@@ -38,7 +38,7 @@ class SpectralMixtureLinearMeanGPModel(ExactGP):
 
 class TwoDSpectralMixtureGPModel(ExactGP):
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
-        super(SpectralMixtureGPModel, self).__init__(train_x, train_y, likelihood)
+        super(TwoDSpectralMixtureGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
         self.covar_module = SMK(ard_num_dims = 2, num_mixtures = num_mixtures)
         self.covar_module.initialize_from_data(train_x, train_y)
@@ -52,7 +52,7 @@ class TwoDSpectralMixtureGPModel(ExactGP):
 
 class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
-        super(SpectralMixtureLinearMeanGPModel, self).__init__(train_x, train_y, likelihood)
+        super(TwoDSpectralMixtureLinearMeanGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
         self.covar_module = SMK(ard_num_dims = 2, num_mixtures = num_mixtures)
         self.covar_module.initialize_from_data(train_x, train_y)
@@ -112,7 +112,7 @@ class TwoDSpectralMixtureKISSGPModel(ExactGP):
 
 class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4, grid_size = [5000,20]):
-        super(SpectralMixtureLinearMeanKISSGPModel, self).__init__(train_x, train_y, likelihood)
+        super(TwoDSpectralMixtureLinearMeanKISSGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
         self.covar_module = GIK(SMK(ard_num_dims = 2, num_mixtures = num_mixtures), num_dims = 2, grid_size = grid_size
         )

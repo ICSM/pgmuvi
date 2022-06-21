@@ -3,8 +3,43 @@ import torch
 import gpytorch
 import pandas as pd
 from gps import SpectralMixtureGPModel as SMG
+from gps import TwoDSpectralMixtureGPModel as TMG
 import matplotlib.pyplot as plt
+from trainers import train
 
+
+def parse_results(gp, results):
+    loss = results['loss']
+    print("Final loss: ",loss[-1])
+    
+    pass
+
+def plot_results(gp, results):
+    for key, value in results.items():
+        #loss = results['loss']
+        #print("Final loss: ",loss[-1])
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        try:
+            ax.plot(value, "-")
+        except ValueError:
+            
+        ax.set_ylabel(key)
+        ax.set_xlabel("Iteration")
+        plt.show()
+    pass
+
+def plot_psd(gp, results):
+    #if isinstance(results['covar_module.raw_mixture_weights'][-1], float): #only one mixture component
+    #    n_dim, n_mix = 1, 1
+    #elif isinstance(results['covar_module.raw_mixture_weights'][-1], ): #only one mixture component
+    #    pass
+    n_mix = results['covar_module.raw_mixture_means'][-1].size()[0]
+    n_dim = result['covar_module.raw_mixture_means'][-1].size()[1]
+    pass
+
+def plot_data():
+    pass
 
 
 if __name__=="__main__":
@@ -26,8 +61,15 @@ if __name__=="__main__":
     train_mag = train_mag + 0.1*torch.randn_like(train_mag)
 
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
+    #We can also try:
+    #likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(train_mag_err, learn_additional_noise = True)
+    #when we have measured uncertainty. While this wouldn't make a lot of sense for this set of synthetic data where the uncertainty is always the same
+    #it can be a powerful addition if you have measured uncertainty. Setting learn_additional_noise = True will tell it to also try to infer and
+    #additional set of Gaussian noise on the diagonal of the covariance matrix, as the simple GaussianLikelihood does. If you're very confident about the
+    #measured uncertainty, set it to False instead, but if you think there may be extra physics (e.g. stochastic variation/jitter) that isn't captured
+    #well by this model, or that the uncertainties may be underestimated, it is good to turn it on.
 
-    model = SMG(train_jd, train_mag, likelihood, num_mixtures = 1)
+    model = SMG(train_jd, train_mag, likelihood, num_mixtures = 2)
     #print(model)
     #print(model.covar_module)
     #help(model)
@@ -49,7 +91,27 @@ if __name__=="__main__":
 
     #help(likelihood)
 
-    training_iter = 100#0
+    training_iter = 100
+
+    print(model.parameters())
+    for p in model.parameters():
+        print(p)
+
+    for param_name, param in model.named_parameters():
+        print(f'Parameter name: {param_name:42} value = {param.data}')
+
+
+    results = train(model, likelihood, train_jd, train_mag, maxiter = training_iter, miniter = 20, stop = 0.01, optim="Adam")
+    #print(results)
+    for key, value in results.items():
+        print(key)
+        print(value)
+        try:
+            print(value[0].size())
+        except:
+            pass
+    plot_results(results)
+    exit()
 
     
     # Use the adam optimizer
@@ -69,6 +131,9 @@ if __name__=="__main__":
         loss.backward()
         #print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iter, loss.item()))
         optimizer.step()
+
+
+    #Add saving the model/optimizer stuff
 
     #print(model)
 
@@ -101,7 +166,7 @@ if __name__=="__main__":
         
     #exit()
     # 1000 test points across the range of the data
-    test_x = torch.linspace(train_jd.min(), train_jd.max(), 1000)
+    test_x = torch.linspace(train_jd.min(), train_jd.max(), 10000)
 
     # Get into evaluation (predictive posterior) mode
     model.eval()
