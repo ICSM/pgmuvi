@@ -6,7 +6,7 @@ from gps import SpectralMixtureGPModel as SMG
 from gps import TwoDSpectralMixtureGPModel as TMG
 import matplotlib.pyplot as plt
 from trainers import train
-
+from astropy import units
 
 def parse_results(gp, results):
     loss = results['loss']
@@ -41,20 +41,40 @@ def plot_psd(gp, results):
 def plot_data():
     pass
 
-
-if __name__=="__main__":
-    testdata = pd.read_csv("~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")
+# if __name__=="__main__":
+def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
+              magcolumn = 'Magnitude', period = 130.):
+    """
+    Arguments:
+    ----------
+    LCfile -- full path to file containing light curve. It should contain
+                two columns, one containing the time coordinate and
+                another containing the magnitude (or flux) variable
+    timecolumn -- name of column in LCfile containing the time coordinate
+    magcolumn -- name of column in LCfile containing the magnitude variable
+    period -- initial guess for period of source
+                can either be a float or an astropy Quantity
+    """
+    # testdata = pd.read_csv("~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")
+    testdata = pd.read_csv(LCfile)
 
     print(testdata)
 
-    train_jd = torch.Tensor(testdata['JD'].to_numpy())
-    train_mag = torch.Tensor(testdata['Magnitude'].to_numpy())
+    # train_jd = torch.Tensor(testdata['JD'].to_numpy())
+    # train_mag = torch.Tensor(testdata['Magnitude'].to_numpy())
+    train_jd = torch.Tensor(testdata[timecolumn].to_numpy())
+    train_mag = torch.Tensor(testdata[magcolumn].to_numpy())
 
 
     """ Let's generate some synthetic data from a perturbed sine curve 
         but on the same time sampling as the real data"""
 
-    P = 137. #Days!
+    # P = 137. #Days!
+    if isinstance(period, units.Quantity):
+        P = period.to('day').value
+    else:
+        P = period
+    
     train_mag = torch.sin(train_jd*(2*np.pi/P))
 
 
