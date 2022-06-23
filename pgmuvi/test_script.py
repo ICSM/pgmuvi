@@ -43,7 +43,7 @@ def plot_data():
 
 # if __name__=="__main__":
 def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
-              magcolumn = 'Magnitude', period = 130.):
+              magcolumn = 'Magnitude'):
     """
     Arguments:
     ----------
@@ -52,8 +52,6 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
                 another containing the magnitude (or flux) variable
     timecolumn -- name of column in LCfile containing the time coordinate
     magcolumn -- name of column in LCfile containing the magnitude variable
-    period -- initial guess for period of source
-                can either be a float or an astropy Quantity
     """
     # testdata = pd.read_csv("~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")
     testdata = pd.read_csv(LCfile)
@@ -66,19 +64,17 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
     train_mag = torch.Tensor(testdata[magcolumn].to_numpy())
 
 
-    """ Let's generate some synthetic data from a perturbed sine curve 
-        but on the same time sampling as the real data"""
+    # """ Let's generate some synthetic data from a perturbed sine curve 
+    #     but on the same time sampling as the real data"""
 
     # P = 137. #Days!
-    if isinstance(period, units.Quantity):
-        P = period.to('day').value
-    else:
-        P = period
-    
-    train_mag = torch.sin(train_jd*(2*np.pi/P))
-
-
-    train_mag = train_mag + 0.1*torch.randn_like(train_mag)
+    # if isinstance(period, units.Quantity):
+    #     P = period.to('day').value
+    # else:
+    #     P = period
+    # 
+    # train_mag = torch.sin(train_jd*(2*np.pi/P))
+    # train_mag = train_mag + 0.1*torch.randn_like(train_mag)
 
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
     #We can also try:
