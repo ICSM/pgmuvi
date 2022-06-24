@@ -23,6 +23,7 @@ def plot_results(results):
         try:
             ax.plot(value, "-")
         except ValueError:
+            pass
             
         ax.set_ylabel(key)
         ax.set_xlabel("Iteration")
