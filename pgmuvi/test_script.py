@@ -127,7 +127,7 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
         except:
             pass
     plot_results(results)
-    exit()
+    # exit()
 
     
     # Use the adam optimizer
