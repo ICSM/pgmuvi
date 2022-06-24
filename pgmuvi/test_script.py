@@ -14,7 +14,7 @@ def parse_results(gp, results):
     
     pass
 
-def plot_results(gp, results):
+def plot_results(results):
     for key, value in results.items():
         #loss = results['loss']
         #print("Final loss: ",loss[-1])
