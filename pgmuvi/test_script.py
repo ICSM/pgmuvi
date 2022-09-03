@@ -15,6 +15,7 @@ from pyro.optim import Adam
 from pyro.infer import SVI, Trace_ELBO
 import pyro.distributions as dist
 
+from astropy import units
 
 def parse_results(gp, results):
     loss = results['loss']
@@ -56,17 +57,18 @@ def plot_psd(gp, results):
 def plot_data():
     pass
 
-
-if __name__=="__main__":
-    #testdata = pd.read_csv("~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")
-
-    #print(testdata)
-
-    #train_jd = torch.Tensor(testdata['JD'].to_numpy())
-    #train_mag = torch.Tensor(testdata['Magnitude'].to_numpy())
-    #train_mag_err = 0.05*train_mag
-
-    synthetic_data = False
+# if __name__=="__main__":
+def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
+               magcolumn = 'Magnitude', synthetic_data=False):
+    """
+    Arguments:
+    ----------
+    LCfile -- full path to file containing light curve. It should contain
+                two columns, one containing the time coordinate and
+                another containing the magnitude (or flux) variable
+    timecolumn -- name of column in LCfile containing the time coordinate
+    magcolumn -- name of column in LCfile containing the magnitude variable
+    """
 
     if synthetic_data:
 
@@ -83,17 +85,18 @@ if __name__=="__main__":
         print("Simulating for ",n_periods," periods")
         train_jd = torch.Tensor(np.random.uniform(jd_min, jd_max, size=n_data))
         train_mag = torch.sin(train_jd*(2*np.pi/P))
-
-
         train_mag = train_mag + 0.1*torch.randn_like(train_mag)
         train_mag_err = 0.1*train_mag
 
         period_guess = P*(np.random.uniform()+0.5)#147 #this number is in the same units as our original input.
     else:
-        testdata = pd.read_csv("~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")#[-700:]
-        train_jd = torch.Tensor(testdata['JD'].to_numpy())
+        #testdata = pd.read_csv("~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")#[-700:]
+        testdata = pd.read_csv(LCfile)
+        #train_jd = torch.Tensor(testdata['JD'].to_numpy())
+        train_jd = torch.Tensor(testdata[timecolumn].to_numpy())
+        train_mag = torch.Tensor(testdata[magcolumn].to_numpy())
         print(len(train_jd))
-        train_mag = torch.Tensor(testdata['Magnitude'].to_numpy())
+        #train_mag = torch.Tensor(testdata['Magnitude'].to_numpy())
         train_mag_err = 0.05*train_mag
 
         period_guess = 400.
@@ -269,17 +272,14 @@ if __name__=="__main__":
             results = train(model, likelihood, train_jd, train_mag, maxiter = training_iter, miniter = 50, stop = 0.00001, lr=0.1, optim="AdamW", stopavg=30)
 
     
-    #print(results)
-    #for key, value in results.items():
-    #    print(key)
-    #    print(value)
-    #    try:
-    #        print(value[0].size())
-    #    except:
-    #        pass
-    #plot_results(results)
-    #exit()
-
+    for key, value in results.items():
+        print(key)
+        print(value)
+        try:
+            print(value[0].size())
+        except:
+            pass
+    plot_results(results)
     
     ## Use the adam optimizer
     #optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
@@ -361,3 +361,7 @@ if __name__=="__main__":
         ax.set_ylim([3, -3])
         ax.legend(['Observed Data', 'Mean', 'Confidence'])
         plt.show()
+
+
+if __name__=="__main__":
+    run_pgmuvi(LCfile="~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")
