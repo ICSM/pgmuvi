@@ -116,13 +116,17 @@ def train(model, likelihood, train_x, train_y,
         results['loss'].append(loss.item())
         
         for param_name, param in model.named_parameters():
-            results[param_name].append(param.data)
+            results[param_name].append(param.item())
+            #print(i, param_name," = ",param.item())
         #Finally check if convergence criterion is met
         #optimisers are stochastic, so we average the change in loss function over a few iterations
         if stop:
             if i > miniter:
-                if np.mean(results['delta_loss'][-stopavg:]) < stop:
-                    print("Average change in loss over the last 9 iterations was {0}.\n This is < {1}, so we will end training here.".format(np.mean(results['delta_loss'][-9:]), stop))
+                #stopval = np.mean(results['delta_loss'][-stopavg:])
+                stopval = np.std(results['loss'][-stopavg:])
+                #if np.mean(results['delta_loss'][-stopavg:]) < stop:
+                if stopval < stop:
+                    print("Average change in loss over the last {0} iterations was {1}.\n This is < {2}, so we will end training here.".format(stopavg,stopval, stop))
                     break #break out of the training loop early
 
 

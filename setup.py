@@ -37,7 +37,8 @@ setup(
                       'seaborn',
                       'pytorch',
                       'gpytorch',
-                      'pyro-ppl'
+                      'pyro-ppl',
+                      'tqdm'
                       ],
     python_requires=">=3.7", 
 
