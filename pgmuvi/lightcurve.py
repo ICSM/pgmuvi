@@ -156,7 +156,11 @@ class Lightcurve(object):
 
     
     def fit(self, model = None, likelihood = None, num_mixtures = 4,
-            guess = None, grid_size = 2000, cuda = False, **kwargs):
+            guess = None, grid_size = 2000, cuda = False,
+            training_iter=300, max_cg_iterations = None,
+            optim="AdamW", miniter=100, stop=1e-5, lr = 0.1,
+            stopavg=30,
+            **kwargs):
         if self._yerr_transformed is not None and likelihood is None:
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(train_mag_err) #, learn_additional_noise = True)
         elif self._yerr_transformed is not None and likelihood is "learn":
@@ -218,3 +222,8 @@ class Lightcurve(object):
 
         if guess is not None:
             self.model.initialize(**guess)
+
+        # Next we probably want to report some setup info
+
+
+        #Now we're going 

@@ -54,6 +54,31 @@ def plot_psd(gp, results):
     n_dim = result['covar_module.raw_mixture_means'][-1].size()[1]
     pass
 
+
+#MATLAB function for PSD from Andrew Gordon Wilson's tutorials: https://people.orie.cornell.edu/andrew/pattern/ smspect.m
+#function [sm_spect w mus sigmas] = smspect(s,hyp,Q)
+#
+#w = exp(hyp(1:Q));
+#mus = exp(hyp(Q+1:2*Q));
+#sigmas = exp(hyp(2*Q+1:3*Q));
+#
+#sm_spect = zeros(numel(s),1);
+#
+#for j=1:Q
+#    sm_spect = sm_spect + w(j)*(normpdf(s,mus(j),sigmas(j)) + normpdf(-s,mus(j),sigmas(j)));
+#end
+
+def compute_psd():
+    c = np.zeros((len(means),) + f.shape,)
+    for i, m in enumerate(means):
+        s = scales[i]
+        w = weights[i]
+        c[i] = np.sqrt(w) * (norm.pdf(f, m, s) - norm.pdf(-f, m, s)) #Each component of the PSD is the weight times the difference of the forward and reverse PDFs
+        #In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
+    #Now we just have to some over the components
+    psd = np.sum(c, axis=0)
+        
+
 def plot_data():
     pass
 
