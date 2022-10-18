@@ -31,11 +31,11 @@ setup(
     author='Peter Scicluna',
     author_email='peter.scicluna@eso.org',
     license='GPL',
-    packages=['pygmuvi'],
+    packages=['pgmuvi'],
     install_requires=['numpy',
                       'matplotlib',
                       'seaborn',
-                      'pytorch',
+                      'torch',
                       'gpytorch',
                       'pyro-ppl',
                       'tqdm'

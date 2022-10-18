@@ -17,13 +17,13 @@ import pyro.distributions as dist
 
 from astropy import units
 
-def parse_results(gp, results):
+def parse_results(results):
     loss = results['loss']
     print("Final loss: ",loss[-1])
     
     pass
 
-def plot_results(gp, results, zscale = None):
+def plot_results(results, zscale = None):
     for key, value in results.items():
         #print(key, value, torch.Tensor(value))
         #loss = results['loss']
@@ -45,7 +45,7 @@ def plot_results(gp, results, zscale = None):
     #plt.show()
     #pass
 
-def plot_psd(gp, results):
+def plot_psd(results):
     #if isinstance(results['covar_module.raw_mixture_weights'][-1], float): #only one mixture component
     #    n_dim, n_mix = 1, 1
     #elif isinstance(results['covar_module.raw_mixture_weights'][-1], ): #only one mixture component
@@ -355,7 +355,7 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
         print("Additional noise: ", model.likelihood.noise_covar.noise.item())
         #print("Estimated width: ", 1./model.covar_module.mixture_scales.item())
         
-    plot_results(model, results, zscale = date_range)
+    plot_results(results, zscale = date_range)
     
         
     #exit()

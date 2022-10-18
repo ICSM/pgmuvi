@@ -174,7 +174,7 @@ class Lightcurve(object):
         #Also add a case for if it is a Likelihood object
 
         if model == "2D": #This if/else is very annoying. Need a better way to do this!
-            self.model = TwpDSpectralMixtureGPModel(self._xdata_transformed,
+            self.model = TwoDSpectralMixtureGPModel(self._xdata_transformed,
                                                     self._ydata_transformed,
                                                     self.likelihood,
                                                     num_mixtures = num_mixtures)
@@ -213,6 +213,8 @@ class Lightcurve(object):
                                                     self._ydata_transformed,
                                                     self.likelihood,
                                                     num_mixtures = num_mixtures)
+        elif "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
+            self.model = model
             
 
         if cuda:
