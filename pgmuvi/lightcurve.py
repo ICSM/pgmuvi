@@ -229,3 +229,4 @@ class Lightcurve(object):
 
 
         #Now we're going 
+        

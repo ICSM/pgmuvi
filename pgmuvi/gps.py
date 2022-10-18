@@ -11,6 +11,34 @@ from gpytorch.models import ExactGP, ApproximateGP
 
 #### FIRST WE HAVE SOME Naive GPs
 class SpectralMixtureGPModel(ExactGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power 
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. 
+    This model assumes the mean is constant.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
         super(SpectralMixtureGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
@@ -28,6 +56,34 @@ class SpectralMixtureGPModel(ExactGP):
         return MVN(mean_x, covar_x)
 
 class SpectralMixtureLinearMeanGPModel(ExactGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power 
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. 
+    This model assumes the mean is a linear function.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
         super(SpectralMixtureLinearMeanGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
@@ -45,6 +101,35 @@ class SpectralMixtureLinearMeanGPModel(ExactGP):
         return MVN(mean_x, covar_x)
 
 class TwoDSpectralMixtureGPModel(ExactGP):
+    ''' A two-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power 
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. 
+    This model assumes the mean is constant. It supports datasets with two 
+    independent variables (e.g. time and wavelength). 
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps and wavelengths)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
         super(TwoDSpectralMixtureGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
@@ -63,6 +148,35 @@ class TwoDSpectralMixtureGPModel(ExactGP):
         
 
 class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
+    ''' A two-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power 
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. 
+    This model assumes the mean is a linear function.  It supports datasets 
+    with two independent variables (e.g. time and wavelength). 
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps and wavelengths)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
         super(TwoDSpectralMixtureLinearMeanGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
@@ -82,6 +196,40 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
 
 #Now we define some that use KISS-GP/SKI to try to accelerate inference
 class SpectralMixtureKISSGPModel(ExactGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power 
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. 
+    This model assumes the mean is constant. It uses the Kernel interpolation 
+    for scalable structured Gaussian processes (KISS-GP) approximation to 
+    enable scaling to much larger datasets. This means it becomes effective 
+    when your dataset exceeds ~10,000 entries; for smaller datasets, the 
+    overhead of interpolation is typically not worth the effort.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+    grid_size : int
+        The number of points to use in the kernel interpolation grid.
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4, grid_size = 2000):
         super(SpectralMixtureKISSGPModel, self).__init__(train_x, train_y, likelihood)
         if not grid_size:
@@ -105,6 +253,40 @@ class SpectralMixtureKISSGPModel(ExactGP):
         
 
 class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power 
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. 
+    This model assumes the mean is a linear function. It uses the Kernel 
+    interpolation for scalable structured Gaussian processes (KISS-GP) 
+    approximation to enable scaling to much larger datasets. This means it 
+    becomes effective when your dataset exceeds ~10,000 entries; for smaller 
+    datasets, the overhead of interpolation is typically not worth the effort.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+    grid_size : int
+        The number of points to use in the kernel interpolation grid.
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4, grid_size = 2000):
         super(SpectralMixtureLinearMeanKISSGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
@@ -124,6 +306,41 @@ class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
     
 class TwoDSpectralMixtureKISSGPModel(ExactGP):
+    ''' A two-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power 
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. 
+    This model assumes the mean is constant. It supports datasets with two 
+    independent variables (e.g. time and wavelength). It uses the Kernel 
+    interpolation for scalable structured Gaussian processes (KISS-GP) 
+    approximation to enable scaling to much larger datasets. This means it 
+    becomes effective when your dataset exceeds ~10,000 entries; for smaller 
+    datasets, the overhead of interpolation is typically not worth the effort.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+    grid_size : (2x1) iterable of ints
+        The number of points to use in the kernel interpolation grid, with one value per dimension.
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4, grid_size = [5000,20]):
         super(SpectralMixtureKISSGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
@@ -143,6 +360,41 @@ class TwoDSpectralMixtureKISSGPModel(ExactGP):
         
 
 class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
+    ''' A two-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power 
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. 
+    This model assumes the mean is a linear function. It supports datasets 
+    with two independent variables (e.g. time and wavelength). It uses the 
+    Kernel interpolation for scalable structured Gaussian processes (KISS-GP) 
+    approximation to enable scaling to much larger datasets. This means it 
+    becomes effective when your dataset exceeds ~10,000 entries; for smaller 
+    datasets, the overhead of interpolation is typically not worth the effort.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+    grid_size : (2x1) iterable of ints
+        The number of points to use in the kernel interpolation grid, with one value per dimension.
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4, grid_size = [5000,20]):
         super(TwoDSpectralMixtureLinearMeanKISSGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
@@ -166,6 +418,32 @@ from gpytorch.variational import VariationalStrategy
     
 #We can also implement sparse/variational GPs here
 class SparseSpectralMixtureGPModel(ApproximateGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A longer description goes here
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
         variational_distribution = CholeskyVariationalDistribution(inducing_points.size(0))
         variational_strategy = VariationalStrategy(self, inducing_points, variational_distribution, learn_inducing_locations=True)
@@ -186,6 +464,27 @@ class SparseSpectralMixtureGPModel(ApproximateGP):
         return MVN(mean_x, covar_x)
 
 class SparseSpectralMixtureLinearMeanGPModel(ExactGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A longer description goes here
+
+    Parameters
+    ----------
+    train_x : Tensor
+    train_y : Tensor
+    likelihood : a Likelihood object or subclass
+    num_mixtures : int
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
         super(SpectralMixtureLinearMeanGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
@@ -203,6 +502,27 @@ class SparseSpectralMixtureLinearMeanGPModel(ExactGP):
         return MVN(mean_x, covar_x)
 
 class SparseTwoDSpectralMixtureGPModel(ExactGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A longer description goes here
+
+    Parameters
+    ----------
+    train_x : Tensor
+    train_y : Tensor
+    likelihood : a Likelihood object or subclass
+    num_mixtures : int
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
         super(TwoDSpectralMixtureGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
@@ -221,6 +541,27 @@ class SparseTwoDSpectralMixtureGPModel(ExactGP):
         
 
 class SparseTwoDSpectralMixtureLinearMeanGPModel(ExactGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A longer description goes here
+
+    Parameters
+    ----------
+    train_x : Tensor
+    train_y : Tensor
+    likelihood : a Likelihood object or subclass
+    num_mixtures : int
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+    
+
+    '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
         super(TwoDSpectralMixtureLinearMeanGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
