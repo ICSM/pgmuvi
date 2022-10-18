@@ -60,7 +60,7 @@ def minmax(data, dim=0):
     return (data-m)/r, m, r
 
 class Lightcurve(object):
-    def __init__(self, xdata, ydata, yerr = None
+    def __init__(self, xdata, ydata, yerr = None,
                  xtransform='minmax', ytransform = None,
                  **kwargs):
         if xtransform is 'minmax':
