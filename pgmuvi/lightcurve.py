@@ -233,12 +233,12 @@ class Lightcurve(object):
     def plot(self):
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Get into evaluation (predictive posterior) mode
-            model.eval()
-            likelihood.eval()
+            self.model.eval()
+            self.likelihood.eval()
 
             # Importing raw x and y training data from xdata and ydata functions
-            x_raw = xdata()
-            y_raw = ydata()
+            x_raw = self.xdata()
+            y_raw = self.ydata()
 
             # creating array of 10000 test points across the range of the data
             x_fine = torch.linspace(x_raw.min(), x_raw.max(), 10000)
