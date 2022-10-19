@@ -187,11 +187,7 @@ class Lightcurve(object):
         "2DLinearSKI": TwoDSpectrakMixtureLinearMeanKISSGPModel
         }
 
-        if model is None:
-            pass
-            #Add
-
-        elif "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
+        if "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
             self.model = model
 
         elif model in model_dic_1.keys():
@@ -199,11 +195,14 @@ class Lightcurve(object):
                                         self._ydata_transformed,
                                         self.likelihood,
                                         num_mixtures=num_mixtures)
-        else:
+        elif model in model_dic_2.keys():
             self.model = model_dic_2[model](self._xdata_transformed,
                                         self._ydata_transformed,
                                         self.likelihood,
                                         num_mixtures=num_mixtures) #Add missing arguments
+        
+        else:
+            raise ValueError("Insert a valid model")
 
         if cuda:
             self.likelihood.cuda()
