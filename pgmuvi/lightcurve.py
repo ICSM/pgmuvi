@@ -231,3 +231,43 @@ class Lightcurve(object):
         #Now we're going
 
         
+    def plot(self):
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            # Get into evaluation (predictive posterior) mode
+            self.model.eval()
+            self.likelihood.eval()
+
+            # Importing raw x and y training data from xdata and ydata functions
+            x_raw = self.xdata()
+            y_raw = self.ydata()
+
+            # creating array of 10000 test points across the range of the data
+            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+
+            # transforming the x_fine_raw data to the space that the GP was trained in (so it can predict)
+            if self.xtransform is None:
+                x_fine_transformed = x_fine_raw
+            elif isinstance(self.xtransform, Transformer):
+                x_fine_transformed = self.xtransform.transform(x_fine_raw)
+
+            # Make predictions
+            observed_pred = self.likelihood(self.model(x_fine_transformed))
+
+            # Initialize plot
+            f, ax = plt.subplots(1, 1, figsize=(8,6))
+
+            # Get upper and lower confidence bounds
+            lower, upper = observed_pred.confidence_region()
+
+            # Plot training data as black stars
+            ax.plot(x_raw.numpy(), y_raw.numpy(), 'k*')
+
+            # Plot predictive GP mean as blue line
+            ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
+
+            # Shade between the lower and upper confidence bounds
+            ax.fill_between(x_fine_raw.numpy(), lower.numpy(), upper.numpy(), alpha=0.5)
+            ax.set_ylim([3, -3])
+            ax.legend(['Observed Data', 'Mean', 'Confidence'])
+            plt.show()
+
