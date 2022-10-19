@@ -29,7 +29,7 @@ setup(
         "Bug Tracker": "https://github.com/icsm/pgmuvi/issues",
     },
     author='Peter Scicluna, Kathryn Jones',
-    author_email='peter.scicluna@eso.org', 'kathryn.jones@unibe.ch'
+    author_email='peter.scicluna@eso.org, kathryn.jones@unibe.ch',
     license='GPL',
     packages=['pgmuvi'],
     install_requires=['numpy',
