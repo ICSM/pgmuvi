@@ -273,49 +273,36 @@ class Lightcurve(object):
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
         #Also add a case for if it is a Likelihood object
 
-        if model == "2D": #This if/else is very annoying. Need a better way to do this!
-            self.model = TwoDSpectralMixtureGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "1D":
-            self.model = SpectralMixtureGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "1DLinear":
-            self.model = SpectralMixtureLinearMeanGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "2DLinear":
-            self.model = TwoDSpectralMixtureLinearMeanGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "1DSKI":
-            self.model = SpectralMixtureKISSGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "2DSKI":
-            self.model = TwoDSpectralMixtureKISSGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "1DLinearSKI":
-            self.model = SpectralMixtureLinearMeanKISSGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "2DLinearSKI":
-            self.model = TwoDSpectrakMixtureLinearMeanKISSGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
+        model_dic_1 = {
+        "2D": TwoDSpectralMixtureGPModel,
+        "1D": SpectralMixtureGPModel,
+        "1DLinear": SpectralMixtureLinearMeanGPModel,
+        "2DLinear": TwoDSpectralMixtureLinearMeanGPModel
+        }
+
+        model_dic_2={
+        "1DSKI": SpectralMixtureKISSGPModel,
+        "2DSKI": TwoDSpectralMixtureKISSGPModel,
+        "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
+        "2DLinearSKI": TwoDSpectrakMixtureLinearMeanKISSGPModel
+        }
+
+        if "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
             self.model = model
-            
+
+        elif model in model_dic_1.keys():
+            self.model = model_dic_1[model](self._xdata_transformed,
+                                        self._ydata_transformed,
+                                        self.likelihood,
+                                        num_mixtures=num_mixtures)
+        elif model in model_dic_2.keys():
+            self.model = model_dic_2[model](self._xdata_transformed,
+                                        self._ydata_transformed,
+                                        self.likelihood,
+                                        num_mixtures=num_mixtures) #Add missing arguments
+        
+        else:
+            raise ValueError("Insert a valid model")
 
         if cuda:
             self.likelihood.cuda()
@@ -328,5 +315,59 @@ class Lightcurve(object):
         # Next we probably want to report some setup info
 
 
-        #Now we're going 
+
+        #Train the model
+        self.model.train()
+        self.likelihood.train()
+
+        for param_name, param in self.model.named_parameters():
+            print(f'Parameter name: {param_name:42} value = {param.data}')
+
+        with gpytorch.settings.max_cg_iterations(10000):
+            self.results = train(self.model, self.likelihood, self._xdata_transformed, self._ydata_transformed, maxiter = training_iter, miniter = miniter, stop = stop, lr=lr, optim=optim, stopavg=stopavg)
+
+        return self.results
+
+        #Now we're going
+
         
+    def plot(self):
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            # Get into evaluation (predictive posterior) mode
+            self.model.eval()
+            self.likelihood.eval()
+
+            # Importing raw x and y training data from xdata and ydata functions
+            x_raw = self.xdata()
+            y_raw = self.ydata()
+
+            # creating array of 10000 test points across the range of the data
+            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+
+            # transforming the x_fine_raw data to the space that the GP was trained in (so it can predict)
+            if self.xtransform is None:
+                x_fine_transformed = x_fine_raw
+            elif isinstance(self.xtransform, Transformer):
+                x_fine_transformed = self.xtransform.transform(x_fine_raw)
+
+            # Make predictions
+            observed_pred = self.likelihood(self.model(x_fine_transformed))
+
+            # Initialize plot
+            f, ax = plt.subplots(1, 1, figsize=(8,6))
+
+            # Get upper and lower confidence bounds
+            lower, upper = observed_pred.confidence_region()
+
+            # Plot training data as black stars
+            ax.plot(x_raw.numpy(), y_raw.numpy(), 'k*')
+
+            # Plot predictive GP mean as blue line
+            ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
+
+            # Shade between the lower and upper confidence bounds
+            ax.fill_between(x_fine_raw.numpy(), lower.numpy(), upper.numpy(), alpha=0.5)
+            ax.set_ylim([3, -3])
+            ax.legend(['Observed Data', 'Mean', 'Confidence'])
+            plt.show()
+
