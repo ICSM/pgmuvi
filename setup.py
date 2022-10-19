@@ -29,7 +29,7 @@ setup(
         "Bug Tracker": "https://github.com/icsm/pgmuvi/issues",
     },
     author='Peter Scicluna, Stefan Waterval',
-    author_email='peter.scicluna@eso.org', 'sw4445@nyu.edu'
+    author='peter.scicluna@eso.org, sw4445@nyu.edu',
     license='GPL',
     packages=['pgmuvi'],
     install_requires=['numpy',
