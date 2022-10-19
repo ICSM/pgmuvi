@@ -173,49 +173,36 @@ class Lightcurve(object):
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
         #Also add a case for if it is a Likelihood object
 
-        if model == "2D": #This if/else is very annoying. Need a better way to do this!
-            self.model = TwoDSpectralMixtureGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "1D":
-            self.model = SpectralMixtureGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "1DLinear":
-            self.model = SpectralMixtureLinearMeanGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "2DLinear":
-            self.model = TwoDSpectralMixtureLinearMeanGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "1DSKI":
-            self.model = SpectralMixtureKISSGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "2DSKI":
-            self.model = TwoDSpectralMixtureKISSGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "1DLinearSKI":
-            self.model = SpectralMixtureLinearMeanKISSGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif model == "2DLinearSKI":
-            self.model = TwoDSpectrakMixtureLinearMeanKISSGPModel(self._xdata_transformed,
-                                                    self._ydata_transformed,
-                                                    self.likelihood,
-                                                    num_mixtures = num_mixtures)
-        elif "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
+        model_dic_1 = {
+        "2D": TwoDSpectralMixtureGPModel,
+        "1D": SpectralMixtureGPModel,
+        "1DLinear": SpectralMixtureLinearMeanGPModel,
+        "2DLinear": TwoDSpectralMixtureLinearMeanGPModel
+        }
+
+        model_dic_2={
+        "1DSKI": SpectralMixtureKISSGPModel,
+        "2DSKI": TwoDSpectralMixtureKISSGPModel,
+        "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
+        "2DLinearSKI": TwoDSpectrakMixtureLinearMeanKISSGPModel
+        }
+
+        if "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
             self.model = model
-            
+
+        elif model in model_dic_1.keys():
+            self.model = model_dic_1[model](self._xdata_transformed,
+                                        self._ydata_transformed,
+                                        self.likelihood,
+                                        num_mixtures=num_mixtures)
+        elif model in model_dic_2.keys():
+            self.model = model_dic_2[model](self._xdata_transformed,
+                                        self._ydata_transformed,
+                                        self.likelihood,
+                                        num_mixtures=num_mixtures) #Add missing arguments
+        
+        else:
+            raise ValueError("Insert a valid model")
 
         if cuda:
             self.likelihood.cuda()
@@ -228,5 +215,19 @@ class Lightcurve(object):
         # Next we probably want to report some setup info
 
 
-        #Now we're going 
+
+        #Train the model
+        self.model.train()
+        self.likelihood.train()
+
+        for param_name, param in self.model.named_parameters():
+            print(f'Parameter name: {param_name:42} value = {param.data}')
+
+        with gpytorch.settings.max_cg_iterations(10000):
+            self.results = train(self.model, self.likelihood, self._xdata_transformed, self._ydata_transformed, maxiter = training_iter, miniter = miniter, stop = stop, lr=lr, optim=optim, stopavg=stopavg)
+
+        return self.results
+
+        #Now we're going
+
         
