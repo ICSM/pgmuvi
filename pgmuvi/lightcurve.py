@@ -18,40 +18,118 @@ import pyro.distributions as dist
 
 class Transformer(object):
     def transform(self, data, **kwargs):
+        """ Transform some data and return it, storing the parameters required to repeat or reverse the transform 
+
+        This is a baseclass with no implementations, your subclass should 
+        implement the transform itself
+        """
         raise NotImplementedError
 
     def inverse(self, data, **kwargs):
+        """ Invert a transform based on saved parameters
+
+        This is a baseclass with no implementation, your subclass should
+        implement the inverse transform itself
+        """
         raise NotImplementedError
 
 class MinMax(Transformer):
     def transform(self, data, dim=0, recalc = False, **kwargs):
+        """ Perform a MinMax transformation 
+
+        Transform the data such that each dimension is rescaled to the [0,1] 
+        interval. It stores the min and range of the data for the inverse 
+        transformation.
+
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be transformed
+        recalc : bool, default False
+            Should the min and range of the transform be recalculated, or reused from previously?
+        """
         if recalc or self.min is None:
             self.min = torch.min(data, dim=dim, keepdim=True)
             self.range = torch.max(data, dim=dim, keepdim=True) - self.min
         return (data-self.min)/self.range
 
     def inverse(self, data, **kwargs):
+        """ Invert a MinMax transformation based on saved state
+
+        Invert the transformation of the data from  the [0,1] interval. 
+        It used the stored min and range of the data for the inverse 
+        transformation.
+
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be reverse-transformed
+        """
         return (data * self.range)+self.min
 
 class ZScore(Transformer):
     def transform(self, data, dim=0, recalc = False, **kwargs):
+        """ Perform a z-score transformation 
+
+        Transform the data such that each dimension is rescaled to the such that
+        its mean is 0 and its standard deviation is 1.
+
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be transformed
+        recalc : bool, default False
+            Should the parameters of the transform be recalculated, or reused from previously?
+        """
         if recalc or self.mean is None:
             self.mean = torch.mean(data, dim=dim, keepdim=True)
             self.sd = torch.std(data, dim=dim, keepdim=True)
         return (data - self.mean)/self.sd
 
     def inverse(self, data, **kwargs):
+        """ Invert a z-score transformation based on saved state
+
+        Invert the z-scoring of the data based on the saved mean and standard
+        deviation
+
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be reverse-transformed
+        """
         return (data*self.sd) + self.mean
 
 
 class RobustZScore(Transformer):
     def transform(self, data, dim=0, recalc = False, **kwargs):
+        """ Perform a robust z-score transformation 
+
+        Transform the data such that each dimension is rescaled to the such that
+        its median is 0 and its median absolute deviation is 1.
+
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be transformed
+        recalc : bool, default False
+            Should the parameters of the transform be recalculated, or reused from previously?
+        """
         if recalc or self.mad is None:
             self.median = torch.median(data, dim=dim, keepdim=True)
             self.mad = torch.median(torch.abs(data - self.median), dim=dim, keepdim=True)
         return (data - self.median)/self.mad
 
     def inverse(self, data, **kwargs):
+        """ Invert a robust z-score transformation based on saved state
+
+        Invert the robust z-scoring of the data based on the saved median and 
+        median absolute deviation.
+
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be reverse-transformed
+        """
         return (data * self.mad) + self.median
 
 def minmax(data, dim=0):
@@ -60,6 +138,22 @@ def minmax(data, dim=0):
     return (data-m)/r, m, r
 
 class Lightcurve(object):
+    """ A class for storing, manipulating and fitting light curves
+
+    Long description goes here
+
+    Parameters
+    ----------
+
+
+
+    Examples
+    --------
+
+
+    Notes
+    -----
+    """
     def __init__(self, xdata, ydata, yerr = None,
                  xtransform='minmax', ytransform = None,
                  **kwargs):
@@ -97,6 +191,12 @@ class Lightcurve(object):
 
     @property
     def xdata(self):
+        """ The independent variable data
+
+        :getter: Returns the independent variable data in its raw (untransformed) state
+        :setter: Takes the input data and transforms it as requested by the user 
+        :type: torch.Tensor
+        """
         return self._xdata_raw
 
     @xdata.setter
