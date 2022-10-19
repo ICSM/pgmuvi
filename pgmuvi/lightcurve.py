@@ -252,8 +252,6 @@ class Lightcurve(object):
             return values
         elif isinstance(self.xtransform, Transformer):
             return self.xtransform.transform(values)    
-        
-
     
     def fit(self, model = None, likelihood = None, num_mixtures = 4,
             guess = None, grid_size = 2000, cuda = False,
@@ -262,9 +260,10 @@ class Lightcurve(object):
             stopavg=30,
             **kwargs):
         if self._yerr_transformed is not None and likelihood is None:
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(train_mag_err) #, learn_additional_noise = True)
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed) #, learn_additional_noise = True)
         elif self._yerr_transformed is not None and likelihood is "learn":
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(train_mag_err, learn_additional_noise = True)
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
+                                                                                learn_additional_noise = True)
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
             #In this case, the likelihood has been passed a constraint, which means we want a constrained GaussianLikelihood
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=likelihood)
@@ -292,14 +291,14 @@ class Lightcurve(object):
 
         elif model in model_dic_1.keys():
             self.model = model_dic_1[model](self._xdata_transformed,
-                                        self._ydata_transformed,
-                                        self.likelihood,
-                                        num_mixtures=num_mixtures)
+                                            self._ydata_transformed,
+                                            self.likelihood,
+                                            num_mixtures=num_mixtures)
         elif model in model_dic_2.keys():
             self.model = model_dic_2[model](self._xdata_transformed,
-                                        self._ydata_transformed,
-                                        self.likelihood,
-                                        num_mixtures=num_mixtures) #Add missing arguments
+                                            self._ydata_transformed,
+                                            self.likelihood,
+                                            num_mixtures=num_mixtures) #Add missing arguments
         
         else:
             raise ValueError("Insert a valid model")
