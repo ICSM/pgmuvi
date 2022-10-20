@@ -330,7 +330,7 @@ class Lightcurve(object):
 
         #Now we're going
 
-    def plot_psd(self, means, freq, scales, weights):
+    def plot_psd(self, means, freq, scales, weights, show=True):
         #Computing the psd for frequencies f
         psd = compute_psd(means, freq, scales, weights)
 
