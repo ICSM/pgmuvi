@@ -371,8 +371,7 @@ class Lightcurve(object):
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
             plt.show()
             
-    def plot_results(self,results,z_scale = None):
-        self.results = results
+    def plot_results(self,zscale = None):
         for key, value in self.results.item():
             fig = plt.figure()
             ax = fig.add_subplot(111)
@@ -381,8 +380,8 @@ class Lightcurve(object):
             except ValueError:
                 pass
             ax.set_ylabel(key)
-            
             ax.set_xlabel("Iteration")
+            
             if "means" in key and zscale is not None:
                 fig = plt.figure()
                 ax = fig.add_subplot(111)
