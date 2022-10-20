@@ -370,4 +370,23 @@ class Lightcurve(object):
             ax.set_ylim([3, -3])
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
             plt.show()
-
+            
+    def plot_results(self,results,z_scale = None):
+        self.results = results
+        for key, value in self.results.item():
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            try:
+                ax.plot(value, "-")
+            except ValueError:
+                pass
+            ax.set_ylabel(key)
+            
+            ax.set_xlabel("Iteration")
+            if "means" in key and zscale is not None:
+                fig = plt.figure()
+                ax = fig.add_subplot(111)
+                ax.plot(zscale/torch.Tensor(value),"-")
+                ax.set_ylabel(key)
+                ax.set_xlabel("Iteration")
+        plt.show()
