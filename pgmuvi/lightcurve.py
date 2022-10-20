@@ -264,8 +264,6 @@ class Lightcurve(object):
             return values
         elif isinstance(self.xtransform, Transformer):
             return self.xtransform.transform(values)    
-        
-
     
     def fit(self, model = None, likelihood = None, num_mixtures = 4,
             guess = None, grid_size = 2000, cuda = False,
@@ -315,9 +313,10 @@ class Lightcurve(object):
             _description_
         """
         if self._yerr_transformed is not None and likelihood is None:
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(train_mag_err) #, learn_additional_noise = True)
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed) #, learn_additional_noise = True)
         elif self._yerr_transformed is not None and likelihood is "learn":
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(train_mag_err, learn_additional_noise = True)
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
+                                                                                learn_additional_noise = True)
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
             #In this case, the likelihood has been passed a constraint, which means we want a constrained GaussianLikelihood
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=likelihood)
@@ -345,14 +344,14 @@ class Lightcurve(object):
 
         elif model in model_dic_1.keys():
             self.model = model_dic_1[model](self._xdata_transformed,
-                                        self._ydata_transformed,
-                                        self.likelihood,
-                                        num_mixtures=num_mixtures)
+                                            self._ydata_transformed,
+                                            self.likelihood,
+                                            num_mixtures=num_mixtures)
         elif model in model_dic_2.keys():
             self.model = model_dic_2[model](self._xdata_transformed,
-                                        self._ydata_transformed,
-                                        self.likelihood,
-                                        num_mixtures=num_mixtures) #Add missing arguments
+                                            self._ydata_transformed,
+                                            self.likelihood,
+                                            num_mixtures=num_mixtures) #Add missing arguments
         
         else:
             raise ValueError("Insert a valid model")
@@ -380,6 +379,34 @@ class Lightcurve(object):
             self.results = train(self.model, self.likelihood, self._xdata_transformed, self._ydata_transformed, maxiter = training_iter, miniter = miniter, stop = stop, lr=lr, optim=optim, stopavg=stopavg)
 
         return self.results
+
+        #Now we're going
+
+    def plot_psd(self, means, freq, scales, weights, show=True):
+        #Computing the psd for frequencies f
+        psd = compute_psd(means, freq, scales, weights)
+
+        # Initialize plot
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+        #plotting psd
+        ax.plot(freq, psd)
+        if show:
+            plt.show()
+        else:
+            return fig, ax
+
+    def compute_psd(means, freq, scales, weights):
+        c = np.zeros((len(means),) + freq.shape, ) #mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
+        for i, m in enumerate(means): #f = array of frequencies that we want to plot
+            s = scales[i] #s.d
+            w = weights[i] #how much power is given to each gaussian
+            c[i] = np.sqrt(w) * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
+            # Each component of the PSD is the weight times the difference of the forward and reverse PDFs
+            # In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
+        # Now we just have to some over the components
+        psd = np.sum(c, axis=0)
+        return psd
 
     def plot(self):
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
