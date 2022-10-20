@@ -339,7 +339,10 @@ class Lightcurve(object):
 
         #plotting psd
         ax.plot(freq, psd)
-        plt.show()
+        if show:
+            plt.show()
+        else:
+            return fig, ax
 
     def compute_psd(means, freq, scales, weights):
         c = np.zeros((len(means),) + freq.shape, ) #mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
