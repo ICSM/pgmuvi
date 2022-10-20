@@ -157,29 +157,41 @@ class Lightcurve(object):
     def __init__(self, xdata, ydata, yerr = None,
                  xtransform='minmax', ytransform = None,
                  **kwargs):
-        if xtransform is 'minmax':
-            self.xtransform = MinMax()
-        elif xtransform is 'zscore':
-            self.xtransform = ZScore()
-        elif xtransform is 'robust_zscore':
-            self.xtransform = RobustZScore()
-        elif xtransform is None or isinstance(xtransform, Transformer):
-            self.xtransform = xtransform
+        """_summary_
 
-        if ytransform is 'minmax':
-            self.ytransform = MinMax()
-        elif ytransform is 'zscore':
-            self.ytransform = ZScore()
-        elif ytransform is 'robust_zscore':
-            self.ytransform = RobustZScore()
-        elif ytransform is None or isinstance(ytransform, Transformer):
+        Parameters
+        ----------
+        xdata : _type_
+            _description_
+        ydata : _type_
+            _description_
+        yerr : _type_, optional
+            _description_, by default None
+        xtransform : str, optional
+            _description_, by default 'minmax'
+        ytransform : _type_, optional
+            _description_, by default None
+        """
+        
+        transform_dic = {'minmax':MinMax(),
+                         'zscore':ZScore(),
+                         'robust_score':RobustZScore()}
+        
+        if xtransform is None or isinstance(xtransform, Transformer):
+            self.xtransform = xtransform
+        else:
+            self.xtransform = transform_dic[xtransform]
+            
+        if ytransform is None or isinstance(ytransform, Transformer):
             self.ytransform = ytransform
+        else:
+            self.ytransform = transform_dic[ytransform]
+            
         self.xdata = xdata
         self.ydata = ydata
         if yerr is not None:
             self.yerr = yerr
         pass
-
 
     @property
     def magnitudes(self):
@@ -261,6 +273,47 @@ class Lightcurve(object):
             optim="AdamW", miniter=100, stop=1e-5, lr = 0.1,
             stopavg=30,
             **kwargs):
+        """Fit the lightcurve
+
+        Parameters
+        ----------
+        model : _type_, optional
+            _description_, by default None
+        likelihood : _type_, optional
+            _description_, by default None
+        num_mixtures : int, optional
+            _description_, by default 4
+        guess : _type_, optional
+            _description_, by default None
+        grid_size : int, optional
+            _description_, by default 2000
+        cuda : bool, optional
+            _description_, by default False
+        training_iter : int, optional
+            _description_, by default 300
+        max_cg_iterations : _type_, optional
+            _description_, by default None
+        optim : str, optional
+            _description_, by default "AdamW"
+        miniter : int, optional
+            _description_, by default 100
+        stop : _type_, optional
+            _description_, by default 1e-5
+        lr : float, optional
+            _description_, by default 0.1
+        stopavg : int, optional
+            _description_, by default 30
+
+        Returns
+        -------
+        _type_
+            _description_
+
+        Raises
+        ------
+        ValueError
+            _description_
+        """
         if self._yerr_transformed is not None and likelihood is None:
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(train_mag_err) #, learn_additional_noise = True)
         elif self._yerr_transformed is not None and likelihood is "learn":
@@ -328,9 +381,6 @@ class Lightcurve(object):
 
         return self.results
 
-        #Now we're going
-
-        
     def plot(self):
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Get into evaluation (predictive posterior) mode
@@ -371,7 +421,7 @@ class Lightcurve(object):
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
             plt.show()
             
-    def plot_results(self,zscale = None):
+    def plot_results(self):
         for key, value in self.results.item():
             fig = plt.figure()
             ax = fig.add_subplot(111)
@@ -382,10 +432,12 @@ class Lightcurve(object):
             ax.set_ylabel(key)
             ax.set_xlabel("Iteration")
             
-            if "means" in key and zscale is not None:
+            if "means" in key:
+                self.value_inversed = self.xtransform.inverse(value)
+                
                 fig = plt.figure()
                 ax = fig.add_subplot(111)
-                ax.plot(zscale/torch.Tensor(value),"-")
+                ax.plot(torch.Tensor(self.value_reversed),"-")
                 ax.set_ylabel(key)
                 ax.set_xlabel("Iteration")
         plt.show()
