@@ -330,7 +330,17 @@ class Lightcurve(object):
 
         #Now we're going
 
-        
+    def compute_psd(means, f, scales, weights):
+        c = np.zeros((len(means),) + f.shape, ) #mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
+        for i, m in enumerate(means): #f = array of frequencies that we want to plot
+            s = scales[i] #s.d
+            w = weights[i] #how much power is given to each gaussian
+            c[i] = np.sqrt(w) * (norm.pdf(f, m, s) - norm.pdf(-f, m, s))  #subtracting negative side of psd - otherwise it would cause interference
+            # Each component of the PSD is the weight times the difference of the forward and reverse PDFs
+            # In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
+        # Now we just have to some over the components
+        psd = np.sum(c, axis=0)
+
     def plot(self):
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Get into evaluation (predictive posterior) mode
