@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import gpytorch
 import pandas as pd
-# from gps import SpectralMixtureGPModel as SMG
+#from gps import SpectralMixtureGPModel as SMG
 # from gps import SpectralMixtureKISSGPModel as SMKG
 # from gps import TwoDSpectralMixtureGPModel as TMG
 from .gps import *  # FIX THIS LATER!
