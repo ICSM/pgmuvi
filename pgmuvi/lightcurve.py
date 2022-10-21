@@ -23,7 +23,7 @@ class Transformer(object):
         """ Transform some data and return it, storing the parameters required to repeat or reverse the transform
 
         This is a baseclass with no implementations, your subclass should
-		implement the transform itself
+        implement the transform itself
 		"""
         raise NotImplementedError
 
