@@ -343,7 +343,7 @@ class Lightcurve(object):
         "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
         }
 
-        if "GP" in [t.__name__ for t in type(model).__mro__]:  # check if it is or inherets from a GPyTorch model
+        if "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
             self.model = model
 
         elif model in model_dic_1.keys():
