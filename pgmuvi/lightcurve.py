@@ -22,7 +22,7 @@ class Transformer(object):
     def transform(self, data, **kwargs):
         """ Transform some data and return it, storing the parameters required to repeat or reverse the transform
 
-		This is a baseclass with no implementations, your subclass should
+        This is a baseclass with no implementations, your subclass should
 		implement the transform itself
 		"""
         raise NotImplementedError
