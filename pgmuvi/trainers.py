@@ -112,11 +112,11 @@ def train(model, likelihood, train_x, train_y,
         optimizer.step()
         #Now update list of parameters
         if i > 0:
-            results['delta_loss'].append(loss.item() - results['loss'][-1])
-        results['loss'].append(loss.item())
+            results['delta_loss'].append(loss.detach().numpy() - results['loss'][-1])
+        results['loss'].append(loss.detach().numpy())
         
         for param_name, param in model.named_parameters():
-            results[param_name].append(param.item())
+            results[param_name].append(param.detach().numpy())
             #print(i, param_name," = ",param.item())
         #Finally check if convergence criterion is met
         #optimisers are stochastic, so we average the change in loss function over a few iterations

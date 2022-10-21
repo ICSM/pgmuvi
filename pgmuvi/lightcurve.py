@@ -7,7 +7,7 @@ import pandas as pd
 #from gps import TwoDSpectralMixtureGPModel as TMG
 from .gps import * #FIX THIS LATER!
 import matplotlib.pyplot as plt
-from trainers import train
+from .trainers import train
 from gpytorch.constraints import Interval
 from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior
 import pyro
@@ -48,9 +48,9 @@ class MinMax(Transformer):
         recalc : bool, default False
             Should the min and range of the transform be recalculated, or reused from previously?
         """
-        if recalc or self.min is None:
-            self.min = torch.min(data, dim=dim, keepdim=True)
-            self.range = torch.max(data, dim=dim, keepdim=True) - self.min
+        if recalc or not hasattr(self,"min"):
+            self.min = torch.min(data, dim=dim, keepdim=True)[0]
+            self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
         return (data-self.min)/self.range
 
     def inverse(self, data, **kwargs):
@@ -336,7 +336,7 @@ class Lightcurve(object):
         "1DSKI": SpectralMixtureKISSGPModel,
         "2DSKI": TwoDSpectralMixtureKISSGPModel,
         "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
-        "2DLinearSKI": TwoDSpectrakMixtureLinearMeanKISSGPModel
+        "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
         }
 
         if "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
