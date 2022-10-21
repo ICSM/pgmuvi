@@ -7,7 +7,7 @@ import pandas as pd
 #from gps import TwoDSpectralMixtureGPModel as TMG
 from .gps import * #FIX THIS LATER!
 import matplotlib.pyplot as plt
-from .trainers import train
+from ..trainers import train
 from gpytorch.constraints import Interval
 from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior
 import pyro
@@ -81,9 +81,9 @@ class ZScore(Transformer):
         recalc : bool, default False
             Should the parameters of the transform be recalculated, or reused from previously?
         """
-        if recalc or self.mean is None:
-            self.mean = torch.mean(data, dim=dim, keepdim=True)
-            self.sd = torch.std(data, dim=dim, keepdim=True)
+        if recalc or not hasattr(self, 'mean'):
+            self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
+            self.sd = torch.std(data, dim=dim, keepdim=True)[0]
         return (data - self.mean)/self.sd
 
     def inverse(self, data, **kwargs):
@@ -114,9 +114,9 @@ class RobustZScore(Transformer):
         recalc : bool, default False
             Should the parameters of the transform be recalculated, or reused from previously?
         """
-        if recalc or self.mad is None:
-            self.median = torch.median(data, dim=dim, keepdim=True)
-            self.mad = torch.median(torch.abs(data - self.median), dim=dim, keepdim=True)
+        if recalc or not hasattr(self, 'mad'):
+            self.median = torch.median(data, dim=dim, keepdim=True)[0]
+            self.mad = torch.median(torch.abs(data - self.median), dim=dim, keepdim=True)[0]
         return (data - self.median)/self.mad
 
     def inverse(self, data, **kwargs):
