@@ -48,7 +48,7 @@ class MinMax(Transformer):
         recalc : bool, default False
             Should the min and range of the transform be recalculated, or reused from previously?
         """
-        if recalc or not hasattr(self, 'min'):
+        if recalc or not hasattr(self,"min"):
             self.min = torch.min(data, dim=dim, keepdim=True)[0]
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
         return (data-self.min)/self.range
@@ -380,7 +380,20 @@ class Lightcurve(object):
 
         return self.results
 
-        #Now we're going
+    def print_results(self):
+        for key in self.results.keys():
+            results_tmp = self.results[key][-1]
+            results_tmp_shape = results_tmp.shape #e.g. (4,1,1)
+            results_tmp_shape_len = len(results_tmp.shape)
+            if results_tmp_shape_len == 1:
+                print(f"{key}: {results_tmp}")
+            else:
+                sum_over_shape = sum(j > 1 for j in results_tmp_shape)
+                if sum_over_shape in [0,1]:
+                    print(f"{key}: {results_tmp.flatten()}")
+                elif sum_over_shape == 2:
+                    print(f"{key}: {results_tmp[:,0].flatten()}, {results_tmp[:,1].flatten()}")
+            
 
     def plot_psd(self, means, freq, scales, weights, show=True):
         #Computing the psd for frequencies f
