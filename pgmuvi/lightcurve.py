@@ -7,7 +7,7 @@ import pandas as pd
 # from gps import TwoDSpectralMixtureGPModel as TMG
 from .gps import *  # FIX THIS LATER!
 import matplotlib.pyplot as plt
-from trainers import train
+from .trainers import train
 from gpytorch.constraints import Interval
 from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior
 import pyro
@@ -37,24 +37,24 @@ class Transformer(object):
 
 
 class MinMax(Transformer):
-    def transform(self, data, dim=0, recalc=False, **kwargs):
-        """ Perform a MinMax transformation
+    def transform(self, data, dim=0, recalc = False, **kwargs):
+        """ Perform a MinMax transformation 
 
-		Transform the data such that each dimension is rescaled to the [0,1]
-		interval. It stores the min and range of the data for the inverse
-		transformation.
+        Transform the data such that each dimension is rescaled to the [0,1] 
+        interval. It stores the min and range of the data for the inverse 
+        transformation.
 
-		Parameters
-		----------
-		data : Tensor of floats
-			The data to be transformed
-		recalc : bool, default False
-			Should the min and range of the transform be recalculated, or reused from previously?
-		"""
-        if recalc or self.min is None:
-            self.min = torch.min(data, dim=dim, keepdim=True)
-            self.range = torch.max(data, dim=dim, keepdim=True) - self.min
-        return (data - self.min) / self.range
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be transformed
+        recalc : bool, default False
+            Should the min and range of the transform be recalculated, or reused from previously?
+        """
+        if recalc or not hasattr(self, 'min'):
+            self.min = torch.min(data, dim=dim, keepdim=True)[0]
+            self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
+        return (data-self.min)/self.range
 
     def inverse(self, data, **kwargs):
         """ Invert a MinMax transformation based on saved state
@@ -72,23 +72,21 @@ class MinMax(Transformer):
 
 
 class ZScore(Transformer):
-    def transform(self, data, dim=0, recalc=False, **kwargs):
-        """ Perform a z-score transformation
 
-		Transform the data such that each dimension is rescaled to the such that
-		its mean is 0 and its standard deviation is 1.
+        Transform the data such that each dimension is rescaled to the such that
+        its mean is 0 and its standard deviation is 1.
 
-		Parameters
-		----------
-		data : Tensor of floats
-			The data to be transformed
-		recalc : bool, default False
-			Should the parameters of the transform be recalculated, or reused from previously?
-		"""
-        if recalc or self.mean is None:
-            self.mean = torch.mean(data, dim=dim, keepdim=True)
-            self.sd = torch.std(data, dim=dim, keepdim=True)
-        return (data - self.mean) / self.sd
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be transformed
+        recalc : bool, default False
+            Should the parameters of the transform be recalculated, or reused from previously?
+        """
+        if recalc or not hasattr(self, 'mean'):
+            self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
+            self.sd = torch.std(data, dim=dim, keepdim=True)[0]
+        return (data - self.mean)/self.sd
 
     def inverse(self, data, **kwargs):
         """ Invert a z-score transformation based on saved state
@@ -105,23 +103,23 @@ class ZScore(Transformer):
 
 
 class RobustZScore(Transformer):
-    def transform(self, data, dim=0, recalc=False, **kwargs):
-        """ Perform a robust z-score transformation
+    def transform(self, data, dim=0, recalc = False, **kwargs):
+        """ Perform a robust z-score transformation 
 
-		Transform the data such that each dimension is rescaled to the such that
-		its median is 0 and its median absolute deviation is 1.
+        Transform the data such that each dimension is rescaled to the such that
+        its median is 0 and its median absolute deviation is 1.
 
-		Parameters
-		----------
-		data : Tensor of floats
-			The data to be transformed
-		recalc : bool, default False
-			Should the parameters of the transform be recalculated, or reused from previously?
-		"""
-        if recalc or self.mad is None:
-            self.median = torch.median(data, dim=dim, keepdim=True)
-            self.mad = torch.median(torch.abs(data - self.median), dim=dim, keepdim=True)
-        return (data - self.median) / self.mad
+        Parameters
+        ----------
+        data : Tensor of floats
+            The data to be transformed
+        recalc : bool, default False
+            Should the parameters of the transform be recalculated, or reused from previously?
+        """
+        if recalc or not hasattr(self, 'mad'):
+            self.median = torch.median(data, dim=dim, keepdim=True)[0]
+            self.mad = torch.median(torch.abs(data - self.median), dim=dim, keepdim=True)[0]
+        return (data - self.median)/self.mad
 
     def inverse(self, data, **kwargs):
         """ Invert a robust z-score transformation based on saved state
@@ -164,23 +162,36 @@ class Lightcurve(object):
     def __init__(self, xdata, ydata, yerr=None,
                  xtransform='minmax', ytransform=None,
                  **kwargs):
-        if xtransform is 'minmax':
-            self.xtransform = MinMax()
-        elif xtransform is 'zscore':
-            self.xtransform = ZScore()
-        elif xtransform is 'robust_zscore':
-            self.xtransform = RobustZScore()
-        elif xtransform is None or isinstance(xtransform, Transformer):
-            self.xtransform = xtransform
+        """_summary_
 
-        if ytransform is 'minmax':
-            self.ytransform = MinMax()
-        elif ytransform is 'zscore':
-            self.ytransform = ZScore()
-        elif ytransform is 'robust_zscore':
-            self.ytransform = RobustZScore()
-        elif ytransform is None or isinstance(ytransform, Transformer):
+        Parameters
+        ----------
+        xdata : _type_
+            _description_
+        ydata : _type_
+            _description_
+        yerr : _type_, optional
+            _description_, by default None
+        xtransform : str, optional
+            _description_, by default 'minmax'
+        ytransform : _type_, optional
+            _description_, by default None
+        """
+        
+        transform_dic = {'minmax':MinMax(),
+                         'zscore':ZScore(),
+                         'robust_score':RobustZScore()}
+        
+        if xtransform is None or isinstance(xtransform, Transformer):
+            self.xtransform = xtransform
+        else:
+            self.xtransform = transform_dic[xtransform]
+            
+        if ytransform is None or isinstance(ytransform, Transformer):
             self.ytransform = ytransform
+        else:
+            self.ytransform = transform_dic[ytransform]
+            
         self.xdata = xdata
         self.ydata = ydata
         if yerr is not None:
@@ -263,6 +274,47 @@ class Lightcurve(object):
             optim="AdamW", miniter=100, stop=1e-5, lr=0.1,
             stopavg=30,
             **kwargs):
+        """Fit the lightcurve
+
+        Parameters
+        ----------
+        model : _type_, optional
+            _description_, by default None
+        likelihood : _type_, optional
+            _description_, by default None
+        num_mixtures : int, optional
+            _description_, by default 4
+        guess : _type_, optional
+            _description_, by default None
+        grid_size : int, optional
+            _description_, by default 2000
+        cuda : bool, optional
+            _description_, by default False
+        training_iter : int, optional
+            _description_, by default 300
+        max_cg_iterations : _type_, optional
+            _description_, by default None
+        optim : str, optional
+            _description_, by default "AdamW"
+        miniter : int, optional
+            _description_, by default 100
+        stop : _type_, optional
+            _description_, by default 1e-5
+        lr : float, optional
+            _description_, by default 0.1
+        stopavg : int, optional
+            _description_, by default 30
+
+        Returns
+        -------
+        _type_
+            _description_
+
+        Raises
+        ------
+        ValueError
+            _description_
+        """
         if self._yerr_transformed is not None and likelihood is None:
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
                 self._yerr_transformed)  # , learn_additional_noise = True)
@@ -284,11 +336,11 @@ class Lightcurve(object):
             "2DLinear": TwoDSpectralMixtureLinearMeanGPModel
         }
 
-        model_dic_2 = {
-            "1DSKI": SpectralMixtureKISSGPModel,
-            "2DSKI": TwoDSpectralMixtureKISSGPModel,
-            "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
-            "2DLinearSKI": TwoDSpectrakMixtureLinearMeanKISSGPModel
+        model_dic_2={
+        "1DSKI": SpectralMixtureKISSGPModel,
+        "2DSKI": TwoDSpectralMixtureKISSGPModel,
+        "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
+        "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
         }
 
         if "GP" in [t.__name__ for t in type(model).__mro__]:  # check if it is or inherets from a GPyTorch model
@@ -431,3 +483,24 @@ class Lightcurve(object):
             ax.set_ylim([3, -3])
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
             plt.show()
+            
+    def plot_results(self):
+        for key, value in self.results.item():
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            try:
+                ax.plot(value, "-")
+            except ValueError:
+                pass
+            ax.set_ylabel(key)
+            ax.set_xlabel("Iteration")
+            
+            if "means" in key:
+                self.value_inversed = self.xtransform.inverse(value)
+                
+                fig = plt.figure()
+                ax = fig.add_subplot(111)
+                ax.plot(torch.Tensor(self.value_reversed),"-")
+                ax.set_ylabel(key)
+                ax.set_xlabel("Iteration")
+        plt.show()
