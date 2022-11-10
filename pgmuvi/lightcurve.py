@@ -421,7 +421,7 @@ class Lightcurve(object):
         psd = np.sum(c, axis=0)
         return psd
 
-    def plot(self):
+    def plot(self, ylim = [-3, 3]):
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Get into evaluation (predictive posterior) mode
             self.model.eval()
@@ -457,7 +457,8 @@ class Lightcurve(object):
 
             # Shade between the lower and upper confidence bounds
             ax.fill_between(x_fine_raw.numpy(), lower.numpy(), upper.numpy(), alpha=0.5)
-            ax.set_ylim([3, -3])
+            if ylim is not None:
+                ax.set_ylim(ylim)
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
             plt.show()
             
