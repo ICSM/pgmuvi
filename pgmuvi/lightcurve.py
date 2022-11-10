@@ -415,8 +415,8 @@ class Lightcurve(object):
             self.likelihood.eval()
 
             # Importing raw x and y training data from xdata and ydata functions
-            x_raw = self.xdata()
-            y_raw = self.ydata()
+            x_raw = self.xdata
+            y_raw = self.ydata
 
             # creating array of 10000 test points across the range of the data
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
