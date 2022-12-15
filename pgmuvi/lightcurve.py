@@ -312,9 +312,9 @@ class Lightcurve(object):
         ValueError
             _description_
         """
-        if self._yerr_transformed is not None and likelihood is None:
+        if hasattr(self,'_yerr_transformed') and likelihood is None:
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed) #, learn_additional_noise = True)
-        elif self._yerr_transformed is not None and likelihood is "learn":
+        elif hasattr(self,'_yerr_transformed') and likelihood is "learn":
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
                                                                                 learn_additional_noise = True)
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
@@ -397,7 +397,7 @@ class Lightcurve(object):
 
     def plot_psd(self, means, freq, scales, weights, show=True):
         #Computing the psd for frequencies f
-        psd = compute_psd(means, freq, scales, weights)
+        psd = self.compute_psd(means, freq, scales, weights)
 
         # Initialize plot
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
@@ -409,12 +409,13 @@ class Lightcurve(object):
         else:
             return fig, ax
 
-    def compute_psd(means, freq, scales, weights):
+    def compute_psd(self, means, freq, scales, weights):
+        from scipy.stats import norm
         c = np.zeros((len(means),) + freq.shape, ) #mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
         for i, m in enumerate(means): #f = array of frequencies that we want to plot
             s = scales[i] #s.d
             w = weights[i] #how much power is given to each gaussian
-            c[i] = np.sqrt(w) * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
+            c[i] = np.sqrt(w)[:,np.newaxis] * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
             # Each component of the PSD is the weight times the difference of the forward and reverse PDFs
             # In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
         # Now we just have to some over the components
