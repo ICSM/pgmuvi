@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import gpytorch
 import pandas as pd
+from astropy.table import Table,QTable
 from gps import SpectralMixtureGPModel as SMG
 from gps import SpectralMixtureKISSGPModel as SMKG
 from gps import TwoDSpectralMixtureGPModel as TMG
@@ -14,16 +15,17 @@ from pyro.infer.mcmc import NUTS, MCMC, HMC
 from pyro.optim import Adam
 from pyro.infer import SVI, Trace_ELBO
 import pyro.distributions as dist
+from astropy.table import Table, MaskedColumn
 
 from astropy import units
 
-def parse_results(results):
+def parse_results(gp, results):
     loss = results['loss']
     print("Final loss: ",loss[-1])
     
     pass
 
-def plot_results(results, zscale = None):
+def plot_results(gp, results, zscale = None):
     for key, value in results.items():
         #print(key, value, torch.Tensor(value))
         #loss = results['loss']
@@ -45,46 +47,23 @@ def plot_results(results, zscale = None):
     #plt.show()
     #pass
 
-def plot_psd(results):
+def plot_psd(gp, results):
     #if isinstance(results['covar_module.raw_mixture_weights'][-1], float): #only one mixture component
     #    n_dim, n_mix = 1, 1
     #elif isinstance(results['covar_module.raw_mixture_weights'][-1], ): #only one mixture component
     #    pass
     n_mix = results['covar_module.raw_mixture_means'][-1].size()[0]
-    n_dim = result['covar_module.raw_mixture_means'][-1].size()[1]
+    n_dim = results['covar_module.raw_mixture_means'][-1].size()[1]
     pass
-
-
-#MATLAB function for PSD from Andrew Gordon Wilson's tutorials: https://people.orie.cornell.edu/andrew/pattern/ smspect.m
-#function [sm_spect w mus sigmas] = smspect(s,hyp,Q)
-#
-#w = exp(hyp(1:Q));
-#mus = exp(hyp(Q+1:2*Q));
-#sigmas = exp(hyp(2*Q+1:3*Q));
-#
-#sm_spect = zeros(numel(s),1);
-#
-#for j=1:Q
-#    sm_spect = sm_spect + w(j)*(normpdf(s,mus(j),sigmas(j)) + normpdf(-s,mus(j),sigmas(j)));
-#end
-
-def compute_psd():
-    c = np.zeros((len(means),) + f.shape,)
-    for i, m in enumerate(means):
-        s = scales[i]
-        w = weights[i]
-        c[i] = np.sqrt(w) * (norm.pdf(f, m, s) - norm.pdf(-f, m, s)) #Each component of the PSD is the weight times the difference of the forward and reverse PDFs
-        #In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
-    #Now we just have to some over the components
-    psd = np.sum(c, axis=0)
-        
 
 def plot_data():
     pass
 
 # if __name__=="__main__":
 def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
-               magcolumn = 'Magnitude', synthetic_data=False):
+               magcolumn = 'Magnitude', synthetic_data=False, path_table="mode_csv",\
+                yerr=False,mag_err_column = 'Magnitude_err',per_guess=400.0,\
+                plot_graph=False,save_plot=False,num_tra_iter=400,tra_mag=False):
     """
     Arguments:
     ----------
@@ -116,15 +95,28 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
         period_guess = P*(np.random.uniform()+0.5)#147 #this number is in the same units as our original input.
     else:
         #testdata = pd.read_csv("~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")#[-700:]
-        testdata = pd.read_csv(LCfile)
-        #train_jd = torch.Tensor(testdata['JD'].to_numpy())
-        train_jd = torch.Tensor(testdata[timecolumn].to_numpy())
-        train_mag = torch.Tensor(testdata[magcolumn].to_numpy())
+        #-----> Modified by ALEJANDRO
+        
+        if path_table=="mode_csv":     #if you use tables in .csv format
+          testdata = pd.read_csv(LCfile)
+          #train_jd = torch.Tensor(testdata['JD'].to_numpy())
+          train_jd = torch.Tensor(testdata[timecolumn].to_numpy())
+          train_mag = torch.Tensor(testdata[magcolumn].to_numpy())
+          vec_mag=np.array(testdata[magcolumn])
+          vec_jd=np.array(testdata[timecolumn])
+        else:                           #if you use tables in .h5 format
+          testdata=QTable.read(LCfile,path_table)
+          vec_mag=np.array(testdata[magcolumn])
+          vec_jd=np.array(testdata[timecolumn])
+          train_mag = torch.Tensor(vec_mag)
+          train_jd = torch.Tensor(vec_jd)
+          
+
         print(len(train_jd))
         #train_mag = torch.Tensor(testdata['Magnitude'].to_numpy())
         train_mag_err = 0.05*train_mag
 
-        period_guess = 400.
+        period_guess = per_guess
 
     #For homoscedastic data, or when the scatter dominates instead of uncertainty, you can use this likelihood, which will attempt to learn a single number of the noise
     #likelihood = gpytorch.likelihoods.GaussianLikelihood()
@@ -142,7 +134,7 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
     #We're going to put a constraint on the noise in the likelihood, because we want to use the information we have about the data
     #likelihood.register_constraint("noise_constraint", Interval(0.08, 0.2), "noise")
 
-    n_mix = 1
+    n_mix = 1 #####1
 
     #train_jd = train_jd/365.25
     #z-scoring (i.e. transforming the data so that it fills the [0,1)
@@ -161,8 +153,12 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
     train_method=False #"NUTS"
 
     #model.covar_module.base_kernel.raw_mixture_means.item = torch.Tensor([[[np.log10(1/100)]]])
-
     
+    num_train_mag=0.0
+    if tra_mag==True:
+        num_train_mag=np.median(vec_mag)
+
+
     #Now we should z-scale it
     period_guess = period_guess/date_range
 
@@ -171,7 +167,7 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
         'covar_module.base_kernel.raw_mixture_means': (1/period_guess.clone().detach()),
         'covar_module.base_kernel.raw_mixture_weights': torch.tensor(0.0),
         'covar_module.base_kernel.raw_mixture_scales': torch.tensor(0.),
-        'mean_module.constant': torch.tensor(0.),
+        'mean_module.constant': torch.tensor(num_train_mag)#0.),
     }
 
     hypers = {
@@ -179,7 +175,7 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
         'covar_module.raw_mixture_means': (1/period_guess.clone().detach()), #torch.tensor(-2.),
         'covar_module.raw_mixture_weights': torch.tensor(0.),
         'covar_module.raw_mixture_scales': torch.tensor(0.),
-        'mean_module.constant': torch.tensor(0.),
+        'mean_module.constant': torch.tensor(num_train_mag)#0.),
     }
 
     hypers = {
@@ -187,10 +183,11 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
         'covar_module.mixture_means': (1/period_guess.clone().detach()), #torch.tensor(-2.),
         'covar_module.mixture_weights': torch.tensor(1.),
         'covar_module.mixture_scales': torch.tensor(1.),
-        'mean_module.constant': torch.tensor(0.),
+        'mean_module.constant': torch.tensor(num_train_mag)#0.),
     }
     model.initialize(**hypers)
-
+   
+    #import pdb; pdb.set_trace()
     print("Initial z-scaled period: ", 1./(model.sci_kernel.mixture_means.item())) #for a single component
     print("Initial period: ", date_range * 1./(model.sci_kernel.mixture_means.item())) #for a single component
     print("Inital width: ", (model.sci_kernel.mixture_scales.item()/model.sci_kernel.mixture_means.item()) * (date_range/(model.sci_kernel.mixture_means.item())))
@@ -284,7 +281,7 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
 
         #help(likelihood)
 
-        training_iter = 300#0
+        training_iter = num_tra_iter#0
 
         print(model.parameters())
         for p in model.parameters():
@@ -304,8 +301,8 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
             print(value[0].size())
         except:
             pass
-    plot_results(results)
-    
+    #plot_results(results)
+    import pdb; pdb.set_trace()
     ## Use the adam optimizer
     #optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
 
@@ -349,13 +346,14 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
         #print("Estimated frequency: ", model.covar_module.mixture_means.item()) #for a single component
         #print("Estimated width: ", model.covar_module.mixture_scales.item())
         #print("Fractional width: ", model.covar_module.mixture_scales.item()/model.covar_module.mixture_means.item())
-        print("Estimated period: ", date_range * 1./(model.sci_kernel.mixture_means.item())) #for a single component
+        print("Estimated period: ", date_range/(model.sci_kernel.mixture_means.item()))#date_range * 1./(model.sci_kernel.mixture_means.item())) #for a single component
+        #import pdb; pdb.set_trace()
         print("Estimated width: ", model.sci_kernel.mixture_scales.item()/model.sci_kernel.mixture_means.item() * (1./(model.sci_kernel.mixture_means.item()*date_range)))
         print("Estimated weight: ", model.sci_kernel.mixture_weights.item())
         print("Additional noise: ", model.likelihood.noise_covar.noise.item())
         #print("Estimated width: ", 1./model.covar_module.mixture_scales.item())
         
-    plot_results(results, zscale = date_range)
+    #plot_results(model, results, zscale = date_range)
     
         
     #exit()
@@ -365,28 +363,73 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
     # Get into evaluation (predictive posterior) mode
     model.eval()
     likelihood.eval()
-    
     # The gpytorch.settings.fast_pred_var flag activates LOVE (for fast variances)
     # See https://arxiv.org/abs/1803.06058
-    with torch.no_grad(), gpytorch.settings.fast_pred_var():
-        # Make predictions
-        observed_pred = likelihood(model(test_x))
-        
-        # Initialize plot
-        f, ax = plt.subplots(1, 1, figsize=(4, 3))
-        
-        # Get upper and lower confidence bounds
-        lower, upper = observed_pred.confidence_region()
-        # Plot training data as black stars
-        ax.plot(train_jd.numpy(), train_mag.numpy(), 'k*')
-        # Plot predictive means as blue line
-        ax.plot(test_x.numpy(), observed_pred.mean.numpy(), 'b')
-        # Shade between the lower and upper confidence bounds
-        ax.fill_between(test_x.numpy(), lower.numpy(), upper.numpy(), alpha=0.5)
-        ax.set_ylim([3, -3])
-        ax.legend(['Observed Data', 'Mean', 'Confidence'])
-        plt.show()
+    
+    per=(date_range * 1./(model.sci_kernel.mixture_means.item())).numpy()
+    mag=model.mean_module.constant.item()
 
 
+    if plot_graph==True:
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+         # Make predictions
+            observed_pred = likelihood(model(test_x))
+        
+            # Initialize plot
+            f, ax = plt.subplots(1, 1, figsize=(12, 8))
+            plt.rcParams.update({'font.size': 15}) 
+
+            # Get upper and lower confidence bounds
+            lower, upper = observed_pred.confidence_region()
+            # Plot training data as black stars
+            ax.plot(train_jd.numpy()*date_range.numpy(), train_mag.numpy(), 'k*')
+            # Plot predictive means as blue line
+            ax.plot(test_x.numpy()*date_range.numpy(), observed_pred.mean.numpy(), 'r')
+            # Shade between the lower and upper confidence bounds
+            ax.fill_between(test_x.numpy()*date_range.numpy(), lower.numpy(), upper.numpy(), alpha=0.5,color='r')
+            #ax.set_ylim([3, -3])
+
+            ax.axhline(y=mag, xmin=0, xmax=np.max(train_jd.numpy()*date_range.numpy()),c='g')
+            #plt.title(path_table+'   per='+str(per))
+            print(path_table)
+            ax.legend(['Observed Data', 'Model', 'Confidence', 'Mag_mean'])
+            ax.xaxis.label.set_size(20)
+            ax.yaxis.label.set_size(20)
+            ax.tick_params(labelsize=15)
+            plt.xlabel('Time [d]')
+            plt.ylabel('Magnitude')
+            if save_plot==True:
+               plt.savefig(path_table.replace('/','_')+'.pdf', bbox_inches='tight')
+
+            plt.show()
+
+       
+    if yerr==True:
+        
+        vec_mag_err=np.array(testdata[mag_err_column])
+        frec =(per)**(-1)
+        mag_err=MaskedColumn(data = vec_mag_err, mask = (vec_mag_err == 0))
+        
+        try:    
+            
+            SNR=vec_mag/mag_err
+            
+            try:
+                SNR=SNR[~SNR.mask]
+            except:
+                pass
+            average_SNR=np.median(SNR)
+            N=len(SNR) #solo usamos los datos que tienen errores en magnitud pero solo para estimar la incertidumbre
+            del_fre=frec*np.sqrt(2/(N*average_SNR**2))
+            del_per=del_fre*per**2
+            #del_per=0
+            return (mag,float(per),del_per)
+        
+        except:
+             
+             return (mag,float(per),'') 
+    else:
+        return (mag,float(per),'')
+    
 if __name__=="__main__":
     run_pgmuvi(LCfile="~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")
