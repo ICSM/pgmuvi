@@ -13,9 +13,9 @@ from astropy.timeseries import LombScargle
 from astropy.table import Table, MaskedColumn
 
 
-with open('/Users/d.vasquez/Desktop/NESS_2023/tescope_filters.json', 'r') as fp:
+with open('lightcurves/tescope_filters.json', 'r') as fp:
     data = json.load(fp)
-patt_lc='/Users/d.vasquez/Desktop/NESS_2023/data_h5/light_curves.h5'
+patt_lc='lightcurves/light_curves.h5'
 f = h5py.File(patt_lc, "r+",)
 """
 path_ssb='04573-1452/WHITELOCK/GLASS_H'
