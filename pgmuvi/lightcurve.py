@@ -144,7 +144,11 @@ class Lightcurve(object):
 
     Parameters
     ----------
-
+    xdata : Tensor of floats
+    ydata : Tensor of floats
+    yerr : Tensor of floats, optional
+    xtransform : str, optional
+    ytransform : str, optional
 
 
     Examples
@@ -392,7 +396,7 @@ class Lightcurve(object):
                 if sum_over_shape in [0,1]:
                     print(f"{key}: {results_tmp.flatten()}")
                 elif sum_over_shape == 2:
-                    print(f"{key}: {results_tmp[:,0].flatten()}, {results_tmp[:,1].flatten()}")
+                    print(f"{key}: {results_tmp[:,0].flatten()}, {results_tmp[:,2].flatten()}")
             
 
     def plot_psd(self, means, freq, scales, weights, show=True):
@@ -483,3 +487,4 @@ class Lightcurve(object):
                 ax.set_ylabel(key)
                 ax.set_xlabel("Iteration")
         plt.show()
+
