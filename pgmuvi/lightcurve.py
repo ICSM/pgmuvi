@@ -25,7 +25,7 @@ class Transformer(object):
         """
         raise NotImplementedError
 
-    def inverse(self, data, **kwargs):
+    def inverse(self, data, shift=True, **kwargs):
         """ Invert a transform based on saved parameters
 
         This is a baseclass with no implementation, your subclass should
@@ -53,7 +53,7 @@ class MinMax(Transformer):
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
         return (data-self.min)/self.range
 
-    def inverse(self, data, **kwargs):
+    def inverse(self, data, shift=True, **kwargs):
         """ Invert a MinMax transformation based on saved state
 
         Invert the transformation of the data from  the [0,1] interval. 
@@ -65,7 +65,7 @@ class MinMax(Transformer):
         data : Tensor of floats
             The data to be reverse-transformed
         """
-        return (data * self.range)+self.min
+        return (data * self.range)+(shift*self.min)
 
 class ZScore(Transformer):
     def transform(self, data, dim=0, recalc = False, **kwargs):
@@ -86,7 +86,7 @@ class ZScore(Transformer):
             self.sd = torch.std(data, dim=dim, keepdim=True)[0]
         return (data - self.mean)/self.sd
 
-    def inverse(self, data, **kwargs):
+    def inverse(self, data, shift=True, **kwargs):
         """ Invert a z-score transformation based on saved state
 
         Invert the z-scoring of the data based on the saved mean and standard
@@ -97,7 +97,7 @@ class ZScore(Transformer):
         data : Tensor of floats
             The data to be reverse-transformed
         """
-        return (data*self.sd) + self.mean
+        return (data*self.sd) + (self.mean*shift)
 
 
 class RobustZScore(Transformer):
@@ -119,7 +119,7 @@ class RobustZScore(Transformer):
             self.mad = torch.median(torch.abs(data - self.median), dim=dim, keepdim=True)[0]
         return (data - self.median)/self.mad
 
-    def inverse(self, data, **kwargs):
+    def inverse(self, data, shift=True, **kwargs):
         """ Invert a robust z-score transformation based on saved state
 
         Invert the robust z-scoring of the data based on the saved median and 
@@ -130,7 +130,7 @@ class RobustZScore(Transformer):
         data : Tensor of floats
             The data to be reverse-transformed
         """
-        return (data * self.mad) + self.median
+        return (data * self.mad) + (self.median*shift)
 
 def minmax(data, dim=0):
     m = torch.min(data, dim=dim, keepdim=True)
