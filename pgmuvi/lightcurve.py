@@ -396,7 +396,9 @@ class Lightcurve(object):
                 if sum_over_shape in [0,1]:
                     print(f"{key}: {results_tmp.flatten()}")
                 elif sum_over_shape == 2:
-                    print(f"{key}: {results_tmp[...,0].flatten()}, {results_tmp[...,2].flatten()}")
+                    for i in range(results_tmp.shape[-1]):
+                        print(f"{key}: {results_tmp[...,i].flatten()}")
+                    # print(f"{key}: {results_tmp[...,0].flatten()}, {results_tmp[...,2].flatten()}")
             
 
     def plot_psd(self, means, freq, scales, weights, show=True):
