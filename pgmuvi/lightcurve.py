@@ -160,6 +160,7 @@ class Lightcurve(object):
     """
     def __init__(self, xdata, ydata, yerr = None,
                  xtransform='minmax', ytransform = None,
+                 name=None,
                  **kwargs):
         """_summary_
 
@@ -195,6 +196,8 @@ class Lightcurve(object):
         self.ydata = ydata
         if yerr is not None:
             self.yerr = yerr
+
+        self.name = "Lightcurve" if name is None else name
 
     @property
     def ndim(self):
@@ -446,7 +449,8 @@ class Lightcurve(object):
             # creating array of 10000 test points across the range of the data
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
 
-            # transforming the x_fine_raw data to the space that the GP was trained in (so it can predict)
+            # transforming the x_fine_raw data to the space that the GP was
+            # trained in (so it can predict)
             if self.xtransform is None:
                 x_fine_transformed = x_fine_raw
             elif isinstance(self.xtransform, Transformer):
@@ -468,11 +472,50 @@ class Lightcurve(object):
             ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
 
             # Shade between the lower and upper confidence bounds
-            ax.fill_between(x_fine_raw.numpy(), lower.numpy(), upper.numpy(), alpha=0.5)
+            ax.fill_between(x_fine_raw.numpy(),
+                            lower.numpy(), upper.numpy(),
+                            alpha=0.5)
             if ylim is not None:
                 ax.set_ylim(ylim)
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
             plt.show()
+
+    def _plot_1d(self, ylim=None):
+        pass
+
+    def _plot_2d(self, x_fine, ylim=None, show=False,
+                 save=True):
+        unique_values_axis2 = torch.unique(self.xdata[:,1])
+        for val in unique_values_axis2:
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            ax.plot(self.xdata[self.xdata[:,1]==val,0], 
+                    self.ydata[self.xdata[:,1]==val], 
+                    "k*")
+
+            vals = torch.ones_like(x_fine)*val
+            x_fine_tmp = torch.cat((x_fine, vals[:,None]), dim=1)
+
+            observed_pred = self.likelihood(self.model(x_fine_tmp))
+            ax.plot(x_fine_tmp[:,0].numpy(), observed_pred.mean.numpy(), 'b')
+
+            lower, upper = observed_pred.confidence_region()
+            ax.fill_between(x_fine_tmp[:,0].numpy(),
+                            lower.numpy(), upper.numpy(),
+                            alpha=0.5)
+            ax.legend(['Observed Data', 'Mean', 'Confidence'])
+
+            ax.set_ylabel("y")
+            ax.set_xlabel("x")
+            ax.set_title(f"y vs x for {val}")
+            if ylim is not None:
+                ax.set_ylim(ylim)
+            if save:
+                plt.savefig(f"{self.name}_{val}_fit.png")
+        
+            if show:
+                plt.show()
+        return fig
             
     def plot_results(self):
         for key, value in self.results.item():
