@@ -59,6 +59,7 @@ class MinMax(Transformer):
             self.min = torch.min(data, dim=dim, keepdim=True)[0]
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
         if apply_to is not None:
+            import pdb; pdb.set_trace()
             return (data-self.min[apply_to])/self.range[apply_to]
         return (data-self.min)/self.range
 
