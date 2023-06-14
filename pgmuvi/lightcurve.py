@@ -1,3 +1,4 @@
+import contextlib
 import numpy as np
 import torch
 import gpytorch
@@ -48,7 +49,7 @@ class MinMax(Transformer):
         ----------
         data : Tensor of floats
             The data to be transformed
-        apply_to : int or tensor of ints, optional
+        apply_to : tensor of ints or slice objects, optional
             Which dimensions to apply the transform to. If None, apply to all
         recalc : bool, default False
             Should the min and range of the transform be recalculated, or
@@ -58,9 +59,7 @@ class MinMax(Transformer):
             self.min = torch.min(data, dim=dim, keepdim=True)[0]
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
         if apply_to is not None:
-            self.min = self.min[apply_to]
-            self.range = self.range[apply_to]
-            import pdb; pdb.set_trace()
+            return (data-self.min[apply_to])/self.range[apply_to]
         return (data-self.min)/self.range
 
     def inverse(self, data, shift=True, **kwargs):
@@ -100,8 +99,7 @@ class ZScore(Transformer):
             self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
             self.sd = torch.std(data, dim=dim, keepdim=True)[0]
         if apply_to is not None:
-            self.mean = self.mean[apply_to]
-            self.sd = self.sd[apply_to]
+            return (data-self.mean[apply_to])/self.sd[apply_to]
         return (data - self.mean)/self.sd
 
     def inverse(self, data, shift=True, **kwargs):
@@ -141,8 +139,7 @@ class RobustZScore(Transformer):
             self.mad = torch.median(torch.abs(data - self.median),
                                     dim=dim, keepdim=True)[0]
         if apply_to is not None:
-            self.median = self.median[apply_to]
-            self.mad = self.mad[apply_to]
+            return (data-self.median[apply_to])/self.mad[apply_to]
         return (data - self.median)/self.mad
 
     def inverse(self, data, shift=True, **kwargs):
@@ -466,7 +463,7 @@ class Lightcurve(object):
         psd = np.sum(c, axis=0)
         return psd
 
-    def plot(self, ylim=None):
+    def plot(self, ylim=None, show=True):
         if ylim is None:
             ylim = [-3, 3]
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
@@ -481,58 +478,81 @@ class Lightcurve(object):
             # creating array of 10000 test points across the range of the data
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
 
-            # transforming the x_fine_raw data to the space that the GP was
-            # trained in (so it can predict)
-            if self.xtransform is None:
-                x_fine_transformed = x_fine_raw
-            elif isinstance(self.xtransform, Transformer):
-                x_fine_transformed = self.xtransform.transform(x_fine_raw, apply_to=0)
+            if self.ndim == 1:
+                fig = self._plot_1d(x_fine_raw, ylim=ylim, 
+                              show=show)
+            elif self.ndim == 2:
+                fig = self._plot_2d(x_fine_raw, ylim=ylim,
+                              show=show)
+            else:
+                raise NotImplementedError("""
+                Plotting models and data in more than 2 dimensions is not
+                currently supported. Please get in touch if you need this
+                functionality!
+                """)
+        return fig
 
-            # Make predictions
-            observed_pred = self.likelihood(self.model(x_fine_transformed))
-
-            # Initialize plot
-            f, ax = plt.subplots(1, 1, figsize=(8,6))
-
-            # Get upper and lower confidence bounds
-            lower, upper = observed_pred.confidence_region()
-
-            # Plot training data as black stars
-            ax.plot(x_raw.numpy(), y_raw.numpy(), 'k*')
-
-            # Plot predictive GP mean as blue line
-            ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
-
-            # Shade between the lower and upper confidence bounds
-            ax.fill_between(x_fine_raw.numpy(),
-                            lower.numpy(), upper.numpy(),
-                            alpha=0.5)
-            if ylim is not None:
-                ax.set_ylim(ylim)
-            ax.legend(['Observed Data', 'Mean', 'Confidence'])
-            plt.show()
-
-    def _plot_1d(self, ylim=None):
-        pass
-
-    def _plot_2d(self, x_fine, ylim=None, show=False,
+    def _plot_1d(self, x_fine_raw, ylim=None, show=False,
                  save=True):
+        # transforming the x_fine_raw data to the space that the GP was
+        # trained in (so it can predict)
+        if self.xtransform is None:
+            x_fine_transformed = x_fine_raw
+        elif isinstance(self.xtransform, Transformer):
+            x_fine_transformed = self.xtransform.transform(x_fine_raw)
+
+        # Make predictions
+        observed_pred = self.likelihood(self.model(x_fine_transformed))
+
+        # Initialize plot
+        f, ax = plt.subplots(1, 1, figsize=(8,6))
+
+        # Get upper and lower confidence bounds
+        lower, upper = observed_pred.confidence_region()
+
+        # Plot training data as black stars
+        ax.plot(x_raw.numpy(), y_raw.numpy(), 'k*')
+
+        # Plot predictive GP mean as blue line
+        ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
+
+        # Shade between the lower and upper confidence bounds
+        ax.fill_between(x_fine_raw.numpy(),
+                        lower.numpy(), upper.numpy(),
+                        alpha=0.5)
+        if ylim is not None:
+            ax.set_ylim(ylim)
+        ax.legend(['Observed Data', 'Mean', 'Confidence'])
+        if save:
+            plt.savefig(f"{self.name}_{val}_fit.png")
+        if show:
+            plt.show()
+        return f
+
+    def _plot_2d(self, x_fine_raw, ylim=None, show=False,
+                 save=True):
+        if self.xtransform is None:
+            x_fine_transformed = x_fine_raw
+        elif isinstance(self.xtransform, Transformer):
+            x_fine_transformed = self.xtransform.transform(x_fine_raw,
+                                                           apply_to=[None, 0])
         unique_values_axis2 = torch.unique(self.xdata[:,1])
+        figs = []
         for val in unique_values_axis2:
             fig = plt.figure()
             ax = fig.add_subplot(111)
-            ax.plot(self.xdata[self.xdata[:,1]==val,0], 
-                    self.ydata[self.xdata[:,1]==val], 
+            ax.plot(self.xdata[self.xdata[:, 1] == val, 0],
+                    self.ydata[self.xdata[:, 1] == val],
                     "k*")
 
-            vals = torch.ones_like(x_fine)*val
-            x_fine_tmp = torch.cat((x_fine, vals[:,None]), dim=1)
+            vals = torch.ones_like(x_fine_transformed)*val
+            x_fine_tmp = torch.cat((x_fine_transformed, vals[:, None]), dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            ax.plot(x_fine_tmp[:,0].numpy(), observed_pred.mean.numpy(), 'b')
+            ax.plot(x_fine_tmp[:, 0].numpy(), observed_pred.mean.numpy(), 'b')
 
             lower, upper = observed_pred.confidence_region()
-            ax.fill_between(x_fine_tmp[:,0].numpy(),
+            ax.fill_between(x_fine_tmp[:, 0].numpy(),
                             lower.numpy(), upper.numpy(),
                             alpha=0.5)
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
@@ -547,7 +567,8 @@ class Lightcurve(object):
         
             if show:
                 plt.show()
-        return fig
+            figs.append(fig)
+        return figs
     
     def _plot_nd(self):
         raise NotImplementedError("""
@@ -559,16 +580,14 @@ class Lightcurve(object):
         for key, value in self.results.item():
             fig = plt.figure()
             ax = fig.add_subplot(111)
-            try:
+            with contextlib.suppress(ValueError):
                 ax.plot(value, "-")
-            except ValueError:
-                pass
             ax.set_ylabel(key)
             ax.set_xlabel("Iteration")
-            
+
             if "means" in key:
                 self.value_inversed = self.xtransform.inverse(value)
-                
+
                 fig = plt.figure()
                 ax = fig.add_subplot(111)
                 ax.plot(torch.Tensor(self.value_reversed),"-")
