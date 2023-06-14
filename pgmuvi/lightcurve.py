@@ -476,7 +476,7 @@ class Lightcurve(object):
             if self.ndim == 1:
                 x_raw = self.xdata
             elif self.ndim == 2:
-                x_fine_raw = self.xdata[:, 0]
+                x_raw = self.xdata[:, 0]
             y_raw = self.ydata
 
             # creating array of 10000 test points across the range of the data
