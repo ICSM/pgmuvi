@@ -51,8 +51,11 @@ class MinMax(Transformer):
         if recalc or not hasattr(self,"min"):
             self.min = torch.min(data, dim=dim, keepdim=True)[0]
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
-        import pdb; pdb.set_trace()
-        return torch.div(torch.sub(data, self.min), self.range)
+        try:
+            r = torch.div(torch.sub(data, self.min), self.range)
+        except:
+            import pdb; pdb.set_trace()
+        return r
 
     def inverse(self, data, shift=True, **kwargs):
         """ Invert a MinMax transformation based on saved state
