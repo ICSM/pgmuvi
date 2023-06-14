@@ -475,10 +475,9 @@ class Lightcurve(object):
             # ydata functions
             if self.ndim == 1:
                 x_raw = self.xdata
-                y_raw = self.ydata
             elif self.ndim == 2:
                 x_fine_raw = self.xdata[:, 0]
-                y_raw = self.ydata[:, 0]
+            y_raw = self.ydata
 
             # creating array of 10000 test points across the range of the data
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
