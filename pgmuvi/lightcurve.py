@@ -1,10 +1,9 @@
 import numpy as np
 import torch
 import gpytorch
-import pandas as pd
-#from gps import SpectralMixtureGPModel as SMG
-#from gps import SpectralMixtureKISSGPModel as SMKG
-#from gps import TwoDSpectralMixtureGPModel as TMG
+# from gps import SpectralMixtureGPModel as SMG
+# from gps import SpectralMixtureKISSGPModel as SMKG
+# from gps import TwoDSpectralMixtureGPModel as TMG
 from .gps import * #FIX THIS LATER!
 import matplotlib.pyplot as plt
 from .trainers import train
@@ -16,11 +15,13 @@ from pyro.optim import Adam
 from pyro.infer import SVI, Trace_ELBO
 import pyro.distributions as dist
 
+
 class Transformer(object):
     def transform(self, data, **kwargs):
-        """ Transform some data and return it, storing the parameters required to repeat or reverse the transform 
+        """ Transform some data and return it, storing the parameters required
+        to repeat or reverse the transform 
 
-        This is a baseclass with no implementations, your subclass should 
+        This is a baseclass with no implementations, your subclass should
         implement the transform itself
         """
         raise NotImplementedError
@@ -39,8 +40,8 @@ class MinMax(Transformer):
                   recalc=False, **kwargs):
         """ Perform a MinMax transformation
 
-        Transform the data such that each dimension is rescaled to the [0,1] 
-        interval. It stores the min and range of the data for the inverse 
+        Transform the data such that each dimension is rescaled to the [0,1]
+        interval. It stores the min and range of the data for the inverse
         transformation.
 
         Parameters
@@ -50,7 +51,7 @@ class MinMax(Transformer):
         apply_to : int or tensor of ints, optional
             Which dimensions to apply the transform to. If None, apply to all
         recalc : bool, default False
-            Should the min and range of the transform be recalculated, or 
+            Should the min and range of the transform be recalculated, or
             reused from previously?
         """
         if recalc or not hasattr(self, "min"):
@@ -64,8 +65,8 @@ class MinMax(Transformer):
     def inverse(self, data, shift=True, **kwargs):
         """ Invert a MinMax transformation based on saved state
 
-        Invert the transformation of the data from  the [0,1] interval. 
-        It used the stored min and range of the data for the inverse 
+        Invert the transformation of the data from  the [0,1] interval.
+        It used the stored min and range of the data for the inverse
         transformation.
 
         Parameters
@@ -79,7 +80,7 @@ class MinMax(Transformer):
 class ZScore(Transformer):
     def transform(self, data, dim=0, apply_to=None,
                   recalc=False, **kwargs):
-        """ Perform a z-score transformation 
+        """ Perform a z-score transformation
 
         Transform the data such that each dimension is rescaled such that
         its mean is 0 and its standard deviation is 1.
@@ -119,7 +120,7 @@ class ZScore(Transformer):
 class RobustZScore(Transformer):
     def transform(self, data, dim=0, apply_to=None,
                   recalc=False, **kwargs):
-        """ Perform a robust z-score transformation 
+        """ Perform a robust z-score transformation
 
         Transform the data such that each dimension is rescaled such that
         its median is 0 and its median absolute deviation is 1.
@@ -131,7 +132,7 @@ class RobustZScore(Transformer):
         apply_to : int or tensor of ints, optional
             Which dimensions to apply the transform to. If None, apply to all
         recalc : bool, default False
-            Should the parameters of the transform be recalculated, or reused 
+            Should the parameters of the transform be recalculated, or reused
             from previously?
         """
         if recalc or not hasattr(self, 'mad'):
@@ -146,7 +147,7 @@ class RobustZScore(Transformer):
     def inverse(self, data, shift=True, **kwargs):
         """ Invert a robust z-score transformation based on saved state
 
-        Invert the robust z-scoring of the data based on the saved median and 
+        Invert the robust z-scoring of the data based on the saved median and
         median absolute deviation.
 
         Parameters
@@ -184,8 +185,8 @@ class Lightcurve(object):
     Notes
     -----
     """
-    def __init__(self, xdata, ydata, yerr = None,
-                 xtransform='minmax', ytransform = None,
+    def __init__(self, xdata, ydata, yerr=None,
+                 xtransform='minmax', ytransform=None,
                  name=None,
                  **kwargs):
         """_summary_
@@ -204,9 +205,9 @@ class Lightcurve(object):
             _description_, by default None
         """
         
-        transform_dic = {'minmax':MinMax(),
-                         'zscore':ZScore(),
-                         'robust_score':RobustZScore()}
+        transform_dic = {'minmax': MinMax(),
+                         'zscore': ZScore(),
+                         'robust_score': RobustZScore()}
 
         if xtransform is None or isinstance(xtransform, Transformer):
             self.xtransform = xtransform
@@ -241,17 +242,20 @@ class Lightcurve(object):
     def xdata(self):
         """ The independent variable data
 
-        :getter: Returns the independent variable data in its raw (untransformed) state
-        :setter: Takes the input data and transforms it as requested by the user 
+        :getter: Returns the independent variable data in its raw
+        (untransformed) state
+        :setter: Takes the input data and transforms it as requested by the
+        user 
         :type: torch.Tensor
         """
         return self._xdata_raw
 
     @xdata.setter
     def xdata(self, values):
-        #first, store the raw data internally
+        # first, store the raw data internally
         self._xdata_raw = values
-        #then, apply the transformation to the values, so it can be used to train the GP
+        # then, apply the transformation to the values, so it can be used to
+        # train the GP
         if self.xtransform is None:
             self._xdata_transformed = values
         elif isinstance(self.xtransform, Transformer):
@@ -260,12 +264,12 @@ class Lightcurve(object):
     @property
     def ydata(self):
         return self._ydata_raw
-    
+
     @ydata.setter
     def ydata(self, values):
-        #first, store the raw data internally
+        # first, store the raw data internally
         self._ydata_raw = values
-        #then, apply the transformation to the values
+        # then, apply the transformation to the values
         if self.ytransform is None:
             self._ydata_transformed = values
         elif isinstance(self.ytransform, Transformer):
@@ -278,7 +282,7 @@ class Lightcurve(object):
     @yerr.setter
     def yerr(self, values):
         self._yerr_raw = values
-        #now apply the same transformation that was applied to the ydata
+        # now apply the same transformation that was applied to the ydata
         if self.ytransform is None:
             self._yerr_transformed = values
         elif isinstance(self.ytransform, Transformer):
@@ -287,13 +291,11 @@ class Lightcurve(object):
     def append_data(self, new_values_x, new_values_y):
         pass
 
-
     def transform_x(self, values):
         if self.xtransform is None:
             return values
         elif isinstance(self.xtransform, Transformer):
             return self.xtransform.transform(values)
-
 
     def transform_y(self, values):
         if self.ytransform is None:
@@ -301,10 +303,10 @@ class Lightcurve(object):
         elif isinstance(self.xtransform, Transformer):
             return self.xtransform.transform(values)    
     
-    def fit(self, model = None, likelihood = None, num_mixtures = 4,
-            guess = None, grid_size = 2000, cuda = False,
-            training_iter=300, max_cg_iterations = None,
-            optim="AdamW", miniter=100, stop=1e-5, lr = 0.1,
+    def fit(self, model=None, likelihood=None, num_mixtures=4,
+            guess=None, grid_size=2000, cuda=False,
+            training_iter=300, max_cg_iterations=None,
+            optim="AdamW", miniter=100, stop=1e-5, lr=0.1,
             stopavg=30,
             **kwargs):
         """Fit the lightcurve
@@ -350,7 +352,7 @@ class Lightcurve(object):
         """
         if hasattr(self,'_yerr_transformed') and likelihood is None:
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed) #, learn_additional_noise = True)
-        elif hasattr(self,'_yerr_transformed') and likelihood is "learn":
+        elif hasattr(self, '_yerr_transformed') and likelihood == "learn":
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
                                                                                 learn_additional_noise = True)
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
@@ -362,17 +364,17 @@ class Lightcurve(object):
         #Also add a case for if it is a Likelihood object
 
         model_dic_1 = {
-        "2D": TwoDSpectralMixtureGPModel,
-        "1D": SpectralMixtureGPModel,
-        "1DLinear": SpectralMixtureLinearMeanGPModel,
-        "2DLinear": TwoDSpectralMixtureLinearMeanGPModel
+            "2D": TwoDSpectralMixtureGPModel,
+            "1D": SpectralMixtureGPModel,
+            "1DLinear": SpectralMixtureLinearMeanGPModel,
+            "2DLinear": TwoDSpectralMixtureLinearMeanGPModel
         }
 
         model_dic_2={
-        "1DSKI": SpectralMixtureKISSGPModel,
-        "2DSKI": TwoDSpectralMixtureKISSGPModel,
-        "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
-        "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
+            "1DSKI": SpectralMixtureKISSGPModel,
+            "2DSKI": TwoDSpectralMixtureKISSGPModel,
+            "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
+            "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
         }
 
         if "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
@@ -388,23 +390,21 @@ class Lightcurve(object):
                                             self._ydata_transformed,
                                             self.likelihood,
                                             num_mixtures=num_mixtures) #Add missing arguments
-        
+
         else:
             raise ValueError("Insert a valid model")
 
         if cuda:
             self.likelihood.cuda()
             self.model.cuda()
-            
 
         if guess is not None:
             self.model.initialize(**guess)
 
         # Next we probably want to report some setup info
+        # later...
 
-
-
-        #Train the model
+        # Train the model
         self.model.train()
         self.likelihood.train()
 
@@ -412,14 +412,20 @@ class Lightcurve(object):
             print(f'Parameter name: {param_name:42} value = {param.data}')
 
         with gpytorch.settings.max_cg_iterations(10000):
-            self.results = train(self.model, self.likelihood, self._xdata_transformed, self._ydata_transformed, maxiter = training_iter, miniter = miniter, stop = stop, lr=lr, optim=optim, stopavg=stopavg)
+            self.results = train(self.model, self.likelihood,
+                                 self._xdata_transformed,
+                                 self._ydata_transformed,
+                                 maxiter=training_iter,
+                                 miniter=miniter,
+                                 stop=stop, lr=lr,
+                                 optim=optim, stopavg=stopavg)
 
         return self.results
 
     def print_results(self):
         for key in self.results.keys():
             results_tmp = self.results[key][-1]
-            results_tmp_shape = results_tmp.shape #e.g. (4,1,1)
+            results_tmp_shape = results_tmp.shape  # e.g. (4,1,1)
             results_tmp_shape_len = len(results_tmp.shape)
             if results_tmp_shape_len == 1:
                 print(f"{key}: {results_tmp}")
@@ -432,7 +438,6 @@ class Lightcurve(object):
                         print(f"{key}: {results_tmp[...,i].flatten()}")
                     # print(f"{key}: {results_tmp[...,0].flatten()}, {results_tmp[...,2].flatten()}")
             
-
     def plot_psd(self, means, freq, scales, weights, show=True):
         #Computing the psd for frequencies f
         psd = self.compute_psd(means, freq, scales, weights)
@@ -480,6 +485,7 @@ class Lightcurve(object):
             if self.xtransform is None:
                 x_fine_transformed = x_fine_raw
             elif isinstance(self.xtransform, Transformer):
+                import pdb; pdb.set_trace()
                 x_fine_transformed = self.xtransform.transform(x_fine_raw, apply_to=0)
 
             # Make predictions
