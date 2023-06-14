@@ -546,8 +546,9 @@ class Lightcurve(object):
                     "k*")
 
             vals = torch.ones_like(x_fine_transformed)*val
-            import pdb; pdb.set_trace()
-            x_fine_tmp = torch.cat((x_fine_transformed, vals[:, None]), dim=1)
+            x_fine_tmp = torch.cat((x_fine_transformed[:, None],
+                                    vals[:, None]),
+                                   dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
             ax.plot(x_fine_tmp[:, 0].numpy(), observed_pred.mean.numpy(), 'b')
