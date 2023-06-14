@@ -59,7 +59,6 @@ class MinMax(Transformer):
             self.min = torch.min(data, dim=dim, keepdim=True)[0]
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
         if apply_to is not None:
-            import pdb; pdb.set_trace()
             return (data-self.min[apply_to])/self.range[apply_to]
         return (data-self.min)/self.range
 
@@ -547,6 +546,7 @@ class Lightcurve(object):
                     "k*")
 
             vals = torch.ones_like(x_fine_transformed)*val
+            import pdb; pdb.set_trace()
             x_fine_tmp = torch.cat((x_fine_transformed, vals[:, None]), dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
