@@ -421,10 +421,24 @@ class Lightcurve(object):
         return self.results
     
     def print_periods(self):
-        for i in range(self.ndim):
-            print(f"Period {i}: "
-                  f"{self.xtransform.inverse(1/self.model.covar_module.raw_mixture_means[i,0], shift=False)},"
-                  f" weight: {self.model.covar_module.raw_mixture_weights[i,0]}")
+        if self.ndim == 1:
+            for i in range(len(self.model.covar_module.raw_mixture_means)):
+                if self.xtransform is None:
+                    p = 1/self.model.covar_module.raw_mixture_means[i]
+                else:
+                    p = self.xtransform.inverse(1/self.model.covar_module.raw_mixture_means[i], shift=False)
+                print(f"Period {i}: "
+                      f"{p}"
+                      f" weight: {self.model.covar_module.raw_mixture_weights[i]}")
+        elif self.ndim == 2:
+            for i in range(len(self.model.covar_module.raw_mixture_means[:,0])):
+                if self.xtransform is None:
+                    p = 1/self.model.covar_module.raw_mixture_means[:,i]
+                else:
+                    p = self.xtransform.inverse(1/self.model.covar_module.raw_mixture_means[:,i], shift=False)
+                print(f"Period {i}: "
+                      f"{p}"
+                      f" weight: {self.model.covar_module.raw_mixture_weights[i]}")
 
     def print_results(self):
         for key in self.results.keys():
