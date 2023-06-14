@@ -535,7 +535,7 @@ class Lightcurve(object):
             x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
             x_fine_transformed = self.xtransform.transform(x_fine_raw,
-                                                           apply_to=[None, 0])
+                                                           apply_to=[0, 0])
         unique_values_axis2 = torch.unique(self.xdata[:,1])
         figs = []
         for val in unique_values_axis2:
