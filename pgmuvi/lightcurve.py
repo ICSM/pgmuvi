@@ -551,10 +551,10 @@ class Lightcurve(object):
                                    dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            ax.plot(x_fine_tmp[:, 0].numpy(), observed_pred.mean.numpy(), 'b')
+            ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
 
             lower, upper = observed_pred.confidence_region()
-            ax.fill_between(x_fine_tmp[:, 0].numpy(),
+            ax.fill_between(x_fine_raw.numpy(),
                             lower.numpy(), upper.numpy(),
                             alpha=0.5)
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
