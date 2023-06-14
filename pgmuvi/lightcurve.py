@@ -60,6 +60,7 @@ class MinMax(Transformer):
         if apply_to is not None:
             self.min = self.min[apply_to]
             self.range = self.range[apply_to]
+        import pdb; pdb.set_trace()
         return (data-self.min)/self.range
 
     def inverse(self, data, shift=True, **kwargs):
@@ -485,7 +486,6 @@ class Lightcurve(object):
             if self.xtransform is None:
                 x_fine_transformed = x_fine_raw
             elif isinstance(self.xtransform, Transformer):
-                import pdb; pdb.set_trace()
                 x_fine_transformed = self.xtransform.transform(x_fine_raw, apply_to=0)
 
             # Make predictions
