@@ -33,9 +33,11 @@ class Transformer(object):
         """
         raise NotImplementedError
 
+
 class MinMax(Transformer):
-    def transform(self, data, dim=0, recalc = False, **kwargs):
-        """ Perform a MinMax transformation 
+    def transform(self, data, dim=0, apply_to=None,
+                  recalc=False, **kwargs):
+        """ Perform a MinMax transformation
 
         Transform the data such that each dimension is rescaled to the [0,1] 
         interval. It stores the min and range of the data for the inverse 
@@ -45,12 +47,18 @@ class MinMax(Transformer):
         ----------
         data : Tensor of floats
             The data to be transformed
+        apply_to : int or tensor of ints, optional
+            Which dimensions to apply the transform to. If None, apply to all
         recalc : bool, default False
-            Should the min and range of the transform be recalculated, or reused from previously?
+            Should the min and range of the transform be recalculated, or 
+            reused from previously?
         """
-        if recalc or not hasattr(self,"min"):
+        if recalc or not hasattr(self, "min"):
             self.min = torch.min(data, dim=dim, keepdim=True)[0]
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
+        if apply_to is not None:
+            self.min = self.min[apply_to]
+            self.range = self.range[apply_to]
         return (data-self.min)/self.range
 
     def inverse(self, data, shift=True, **kwargs):
@@ -67,23 +75,31 @@ class MinMax(Transformer):
         """
         return (data * self.range)+(shift*self.min)
 
+
 class ZScore(Transformer):
-    def transform(self, data, dim=0, recalc = False, **kwargs):
+    def transform(self, data, dim=0, apply_to=None,
+                  recalc=False, **kwargs):
         """ Perform a z-score transformation 
 
-        Transform the data such that each dimension is rescaled to the such that
+        Transform the data such that each dimension is rescaled such that
         its mean is 0 and its standard deviation is 1.
 
         Parameters
         ----------
         data : Tensor of floats
             The data to be transformed
+        apply_to : int or tensor of ints, optional
+            Which dimensions to apply the transform to. If None, apply to all
         recalc : bool, default False
-            Should the parameters of the transform be recalculated, or reused from previously?
+            Should the parameters of the transform be recalculated, or reused
+            from previously?
         """
         if recalc or not hasattr(self, 'mean'):
             self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
             self.sd = torch.std(data, dim=dim, keepdim=True)[0]
+        if apply_to is not None:
+            self.mean = self.mean[apply_to]
+            self.sd = self.sd[apply_to]
         return (data - self.mean)/self.sd
 
     def inverse(self, data, shift=True, **kwargs):
@@ -101,22 +117,30 @@ class ZScore(Transformer):
 
 
 class RobustZScore(Transformer):
-    def transform(self, data, dim=0, recalc = False, **kwargs):
+    def transform(self, data, dim=0, apply_to=None,
+                  recalc=False, **kwargs):
         """ Perform a robust z-score transformation 
 
-        Transform the data such that each dimension is rescaled to the such that
+        Transform the data such that each dimension is rescaled such that
         its median is 0 and its median absolute deviation is 1.
 
         Parameters
         ----------
         data : Tensor of floats
             The data to be transformed
+        apply_to : int or tensor of ints, optional
+            Which dimensions to apply the transform to. If None, apply to all
         recalc : bool, default False
-            Should the parameters of the transform be recalculated, or reused from previously?
+            Should the parameters of the transform be recalculated, or reused 
+            from previously?
         """
         if recalc or not hasattr(self, 'mad'):
             self.median = torch.median(data, dim=dim, keepdim=True)[0]
-            self.mad = torch.median(torch.abs(data - self.median), dim=dim, keepdim=True)[0]
+            self.mad = torch.median(torch.abs(data - self.median),
+                                    dim=dim, keepdim=True)[0]
+        if apply_to is not None:
+            self.median = self.median[apply_to]
+            self.mad = self.mad[apply_to]
         return (data - self.median)/self.mad
 
     def inverse(self, data, shift=True, **kwargs):
@@ -132,10 +156,12 @@ class RobustZScore(Transformer):
         """
         return (data * self.mad) + (self.median*shift)
 
+
 def minmax(data, dim=0):
     m = torch.min(data, dim=dim, keepdim=True)
     r = torch.max(data, dim=dim, keepdim=True) - m
     return (data-m)/r, m, r
+
 
 class Lightcurve(object):
     """ A class for storing, manipulating and fitting light curves
@@ -454,7 +480,7 @@ class Lightcurve(object):
             if self.xtransform is None:
                 x_fine_transformed = x_fine_raw
             elif isinstance(self.xtransform, Transformer):
-                x_fine_transformed = self.xtransform.transform(x_fine_raw)
+                x_fine_transformed = self.xtransform.transform(x_fine_raw, apply_to=0)
 
             # Make predictions
             observed_pred = self.likelihood(self.model(x_fine_transformed))
@@ -516,6 +542,12 @@ class Lightcurve(object):
             if show:
                 plt.show()
         return fig
+    
+    def _plot_nd(self):
+        raise NotImplementedError("""
+        Plotting models and data in more than 2 dimensions is not currently supported.
+        Please get in touch if you need this functionality!
+        """)
             
     def plot_results(self):
         for key, value in self.results.item():
