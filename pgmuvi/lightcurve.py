@@ -471,19 +471,24 @@ class Lightcurve(object):
             self.model.eval()
             self.likelihood.eval()
 
-            # Importing raw x and y training data from xdata and ydata functions
-            x_raw = self.xdata
-            y_raw = self.ydata
+            # Importing raw x and y training data from xdata and
+            # ydata functions
+            if self.ndim == 1:
+                x_raw = self.xdata
+                y_raw = self.ydata
+            elif self.ndim == 2:
+                x_fine_raw = self.xdata[:, 0]
+                y_raw = self.ydata[:, 0]
 
             # creating array of 10000 test points across the range of the data
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
 
             if self.ndim == 1:
                 fig = self._plot_1d(x_fine_raw, ylim=ylim, 
-                              show=show)
+                                    show=show)
             elif self.ndim == 2:
                 fig = self._plot_2d(x_fine_raw, ylim=ylim,
-                              show=show)
+                                    show=show)
             else:
                 raise NotImplementedError("""
                 Plotting models and data in more than 2 dimensions is not
@@ -505,13 +510,13 @@ class Lightcurve(object):
         observed_pred = self.likelihood(self.model(x_fine_transformed))
 
         # Initialize plot
-        f, ax = plt.subplots(1, 1, figsize=(8,6))
+        f, ax = plt.subplots(1, 1, figsize=(8, 6))
 
         # Get upper and lower confidence bounds
         lower, upper = observed_pred.confidence_region()
 
         # Plot training data as black stars
-        ax.plot(x_raw.numpy(), y_raw.numpy(), 'k*')
+        ax.plot(self.xdata.numpy(), self.ydata.numpy(), 'k*')
 
         # Plot predictive GP mean as blue line
         ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
@@ -524,7 +529,7 @@ class Lightcurve(object):
             ax.set_ylim(ylim)
         ax.legend(['Observed Data', 'Mean', 'Confidence'])
         if save:
-            plt.savefig(f"{self.name}_{val}_fit.png")
+            plt.savefig(f"{self.name}_fit.png")
         if show:
             plt.show()
         return f
