@@ -426,7 +426,8 @@ class Lightcurve(object):
                 if self.xtransform is None:
                     p = 1/self.model.covar_module.raw_mixture_means[i]
                 else:
-                    p = self.xtransform.inverse(1/self.model.covar_module.raw_mixture_means[i], shift=False)
+                    p = self.xtransform.inverse(1/self.model.covar_module.raw_mixture_means[i], 
+                                                shift=False).detach().numpy()[0]
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.raw_mixture_weights[i]}")
@@ -576,7 +577,6 @@ class Lightcurve(object):
                                    dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            import pdb; pdb.set_trace()
             ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
 
             lower, upper = observed_pred.confidence_region()
