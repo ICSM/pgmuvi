@@ -226,7 +226,7 @@ class Lightcurve(object):
 
     @property
     def ndim(self):
-        return self.xdata.shape[-1]
+        return self.xdata.shape[-1] if self.xdata.dim() > 1 else 1
 
     @property
     def magnitudes(self):
