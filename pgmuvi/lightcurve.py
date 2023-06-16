@@ -423,25 +423,25 @@ class Lightcurve(object):
     
     def print_periods(self):
         if self.ndim == 1:
-            for i in range(len(self.model.covar_module.raw_mixture_means)):
+            for i in range(len(self.model.covar_module.mixture_means)):
                 if self.xtransform is None:
-                    p = 1/self.model.covar_module.raw_mixture_means[i]
+                    p = 1/self.model.covar_module.mixture_means[i]
                 else:
-                    p = self.xtransform.inverse(1/self.model.covar_module.raw_mixture_means[i], 
+                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i], 
                                                 shift=False).detach().numpy()[0]
                 print(f"Period {i}: "
                       f"{p}"
-                      f" weight: {self.model.covar_module.raw_mixture_weights[i]}")
+                      f" weight: {self.model.covar_module.mixture_weights[i]}")
         elif self.ndim == 2:
-            for i in range(len(self.model.covar_module.raw_mixture_means[:,0])):
+            for i in range(len(self.model.covar_module.mixture_means[:,0])):
                 if self.xtransform is None:
-                    p = 1/self.model.covar_module.raw_mixture_means[:,i]
+                    p = 1/self.model.covar_module.mixture_means[:,i]
                 else:
-                    p = self.xtransform.inverse(1/self.model.covar_module.raw_mixture_means[:,i], 
+                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[:,i], 
                                                 shift=False).detach().numpy()[0,0]
                 print(f"Period {i}: "
                       f"{p}"
-                      f" weight: {self.model.covar_module.raw_mixture_weights[i]}")
+                      f" weight: {self.model.covar_module.mixture_weights[i]}")
 
     def print_results(self):
         for key in self.results.keys():
