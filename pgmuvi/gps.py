@@ -8,7 +8,6 @@ from gpytorch.distributions import MultivariateNormal as MVN
 from gpytorch.models import ExactGP, ApproximateGP
 
 
-
 #### FIRST WE HAVE SOME Naive GPs
 class SpectralMixtureGPModel(ExactGP):
     ''' A one-dimensional GP model using a spectral mixture kernel

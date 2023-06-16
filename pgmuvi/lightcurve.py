@@ -354,12 +354,13 @@ class Lightcurve(object):
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
                                                                                 learn_additional_noise = True)
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
-            #In this case, the likelihood has been passed a constraint, which means we want a constrained GaussianLikelihood
+            # In this case, the likelihood has been passed a constraint, which
+            # means we want a constrained GaussianLikelihood
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=likelihood)
         elif likelihood is None:
-            #We're just going to make the simplest assumption
+            # We're just going to make the simplest assumption
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        #Also add a case for if it is a Likelihood object
+        # Also add a case for if it is a Likelihood object
 
         model_dic_1 = {
             "2D": TwoDSpectralMixtureGPModel,
@@ -375,20 +376,20 @@ class Lightcurve(object):
             "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
         }
 
-        if "GP" in [t.__name__ for t in type(model).__mro__]: #check if it is or inherets from a GPyTorch model
+        if "GP" in [t.__name__ for t in type(model).__mro__]:
+            # check if it is or inherets from a GPyTorch model
             self.model = model
-
-        elif model in model_dic_1.keys():
+        elif model in model_dic_1:
             self.model = model_dic_1[model](self._xdata_transformed,
                                             self._ydata_transformed,
                                             self.likelihood,
                                             num_mixtures=num_mixtures)
-        elif model in model_dic_2.keys():
+        elif model in model_dic_2:
             self.model = model_dic_2[model](self._xdata_transformed,
                                             self._ydata_transformed,
                                             self.likelihood,
-                                            num_mixtures=num_mixtures) #Add missing arguments
-
+                                            num_mixtures=num_mixtures)
+            # Add missing arguments to the model call
         else:
             raise ValueError("Insert a valid model")
 
