@@ -409,8 +409,8 @@ class Lightcurve(object):
 
         for param_name, param in self.model.named_parameters():
             print(f'Parameter name: {param_name:42} value = {param.data}')
-            if 'raw' in param_name:
-                print(f'Constrained Parameter name: {param_name[3:]:42} value = {param.constraint.transform(param.data)}')
+            #if 'raw' in param_name:
+            #    print(f'Constrained Parameter name: {param_name[3:]:42} value = {param.constraint.transform(param.data)}')
 
         with gpytorch.settings.max_cg_iterations(10000):
             self.results = train(self.model, self.likelihood,
