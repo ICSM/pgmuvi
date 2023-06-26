@@ -437,9 +437,9 @@ class Lightcurve(object):
         elif self.ndim == 2:
             for i in range(len(self.model.covar_module.mixture_means[:, 0])):
                 if self.xtransform is None:
-                    p = 1/self.model.covar_module.mixture_means[:, i]
+                    p = 1/self.model.covar_module.mixture_means[i, 0]
                 else:
-                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[:, i],
+                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i, 0],
                                                 shift=False).detach().numpy()[0, 0]
                 print(f"Period {i}: "
                       f"{p}"
