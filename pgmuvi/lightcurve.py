@@ -409,6 +409,8 @@ class Lightcurve(object):
 
         for param_name, param in self.model.named_parameters():
             print(f'Parameter name: {param_name:42} value = {param.data}')
+            if 'raw' in param_name:
+                print(f'Constrained Parameter name: {param_name[3:]:42} value = {param.constraint.transform(param.data)}')
 
         with gpytorch.settings.max_cg_iterations(10000):
             self.results = train(self.model, self.likelihood,
@@ -427,21 +429,27 @@ class Lightcurve(object):
                 if self.xtransform is None:
                     p = 1/self.model.covar_module.mixture_means[i]
                 else:
-                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i], 
+                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i],
                                                 shift=False).detach().numpy()[0]
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
         elif self.ndim == 2:
-            for i in range(len(self.model.covar_module.mixture_means[:,0])):
+            for i in range(len(self.model.covar_module.mixture_means[:, 0])):
                 if self.xtransform is None:
-                    p = 1/self.model.covar_module.mixture_means[:,i]
+                    p = 1/self.model.covar_module.mixture_means[:, i]
                 else:
-                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[:,i], 
-                                                shift=False).detach().numpy()[0,0]
+                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[:, i],
+                                                shift=False).detach().numpy()[0, 0]
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
+                
+    def print_parameters(self):
+        for param_name, param in self.model.named_parameters():
+            print(f'Parameter name: {param_name:42} value = {param.data}')
+            if 'raw' in param_name:
+                print(f'Constrained Parameter name: {param_name[3:]:42} value = {param.constraint.transform(param.data)}')
 
     def print_results(self):
         for key in self.results.keys():

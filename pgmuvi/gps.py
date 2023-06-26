@@ -38,16 +38,31 @@ class SpectralMixtureGPModel(ExactGP):
     
 
     '''
-    def __init__(self, train_x, train_y, likelihood, num_mixtures = 4):
-        super(SpectralMixtureGPModel, self).__init__(train_x, train_y, likelihood)
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
+        super(SpectralMixtureGPModel, self).__init__(train_x,
+                                                     train_y,
+                                                     likelihood)
         self.mean_module = ConstantMean()
-        self.covar_module = SMK(num_mixtures = num_mixtures)
+        self.covar_module = SMK(num_mixtures=num_mixtures)
         self.covar_module.initialize_from_data(train_x, train_y)
 
-        #Now we alias the covariance kernel so that we can exploit the same object properties in different classes with different kernel structure
-        #Will turn this into an @property at some point.
+        # Now we alias the covariance kernel so that we can exploit the
+        # same object properties in different classes with different kernel
+        # structure
+        # Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
 
+        self._constrained_params = {
+                                    'mean_constant': self.mean_module.constant,
+                                    'mixtures_means': self.sci_kernel.mixture_means,
+                                    'mixtures_scales': self.sci_kernel.mixture_scales,
+                                    'mixtures_weights': self.sci_kernel.mixture_weights
+                                    }
+        if hasattr(self.likelihood, 'second_noise_covar'):
+            self._constrained_params['noise'] = self.likelihood.second_noise_covar.noise
+        elif hasattr(self.likelihood, 'noise_covar'):
+            self._constrained_params['noise'] = self.likelihood.noise_covar.noise
+            # 'noise': self.likelihood.noise_covar.noise if hasattr(self.likelihood, 'noise_covar') else self.likelihood.second_noise_covar.noise,
 
     def forward(self, x):
         mean_x = self.mean_module(x)
