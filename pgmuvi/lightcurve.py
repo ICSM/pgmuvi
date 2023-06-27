@@ -422,7 +422,7 @@ class Lightcurve(object):
                                  optim=optim, stopavg=stopavg)
 
         return self.results
-    
+
     def print_periods(self):
         if self.ndim == 1:
             for i in range(len(self.model.covar_module.mixture_means)):
@@ -444,6 +444,41 @@ class Lightcurve(object):
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
+
+    def get_periods(self):
+        '''
+        Returns a list of the periods, scales and weights of the model. This 
+        is useful for getting the periods after training, for example.
+        '''
+        periods = []
+        scales = []
+        weights = []
+        if self.ndim == 1:
+            for i in range(len(self.model.sci_kernel.mixture_means)):
+                if self.xtransform is None:
+                    p = 1/self.model.sci_kernel.mixture_means[i]
+                    scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]))
+                else:
+                    p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i],
+                                                shift=False).detach().numpy()[0]
+                    scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]),
+                                                shift=False).detach().numpy()[0])
+                periods.append(p)
+                weights.append(self.model.sci_kernel.mixture_weights[i])
+        elif self.ndim == 2:
+            for i in range(len(self.model.sci_kernel.mixture_means[:, 0])):
+                if self.xtransform is None:
+                    p = 1/self.model.sci_kernel.mixture_means[i, 0]
+                    scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]))
+                else:
+                    p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i, 0],
+                                                shift=False).detach().numpy()[0, 0]
+                    scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),
+                                                shift=False).detach().numpy()[0, 0])
+                periods.append(p)
+                weights.append(self.model.sci_kernel.mixture_weights[i])
+
+        return periods, weights, scales
                 
     def get_parameters(self, raw=False):
         '''
@@ -494,6 +529,19 @@ class Lightcurve(object):
         return pars
                 
     def print_parameters(self, raw=False):
+        '''
+        Prints the parameters of the model, with the keys being the names of
+        the parameters and the values being the values of the parameters. This
+        is useful for getting the values of the parameters after training, for
+        example.
+
+        Parameters
+        ----------
+        raw : bool, default False
+            If True, prints the raw values of the parameters, otherwise prints
+            the constrained values of the parameters.
+
+        '''
         pars = self.get_parameters(raw=raw)
         for key, value in pars.items():
             print(f"{key}: {value}")
