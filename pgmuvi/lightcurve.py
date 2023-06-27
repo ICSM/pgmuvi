@@ -445,9 +445,63 @@ class Lightcurve(object):
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
                 
-    def print_parameters(self):
+    def get_parameters(self, raw=False):
+        '''
+        Returns a dictionary of the parameters of the model, with the keys
+        being the names of the parameters and the values being the values of
+        the parameters. This is useful for getting the values of the parameters
+        after training, for example.
+
+        The routine is rather hacky, since there is no built-in way to get the
+        unconstrained values of the parameters from the model without knowing
+        exactly what they are ahead of time. This routine therefore gets the
+        names of the raw parameters, and then uses those names with string
+        manipulation and `__getattr__` to get the values of the constrained
+        parameters.
+
+        Parameters
+        ----------
+        raw : bool, default False
+            If True, returns the raw values of the parameters, otherwise
+            returns the constrained values of the parameters.
+        
+        Returns
+        -------
+        pars : dict
+            A dictionary of the parameters of the model, with the keys
+            being the names of the parameters and the values being the values
+            of the parameters.
+        '''
+        pars = {}
         for param_name, param in self.model.named_parameters():
-            print(f'Parameter name: {param_name:42} value = {param.data}')
+            comps = list(param_name.split('.'))
+            if not raw and 'raw' in param_name:
+                # This is a constrained parameter, so we need to get the
+                # unconstrained value
+                pn = '.'.join([c.lstrip('raw_') for c in comps])
+                tmp = self.model.__getattr__(comps[0])
+                for i in range(1,len(comps)):
+                    c = comps[i] if 'raw' not in comps[i] else comps[i].lstrip('raw_')
+                    try:
+                        tmp = tmp.__getattr__(c)
+                    except AttributeError:
+                        tmp = tmp.__getattribute__(c)
+                pars[pn] = tmp.data
+            else:
+                # Either we actually want the raw values, or it's not a
+                # constrained parameter
+                pars[param_name] = param.data
+        return pars
+                
+    def print_parameters(self, raw=False):
+        pars = self.get_parameters(raw=raw)
+        for key, value in pars.items():
+            print(f"{key}: {value}")
+        # for param_name, param in self.model.named_parameters():
+        #     if raw:
+        #         print(f'Parameter name: {param_name:42} value = {param.data}')
+        #     else:
+
             #if 'raw' in param_name:
             #    print(f'Constrained Parameter name: {param_name[3:]:42} value = {param.constraint.transform(param.data)}')
 
