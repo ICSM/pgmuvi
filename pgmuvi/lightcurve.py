@@ -373,7 +373,8 @@ class Lightcurve(object):
                               Likelihood instance, but got {type(likelihood)}.
                               Please provide a suitable likelihood input.""")
 
-    def set_model(self, model=None, likelihood=None, **kwargs):
+    def set_model(self, model=None, likelihood=None,
+                  num_mixtures=None, **kwargs):
         """Set the model for the lightcurve
 
         Parameters
@@ -398,6 +399,13 @@ class Lightcurve(object):
             If likelihood is passed, it will be passed along to `set_likelihood()`
             and used to set the likelihood function for the model. For details, see
             the documentation for `set_likelihood()`.
+        num_mixtures : int, optional
+            The number of mixtures to use in the spectral mixture kernel, by
+            default None. If None, a default value will be used. This value
+            is passed to the constructor for the model if a string is passed
+            as the model argument.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the model constructor.
         """
 
         model_dic_1 = {
@@ -426,12 +434,14 @@ class Lightcurve(object):
             self.model = model_dic_1[model](self._xdata_transformed,
                                             self._ydata_transformed,
                                             self.likelihood,
-                                            num_mixtures=num_mixtures)
+                                            num_mixtures=num_mixtures,
+                                            **kwargs)
         elif model in model_dic_2:
             self.model = model_dic_2[model](self._xdata_transformed,
                                             self._ydata_transformed,
                                             self.likelihood,
-                                            num_mixtures=num_mixtures)
+                                            num_mixtures=num_mixtures,
+                                            **kwargs)
             # Add missing arguments to the model call
         else:
             raise ValueError("Insert a valid model")
