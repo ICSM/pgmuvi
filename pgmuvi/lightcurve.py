@@ -15,9 +15,24 @@ from pyro.infer.mcmc import NUTS, MCMC, HMC
 from pyro.optim import Adam
 from pyro.infer import SVI, Trace_ELBO
 import pyro.distributions as dist
+from inspect import isclass
 
 
 def _reraise_with_note(e, note):
+    """Reraise an exception with a note added to the message
+
+    This function is to provide a way to add a note to an exception, without
+    losing the traceback, and without requiring python 3.11, which has
+    added notes. It is based on this answer on stackoverflow:
+    https://stackoverflow.com/a/75549200/16164384
+
+    Parameters
+    ----------
+    e : Exception
+        The exception to reraise
+    note : str
+        The note to add to the exception message
+    """
     try:
         e.add_note(note)
     except AttributeError:
@@ -509,7 +524,6 @@ class Lightcurve(object):
 
         # set training mode:
         self._train()
-
 
         for param_name, param in self.model.named_parameters():
             print(f'Parameter name: {param_name:42} value = {param.data}')
