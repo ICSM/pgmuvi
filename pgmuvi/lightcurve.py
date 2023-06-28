@@ -445,6 +445,93 @@ class Lightcurve(object):
             # Add missing arguments to the model call
         else:
             raise ValueError("Insert a valid model")
+        
+    def set_model_prior(self, prior=None, **kwargs):
+        '''Set the prior for the model parameters
+        
+        Parameters
+        ----------
+        prior : dict, optional
+            A dictionary of the priors to use for the model parameters. The
+            keys should be the names of the parameters, and the values should
+            be instances of gpytorch.priors.Prior. If None, no priors will be
+            used. If a prior is passed for a parameter that is not a model
+            parameter, it will be ignored.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the Prior constructors.
+        '''
+        pass
+
+    def set_model_constraint(self, constraint=None, **kwargs):
+        '''Set the constraint for the model parameters
+
+        Parameters
+        ----------
+        constraint : dict, optional
+            A dictionary of the constraints to use for the model parameters. The
+            keys should be the names of the parameters, and the values should
+            be instances of gpytorch.constraints.Constraint. If None, no
+            constraints will be used. If a constraint is passed for a parameter
+            that is not a model parameter, it will be ignored.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the Constraint
+            constructors.
+        '''
+        pass
+
+    def set_likelihood_prior(self, prior=None, **kwargs):
+        '''Set the prior for the likelihood parameters
+
+        Parameters
+        ----------
+        prior : dict, optional
+            A dictionary of the priors to use for the likelihood parameters. The
+            keys should be the names of the parameters, and the values should
+            be instances of gpytorch.priors.Prior. If None, no priors will be
+            used. If a prior is passed for a parameter that is not a likelihood
+            parameter, it will be ignored.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the Prior constructors.
+        '''
+        pass
+
+    def set_likelihood_constraint(self, constraint=None, **kwargs):
+        '''Set the constraint for the likelihood parameters
+
+        Parameters
+        ----------
+        constraint : dict, optional
+            A dictionary of the constraints to use for the likelihood parameters.
+            The keys should be the names of the parameters, and the values
+            should be instances of gpytorch.constraints.Constraint. If None, no
+            constraints will be used. If a constraint is passed for a parameter
+            that is not a likelihood parameter, it will be ignored.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the Constraint
+            constructors.
+        '''
+        pass
+
+    def set_hypers(self, hypers=None, **kwargs):
+        '''Set the hyperparameters for the model and likelihood. This is a
+        convenience function that calls the model.initialize() to set the 
+        hyperparameters. However, first it applies any transforms to the
+        hyperparameters, so that the user can pass the hyperparameters in
+        the original data space if they wish.
+
+        Parameters
+        ----------
+        hypers : dict, optional
+            A dictionary of the hyperparameters to use for the model and
+            likelihood. The keys should be the names of the parameters, and the
+            values should be Tensors containing the values of the parameters.
+            If None, no hyperparameters will be set. If a hyperparameter is
+            passed for a parameter that is not a model or likelihood
+            parameter, it will be ignored.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the initialize.
+        '''
+        pass
 
     def cuda(self):
         try:
