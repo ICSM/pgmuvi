@@ -17,6 +17,16 @@ from pyro.infer import SVI, Trace_ELBO
 import pyro.distributions as dist
 
 
+def _reraise_with_note(e, note):
+    try:
+        e.add_note(note)
+    except AttributeError:
+        args = e.args
+        arg0 = f"{args[0]}\n{note}" if args else note
+        e.args = (arg0,) + args[1:]
+    raise e
+
+
 class Transformer(object):
     def transform(self, data, **kwargs):
         """ Transform some data and return it, storing the parameters required
@@ -299,8 +309,134 @@ class Lightcurve(object):
         if self.ytransform is None:
             return values
         elif isinstance(self.xtransform, Transformer):
-            return self.xtransform.transform(values)    
-    
+            return self.xtransform.transform(values)
+
+    def set_likelihood(self, likelihood=None, **kwargs):
+        """Set the likelihood function for the model
+
+        Parameters
+        ----------
+        likelihood : string, None or instance of
+                     gpytorch.likelihoods.likelihood.Likelihood or Constraint,
+                     optional
+            The likelihood function to use for the GP, by default None. If
+            None, a Gaussian likelihood will be used. If a string, it must be
+            'learn', in which case a Gaussian likelihood with learnable noise
+            will be used. If an instance of a Likelihood object, that object
+            will be used. If a Constraint object, a GaussianLikelihood will be
+            used, with the constraint being passed to the likelihood as the
+            noise_constraint argument. If a Constraint object is passed, the
+            noise_constraint argument will override any other arguments passed
+            to the likelihood function. You can also provide a class as input,
+            in which case the class will be instantiated with the kwargs
+            provided under the assumption that it is a Likelihood object, and
+            it will also be passed the uncertainties on the y data, if available.
+        """
+        if hasattr(self, '_yerr_transformed') and likelihood is None:
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed)
+        elif hasattr(self, '_yerr_transformed') and likelihood == "learn":
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
+                                                                                learn_additional_noise = True)
+        elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
+            # In this case, the likelihood has been passed a constraint, which
+            # means we want a constrained GaussianLikelihood
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=likelihood)
+        elif likelihood is None:
+            # We're just going to make the simplest assumption
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+        # Also add a case for if it is a Likelihood object
+        elif isinstance(likelihood, gpytorch.likelihoods.likelihood.Likelihood):
+            self.likelihood = likelihood
+        elif isclass(likelihood):
+            if hasattr(self, '_yerr_transformed'):
+                self.likelihood = likelihood(self._yerr_transformed, **kwargs)
+            else:
+                self.likelihood = likelihood(**kwargs)
+        else:
+            raise ValueError(f"""Expected a string, a constraint, a Likelihood
+                              instance or a class to be instantiated as a
+                              Likelihood instance, but got {type(likelihood)}.
+                              Please provide a suitable likelihood input.""")
+
+    def set_model(self, model=None, likelihood=None, **kwargs):
+        """Set the model for the lightcurve
+
+        Parameters
+        ----------
+        model : string or instance of gpytorch.models.GP, optional
+            The model to use for the GP, by default None. If None, an
+            error will be raised. If a string, it must be one of the
+            following:
+                '1D': SpectralMixtureGPModel
+                '2D': TwoDSpectralMixtureGPModel
+                '1DLinear': SpectralMixtureLinearMeanGPModel
+                '2DLinear': TwoDSpectralMixtureLinearMeanGPModel
+                '1DSKI': SpectralMixtureKISSGPModel
+                '2DSKI': TwoDSpectralMixtureKISSGPModel
+                '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
+                '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+            If an instance of a GP class, that object will be used.
+            _description_, by default None
+        likelihood : string, None or instance of
+                     gpytorch.likelihoods.likelihood.Likelihood or Constraint,
+                     optional
+            If likelihood is passed, it will be passed along to `set_likelihood()`
+            and used to set the likelihood function for the model. For details, see
+            the documentation for `set_likelihood()`.
+        """
+
+        model_dic_1 = {
+            "2D": TwoDSpectralMixtureGPModel,
+            "1D": SpectralMixtureGPModel,
+            "1DLinear": SpectralMixtureLinearMeanGPModel,
+            "2DLinear": TwoDSpectralMixtureLinearMeanGPModel
+        }
+
+        model_dic_2 = {
+            "1DSKI": SpectralMixtureKISSGPModel,
+            "2DSKI": TwoDSpectralMixtureKISSGPModel,
+            "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
+            "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
+        }
+
+        if likelihood is None and not hasattr(self, 'likelihood'):
+            raise ValueError("""You must provide a likelihood function""")
+        elif likelihood is not None:
+            self.set_likelihood(likelihood, **kwargs)
+
+        if "GP" in [t.__name__ for t in type(model).__mro__]:
+            # check if it is or inherets from a GPyTorch model
+            self.model = model
+        elif model in model_dic_1:
+            self.model = model_dic_1[model](self._xdata_transformed,
+                                            self._ydata_transformed,
+                                            self.likelihood,
+                                            num_mixtures=num_mixtures)
+        elif model in model_dic_2:
+            self.model = model_dic_2[model](self._xdata_transformed,
+                                            self._ydata_transformed,
+                                            self.likelihood,
+                                            num_mixtures=num_mixtures)
+            # Add missing arguments to the model call
+        else:
+            raise ValueError("Insert a valid model")
+
+    def cuda(self):
+        try:
+            self.model.cuda()
+            self.likelihood.cuda()
+        except AttributeError as e:
+            errmsg = "You must first set the model and likelihood"
+            _reraise_with_note(e, errmsg)
+
+    def _train(self):
+        try:
+            self.model.train()
+            self.likelihood.train()
+        except AttributeError as e:
+            errmsg = "You must first set the model and likelihood"
+            _reraise_with_note(e, errmsg)
+
     def fit(self, model=None, likelihood=None, num_mixtures=4,
             guess=None, grid_size=2000, cuda=False,
             training_iter=300, max_cg_iterations=None,
@@ -348,54 +484,18 @@ class Lightcurve(object):
         ValueError
             _description_
         """
-        if hasattr(self,'_yerr_transformed') and likelihood is None:
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed) #, learn_additional_noise = True)
-        elif hasattr(self, '_yerr_transformed') and likelihood == "learn":
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
-                                                                                learn_additional_noise = True)
-        elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
-            # In this case, the likelihood has been passed a constraint, which
-            # means we want a constrained GaussianLikelihood
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=likelihood)
-        elif likelihood is None:
-            # We're just going to make the simplest assumption
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        # Also add a case for if it is a Likelihood object
+        if likelihood is None and not hasattr(self, 'likelihood'):
+            raise ValueError("""You must provide a likelihood function""")
+        elif likelihood is not None:
+            self.set_likelihood(likelihood, **kwargs)
 
-        model_dic_1 = {
-            "2D": TwoDSpectralMixtureGPModel,
-            "1D": SpectralMixtureGPModel,
-            "1DLinear": SpectralMixtureLinearMeanGPModel,
-            "2DLinear": TwoDSpectralMixtureLinearMeanGPModel
-        }
-
-        model_dic_2={
-            "1DSKI": SpectralMixtureKISSGPModel,
-            "2DSKI": TwoDSpectralMixtureKISSGPModel,
-            "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
-            "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
-        }
-
-        if "GP" in [t.__name__ for t in type(model).__mro__]:
-            # check if it is or inherets from a GPyTorch model
-            self.model = model
-        elif model in model_dic_1:
-            self.model = model_dic_1[model](self._xdata_transformed,
-                                            self._ydata_transformed,
-                                            self.likelihood,
-                                            num_mixtures=num_mixtures)
-        elif model in model_dic_2:
-            self.model = model_dic_2[model](self._xdata_transformed,
-                                            self._ydata_transformed,
-                                            self.likelihood,
-                                            num_mixtures=num_mixtures)
-            # Add missing arguments to the model call
-        else:
-            raise ValueError("Insert a valid model")
+        if model is None and not hasattr(self, 'model'):
+            raise ValueError("""You must provide a model""")
+        elif model is not None:
+            self.set_model(model, self.likelihood, **kwargs)
 
         if cuda:
-            self.likelihood.cuda()
-            self.model.cuda()
+            self.cuda()
 
         if guess is not None:
             self.model.initialize(**guess)
@@ -404,14 +504,19 @@ class Lightcurve(object):
         # later...
 
         # Train the model
-        self.model.train()
-        self.likelihood.train()
+        # self.model.train()
+        # self.likelihood.train()
+
+        # set training mode:
+        self._train()
+
 
         for param_name, param in self.model.named_parameters():
             print(f'Parameter name: {param_name:42} value = {param.data}')
             #if 'raw' in param_name:
             #    print(f'Constrained Parameter name: {param_name[3:]:42} value = {param.constraint.transform(param.data)}')
 
+        # Now actually call the trainer!
         with gpytorch.settings.max_cg_iterations(10000):
             self.results = train(self.model, self.likelihood,
                                  self._xdata_transformed,
