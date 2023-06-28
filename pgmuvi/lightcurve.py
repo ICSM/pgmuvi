@@ -531,7 +531,19 @@ class Lightcurve(object):
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the initialize.
         '''
-        pass
+
+        if hypers is not None:
+            pars_to_transform = {'x': ['mixture_means', 'mixture_scales'],
+                                 'y': ['noise', 'mean_module']}
+            for key in hypers:
+                # first, check if the parameter needs to be transformed:
+                if [p in key for p in pars_to_transform['x']]:
+                    # now apply the x transform
+                    hypers[key] = self.xtransform.transform(hypers[key])
+                elif [p in key for p in pars_to_transform['y']]:
+                    # now apply the y transform
+                    hypers[key] = self.ytransform.transform(hypers[key])
+            self.model.initialize(**hypers, **kwargs)
 
     def cuda(self):
         try:
