@@ -573,6 +573,12 @@ class Lightcurve(object):
                     hypers[key] = self.ytransform.transform(hypers[key])
             self.model.initialize(**hypers, **kwargs)
 
+    def init_hypers_from_LS(self, **kwargs):
+        pass
+
+    def _set_hypers_raw(self, hypers=None, **kwargs):
+        pass
+
     def cuda(self):
         try:
             self.model.cuda()
