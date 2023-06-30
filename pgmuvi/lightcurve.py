@@ -904,6 +904,34 @@ class Lightcurve(object):
 
     def compute_psd(self, freq, means=None, scales=None, weights=None,
                     raw=False, **kwargs):
+        '''Compute the power spectral density for the model
+
+        Parameters
+        ----------
+        freq : array_like
+            The frequencies at which to compute the PSD
+        means : array_like, optional
+            The means of the gaussians in the spectral mixture kernel, by
+            default None. If None, the means from the model will be used.
+        scales : array_like, optional
+            The scales of the gaussians in the spectral mixture kernel, by
+            default None. If None, the scales from the model will be used.
+        weights : array_like, optional
+            The weights of the gaussians in the spectral mixture kernel, by
+            default None. If None, the weights from the model will be used.
+        raw : bool, optional
+            If True, the PSD will be computed in the space that the model was
+            trained in, by default False. If False, the PSD will be computed
+            in the original space of the data.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed.
+        
+        Returns
+        -------
+        psd : array_like
+            The power spectral density of the model at the frequencies given
+            by freq.
+        '''
         if means is None:
             means = self.model.sci_kernel.mixture_means
             # now apply the transform too!
