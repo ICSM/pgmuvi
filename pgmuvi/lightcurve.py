@@ -674,9 +674,7 @@ class Lightcurve(object):
 
         # Now actually call the trainer!
         with gpytorch.settings.max_cg_iterations(10000):
-            self.results = train(self.model, self.likelihood,
-                                 self._xdata_transformed,
-                                 self._ydata_transformed,
+            self.results = train(self,
                                  maxiter=training_iter,
                                  miniter=miniter,
                                  stop=stop, lr=lr,
