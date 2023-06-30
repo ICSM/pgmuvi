@@ -824,8 +824,42 @@ class Lightcurve(object):
                         print(f"{key}: {results_tmp[...,i].flatten()}")
                     # print(f"{key}: {results_tmp[...,0].flatten()}, {results_tmp[...,2].flatten()}")
             
-    def plot_psd(self, freq, means=None, scales=None, weights=None, show=True,
+    def plot_psd(self, freq=None, means=None, scales=None, weights=None, show=True,
                  raw=False, **kwargs):
+        
+        if freq is None:
+            if self.ndim == 1:
+                if raw:
+                    # our step size only needs to be small enough to resolve
+                    # the width of the narrowest gaussian
+                    step = self.model.sci_kernel.mixture_scales.min()/5
+                    # this isn't really the correct way to do this, but it will
+                    # do for now
+                    mindelta = (self._xdata_transformed.sorted()[:-1] - self._xdata_transformed.sorted()[1:]).min()
+                    freq = torch.arange(1/(self._xdata_transformed.max() - self._xdata_transformed.min()),
+                                        1/(),
+                                        step)  
+                else:
+                    # we have to transform the step size to the original space
+                    # to get the correct frequency range
+                    step = 1/self.xtransform.inverse(1/(self.model.sci_kernel.mixture_scales.min()/5),
+                                                     shift=False)
+                    # this isn't really the correct way to do this, but it will
+                    # do for now
+                    mindelta = (self._xdata_raw.sorted()[:-1] - self._xdata_raw.sorted()[1:]).min()
+                    freq = torch.arange(1/(self._xdata_raw.max() - self._xdata_raw.min()),
+                                        1/(mindelta/2),
+                                        step)
+            elif self.ndim == 2:
+                raise NotImplementedError("""Plotting models and data in more than 1 dimension is not
+                currently supported. Please get in touch if you need this
+                functionality!
+                """)
+            else:
+                raise NotImplementedError("""Plotting models and data in more than 2 dimensions is not
+                currently supported. Please get in touch if you need this
+                functionality!
+                """)
         # Computing the psd for frequencies f
         psd = self.compute_psd(freq, means=means, scales=scales,
                                weights=weights, raw=raw)
