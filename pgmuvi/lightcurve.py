@@ -530,6 +530,41 @@ class Lightcurve(object):
         '''
         pass
 
+    def set_default_priors(self, **kwargs):
+        '''Set the default priors for the model and likelihood parameters
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Any keyword arguments to be passed to the Prior constructors.
+        '''
+        pass
+
+    def set_default_constraints(self, **kwargs):
+        '''Set the default constraints for the model and likelihood parameters
+
+        The default constraints are as follows:
+            - All parameters are constrained to be positive, except the mean of
+            the GP, which is constrained to be in the range of the y-data (a correction
+            will be needed if the data are censored!)
+            - The noise is constrained to be less than the standard deviation of
+            the y-data
+            - The mixture means greater than the frequency corresponding to
+            the separation between the earliest and latest points in the data
+            and less than the frequency corresponding to the separation between
+            the two closest data points (should be updated to account for the
+            window function and whatever we're really sensitive to)
+            - The mixture scales greater than 0 and less than the frequency
+            corresponding to the separation between the earliest and latest
+            points in the data.
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Any keyword arguments to be passed to the Constraint constructors.
+        '''
+        pass
+
     def set_hypers(self, hypers=None, debug=False, **kwargs):
         '''Set the hyperparameters for the model and likelihood. This is a
         convenience function that calls the model.initialize() to set the 
