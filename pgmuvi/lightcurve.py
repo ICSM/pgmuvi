@@ -958,7 +958,7 @@ class Lightcurve(object):
         psd = np.sum(c, axis=0)
         return psd
 
-    def plot(self, ylim=None, show=True):
+    def plot(self, ylim=None, show=True, **kwargs):
         if ylim is None:
             ylim = [-3, 3]
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
@@ -979,10 +979,10 @@ class Lightcurve(object):
 
             if self.ndim == 1:
                 fig = self._plot_1d(x_fine_raw, ylim=ylim, 
-                                    show=show)
+                                    show=show, **kwargs)
             elif self.ndim == 2:
                 fig = self._plot_2d(x_fine_raw, ylim=ylim,
-                                    show=show)
+                                    show=show, **kwargs)
             else:
                 raise NotImplementedError("""
                 Plotting models and data in more than 2 dimensions is not
@@ -992,7 +992,7 @@ class Lightcurve(object):
         return fig
 
     def _plot_1d(self, x_fine_raw, ylim=None, show=False,
-                 save=True):
+                 save=True, **kwargs):
         # transforming the x_fine_raw data to the space that the GP was
         # trained in (so it can predict)
         if self.xtransform is None:
@@ -1029,7 +1029,7 @@ class Lightcurve(object):
         return f
 
     def _plot_2d(self, x_fine_raw, ylim=None, show=False,
-                 save=True):
+                 save=True, **kwargs):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
