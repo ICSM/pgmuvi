@@ -530,7 +530,7 @@ class Lightcurve(object):
         '''
         pass
 
-    def set_hypers(self, hypers=None, **kwargs):
+    def set_hypers(self, hypers=None, debug=False, **kwargs):
         '''Set the hyperparameters for the model and likelihood. This is a
         convenience function that calls the model.initialize() to set the 
         hyperparameters. However, first it applies any transforms to the
@@ -550,28 +550,41 @@ class Lightcurve(object):
             Any other keyword arguments to be passed to the initialize.
         '''
 
-        if hypers is not None:
-            pars_to_transform = {'x': ['mixture_means', 'mixture_scales'],
-                                 'y': ['noise', 'mean_module']}
-            for key in hypers:
-                # first, check if the parameter needs to be transformed:
-                if [p in key for p in pars_to_transform['x']]:
-                    # now apply the x transform
-                    # remember that the means and scales are in fourier space
-                    # so we need to transform them back to real space
-                    # before applying the transform
-                    # and then transform them back to fourier space
-                    # luckily, when the shift is removed from the transform,
-                    # the factors of 2pi cancel out for the scales
-                    # so we can just do 1/ for both means and scales
+        if hypers is None:
+            return
+        pars_to_transform = {'x': ['mixture_means', 'mixture_scales'],
+                             'y': ['noise', 'mean_module']}
+        if debug:
+            print("hypers before transform:")
+            print(hypers)
+        for key in hypers:
+            # first, check if the parameter needs to be transformed:
+            if any(p in key for p in pars_to_transform['x']):
+                # now apply the x transform
+                # remember that the means and scales are in fourier space
+                # so we need to transform them back to real space
+                # before applying the transform
+                # and then transform them back to fourier space
+                # luckily, when the shift is removed from the transform,
+                # the factors of 2pi cancel out for the scales
+                # so we can just do 1/ for both means and scales
+                if self.xtransform is not None:
+                    if debug:
+                        print(f"Applying x-transform to {key}")
                     hypers[key] = 1/self.xtransform.transform(1/hypers[key],
-                                                              shift=False)
-                elif [p in key for p in pars_to_transform['y']]:
-                    # now apply the y transform
-                    # the mean function and noise are not defined in fourier
-                    # space, so we can just apply the transform directly
+                                                          shift=False)
+            elif any(p in key for p in pars_to_transform['y']):
+                # now apply the y transform
+                # the mean function and noise are not defined in fourier
+                # space, so we can just apply the transform directly
+                if self.ytransform is not None:
+                    if debug:
+                        print(f"Applying y-transform to {key}")
                     hypers[key] = self.ytransform.transform(hypers[key])
-            self.model.initialize(**hypers, **kwargs)
+        if debug:
+            print("hypers after transform:")
+            print(hypers)
+        self.model.initialize(**hypers, **kwargs)
 
     def init_hypers_from_LS(self, **kwargs):
         pass
