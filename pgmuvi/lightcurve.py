@@ -63,7 +63,7 @@ class Transformer(object):
 
 class MinMax(Transformer):
     def transform(self, data, dim=0, apply_to=None,
-                  recalc=False, **kwargs):
+                  recalc=False, shift=True, **kwargs):
         """ Perform a MinMax transformation
 
         Transform the data such that each dimension is rescaled to the [0,1]
@@ -79,13 +79,19 @@ class MinMax(Transformer):
         recalc : bool, default False
             Should the min and range of the transform be recalculated, or
             reused from previously?
+        shift : bool, default True
+            Should the data be shifted such that the minimum value is 0?
+            This is mainly included so that data or parameters can be
+            transformed when they apply to a single period - in this case,
+            only the range needs to be applied.
         """
         if recalc or not hasattr(self, "min"):
             self.min = torch.min(data, dim=dim, keepdim=True)[0]
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
+            shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
-            return (data-self.min[apply_to])/self.range[apply_to]
-        return (data-self.min)/self.range
+            return (data-(shift*self.min[apply_to]))/self.range[apply_to]
+        return (data-(shift*self.min))/self.range
 
     def inverse(self, data, shift=True, **kwargs):
         """ Invert a MinMax transformation based on saved state
@@ -104,7 +110,7 @@ class MinMax(Transformer):
 
 class ZScore(Transformer):
     def transform(self, data, dim=0, apply_to=None,
-                  recalc=False, **kwargs):
+                  recalc=False, shift=True, **kwargs):
         """ Perform a z-score transformation
 
         Transform the data such that each dimension is rescaled such that
@@ -119,13 +125,19 @@ class ZScore(Transformer):
         recalc : bool, default False
             Should the parameters of the transform be recalculated, or reused
             from previously?
+        shift : bool, default True
+            Should the data be shifted such that the mean value is 0?
+            This is mainly included so that data or parameters can be
+            transformed when they apply to a single period - in this case,
+            only the standard deviation needs to be applied.
         """
         if recalc or not hasattr(self, 'mean'):
             self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
             self.sd = torch.std(data, dim=dim, keepdim=True)[0]
+            shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
-            return (data-self.mean[apply_to])/self.sd[apply_to]
-        return (data - self.mean)/self.sd
+            return (data-(shift*self.mean[apply_to]))/self.sd[apply_to]
+        return (data - shift*self.mean)/self.sd
 
     def inverse(self, data, shift=True, **kwargs):
         """ Invert a z-score transformation based on saved state
@@ -143,7 +155,7 @@ class ZScore(Transformer):
 
 class RobustZScore(Transformer):
     def transform(self, data, dim=0, apply_to=None,
-                  recalc=False, **kwargs):
+                  recalc=False, shift=True, **kwargs):
         """ Perform a robust z-score transformation
 
         Transform the data such that each dimension is rescaled such that
@@ -158,14 +170,20 @@ class RobustZScore(Transformer):
         recalc : bool, default False
             Should the parameters of the transform be recalculated, or reused
             from previously?
+        shift : bool, default True
+            Should the data be shifted such that the median value is 0?
+            This is mainly included so that data or parameters can be
+            transformed when they apply to a single period - in this case,
+            only the median absolute deviation needs to be applied.
         """
         if recalc or not hasattr(self, 'mad'):
             self.median = torch.median(data, dim=dim, keepdim=True)[0]
             self.mad = torch.median(torch.abs(data - self.median),
                                     dim=dim, keepdim=True)[0]
+            shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
-            return (data-self.median[apply_to])/self.mad[apply_to]
-        return (data - self.median)/self.mad
+            return (data-shift*self.median[apply_to])/self.mad[apply_to]
+        return (data - shift*self.median)/self.mad
 
     def inverse(self, data, shift=True, **kwargs):
         """ Invert a robust z-score transformation based on saved state
@@ -539,9 +557,19 @@ class Lightcurve(object):
                 # first, check if the parameter needs to be transformed:
                 if [p in key for p in pars_to_transform['x']]:
                     # now apply the x transform
-                    hypers[key] = self.xtransform.transform(hypers[key])
+                    # remember that the means and scales are in fourier space
+                    # so we need to transform them back to real space
+                    # before applying the transform
+                    # and then transform them back to fourier space
+                    # luckily, when the shift is removed from the transform,
+                    # the factors of 2pi cancel out for the scales
+                    # so we can just do 1/ for both means and scales
+                    hypers[key] = 1/self.xtransform.transform(1/hypers[key],
+                                                              shift=False)
                 elif [p in key for p in pars_to_transform['y']]:
                     # now apply the y transform
+                    # the mean function and noise are not defined in fourier
+                    # space, so we can just apply the transform directly
                     hypers[key] = self.ytransform.transform(hypers[key])
             self.model.initialize(**hypers, **kwargs)
 
@@ -634,10 +662,9 @@ class Lightcurve(object):
         # set training mode:
         self._train()
 
-        for param_name, param in self.model.named_parameters():
-            print(f'Parameter name: {param_name:42} value = {param.data}')
-            #if 'raw' in param_name:
-            #    print(f'Constrained Parameter name: {param_name[3:]:42} value = {param.constraint.transform(param.data)}')
+        #for param_name, param in self.model.named_parameters():
+        #    print(f'Parameter name: {param_name:42} value = {param.data}')
+        self.print_parameters()
 
         # Now actually call the trainer!
         with gpytorch.settings.max_cg_iterations(10000):
@@ -797,9 +824,11 @@ class Lightcurve(object):
                         print(f"{key}: {results_tmp[...,i].flatten()}")
                     # print(f"{key}: {results_tmp[...,0].flatten()}, {results_tmp[...,2].flatten()}")
             
-    def plot_psd(self, means, freq, scales, weights, show=True):
-        #Computing the psd for frequencies f
-        psd = self.compute_psd(means, freq, scales, weights)
+    def plot_psd(self, freq, means=None, scales=None, weights=None, show=True,
+                 raw=False, **kwargs):
+        # Computing the psd for frequencies f
+        psd = self.compute_psd(freq, means=means, scales=scales,
+                               weights=weights, raw=raw)
 
         # Initialize plot
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
@@ -811,10 +840,25 @@ class Lightcurve(object):
         else:
             return fig, ax
 
-    def compute_psd(self, means, freq, scales, weights):
+    def compute_psd(self, freq, means=None, scales=None, weights=None,
+                    raw=False, **kwargs):
+        if means is None:
+            means = self.model.sci_kernel.mixture_means
+            # now apply the transform too!
+            if self.xtransform is not None and not raw:
+                # there's probably an easier way to do this than converting to
+                # a period and back, but this will do for now
+                means = 1/self.xtransform.inverse(1/means, shift=False).detach().numpy()
+        if scales is None:
+            scales = self.model.sci_kernel.mixture_scales
+            # now apply the transform too!
+            if self.xtransform is not None and not raw:
+                scales = 1/(2*np.pi*self.xtransform.inverse(1/(2*torch.pi*scales), shift=False).detach().numpy())
+        if weights is None:
+            weights = self.model.sci_kernel.mixture_weights.detach().numpy()
         from scipy.stats import norm
-        c = np.zeros((len(means),) + freq.shape, ) #mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
-        for i, m in enumerate(means): #f = array of frequencies that we want to plot
+        c = np.zeros((len(means),) + freq.shape, ) # mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
+        for i, m in enumerate(means): # f = array of frequencies that we want to plot
             s = scales[i] #s.d
             w = weights[i] #how much power is given to each gaussian
             c[i] = np.sqrt(w)[:,np.newaxis] * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
