@@ -598,7 +598,7 @@ class Lightcurve(object):
     def fit(self, model=None, likelihood=None, num_mixtures=4,
             guess=None, grid_size=2000, cuda=False,
             training_iter=300, max_cg_iterations=None,
-            optim="AdamW", miniter=100, stop=1e-5, lr=0.1,
+            optim="AdamW", miniter=None, stop=1e-5, lr=0.1,
             stopavg=30,
             **kwargs):
         """Fit the lightcurve
@@ -624,7 +624,7 @@ class Lightcurve(object):
         optim : str, optional
             _description_, by default "AdamW"
         miniter : int, optional
-            _description_, by default 100
+            _description_, by default None
         stop : _type_, optional
             _description_, by default 1e-5
         lr : float, optional
@@ -650,13 +650,18 @@ class Lightcurve(object):
         if model is None and not hasattr(self, 'model'):
             raise ValueError("""You must provide a model""")
         elif model is not None:
-            self.set_model(model, self.likelihood, **kwargs)
+            self.set_model(model, self.likelihood, 
+                           num_mixtures=num_mixtures, **kwargs)
 
         if cuda:
             self.cuda()
 
         if guess is not None:
-            self.model.initialize(**guess)
+            #self.model.initialize(**guess)
+            self.set_hypers(guess)
+
+        if miniter is None:
+            miniter = training_iter
 
         # Next we probably want to report some setup info
         # later...
@@ -828,8 +833,8 @@ class Lightcurve(object):
                         print(f"{key}: {results_tmp[...,i].flatten()}")
                     # print(f"{key}: {results_tmp[...,0].flatten()}, {results_tmp[...,2].flatten()}")
             
-    def plot_psd(self, freq=None, means=None, scales=None, weights=None, show=True,
-                 raw=False, **kwargs):
+    def plot_psd(self, freq=None, means=None, scales=None, weights=None,
+                 show=True, raw=False, log=(True, False), **kwargs):
         
         if freq is None:
             if self.ndim == 1:
@@ -839,10 +844,11 @@ class Lightcurve(object):
                     step = self.model.sci_kernel.mixture_scales.min()/5
                     # this isn't really the correct way to do this, but it will
                     # do for now
-                    mindelta = (self._xdata_transformed.sorted()[:-1] - self._xdata_transformed.sorted()[1:]).min()
-                    freq = torch.arange(1/(self._xdata_transformed.max() - self._xdata_transformed.min()),
-                                        1/(),
-                                        step)  
+                    diffs = self._xdata_transformed.sort().values[1:] - self._xdata_transformed.sort().values[:-1]
+                    mindelta = (diffs[diffs>0]).min().item()
+                    freq = torch.arange(1/(self._xdata_transformed.max() - self._xdata_transformed.min()).item(),
+                                        1/(mindelta),
+                                        step.item())  
                 else:
                     # we have to transform the step size to the original space
                     # to get the correct frequency range
@@ -850,10 +856,11 @@ class Lightcurve(object):
                                                      shift=False)
                     # this isn't really the correct way to do this, but it will
                     # do for now
-                    mindelta = (self._xdata_raw.sorted()[:-1] - self._xdata_raw.sorted()[1:]).min()
-                    freq = torch.arange(1/(self._xdata_raw.max() - self._xdata_raw.min()),
+                    diffs = self._xdata_raw.sort().values[1:] - self._xdata_raw.sort().values[:-1]
+                    mindelta = (diffs[diffs>0]).min().item()
+                    freq = torch.arange(1/(self._xdata_raw.max() - self._xdata_raw.min()).item(),
                                         1/(mindelta/2),
-                                        step)
+                                        step.item())
             elif self.ndim == 2:
                 raise NotImplementedError("""Plotting models and data in more than 1 dimension is not
                 currently supported. Please get in touch if you need this
@@ -873,6 +880,10 @@ class Lightcurve(object):
 
         #plotting psd
         ax.plot(freq, psd)
+        if log[0]:
+            ax.set_xscale('log')
+        if log[1]:
+            ax.set_yscale('log')
         if show:
             plt.show()
         else:
@@ -895,11 +906,11 @@ class Lightcurve(object):
         if weights is None:
             weights = self.model.sci_kernel.mixture_weights.detach().numpy()
         from scipy.stats import norm
-        c = np.zeros((len(means),) + freq.shape, ) # mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
+        c = np.atleast_1d(np.zeros((len(means),) + freq.shape, ))  # mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
         for i, m in enumerate(means): # f = array of frequencies that we want to plot
-            s = scales[i] #s.d
-            w = weights[i] #how much power is given to each gaussian
-            c[i] = np.sqrt(w)[:,np.newaxis] * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
+            s = scales[i]  # s.d
+            w = weights[i]  # how much power is given to each gaussian
+            c[i] = np.atleast_2d(np.sqrt(w)) * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
             # Each component of the PSD is the weight times the difference of the forward and reverse PDFs
             # In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
         # Now we just have to some over the components

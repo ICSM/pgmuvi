@@ -135,7 +135,8 @@ def train(lightcurve=None, model=None, likelihood=None,
 
     results = {'loss': [], 'delta_loss': []}
     if lightcurve is not None:
-        for key, value in lightcurve.get_parameters():
+        pars = lightcurve.get_parameters()
+        for key, value in pars.items():
             results[key] = [value]
     else:
         for param_name, param in model.named_parameters():
@@ -154,7 +155,7 @@ def train(lightcurve=None, model=None, likelihood=None,
         results['loss'].append(loss.detach().numpy())
 
         if lightcurve is not None:
-            for key, value in lightcurve.get_parameters():
+            for key, value in lightcurve.get_parameters().items():
                 results[key] = [value]
         else:
             for param_name, param in model.named_parameters():
