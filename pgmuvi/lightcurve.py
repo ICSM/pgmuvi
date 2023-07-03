@@ -267,6 +267,8 @@ class Lightcurve(object):
 
         self.name = "Lightcurve" if name is None else name
 
+        self.__SET_LIKELIHOOD_CALLED = False
+
     @property
     def ndim(self):
         return self.xdata.shape[-1] if self.xdata.dim() > 1 else 1
@@ -365,6 +367,8 @@ class Lightcurve(object):
             provided under the assumption that it is a Likelihood object, and
             it will also be passed the uncertainties on the y data, if available.
         """
+
+        self.__SET_LIKELIHOOD_CALLED = True
         if hasattr(self, '_yerr_transformed') and likelihood is None:
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed)
         elif hasattr(self, '_yerr_transformed') and likelihood == "learn":
@@ -690,10 +694,18 @@ class Lightcurve(object):
         ValueError
             _description_
         """
-        if likelihood is None and not hasattr(self, 'likelihood'):
-            raise ValueError("""You must provide a likelihood function""")
+        if not hasattr(self, 'likelihood'):
+            self.set_likelihood(likelihood, **kwargs)
+        elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
+            #if no likelihood is passed, we only want to set the likelihood
+            #if it hasn't already been set
+            self.set_likelihood(likelihood, **kwargs)
         elif likelihood is not None:
             self.set_likelihood(likelihood, **kwargs)
+        # if likelihood is None and not hasattr(self, 'likelihood'):
+        #     raise ValueError("""You must provide a likelihood function""")
+        # elif likelihood is not None:
+        #     self.set_likelihood(likelihood, **kwargs)
 
         if model is None and not hasattr(self, 'model'):
             raise ValueError("""You must provide a model""")
