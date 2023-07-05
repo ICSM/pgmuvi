@@ -8,7 +8,7 @@ import gpytorch
 from .gps import * #FIX THIS LATER!
 import matplotlib.pyplot as plt
 from .trainers import train
-from gpytorch.constraints import Interval
+from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive
 from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior
 import pyro
 from pyro.infer.mcmc import NUTS, MCMC, HMC
@@ -444,8 +444,12 @@ class Lightcurve(object):
             "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel
         }
 
-        if likelihood is None and not hasattr(self, 'likelihood'):
-            raise ValueError("""You must provide a likelihood function""")
+        if not hasattr(self, 'likelihood'):
+            self.set_likelihood(likelihood, **kwargs)
+        elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
+            #if no likelihood is passed, we only want to set the likelihood
+            #if it hasn't already been set
+            self.set_likelihood(likelihood, **kwargs)
         elif likelihood is not None:
             self.set_likelihood(likelihood, **kwargs)
 
@@ -468,7 +472,77 @@ class Lightcurve(object):
         else:
             raise ValueError("Insert a valid model")
         
-    def set_model_prior(self, prior=None, **kwargs):
+        # now we've got a model set up, we're going to make some handy lookups
+        # for the parameters and modules that we'll need to access later
+        self._make_parameter_dict()
+        self.set_default_constraints()
+
+    def _make_parameter_dict(self):
+        ''' Make a dictionary of the model parameters
+        
+        This function is used to make a dictionary of the model parameters,
+        providing a convenient way to access them. The dictionary is stored
+        in the _model_pars attribute.
+        '''
+        self._model_pars = {}
+        # there are a few parameters that we want to make sure we expose a direct link to
+        # if we need them!
+        _special_pars = ['noise', 'mixture_means', 'mixture_scales', 'mixture_weights']
+
+        for param_name, param in self.model.named_parameters():
+            comps = list(param_name.split('.'))
+            pn_root = comps[-1]
+            param_dict = {
+                'full_name': param_name,
+                'root_name': pn_root,
+                'chain': [],
+                'constrained': False,
+            }
+            if 'raw' in param_name:
+                # This is a constrained parameter, so we need to get the
+                # unconstrained value
+                pn_const = comps[-1].lstrip('raw_')
+                param_dict['constrained'] = True
+                param_dict['constrained_name'] = pn_const
+                pn = '.'.join([c.lstrip('raw_') for c in comps])
+                param_dict['constrained_full_name'] = pn
+            tmp = self.model.__getattr__(comps[0])
+            param_dict['chain'].append(tmp)
+            for i in range(1,len(comps)):
+                c = comps[i] if 'raw' not in comps[i] else comps[i].lstrip('raw_')
+                try:
+                    tmp = tmp.__getattr__(c)
+                except AttributeError:
+                    tmp = tmp.__getattribute__(c)
+                param_dict['chain'].append(tmp)
+            param_dict['module'] = param_dict['chain'][-2]
+            if param_dict['constrained']:
+                param_dict['param'] = param_dict['chain'][-1]
+                try:
+                    param_dict['raw_param'] = param_dict['chain'][-2].__getattr__(comps[-1])
+                except AttributeError:
+                    param_dict['raw_param'] = param_dict['chain'][-2].__getattribute__(comps[-1])
+            else:
+                param_dict['param'] = param_dict['chain'][-1]
+                param_dict['raw_param'] = param_dict['param']
+            if any(s in pn_root for s in _special_pars):
+                # it's a special parameter that we want extra easy access to!
+                param_dict['special'] = True
+                j = np.argmax([s in pn_root for s in _special_pars])
+                self._model_pars[_special_pars[j]] = param_dict 
+
+            #     pars[pn] = tmp.data
+            # else:
+            #     # Either we actually want the raw values, or it's not a
+            #     # constrained parameter
+            #     pars[param_name] = param.data
+            self._model_pars[param_name] = param_dict
+            if param_dict['constrained']:
+                self._model_pars[pn] = param_dict  # so we also alias the full
+                                                   # name for the constrained
+                                                   # parameter
+        
+    def set_prior(self, prior=None, **kwargs):
         '''Set the prior for the model parameters
         
         Parameters
@@ -484,55 +558,87 @@ class Lightcurve(object):
         '''
         pass
 
-    def set_model_constraint(self, constraint=None, **kwargs):
+    def set_constraint(self, constraint, **kwargs):
         '''Set the constraint for the model parameters
 
         Parameters
         ----------
         constraint : dict, optional
-            A dictionary of the constraints to use for the model parameters. The
-            keys should be the names of the parameters, and the values should
-            be instances of gpytorch.constraints.Constraint. If None, no
+            A dictionary of the constraints to use for the model parameters.
+            The keys should be the names of the parameters, and the values
+            should be instances of gpytorch.constraints.Constraint. If None, no
             constraints will be used. If a constraint is passed for a parameter
             that is not a model parameter, it will be ignored.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the Constraint
             constructors.
         '''
-        pass
+        # which paramaters need to have their constraints transformed? and how?
+        pars_to_transform = {'x': ['mixture_means', 'mixture_scales'],
+                             'y': ['noise', 'mean_module']}
 
-    def set_likelihood_prior(self, prior=None, **kwargs):
-        '''Set the prior for the likelihood parameters
+        for key in constraint:
+            if key in self._model_pars:
+                # constraints must be registered to raw parameters!
+                k = key.split('.')[-1] if 'raw_' in key else f"raw_{key.split('.')[-1]}"
+                if all(p not in key
+                       for p in pars_to_transform['y'] + pars_to_transform['x']):  # no transform needed!
+                    self._model_pars[key]['module'].register_constraint(
+                        k, constraint[key]
+                    )
+                elif any(p in key for p in pars_to_transform['x']):
+                    # now apply the x transform
+                    # remember that the means and scales are in fourier space
+                    # so we need to transform them back to real space
+                    # before applying the transform
+                    # and then transform them back to fourier space
+                    # luckily, when the shift is removed from the transform,
+                    # the factors of 2pi cancel out for the scales
+                    # so we can just do 1/ for both means and scales
+                    if self.xtransform is not None:
+                        # now things get complicated...
+                        # if we have gotten to here, we know that the parameter
+                        # is a mixture mean or scale, so we need to transform
+                        # it to real space, apply the constraint, and then
+                        # transform it back to fourier space
+                        # luckily, when the shift is removed from the transform,
+                        # the factors of 2pi cancel out for the scales
+                        # so we can just do 1/ for both means and scales
+                        if constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-inf)]:
+                            # we need to transform the lower bound
+                            constraint[key].lower_bound = 1./self.xtransform.transform(1./constraint[key].lower_bound,
+                                                                                       shift=False)
+                        if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(inf)]:
+                            # we need to transform the upper bound
+                            constraint[key].upper_bound = 1./self.xtransform.transform(1./constraint[key].upper_bound,
+                                                                                       shift=False)
+                    self._model_pars[key]['module'].register_constraint(
+                        k, constraint[key]
+                    )
+                elif any(p in key for p in pars_to_transform['y']):
+                    if self.ytransform is not None:
+                        if isinstance(constraint[key], Positive) and (
+                            isinstance(self.ytransform, (ZScore, RobustZScore))
+                        ):
+                            # convert constraint to an interval with minimum equal to
+                            # what zero is in the untransformed space
+                            constraint[key] = Interval(self.ytransform.transform(0), inf)
 
-        Parameters
-        ----------
-        prior : dict, optional
-            A dictionary of the priors to use for the likelihood parameters. The
-            keys should be the names of the parameters, and the values should
-            be instances of gpytorch.priors.Prior. If None, no priors will be
-            used. If a prior is passed for a parameter that is not a likelihood
-            parameter, it will be ignored.
-        **kwargs : dict, optional
-            Any other keyword arguments to be passed to the Prior constructors.
-        '''
-        pass
-
-    def set_likelihood_constraint(self, constraint=None, **kwargs):
-        '''Set the constraint for the likelihood parameters
-
-        Parameters
-        ----------
-        constraint : dict, optional
-            A dictionary of the constraints to use for the likelihood parameters.
-            The keys should be the names of the parameters, and the values
-            should be instances of gpytorch.constraints.Constraint. If None, no
-            constraints will be used. If a constraint is passed for a parameter
-            that is not a likelihood parameter, it will be ignored.
-        **kwargs : dict, optional
-            Any other keyword arguments to be passed to the Constraint
-            constructors.
-        '''
-        pass
+                        elif constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-inf)]:
+                            # we need to transform the lower bound
+                            constraint[key].lower_bound = self.ytransform.transform(constraint[key].lower_bound)
+                        if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(inf)]:
+                            # we need to transform the upper bound
+                            constraint[key].upper_bound = self.ytransform.transform(constraint[key].upper_bound)
+                    self._model_pars[key]['module'].register_constraint(
+                        k, constraint[key]
+                    )
+            else:
+                print(f"Parameter {key} not found in model parameters,")
+                print("this constraint will be ignored.")
+                print("Available parameters are:")
+                print(self._model_pars.keys())
+                print("(Beware, several of these are aliases!)")
 
     def set_default_priors(self, **kwargs):
         '''Set the default priors for the model and likelihood parameters
@@ -552,22 +658,43 @@ class Lightcurve(object):
             the GP, which is constrained to be in the range of the y-data (a correction
             will be needed if the data are censored!)
             - The noise is constrained to be less than the standard deviation of
-            the y-data
+            the y-data, and greater than either 1e-4 or 1/10 of the smallest
+            uncertainty on the y-data, if uncertainties are given, or 1e-4
+            times the standard deviation of the y data.
             - The mixture means greater than the frequency corresponding to
             the separation between the earliest and latest points in the data
             and less than the frequency corresponding to the separation between
             the two closest data points (should be updated to account for the
             window function and whatever we're really sensitive to)
-            - The mixture scales greater than 0 and less than the frequency
-            corresponding to the separation between the earliest and latest
-            points in the data.
+            - The mixture scales and weights are left with their default
+            constraints as defined in GPyTorch.
 
         Parameters
         ----------
         **kwargs : dict, optional
             Any keyword arguments to be passed to the Constraint constructors.
         '''
-        pass
+        try:
+            noise_min = np.minimum(1e-4, self._yerr_transformed.min()/10)
+        except AttributeError:
+            noise_min = 1e-4*self._ydata_transformed.std()
+        noise_max = self._ydata_transformed.std()  # for a non-periodic source, the noise should be less than the standard deviation
+        noise_constraint = Interval(noise_min, noise_max)
+        self._model_pars['noise']['module'].register_constraint("raw_noise", 
+                                                                noise_constraint)
+        with contextlib.suppress(RuntimeError):
+            mean_const_constraint = Interval(self._ydata_transformed.min(),
+                                             self._ydata_transformed.max())
+            for key in self._model_pars:
+                if 'mean_module.constant' in key:
+                    self._model_pars[key]['module'].register_constraint("raw_constant",
+                                                                        mean_const_constraint)
+        mixture_means_constraint = GreaterThan(1/self._xdata_transformed.max()) # this should correspond to the longest frequency entirely contained in the dataset
+        self._model_pars['mixture_means']['module'].register_constraint("raw_mixture_means",
+                                                                        mixture_means_constraint)
+        
+        # to-do - check if constraints on mixture scales are useful!
+        
 
     def set_hypers(self, hypers=None, debug=False, **kwargs):
         '''Set the hyperparameters for the model and likelihood. This is a
