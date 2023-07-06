@@ -604,11 +604,11 @@ class Lightcurve(object):
                         # luckily, when the shift is removed from the transform,
                         # the factors of 2pi cancel out for the scales
                         # so we can just do 1/ for both means and scales
-                        if constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-inf)]:
+                        if constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-torch.inf)]:
                             # we need to transform the lower bound
                             constraint[key].lower_bound = 1./self.xtransform.transform(1./constraint[key].lower_bound,
                                                                                        shift=False)
-                        if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(inf)]:
+                        if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(torch.inf)]:
                             # we need to transform the upper bound
                             constraint[key].upper_bound = 1./self.xtransform.transform(1./constraint[key].upper_bound,
                                                                                        shift=False)
@@ -622,12 +622,12 @@ class Lightcurve(object):
                         ):
                             # convert constraint to an interval with minimum equal to
                             # what zero is in the untransformed space
-                            constraint[key] = Interval(self.ytransform.transform(0), inf)
+                            constraint[key] = Interval(self.ytransform.transform(0), torch.inf)
 
-                        elif constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-inf)]:
+                        elif constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-torch.inf)]:
                             # we need to transform the lower bound
                             constraint[key].lower_bound = self.ytransform.transform(constraint[key].lower_bound)
-                        if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(inf)]:
+                        if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(torch.inf)]:
                             # we need to transform the upper bound
                             constraint[key].upper_bound = self.ytransform.transform(constraint[key].upper_bound)
                     self._model_pars[key]['module'].register_constraint(
