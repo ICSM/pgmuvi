@@ -558,7 +558,7 @@ class Lightcurve(object):
         '''
         pass
 
-    def set_constraint(self, constraint, **kwargs):
+    def set_constraint(self, constraint, debug=False, **kwargs):
         '''Set the constraint for the model parameters
 
         Parameters
@@ -579,6 +579,10 @@ class Lightcurve(object):
 
         for key in constraint:
             if key in self._model_pars:
+                if debug:
+                    print(f"Found parameter {key} in model parameters")
+                    print(f"Parameter {key} will have constraint: {constraint[key]}")
+                    print("which may be transformed")
                 # constraints must be registered to raw parameters!
                 k = key.split('.')[-1] if 'raw_' in key else f"raw_{key.split('.')[-1]}"
                 if all(p not in key
@@ -604,35 +608,70 @@ class Lightcurve(object):
                         # luckily, when the shift is removed from the transform,
                         # the factors of 2pi cancel out for the scales
                         # so we can just do 1/ for both means and scales
+                        if debug:
+                            print(constraint[key])
                         if constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-torch.inf)]:
                             # we need to transform the lower bound
-                            constraint[key].lower_bound = 1./self.xtransform.transform(1./constraint[key].lower_bound,
-                                                                                       shift=False)
+                            if debug:
+                                print(1./self.xtransform.transform(1./constraint[key].lower_bound,
+                                                                    apply_to=[0],
+                                                                    shift=False))
+                            constraint[key].lower_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].lower_bound,
+                                                                                       apply_to=[0],
+                                                                                       shift=False).item())
+                            if debug:
+                                print(constraint[key].lower_bound)
+                                print(constraint[key])
                         if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(torch.inf)]:
                             # we need to transform the upper bound
-                            constraint[key].upper_bound = 1./self.xtransform.transform(1./constraint[key].upper_bound,
-                                                                                       shift=False)
+                            constraint[key].upper_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].upper_bound,
+                                                                                       apply_to=[0],
+                                                                                       shift=False).item())
+                            if debug:
+                                print(constraint[key].upper_bound)
+                                print(constraint[key])
+                        if debug:
+                            print(constraint[key])
                     self._model_pars[key]['module'].register_constraint(
                         k, constraint[key]
                     )
                 elif any(p in key for p in pars_to_transform['y']):
                     if self.ytransform is not None:
+                        if debug:
+                            print(constraint[key])
                         if isinstance(constraint[key], Positive) and (
                             isinstance(self.ytransform, (ZScore, RobustZScore))
                         ):
                             # convert constraint to an interval with minimum equal to
                             # what zero is in the untransformed space
                             constraint[key] = Interval(self.ytransform.transform(0), torch.inf)
+                            if debug:
+                                print(constraint[key])
 
                         elif constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-torch.inf)]:
                             # we need to transform the lower bound
-                            constraint[key].lower_bound = self.ytransform.transform(constraint[key].lower_bound)
+                            constraint[key].lower_bound = torch.tensor(self.ytransform.transform(constraint[key].lower_bound).item())
+                            if debug:
+                                print(constraint[key].lower_bound)
+                                print(constraint[key])
                         if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(torch.inf)]:
                             # we need to transform the upper bound
-                            constraint[key].upper_bound = self.ytransform.transform(constraint[key].upper_bound)
+                            constraint[key].upper_bound = torch.tensor(self.ytransform.transform(constraint[key].upper_bound).item())
+                            if debug:
+                                print(constraint[key].upper_bound)
+                                print(constraint[key])
+                    if debug:
+                            print(constraint[key])
                     self._model_pars[key]['module'].register_constraint(
                         k, constraint[key]
                     )
+                if debug:
+                    try:
+                        print(f"Registered constraint {constraint[key]}")
+                    except TypeError:
+                        print("Registered constraint")
+                        print(constraint[key])
+                    print(f"to parameter {key}")
             else:
                 print(f"Parameter {key} not found in model parameters,")
                 print("this constraint will be ignored.")
@@ -931,7 +970,7 @@ class Lightcurve(object):
 
         return periods, weights, scales
                 
-    def get_parameters(self, raw=False):
+    def get_parameters(self, raw=False, transform=True):
         '''
         Returns a dictionary of the parameters of the model, with the keys
         being the names of the parameters and the values being the values of
@@ -959,6 +998,8 @@ class Lightcurve(object):
             of the parameters.
         '''
         pars = {}
+        pars_to_transform = {'x': ['mixture_means', 'mixture_scales'],
+                             'y': ['noise', 'mean_module']}
         for param_name, param in self.model.named_parameters():
             comps = list(param_name.split('.'))
             if not raw and 'raw' in param_name:
@@ -972,11 +1013,23 @@ class Lightcurve(object):
                         tmp = tmp.__getattr__(c)
                     except AttributeError:
                         tmp = tmp.__getattribute__(c)
-                pars[pn] = tmp.data
+                if any(p in pn for p in pars_to_transform['x']) and transform and self.xtransform is not None:
+                    d = 1/self.xtransform.inverse(1/tmp.data, shift=False)
+                elif any(p in pn for p in pars_to_transform['y']) and transform and self.ytransform is not None:
+                    d = self.ytransform.inverse(tmp.data)
+                else:
+                    d = tmp.data
+                pars[pn] = d
             else:
                 # Either we actually want the raw values, or it's not a
                 # constrained parameter
-                pars[param_name] = param.data
+                if any(p in param_name for p in pars_to_transform['x']) and transform and self.xtransform is not None:
+                    d = 1/self.xtransform.inverse(1/param.data, shift=False)
+                elif any(p in param_name for p in pars_to_transform['y']) and transform and self.ytransform is not None:
+                    d = self.ytransform.inverse(param.data)
+                else:
+                    d = param.data
+                pars[param_name] = d
         return pars
                 
     def print_parameters(self, raw=False):
