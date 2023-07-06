@@ -682,12 +682,67 @@ class Lightcurve(object):
     def set_default_priors(self, **kwargs):
         '''Set the default priors for the model and likelihood parameters
 
+        The default priors are as follows:
+            - Parameters that must be positive are given LogNormal, HalfNormal
+            or HalfCauchy priors, depending on the parameter.
+            - The noise is given a HalfNormal prior with a scale of 1/10 of the
+            smallest uncertainty on the y-data, if uncertainties are given, or
+            1/10 of the standard deviation of the y data.
+            - The mean of the GP is given a Gaussian prior with a mean of the
+            mean of the y-data and a standard deviation of 1/10 of the standard
+            deviation of the y-data.
+
+
         Parameters
         ----------
         **kwargs : dict, optional
             Any keyword arguments to be passed to the Prior constructors.
         '''
-        pass
+
+        try:
+            noise_scale = np.minimum(1e-4, self._yerr_transformed.min()/10)
+        except AttributeError:
+            noise_scale = 1e-4*self._ydata_transformed.std()
+        noise_prior = gpytorch.priors.HalfNormal(noise_scale)
+        self._model_pars['noise']['module'].register_prior("noise_prior",
+                                                           noise_prior,
+                                                           'noise')
+        with contextlib.suppress(RuntimeError):
+            mean_prior = gpytorch.priors.Normal(self._ydata_transformed.mean(),
+                                                self._ydata_transformed.std()/10)
+            for key in self._model_pars:
+                if 'mean_module.constant' in key:
+                    self._model_pars[key]['module'].register_prior("mean_prior",
+                                                                   mean_prior,
+                                                                   'constant')
+        # we use a lognormal prior for the means, because we want to make sure
+        # that the means are positive, but we don't want to restrict them to
+        # be close to zero. In fact, we want to penalise both very high and very low
+        # frequencies, so we use a lognormal prior with mu = 0 and sigma = 1
+        mixture_means_prior = gpytorch.priors.LogNormal(0, 1) #/self._xdata_transformed.max())
+        self._model_pars['mixture_means']['module'].register_prior("mixture_means_prior",
+                                                                   mixture_means_prior,
+                                                                   'mixture_means')
+
+        # now we need a prior for the mixture scales
+        # we want to penalise very large scales, so we use a half-cauchy prior
+        # with a scale of 1/10 of the maximum frequency
+        mixture_scales_prior = gpytorch.priors.HalfCauchy(1/self._xdata_transformed.max())
+        self._model_pars['mixture_scales']['module'].register_prior("mixture_scales_prior",
+                                                                    mixture_scales_prior,
+                                                                    'mixture_scales')
+        # we use a HalfCauchy prior for the mixture weights, because we want to
+        # make sure that they are positive and we don't want to restrict them
+        # to be close to zero. In fact, we want to penalise both very high and
+        # very low weights, so we use a HalfCauchy prior with a scale of 1/10
+        # of the maximum frequency
+        mixture_weights_prior = gpytorch.priors.HalfCauchy(1/self._xdata_transformed.max())
+        self._model_pars['mixture_weights']['module'].register_prior("mixture_weights_prior",
+                                                                     mixture_weights_prior,
+                                                                     'mixture_weights')
+
+        # need a more general way to assign default priors to everything, but for now 
+        # let's see if this works!
 
     def set_default_constraints(self, **kwargs):
         '''Set the default constraints for the model and likelihood parameters
@@ -791,7 +846,7 @@ class Lightcurve(object):
             print(hypers)
         self.model.initialize(**hypers, **kwargs)
 
-    def init_hypers_from_LS(self, **kwargs):
+    def init_hypers_from_LombScargle(self, **kwargs):
         pass
 
     def _set_hypers_raw(self, hypers=None, **kwargs):
@@ -809,6 +864,14 @@ class Lightcurve(object):
         try:
             self.model.train()
             self.likelihood.train()
+        except AttributeError as e:
+            errmsg = "You must first set the model and likelihood"
+            _reraise_with_note(e, errmsg)
+    
+    def _eval(self):
+        try:
+            self.model.eval()
+            self.likelihood.eval()
         except AttributeError as e:
             errmsg = "You must first set the model and likelihood"
             _reraise_with_note(e, errmsg)
@@ -889,6 +952,9 @@ class Lightcurve(object):
         if miniter is None:
             miniter = training_iter
 
+        if max_cg_iterations is None:
+            max_cg_iterations = 10000
+
         # Next we probably want to report some setup info
         # later...
 
@@ -904,7 +970,7 @@ class Lightcurve(object):
         self.print_parameters()
 
         # Now actually call the trainer!
-        with gpytorch.settings.max_cg_iterations(10000):
+        with gpytorch.settings.max_cg_iterations(max_cg_iterations):
             self.results = train(self,
                                  maxiter=training_iter,
                                  miniter=miniter,
@@ -912,6 +978,77 @@ class Lightcurve(object):
                                  optim=optim, stopavg=stopavg)
 
         return self.results
+
+    def mcmc(self, sampler=None, num_samples=500,
+             warmup_steps=100, disable_progbar=False,
+             **kwargs):
+        '''Run an MCMC sampler on the model
+        
+        This function runs an MCMC sampler on the model, using the sampler
+        specified in the `sampler` attribute. The results are stored in the
+        `mcmc_results` attribute.
+
+        Parameters
+        ----------
+        sampler : str or MCMC, optional
+            The name of the sampler to use. If None, pyro.infer.mcmc.NUTS will
+            be used. If a string, it must be one of the following:
+                'NUTS': pyro.infer.mcmc.NUTS
+                'HMC': pyro.infer.mcmc.HMC
+            Otherwise, it must be an instance of pyro.infer.mcmc.MCMC.
+        num_samples : int, optional
+            The number of samples to draw from the posterior, by default 500.
+        warmup_steps : int, optional
+            The number of warmup steps to use, by default 100.
+        disable_progbar : bool, optional
+            Whether to disable the progress bar, by default False.
+        **kwargs : dict, optional
+        
+        Returns
+        -------
+        mcmc_results : dict
+            A dictionary containing the results of the MCMC sampling. The
+            keys are the names of the parameters, and the values are the
+            samples of the parameters.
+        '''
+        if sampler is None:
+            sampler = NUTS
+        elif isinstance(sampler, str):
+            if sampler == 'NUTS':
+                sampler = NUTS
+            elif sampler == 'HMC':
+                sampler = HMC
+            else:
+                raise ValueError("sampler must be one of 'NUTS' or 'HMC'")
+        elif not isinstance(sampler, MCMC):
+            raise TypeError("sampler must be either None, a string, or an instance of pyro.infer.mcmc.MCMC")
+        
+        # mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood,
+        #                                                self.model)
+        # at some point we will make this support approximate GPs
+        # if isinstance(self.model, ExactGP):
+        #     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+        # elif isinstance(self.model, ApproximateGP):
+        #     mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=len(self._ydata_transformed))
+        # else:
+        #     raise
+
+        def pyro_model(x, y):
+            with gpytorch.settings.fast_computations(False, False, False):
+                sampled_model = self.model.pyro_sample_from_prior()
+                output = sampled_model.likelihood(sampled_model(x))
+                pyro.sample("obs", output, obs=y)
+            return y
+
+        nuts_kernel = sampler(pyro_model)
+        mcmc_run = MCMC(nuts_kernel, 
+                        num_samples=num_samples, warmup_steps=warmup_steps, 
+                        disable_progbar=disable_progbar)
+        mcmc_run.run(self._xdata_transformed, self._ydata_transformed)
+
+        self.model.pyro_load_from_samples(mcmc_run.get_samples())
+
+        # self.mcmc_results = mcmc(self, sampler, **kwargs)
 
     def print_periods(self):
         if self.ndim == 1:
@@ -1074,7 +1211,51 @@ class Lightcurve(object):
                     # print(f"{key}: {results_tmp[...,0].flatten()}, {results_tmp[...,2].flatten()}")
             
     def plot_psd(self, freq=None, means=None, scales=None, weights=None,
-                 show=True, raw=False, log=(True, False), **kwargs):
+                 show=True, raw=False, log=(True, False), 
+                 truncate_psd = True, logpsd = False, **kwargs):
+        '''Plot the power spectral density of the model
+
+        Parameters
+        ----------
+        freq : array_like, optional
+            The frequencies at which to compute the PSD, by default None. If
+            None, the frequencies will be computed automatically.
+        means : array_like, optional
+            The means of the gaussians in the spectral mixture kernel, by
+            default None. If None, the means from the model will be used.
+        scales : array_like, optional
+            The scales of the gaussians in the spectral mixture kernel, by
+            default None. If None, the scales from the model will be used.
+        weights : array_like, optional
+            The weights of the gaussians in the spectral mixture kernel, by
+            default None. If None, the weights from the model will be used.
+        show : bool, optional
+            Whether to show the plot, by default True.
+        raw : bool, optional
+            If True, the PSD will be computed in the space that the model was
+            trained in, by default False. If False, the PSD will be computed
+            in the original space of the data.
+        log : tuple, optional
+            A tuple of two booleans, indicating whether to plot the x-axis and
+            y-axis on a log scale, respectively, by default (True, False).
+        truncate_psd : float or bool, optional
+            If not False, the PSD will be truncated at this value, by default
+            True. This is useful for speeding up plotting when the frequency
+            range is large. If logpsd is True, this value should be given in
+            (natural) log space. If truncate_psd is True, the PSD will be
+            truncated at 1e-6 times the maximum PSD for logpsd=False, and 1e-15
+            of the maximum PSD (i.e. max(ln(psd)) - 34.5388) for logpsd=True.
+        logpsd : bool, optional
+            If True, the PSD will be plotted on a log scale, by default False.
+            If True, truncate_psd must be given in (natural) log space.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the plotting routine.
+        
+        Returns
+        -------
+        fig, ax : matplotlib.pyplot.Figure, matplotlib.pyplot.Axes
+            The figure and axes objects of the plot.
+        '''
         
         if freq is None:
             if self.ndim == 1:
@@ -1098,22 +1279,42 @@ class Lightcurve(object):
                     # do for now
                     diffs = self._xdata_raw.sort().values[1:] - self._xdata_raw.sort().values[:-1]
                     mindelta = (diffs[diffs>0]).min().item()
+                    print(step, mindelta, 1/(mindelta/2))
+                    
+                    # we want to sample a set of frequencies that are spaced in the range
+                    # covered by the gaussian mixture, but we want to sample them
+                    # densely enough to resolve the narrowest gaussian
+                    # so we want a minimum frequency 
+
                     freq = torch.arange(1/(self._xdata_raw.max() - self._xdata_raw.min()).item(),
                                         1/(mindelta/2),
                                         step.item())
+                    print(freq.shape)
+                    #exit()
             elif self.ndim == 2:
-                raise NotImplementedError("""Plotting models and data in more than 1 dimension is not
+                raise NotImplementedError("""Plotting PSDs in more than 1 dimension is not
                 currently supported. Please get in touch if you need this
                 functionality!
                 """)
             else:
-                raise NotImplementedError("""Plotting models and data in more than 2 dimensions is not
+                raise NotImplementedError("""Plotting PSDs in more than 2 dimensions is not
                 currently supported. Please get in touch if you need this
                 functionality!
                 """)
         # Computing the psd for frequencies f
         psd = self.compute_psd(freq, means=means, scales=scales,
-                               weights=weights, raw=raw)
+                               weights=weights, raw=raw, log=logpsd, **kwargs)
+    
+        if truncate_psd is True:
+            if logpsd:
+                freq = freq[psd>psd.max()-34.5388]
+                psd = psd[psd>psd.max()-34.5388]
+            else:
+                freq = freq[psd>1e-6*psd.max()]
+                psd = psd[psd>1e-6*psd.max()]
+        elif truncate_psd:
+            freq = freq[psd>truncate_psd]
+            psd = psd[psd>truncate_psd]
 
         # Initialize plot
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
@@ -1122,7 +1323,7 @@ class Lightcurve(object):
         ax.plot(freq, psd)
         if log[0]:
             ax.set_xscale('log')
-        if log[1]:
+        if log[1] and not logpsd:  # we don't need to double-log the Y axis (I hope!)
             ax.set_yscale('log')
         if show:
             plt.show()
@@ -1130,7 +1331,7 @@ class Lightcurve(object):
             return fig, ax
 
     def compute_psd(self, freq, means=None, scales=None, weights=None,
-                    raw=False, **kwargs):
+                    raw=False, log=False, debug=True, **kwargs):
         '''Compute the power spectral density for the model
 
         Parameters
@@ -1165,33 +1366,51 @@ class Lightcurve(object):
             if self.xtransform is not None and not raw:
                 # there's probably an easier way to do this than converting to
                 # a period and back, but this will do for now
-                means = 1/self.xtransform.inverse(1/means, shift=False).detach().numpy()
+                means = 1/self.xtransform.inverse(1/means, shift=False).detach()#.numpy()
         if scales is None:
             scales = self.model.sci_kernel.mixture_scales
             # now apply the transform too!
             if self.xtransform is not None and not raw:
-                scales = 1/(2*np.pi*self.xtransform.inverse(1/(2*torch.pi*scales), shift=False).detach().numpy())
+                scales = 1/(2*np.pi*self.xtransform.inverse(1/(2*torch.pi*scales), shift=False).detach())#.numpy())
         if weights is None:
-            weights = self.model.sci_kernel.mixture_weights.detach().numpy()
-        from scipy.stats import norm
-        c = np.atleast_1d(np.zeros((len(means),) + freq.shape, ))  # mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
-        for i, m in enumerate(means): # f = array of frequencies that we want to plot
-            s = scales[i]  # s.d
-            w = weights[i]  # how much power is given to each gaussian
-            c[i] = np.atleast_2d(np.sqrt(w)) * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
-            # Each component of the PSD is the weight times the difference of the forward and reverse PDFs
-            # In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
-        # Now we just have to some over the components
-        psd = np.sum(c, axis=0)
+            weights = self.model.sci_kernel.mixture_weights.detach()#.numpy()
+
+        from torch.distributions import Normal as torchnorm
+        # Computing the psd for frequencies f
+        if debug:
+            print(freq.shape, means.shape, scales.shape, weights.shape)
+        norm = torchnorm(means, scales)
+        if debug:
+            print(norm)
+        psd = norm.log_prob(freq.unsqueeze(-1))
+        if debug:
+            print(psd.shape)
+        psd = torch.logsumexp(torch.log(weights) + psd, dim=-1).squeeze()
+        if debug:
+            print(psd.shape)
+        if not log:
+            psd = psd.exp().detach().numpy()
         return psd
+        # c = np.atleast_1d(np.zeros((len(means),) + freq.shape, ))  # mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
+        # for i, m in enumerate(means): # f = array of frequencies that we want to plot
+        #     s = scales[i]  # s.d
+        #     w = weights[i]  # how much power is given to each gaussian
+        #     c[i] = np.atleast_2d(np.sqrt(w)) * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
+        #     # Each component of the PSD is the weight times the difference of the forward and reverse PDFs
+        #     # In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
+        # # Now we just have to some over the components
+        # psd = np.sum(c, axis=0)
+        # return psd
 
     def plot(self, ylim=None, show=True, **kwargs):
         if ylim is None:
             ylim = [-3, 3]
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Get into evaluation (predictive posterior) mode
-            self.model.eval()
-            self.likelihood.eval()
+            # self.model.eval()
+            # self.likelihood.eval()
+
+            self._eval()
 
             # Importing raw x and y training data from xdata and
             # ydata functions
