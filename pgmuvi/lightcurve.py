@@ -272,6 +272,8 @@ class Lightcurve(object):
         self.__SET_MODEL_CALLED = False
         self.__CONTRAINTS_SET = False
         self.__PRIORS_SET = False
+        self.__FITTED_MAP = False
+        self.__FITTED_MCMC = False
 
     @property
     def ndim(self):
@@ -991,6 +993,7 @@ class Lightcurve(object):
                                  miniter=miniter,
                                  stop=stop, lr=lr,
                                  optim=optim, stopavg=stopavg)
+        self.__FITTED_MAP = True
 
         return self.results
 
@@ -1063,6 +1066,8 @@ class Lightcurve(object):
                 output = sampled_model.likelihood(sampled_model(x))#.detatch()
                 pyro.sample("obs", output, obs=y)
             return y
+        
+        self.num_samples = num_samples
 
         nuts_kernel = sampler(pyro_model)
         self.mcmc_run = MCMC(nuts_kernel, 
@@ -1079,12 +1084,104 @@ class Lightcurve(object):
             self.print_parameters()
             raise e
         
-        self.mcmc_run.summary(prob=0.683)
+        self.__FITTED_MCMC = True
+        
+        #self.mcmc_run.summary(prob=0.683)
         self.inference_data = az.from_pyro(self.mcmc_run)
 
         self.model.pyro_load_from_samples(self.mcmc_run.get_samples())
 
         # self.mcmc_results = mcmc(self, sampler, **kwargs)
+    
+    def summary(self, prob=0.683, use_arviz=True,
+                var_names=None, filter_vars='like',
+                stat_focus='median', **kwargs):
+        '''Print a summary of the results of the MCMC sampling
+        
+        Parameters
+        ----------
+        prob : float, optional
+            The probability to use for the credible intervals, by default
+            0.683.
+        use_arviz : bool, optional
+            Whether to use arviz to print the summary, by default True.
+        var_names : list, optional
+            A list of the names of the variables to include in the summary. If
+            None, the variables for the mean function and the covariance
+            function will be included, by default None.
+        filter_vars : str, optional
+            A string specifying how to filter the variables, based on
+            `arviz.summary`. If None, the default behaviour of `arviz.summary` 
+            will be used, by default 'like'.
+        stat_focus : str, optional
+            A string specifying which statistic to focus on, based on
+            `arviz.summary`. If None, the default behaviour of `arviz.summary`
+            will be used ('mean'), by default 'median'.
+        '''
+        if not self.__FITTED_MCMC:
+            raise RuntimeError("You must first run the MCMC sampler")
+        if var_names is None:
+            var_names=['mean_module', 'covar_module']
+        if stat_focus is None:
+            stat_focus = 'mean'
+        if use_arviz:
+            az.summary(self.inference_data, round_to=2, hdi_prob=prob,
+                       var_names=var_names, filter_vars=filter_vars,
+                       stat_focus=stat_focus, **kwargs)
+        #self.mcmc_run.summary(prob=prob)
+        self.diagnostics = self.mcmc_run.diagnostics()
+        print(self.diagnostics)
+    
+    def plot_corner(self, kind='scatter', var_names=None, filter_vars='like',
+                    marginals=True, point_estimate='median', **kwargs):
+        '''Plot a corner plot of the results of the MCMC sampling
+        
+        Parameters
+        ----------
+        kind : str, optional
+            The kind of plot to use, based on `arviz.plot_pair`. If None, the
+            default behaviour of `arviz.plot_pair` will be used, by default
+            'scatter'. Other options are 'kde' and 'hexbin'.
+        var_names : list, optional
+            A list of the names of the variables to include in the corner plot.
+            If None, the variables for the mean function and the covariance
+            function will be included, by default None.
+        filter_vars : str, optional
+            A string specifying how to filter the variables, based on
+            `arviz.plot_pair`. If None, the default behaviour of
+            `arviz.plot_pair` will be used, by default 'like'.
+        marginals : bool, optional
+            Whether to include the marginal distributions, by default True.
+        point_estimate : str, optional
+            The point estimate to plot, based on `arviz.plot_pair`. If None,
+            no point estimate will be plotted, by default 'median'.
+        '''
+        if not self.__FITTED_MCMC:
+            raise RuntimeError("You must first run the MCMC sampler")
+        if var_names is None:
+            var_names=['mean_module', 'covar_module']
+        if point_estimate is None:
+            point_estimate = 'median'
+        az.plot_pair(self.inference_data, kind=kind, 
+                     var_names=var_names, filter_vars=filter_vars,
+                     marginals=marginals, point_estimate=point_estimate,
+                     **kwargs)
+
+    def plot_trace(self, var_names=None, filter_vars='like', **kwargs):
+        '''Plot a trace plot of the results of the MCMC sampling
+
+        Parameters
+        ----------
+        var_names : list, optional
+            A list of the names of the variables to include in the trace plot.
+            If None, the variables for the mean function and the covariance
+            function will be included, by default None.
+        '''
+        if not self.__FITTED_MCMC:
+            raise RuntimeError("You must first run the MCMC sampler")
+        if var_names is None:
+            var_names = ['mean_module', 'covar_module']
+        az.plot_trace(self.inference_data, var_names=var_names, **kwargs)
 
     def print_periods(self):
         if self.ndim == 1:
@@ -1248,7 +1345,7 @@ class Lightcurve(object):
             
     def plot_psd(self, freq=None, means=None, scales=None, weights=None,
                  show=True, raw=False, log=(True, False), 
-                 truncate_psd = True, logpsd = False, **kwargs):
+                 truncate_psd=True, logpsd=False, **kwargs):
         '''Plot the power spectral density of the model
 
         Parameters
@@ -1438,9 +1535,37 @@ class Lightcurve(object):
         # psd = np.sum(c, axis=0)
         # return psd
 
-    def plot(self, ylim=None, show=True, **kwargs):
+    def plot(self, ylim=None, show=True, 
+             mcmc_samples=False, **kwargs):
+        '''Plot the model and data
+
+        Parameters
+        ----------
+        ylim : list, optional
+            The y-limits of the plot, by default None. If None, the y-limits
+            will be set automatically.
+        show : bool, optional
+            Whether to show the plot, by default True.
+        mcmc_samples : bool, optional
+            Whether to plot the samples from the MCMC run, by default False.
+            This will only work if the MCMC sampler has been run.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the plotting routine.
+        
+        Returns
+        -------
+        fig : matplotlib.pyplot.Figure
+            The figure object of the plot.
+        '''
         if ylim is None:
             ylim = [-3, 3]
+        if mcmc_samples:
+            if self.__FITTED_MCMC:
+                fig = self._plot_mcmc(ylim=ylim, show=show, **kwargs)
+            else:
+                raise RuntimeError("You must first run the MCMC sampler")
+        elif not self.__FITTED:
+            raise RuntimeError("You must first fit the GP")
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Get into evaluation (predictive posterior) mode
             # self.model.eval()
@@ -1472,6 +1597,72 @@ class Lightcurve(object):
                 functionality!
                 """)
         return fig
+    
+    def _plot_mcmc(self, ylim=None, show=False, 
+                   n_samples_to_plot=25,
+                   **kwargs):
+        '''Plot the model and data, including samples from the MCMC run
+
+        Parameters
+        ----------
+        ylim : list, optional
+            The y-limits of the plot, by default None. If None, the y-limits
+            will be set automatically.
+        show : bool, optional
+            Whether to show the plot, by default True.
+        n_samples_to_plot : int, optional
+            The number of samples to plot, by default 25.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the plotting routine.
+        
+        Returns
+        -------
+        fig : matplotlib.pyplot.Figure
+            The figure object of the plot.
+        '''
+        # Get into evaluation (predictive posterior) mode
+        self._eval()
+        
+        if self.ndim > 1:
+            raise NotImplementedError("""
+            Plotting models and data in more than 1 dimension is not
+            currently supported. Please get in touch if you need this
+            functionality!
+            """)
+        # Importing raw x and y training data from xdata and
+        # ydata functions
+        x_raw = self.xdata
+        y_raw = self.ydata
+
+        # creating array of 10000 test points across the range of the data
+        x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+
+        # transforming the x_fine_raw data to the space that the GP was
+        # trained in (so it can predict)
+        if self.xtransform is None:
+            x_fine_transformed = x_fine_raw
+        elif isinstance(self.xtransform, Transformer):
+            x_fine_transformed = self.xtransform.transform(x_fine_raw)
+
+        expanded_test_x = x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)
+        output = self.model(expanded_test_x)
+        with torch.no_grad():
+            f, ax = plt.subplots(1, 1, figsize=(8, 6))
+            # Plot training data as black stars
+            ax.plot(self.xdata.numpy(), self.ydata.numpy(), 'k*')
+            for i in range(min(n_samples_to_plot, self.num_samples)):
+                # Plot predictive samples as colored lines
+                ax.plot(x_fine_raw.numpy(), output[i].sample().numpy(), 'b', alpha=0.2)
+            
+            ax.legend(['Observed Data', 'Sample means'])
+            if ylim is not None:
+                ax.set_ylim(ylim)
+            if show:
+                plt.show()
+        return f
+
+            
+
 
     def _plot_1d(self, x_fine_raw, ylim=None, show=False,
                  save=True, **kwargs):
