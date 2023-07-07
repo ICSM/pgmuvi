@@ -16,6 +16,7 @@ from pyro.optim import Adam
 from pyro.infer import SVI, Trace_ELBO
 import pyro.distributions as dist
 from inspect import isclass
+import arviz as az
 
 
 def _reraise_with_note(e, note):
@@ -268,6 +269,9 @@ class Lightcurve(object):
         self.name = "Lightcurve" if name is None else name
 
         self.__SET_LIKELIHOOD_CALLED = False
+        self.__SET_MODEL_CALLED = False
+        self.__CONTRAINTS_SET = False
+        self.__PRIORS_SET = False
 
     @property
     def ndim(self):
@@ -429,7 +433,7 @@ class Lightcurve(object):
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor.
         """
-
+        self.__SET_MODEL_CALLED = True
         model_dic_1 = {
             "2D": TwoDSpectralMixtureGPModel,
             "1D": SpectralMixtureGPModel,
@@ -475,7 +479,7 @@ class Lightcurve(object):
         # now we've got a model set up, we're going to make some handy lookups
         # for the parameters and modules that we'll need to access later
         self._make_parameter_dict()
-        self.set_default_constraints()
+        # self.set_default_constraints()
 
     def _make_parameter_dict(self):
         ''' Make a dictionary of the model parameters
@@ -556,6 +560,7 @@ class Lightcurve(object):
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the Prior constructors.
         '''
+        self.__PRIORS_SET = True
         pass
 
     def set_constraint(self, constraint, debug=False, **kwargs):
@@ -699,16 +704,21 @@ class Lightcurve(object):
             Any keyword arguments to be passed to the Prior constructors.
         '''
 
-        try:
-            noise_scale = np.minimum(1e-4, self._yerr_transformed.min()/10)
-        except AttributeError:
-            noise_scale = 1e-4*self._ydata_transformed.std()
-        noise_prior = gpytorch.priors.HalfNormal(noise_scale)
-        self._model_pars['noise']['module'].register_prior("noise_prior",
-                                                           noise_prior,
-                                                           'noise')
+        # Gpytorch currently crashes if you try to do MCMC while learning additional
+        # diagonal noise with the FixedNoiseGaussianLikelihood. So we only need to
+        # set priors for the noise if we don't have uncertainties on the data.
+        if not hasattr(self, '_yerr_transformed'):
+            try:
+                noise_scale = np.minimum(1e-4, self._yerr_transformed.min()/10)
+            except AttributeError:
+                noise_scale = 1e-4*self._ydata_transformed.std()
+            #noise_prior = gpytorch.priors.HalfCauchyPrior(noise_scale)
+            noise_prior = gpytorch.priors.LogNormalPrior(torch.log(noise_scale), noise_scale)
+            self._model_pars['noise']['module'].register_prior("noise_prior",
+                                                            noise_prior,
+                                                            'noise')
         with contextlib.suppress(RuntimeError):
-            mean_prior = gpytorch.priors.Normal(self._ydata_transformed.mean(),
+            mean_prior = gpytorch.priors.NormalPrior(self._ydata_transformed.mean(),
                                                 self._ydata_transformed.std()/10)
             for key in self._model_pars:
                 if 'mean_module.constant' in key:
@@ -719,7 +729,7 @@ class Lightcurve(object):
         # that the means are positive, but we don't want to restrict them to
         # be close to zero. In fact, we want to penalise both very high and very low
         # frequencies, so we use a lognormal prior with mu = 0 and sigma = 1
-        mixture_means_prior = gpytorch.priors.LogNormal(0, 1) #/self._xdata_transformed.max())
+        mixture_means_prior = gpytorch.priors.LogNormalPrior(0, 1) #/self._xdata_transformed.max())
         self._model_pars['mixture_means']['module'].register_prior("mixture_means_prior",
                                                                    mixture_means_prior,
                                                                    'mixture_means')
@@ -727,22 +737,24 @@ class Lightcurve(object):
         # now we need a prior for the mixture scales
         # we want to penalise very large scales, so we use a half-cauchy prior
         # with a scale of 1/10 of the maximum frequency
-        mixture_scales_prior = gpytorch.priors.HalfCauchy(1/self._xdata_transformed.max())
+        #mixture_scales_prior = gpytorch.priors.HalfCauchyPrior(1/self._xdata_transformed.max())
+        mixture_scales_prior = gpytorch.priors.LogNormalPrior(0, 1) #1/self._xdata_transformed.max())
         self._model_pars['mixture_scales']['module'].register_prior("mixture_scales_prior",
                                                                     mixture_scales_prior,
                                                                     'mixture_scales')
-        # we use a HalfCauchy prior for the mixture weights, because we want to
-        # make sure that they are positive and we don't want to restrict them
-        # to be close to zero. In fact, we want to penalise both very high and
-        # very low weights, so we use a HalfCauchy prior with a scale of 1/10
-        # of the maximum frequency
-        mixture_weights_prior = gpytorch.priors.HalfCauchy(1/self._xdata_transformed.max())
+        # we use a LogNormal prior for the mixture weights, because we want to
+        # make sure that they are positive (but never zero) and we don't want
+        # to restrict them to be close to zero. In fact, we want to penalise
+        # both very high and very low weights, so we use a LogNormal prior 
+        # with a scale of 1/10 of the maximum frequency
+        mixture_weights_prior = gpytorch.priors.LogNormalPrior(0, 1) #1/self._xdata_transformed.max())
         self._model_pars['mixture_weights']['module'].register_prior("mixture_weights_prior",
                                                                      mixture_weights_prior,
                                                                      'mixture_weights')
 
         # need a more general way to assign default priors to everything, but for now 
         # let's see if this works!
+        self.__PRIORS_SET = True
 
     def set_default_constraints(self, **kwargs):
         '''Set the default constraints for the model and likelihood parameters
@@ -941,6 +953,9 @@ class Lightcurve(object):
         elif model is not None:
             self.set_model(model, self.likelihood, 
                            num_mixtures=num_mixtures, **kwargs)
+            
+        if not self.__CONTRAINTS_SET:
+            self.set_default_constraints()
 
         if cuda:
             self.cuda()
@@ -980,7 +995,8 @@ class Lightcurve(object):
         return self.results
 
     def mcmc(self, sampler=None, num_samples=500,
-             warmup_steps=100, disable_progbar=False,
+             warmup_steps=100, num_chains=1, 
+             disable_progbar=False,
              **kwargs):
         '''Run an MCMC sampler on the model
         
@@ -1023,6 +1039,13 @@ class Lightcurve(object):
         elif not isinstance(sampler, MCMC):
             raise TypeError("sampler must be either None, a string, or an instance of pyro.infer.mcmc.MCMC")
         
+        # we need to make sure that the model is in train mode
+        #self._train()
+        #self._eval()
+
+        if not self.__PRIORS_SET:
+            self.set_default_priors()
+        
         # mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood,
         #                                                self.model)
         # at some point we will make this support approximate GPs
@@ -1032,21 +1055,34 @@ class Lightcurve(object):
         #     mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=len(self._ydata_transformed))
         # else:
         #     raise
+        model = self.model
 
         def pyro_model(x, y):
             with gpytorch.settings.fast_computations(False, False, False):
-                sampled_model = self.model.pyro_sample_from_prior()
-                output = sampled_model.likelihood(sampled_model(x))
+                sampled_model = model.pyro_sample_from_prior()  #.detatch()
+                output = sampled_model.likelihood(sampled_model(x))#.detatch()
                 pyro.sample("obs", output, obs=y)
             return y
 
         nuts_kernel = sampler(pyro_model)
-        mcmc_run = MCMC(nuts_kernel, 
-                        num_samples=num_samples, warmup_steps=warmup_steps, 
-                        disable_progbar=disable_progbar)
-        mcmc_run.run(self._xdata_transformed, self._ydata_transformed)
+        self.mcmc_run = MCMC(nuts_kernel, 
+                             num_samples=num_samples,
+                             warmup_steps=warmup_steps,
+                             num_chains=num_chains,
+                             disable_progbar=disable_progbar)
+        import linear_operator.utils.errors as linear
+        try:
+            self.mcmc_run.run(self._xdata_transformed, self._ydata_transformed)
+        except linear.NanError as e:
+            print("NaNError encountered, returning None")
+            print(list(model.named_parameters()))
+            self.print_parameters()
+            raise e
+        
+        self.mcmc_run.summary(prob=0.683)
+        self.inference_data = az.from_pyro(self.mcmc_run)
 
-        self.model.pyro_load_from_samples(mcmc_run.get_samples())
+        self.model.pyro_load_from_samples(self.mcmc_run.get_samples())
 
         # self.mcmc_results = mcmc(self, sampler, **kwargs)
 
