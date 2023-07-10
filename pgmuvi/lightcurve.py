@@ -16,6 +16,7 @@ from pyro.optim import Adam
 from pyro.infer import SVI, Trace_ELBO
 import pyro.distributions as dist
 from inspect import isclass
+import xarray as xr
 import arviz as az
 
 
@@ -998,11 +999,12 @@ class Lightcurve(object):
         return self.results
 
     def mcmc(self, sampler=None, num_samples=500,
-             warmup_steps=100, num_chains=1, 
+             warmup_steps=100, num_chains=1,
              disable_progbar=False,
+             max_cg_iterations=None,
              **kwargs):
         '''Run an MCMC sampler on the model
-        
+
         This function runs an MCMC sampler on the model, using the sampler
         specified in the `sampler` attribute. The results are stored in the
         `mcmc_results` attribute.
@@ -1041,14 +1043,17 @@ class Lightcurve(object):
                 raise ValueError("sampler must be one of 'NUTS' or 'HMC'")
         elif not isinstance(sampler, MCMC):
             raise TypeError("sampler must be either None, a string, or an instance of pyro.infer.mcmc.MCMC")
-        
+
         # we need to make sure that the model is in train mode
         #self._train()
         #self._eval()
 
         if not self.__PRIORS_SET:
             self.set_default_priors()
-        
+
+        if max_cg_iterations is None:
+            max_cg_iterations = 10000
+
         # mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood,
         #                                                self.model)
         # at some point we will make this support approximate GPs
@@ -1061,12 +1066,13 @@ class Lightcurve(object):
         model = self.model
 
         def pyro_model(x, y):
-            with gpytorch.settings.fast_computations(False, False, False):
+            with (gpytorch.settings.fast_computations(False, False, False), 
+                  gpytorch.settings.max_cg_iterations(max_cg_iterations)):
                 sampled_model = model.pyro_sample_from_prior()  #.detatch()
                 output = sampled_model.likelihood(sampled_model(x))#.detatch()
                 pyro.sample("obs", output, obs=y)
             return y
-        
+
         self.num_samples = num_samples
 
         nuts_kernel = sampler(pyro_model)
@@ -1083,13 +1089,32 @@ class Lightcurve(object):
             print(list(model.named_parameters()))
             self.print_parameters()
             raise e
-        
-        self.__FITTED_MCMC = True
-        
-        #self.mcmc_run.summary(prob=0.683)
-        self.inference_data = az.from_pyro(self.mcmc_run)
 
-        self.model.pyro_load_from_samples(self.mcmc_run.get_samples())
+        self.__FITTED_MCMC = True
+
+        # self.mcmc_run.summary(prob=0.683)
+        self.inference_data = az.from_pyro(self.mcmc_run)
+        samples = self.mcmc_run.get_samples()
+        self.model.pyro_load_from_samples(samples)
+
+        self.post = self.inference_data.posterior
+        transformed_mcmc_periods = 1/self.post['covar_module.mixture_means_prior']
+        raw_mcmc_periods = self.xtransform.inverse(torch.as_tensor(transformed_mcmc_periods.to_numpy()), shift=False)
+        raw_mcmc_frequencies = 1/raw_mcmc_periods
+        transformed_mcmc_period_scales = 1/(2*torch.pi*self.post['covar_module.mixture_scales_prior'])
+        raw_mcmc_period_scales = self.xtransform.inverse(torch.as_tensor(transformed_mcmc_period_scales.to_numpy()), shift=False)
+        raw_mcmc_frequency_scales = 1/(2*torch.pi*raw_mcmc_period_scales)
+
+        self.inference_data.posterior['transformed_periods'] = transformed_mcmc_periods
+        self.inference_data.posterior['raw_periods'] = xr.DataArray(raw_mcmc_periods.reshape(self.post['covar_module.mixture_means_prior'].shape),
+                                                                    coords = self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)
+        self.inference_data.posterior['raw_frequencies'] = xr.DataArray(raw_mcmc_frequencies.reshape(self.post['covar_module.mixture_means_prior'].shape),
+                                                                        coords = self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)
+        self.inference_data.posterior['transformed_period_scales'] = transformed_mcmc_period_scales
+        self.inference_data.posterior['raw_period_scales'] = xr.DataArray(raw_mcmc_period_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),
+                                                                          coords = self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)
+        self.inference_data.posterior['raw_frequency_scales'] = xr.DataArray(raw_mcmc_frequency_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),
+                                                                             coords = self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)
 
         # self.mcmc_results = mcmc(self, sampler, **kwargs)
     
@@ -1121,16 +1146,23 @@ class Lightcurve(object):
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         if var_names is None:
-            var_names=['mean_module', 'covar_module']
+            var_names=['mean_module', 'covar_module.mixture_weights', 'raw']
+        elif var_names == 'all':
+            var_names = None
         if stat_focus is None:
             stat_focus = 'mean'
         if use_arviz:
-            az.summary(self.inference_data, round_to=2, hdi_prob=prob,
-                       var_names=var_names, filter_vars=filter_vars,
-                       stat_focus=stat_focus, **kwargs)
+            self.summary = az.summary(self.inference_data, round_to=2,
+                                      hdi_prob=prob,
+                                      var_names=var_names,
+                                      filter_vars=filter_vars,
+                                      stat_focus=stat_focus,
+                                      **kwargs)
         #self.mcmc_run.summary(prob=prob)
         self.diagnostics = self.mcmc_run.diagnostics()
-        print(self.diagnostics)
+        #figure out how to filter these before printing!
+        #print(self.diagnostics)
+        return self.summary
     
     def plot_corner(self, kind='scatter', var_names=None, filter_vars='like',
                     marginals=True, point_estimate='median', **kwargs):
@@ -1159,7 +1191,7 @@ class Lightcurve(object):
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         if var_names is None:
-            var_names=['mean_module', 'covar_module']
+            var_names=['mean_module', 'covar_module.mixture_weights', 'raw']
         if point_estimate is None:
             point_estimate = 'median'
         az.plot_pair(self.inference_data, kind=kind, 
@@ -1167,7 +1199,8 @@ class Lightcurve(object):
                      marginals=marginals, point_estimate=point_estimate,
                      **kwargs)
 
-    def plot_trace(self, var_names=None, filter_vars='like', **kwargs):
+    def plot_trace(self, var_names=None, filter_vars='like', 
+                   figsize=None, **kwargs):
         '''Plot a trace plot of the results of the MCMC sampling
 
         Parameters
@@ -1180,8 +1213,17 @@ class Lightcurve(object):
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         if var_names is None:
-            var_names = ['mean_module', 'covar_module']
-        az.plot_trace(self.inference_data, var_names=var_names, **kwargs)
+            # we carefully choose the default variables to plot
+            # we want to plot all parameters relating to the mean function
+            # but we don't want to plot all the covariance parameters
+            # because those are in the transformed space. Instead, we want
+            # to plot the extra parameters we have created, which are in the
+            # raw space, as well as the periods and the mixture weights
+            var_names = ['mean_module', 'covar_module.mixture_weights', 'raw']  # ['mean_module', 'covar_module']
+        az.plot_trace(self.inference_data, var_names=var_names, 
+                      filter_vars=filter_vars,
+                      figsize=figsize,
+                      **kwargs)
 
     def print_periods(self):
         if self.ndim == 1:
@@ -1345,7 +1387,8 @@ class Lightcurve(object):
             
     def plot_psd(self, freq=None, means=None, scales=None, weights=None,
                  show=True, raw=False, log=(True, False), 
-                 truncate_psd=True, logpsd=False, **kwargs):
+                 truncate_psd=True, logpsd=False, 
+                 mcmc_samples=False, **kwargs):
         '''Plot the power spectral density of the model
 
         Parameters
@@ -1381,6 +1424,10 @@ class Lightcurve(object):
         logpsd : bool, optional
             If True, the PSD will be plotted on a log scale, by default False.
             If True, truncate_psd must be given in (natural) log space.
+        mcmc_samples : bool, optional
+            If True, many sample PSDs will be plotted using the MCMC samples,
+            by default False. This will only work if the model has been fitted
+            using MCMC.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
         
@@ -1434,9 +1481,17 @@ class Lightcurve(object):
                 currently supported. Please get in touch if you need this
                 functionality!
                 """)
+            
+        if mcmc_samples:
+            fig, ax = self._plot_psd_mcmc(freq, means=means, scales=scales,
+                                weights=weights, show=show, raw=raw,
+                                log=log, truncate_psd=truncate_psd,
+                                logpsd=logpsd, **kwargs)
+            return fig, ax
         # Computing the psd for frequencies f
         psd = self.compute_psd(freq, means=means, scales=scales,
                                weights=weights, raw=raw, log=logpsd, **kwargs)
+        
     
         if truncate_psd is True:
             if logpsd:
@@ -1462,9 +1517,110 @@ class Lightcurve(object):
             plt.show()
         else:
             return fig, ax
+        
+    def _plot_psd_mcmc(self, freq, means=None, scales=None, weights=None,
+                       show=True, raw=False, log=(True, True),
+                       truncate_psd=True, logpsd=False, n_samples_to_plot=25, 
+                       **kwargs):
+        '''Plot the power spectral density of the model using MCMC samples
+
+        Parameters
+        ----------
+        freq : array_like
+            The frequencies at which to compute the PSD
+        means : array_like, optional
+            The means of the gaussians in the spectral mixture kernel, by
+            default None. If None, the means from the model will be used.
+        scales : array_like, optional
+            The scales of the gaussians in the spectral mixture kernel, by
+            default None. If None, the scales from the model will be used.
+        weights : array_like, optional
+            The weights of the gaussians in the spectral mixture kernel, by
+            default None. If None, the weights from the model will be used.
+        show : bool, optional
+            Whether to show the plot, by default True.
+        raw : bool, optional
+            If True, the PSD will be computed in the space that the model was
+            trained in, by default False. If False, the PSD will be computed
+            in the original space of the data.
+        log : tuple, optional
+            A tuple of two booleans, indicating whether to plot the x-axis and
+            y-axis on a log scale, respectively, by default (True, False).
+        truncate_psd : float or bool, optional
+            If not False, the PSD will be truncated at this value, by default
+            True. This is useful for speeding up plotting when the frequency
+            range is large. If logpsd is True, this value should be given in
+            (natural) log space. If truncate_psd is True, the PSD will be
+            truncated at 1e-6 times the maximum PSD for logpsd=False, and 1e-15
+            of the maximum PSD (i.e. max(ln(psd)) - 34.5388) for logpsd=True.
+        logpsd : bool, optional
+            If True, the PSD will be plotted on a log scale, by default False.
+            If True, truncate_psd must be given in (natural) log space.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the plotting routine.
+
+        Returns
+        -------
+        fig, ax : matplotlib.pyplot.Figure, matplotlib.pyplot.Axes
+            The figure and axes objects of the plot.
+        '''
+
+        if not self.__FITTED_MCMC:
+            raise RuntimeError("You must first run the MCMC sampler")
+        # freq = freq.unsqueeze(-1) # promote shape of frequencies so they broadcast correctly
+        n_samples = min(self.num_samples, n_samples_to_plot)
+        if means is None:
+            # this approach is slightly bugged - if more than one chain is used,
+            # it will only draw samples from the first chain
+            # will change this to generate random indices instead
+            # at some point!
+            # right now, this will end up having shape (1, chains, samples) (I thinkk)
+            means = torch.as_tensor(self.inference_data.posterior['raw_frequencies'].values).squeeze()[:n_samples].unsqueeze(0)
+            # print(means.shape)
+            # print(freq.shape)
+        if scales is None:
+            scales = torch.as_tensor(self.inference_data.posterior['raw_frequency_scales'].values).squeeze()[:n_samples].unsqueeze(0)#.unsqueeze(-1)
+        if weights is None:
+            weights = torch.as_tensor(self.inference_data.posterior['covar_module.mixture_weights_prior'].values).squeeze()[:n_samples].unsqueeze(0)#.unsqueeze(-1)
+        
+        # computing the psd for all samples simultaneously is very expensive,
+        # so we're just going to loop over them and plot them individually
+        # this means we have to do things in a differnet order to the other
+        # plotting routines
+        
+        # Initialize plot
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+        for i in range(n_samples):
+
+            # Computing the psd for frequencies f
+            psd = self.compute_psd(freq, means=means[..., i], scales=scales[..., i],
+                                weights=weights[..., i], raw=raw, log=logpsd, **kwargs)
+
+            if truncate_psd is True:
+                mask = psd > psd.max()-34.5388 if logpsd else psd>1e-6*psd.max()
+                # the frequency and psd arrays are now a different dimension to
+                # each other, so we need to mask carefully
+                #freq = freq[mask.sum(axis=0)] # this summation should be equivalent to any() along a given axis
+                #psd = psd[mask]
+            elif truncate_psd:
+                mask = psd > truncate_psd
+                #freq = freq[mask.sum(axis=0)]
+                #psd = psd[mask]
+            # now we can plot it:
+            ax.plot(freq[mask], psd[mask], alpha=0.2, color='b')
+
+        # final plot formatting
+        if log[0]:
+            ax.set_xscale('log')
+        if log[1] and not logpsd:  # we don't need to double-log the Y axis (I hope!)
+            ax.set_yscale('log')
+        if show:
+            plt.show()
+        return fig, ax
 
     def compute_psd(self, freq, means=None, scales=None, weights=None,
-                    raw=False, log=False, debug=True, **kwargs):
+                    raw=False, log=False, debug=False, **kwargs):
         '''Compute the power spectral density for the model
 
         Parameters
@@ -1518,7 +1674,22 @@ class Lightcurve(object):
         psd = norm.log_prob(freq.unsqueeze(-1))
         if debug:
             print(psd.shape)
-        psd = torch.logsumexp(torch.log(weights) + psd, dim=-1).squeeze()
+        try:
+            psd = torch.logsumexp(torch.log(weights) + psd, dim=-1).squeeze()
+        except RuntimeError: # logsumexp tries to allocate a large array and then do the summation
+            # so let's do it in a loop instead and see if that avoids the problem
+            logweights = torch.log(weights)
+            for i in range(means.shape[-2]):
+                if i == 0:
+                    psd = logweights[..., i] + psd[..., i]
+                else:
+                    psd += logweights[..., i] + psd[..., i]
+            psd = logweights + psd
+            for i in range(len(weights)):
+                if i == 0:
+                    psd = weights[i] * torch.exp(psd[i])
+                else:
+                    psd += weights[i] * torch.exp(psd[i])
         if debug:
             print(psd.shape)
         if not log:
@@ -1562,9 +1733,10 @@ class Lightcurve(object):
         if mcmc_samples:
             if self.__FITTED_MCMC:
                 fig = self._plot_mcmc(ylim=ylim, show=show, **kwargs)
+                return fig
             else:
                 raise RuntimeError("You must first run the MCMC sampler")
-        elif not self.__FITTED:
+        elif not self.__FITTED_MAP:
             raise RuntimeError("You must first fit the GP")
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Get into evaluation (predictive posterior) mode
@@ -1635,17 +1807,19 @@ class Lightcurve(object):
         y_raw = self.ydata
 
         # creating array of 10000 test points across the range of the data
-        x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+        x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000).unsqueeze(-1)
 
         # transforming the x_fine_raw data to the space that the GP was
         # trained in (so it can predict)
         if self.xtransform is None:
-            x_fine_transformed = x_fine_raw
+            self.x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
-            x_fine_transformed = self.xtransform.transform(x_fine_raw)
+            self.x_fine_transformed = self.xtransform.transform(x_fine_raw)
 
-        expanded_test_x = x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)
-        output = self.model(expanded_test_x)
+        self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)#.unsqueeze(0)
+        print(self.x_fine_transformed.shape)
+        print(self.expanded_test_x.shape)
+        output = self.model(self.expanded_test_x)
         with torch.no_grad():
             f, ax = plt.subplots(1, 1, figsize=(8, 6))
             # Plot training data as black stars
