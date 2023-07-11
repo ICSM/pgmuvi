@@ -1,10 +1,10 @@
 ---
-title: 'PGMUVI: ' #A Python package for galactic dynamics'
+title: '`pgmuvi`: Quick and easy Gaussian Process Regression for multi-wavelength astronomical timeseries' #A Python package for galactic dynamics'
 tags:
   - Python
   - astronomy
-  - 
-  - 
+  - timeseries
+  - Gaussian processes
   - 
 authors:
   - name: Peter Scicluna
