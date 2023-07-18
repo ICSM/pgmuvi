@@ -10,20 +10,31 @@ authors:
   - name: Peter Scicluna
     orcid: 0000-0000-0000-0000
     equal-contrib: true
+    corresponding: true
     affiliation: "1" # (Multiple affiliations must be quoted)
-  - name: Author Without ORCID
-    equal-contrib: true # (This is how you can denote equal contributions between multiple authors)
+  - name: Sundar Srinivasan
+    orcid: 0000-0000-0000-0000
+    # equal-contrib: true # (This is how you can denote equal contributions between multiple authors)
     affiliation: 2
-  - name: Author with no affiliation
-    corresponding: true # (This is how to denote the corresponding author)
+  - name: Diego Alejandro Vasquez
+    orcid: 0000-0000-0000-0000
+    # corresponding: true # (This is how to denote the corresponding author)
+    affiliation: 2
+  - name: Sara Jamal
     affiliation: 3
+  - name: Stephan Waterval
+    affiliation: "4, 5"
 affiliations:
  - name: European Southern Observatory, Alonso de Córdova 3107, Vitacura, Santiago, Chile
    index: 1
- - name: Institution Name, Country
+ - name: IRyA, Universidad Nacional Autónoma de México, Morelia, Michoacán, México
    index: 2
- - name: Independent Researcher, Country
+ - name: Max Planck Institute for Astronomy, Königstuhl 17, 69117 Heidelberg, Germany
    index: 3
+ - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+   index: 4
+ - name: Center for Astro, Particle and Planetary Physics (CAPPP), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+   index: 5
 date: XX August 2023
 bibliography: paper.bib
 
