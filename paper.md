@@ -108,7 +108,14 @@ For exact GPs and SKI, `pgmuvi` can perform maximum a posteriori (MAP) estimatio
 MAP estimation can exploit any `pytorch` optimizer, but defaults to using ADAM [@kingma2014adam].
 Bayesian inference uses the `pyro` implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
 
-
+To summarise, the key features of `pgmuvi` are:
+- Highly flexible kernel, able to model a wide range of multiwavelength signals
+- Able to exploit multiple strategies to scale to large datasets
+- GPU acceleration for both exact and variational GPs
+- Fully Bayesian inference using HMC
+- Initialisation of kernel hyperparameters using Lomb-Scargle periodogram
+- Automatic creation of diagnostic and summary plots
+- Automatic reporting of kernel hyperparameters and their uncertainties, and summary of MCMC chains.
 
 
 
