@@ -80,8 +80,8 @@ The package is also designed to be flexible, and to allow the user to customize 
 # Method
 
 `pgmuvi` builds on the popular GPyTorch library.
-GPyTorch [@gardner2013gpytorch] is a Gaussian Process library for PyTorch, which is a popular machine learning library for Python.
-By default, `pgmuvi` exploits the highly-flexible Spectral Mixture kernel [@Wilson:2013] in GPyTorch, which is able to model a wide range of signals.
+GPyTorch [@gardner2018gpytorch] is a Gaussian Process library for PyTorch, which is a popular machine learning library for Python.
+By default, `pgmuvi` exploits the highly-flexible Spectral Mixture kernel [@wilson:2013] in GPyTorch, which is able to model a wide range of signals.
 This kernel is particularly interesting for astronomical time-series data, as it is able to effectively model multi-periodic and quasi-periodic signals.
 The spectral mixture kernel models the power spectrum of the covariance matrix as Gaussian mixture model (GMM), making it highly flexible and easy to interpret, while being able to extend to multi-dimensional input easily.
 This kernel also is known for its ability to extrapolate effectively, and is thus well suited to cases where prediction is important (for example, preparing astronomical observations of variable stars).
