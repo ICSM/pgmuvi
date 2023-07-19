@@ -9,32 +9,34 @@ tags:
 authors:
   - name: Peter Scicluna
     orcid: 0000-0000-0000-0000
-    equal-contrib: true
+    # equal-contrib: true
     corresponding: true
-    affiliation: "1" # (Multiple affiliations must be quoted)
+    affiliation: "1, 2" # (Multiple affiliations must be quoted)
   - name: Sundar Srinivasan
     orcid: 0000-0000-0000-0000
     # equal-contrib: true # (This is how you can denote equal contributions between multiple authors)
-    affiliation: 2
+    affiliation: 3
   - name: Diego Alejandro Vasquez
     orcid: 0000-0000-0000-0000
     # corresponding: true # (This is how to denote the corresponding author)
-    affiliation: 2
-  - name: Sara Jamal
     affiliation: 3
+  - name: Sara Jamal
+    affiliation: 4
   - name: Stephan Waterval
-    affiliation: "4, 5"
+    affiliation: "5, 6"
 affiliations:
  - name: European Southern Observatory, Alonso de Córdova 3107, Vitacura, Santiago, Chile
    index: 1
- - name: IRyA, Universidad Nacional Autónoma de México, Morelia, Michoacán, México
+ - name: Space Science Institute, 4750 Walnut Street, Suite 205, Boulder, CO 80301, USA
    index: 2
- - name: Max Planck Institute for Astronomy, Königstuhl 17, 69117 Heidelberg, Germany
+ - name: IRyA, Universidad Nacional Autónoma de México, Morelia, Michoacán, México
    index: 3
- - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+ - name: Max Planck Institute for Astronomy, Königstuhl 17, 69117 Heidelberg, Germany
    index: 4
- - name: Center for Astro, Particle and Planetary Physics (CAPPP), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+ - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
    index: 5
+ - name: Center for Astro, Particle and Planetary Physics (CAPPP), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+   index: 6
 date: XX August 2023
 bibliography: paper.bib
 
@@ -49,6 +51,14 @@ bibliography: paper.bib
 
 
 # Statement of need
+
+# Method
+
+
+# Features
+
+
+
 
 
 # Mathematics
@@ -93,6 +103,8 @@ Figure sizes can be customized by adding an optional second parameter:
 
 # Acknowledgements
 
+This project was developed in part at the 2022 Astro Hack Week, hosted by the Max Planck Institute for Astronomy  and Haus der Astronomie in Heidelberg, Germany.
+This work was partially supported by the Max Planck Institute for Astronomy, the European Space Agency, the Gordon and Betty Moore Foundation, the Alfred P. Sloan foundation.
 
 
 # References
