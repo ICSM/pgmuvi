@@ -85,7 +85,7 @@ The package is designed to be easy to use, and to provide a quick way to perform
 The package is also designed to be flexible, and to allow the user to customize the GPR model to their needs.
 `pgmuvi` exploits multiple strategies to scale regression to large datasets, making it suitable for the current era of large-scale astronomical surveys.
 
-# Method
+# Method and Features
 
 `pgmuvi` builds on the popular GPyTorch library.
 GPyTorch [@gardner2018gpytorch] is a Gaussian Process library for PyTorch, which is a popular machine learning library for Python.
@@ -102,12 +102,11 @@ Multiple options are available to accelerate inference depending on the size of 
 For small datasets, the exact GPs can be used, which is able to scale to datasets of up to $\sim1000$ points.
 `pgmuvi` can also exploit the Structured Kernel Interpolation (SKI) approximation [@wilson2015kernel] to scale to datasets of up to $\sim10^5$ points.
 For larger datasets, `pgmuvi` can in principle exploit the Sparse Variational GP (SVGP) or Variational Nearest Neighbour approximations [@hensman2013gaussian; @wu2022variational] to scale to datasets of almost arbitrary size.
+`pgmuvi` can employ GPU computing for both exact and variational GPs through a simple switch if a GPU is available.
 
 For exact GPs and SKI, `pgmuvi` can perform maximum a posteriori (MAP) estimation of the hyperparameters, or can perform full Bayesian inference.
 MAP estimation can exploit any `pytorch` optimizer, but defaults to using ADAM [@kingma2014adam].
 Bayesian inference uses the `pyro` implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
-
-# Features
 
 
 
