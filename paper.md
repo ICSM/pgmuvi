@@ -63,7 +63,13 @@ This is especially true for data from space-based telescopes, which are often li
 
 A particular challenge in astronomy is handling heterogeneous, multiwavelength data.
 Data must often be combined from a wide variety of instruments, telecsope or surveys, and so the systematics or noise properties of different datasets can vary widely.
-In addition, we 
+In addition, by combining multiple wavelengths, we can gain a better understanding of the physical processes that are driving the variability of the object.
+For example, some variability mechanisms differ across wavelength only in amplitude (e.g. eclipsing binaries), while others may vary in phase (e.g. pulsating stars) or even period with wavelength (e.g. multiperiodic systems).
+Thus, it is important to be able to combine data from multiple wavelengths in a way that is able to account for these differences.
+
+Gaussian Processes (GPs) are a popular way to handle these challenges.
+GPs are a flexible way to forward-model arbitrary signals, by assuming the signal is drawn from a multivariate Gaussian distribution.
+By constructing a covariance function that describes the covariance between any two points in the signal, we can model the signal as a Gaussian process.
 
 In this paper we present a new Python package, `pgmuvi`, which is designed to perform Gaussian Process Regression (GPR) on multi-wavelength astronomical time-series data.
 GPR is a machine learning technique that is able to model non-periodic signals in unevenly sampled data, and is thus well suited for the analysis of astronomical time-series data.
@@ -73,6 +79,15 @@ The package is also designed to be flexible, and to allow the user to customize 
 
 # Method
 
+`pgmuvi` builds on the popular GPyTorch library.
+GPyTorch [@gardner2013gpytorch] is a Gaussian Process library for PyTorch, which is a popular machine learning library for Python.
+By default, `pgmuvi` exploits the highly-flexible Spectral Mixture kernel [@Wilson:2013] in GPyTorch, which is able to model a wide range of signals.
+This kernel is particularly interesting for astronomical time-series data, as it is able to effectively model multi-periodic and quasi-periodic signals.
+The spectral mixture kernel models the power spectrum of the covariance matrix as Gaussian mixture model (GMM), making it highly flexible and easy to interpret, while being able to extend to multi-dimensional input easily.
+This kernel also is known for its ability to extrapolate effectively, and is thus well suited to cases where prediction is important (for example, preparing astronomical observations of variable stars).
+
+However, the flexibility of this kernel comes at a cost; for more than one component in the mixture, the solution space becomes highly non-convex, and thus the optimization of the kernel hyperparameters becomes difficult.
+`pgmuvi` addresses this by first exploiting the Lomb-Scargle periodogram to find the dominant periods in the data, and then using these periods as initial guesses for the means of the mixture components.
 
 # Features
 
