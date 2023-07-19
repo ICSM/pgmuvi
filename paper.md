@@ -93,7 +93,7 @@ By default, `pgmuvi` exploits the highly-flexible Spectral Mixture kernel [@wils
 This kernel is particularly interesting for astronomical time-series data, as it is able to effectively model multi-periodic and quasi-periodic signals.
 The spectral mixture kernel models the power spectrum of the covariance matrix as Gaussian mixture model (GMM), making it highly flexible and easy to interpret, while being able to extend to multi-dimensional input easily.
 This kernel also is known for its ability to extrapolate effectively, and is thus well suited to cases where prediction is important (for example, preparing astronomical observations of variable stars).
-By modelling the power spectrum in this way, `pgmuvi` effectively suppresses noise in the periodogram, and thus is able to find the dominant periods in the data more effectively than, for example, the Lomb-Scargle periodogram.
+By modelling the power spectrum in this way, `pgmuvi` effectively suppresses noise in the periodogram, and thus is able to find the dominant periods in noisy data more effectively than, for example, the Lomb-Scargle periodogram.
 
 However, the flexibility of this kernel comes at a cost; for more than one component in the mixture, the solution space becomes highly non-convex, and thus the optimization of the kernel hyperparameters becomes difficult.
 `pgmuvi` addresses this by first exploiting the Lomb-Scargle periodogram to find the dominant periods in the data, and then using these periods as initial guesses for the means of the mixture components.
@@ -109,6 +109,7 @@ MAP estimation can exploit any `pytorch` optimizer, but defaults to using ADAM [
 Bayesian inference uses the `pyro` implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
 
 To summarise, the key features of `pgmuvi` are:
+
 - Highly flexible kernel, able to model a wide range of multiwavelength signals
 - Able to exploit multiple strategies to scale to large datasets
 - GPU acceleration for both exact and variational GPs
