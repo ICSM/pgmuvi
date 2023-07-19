@@ -70,12 +70,20 @@ Thus, it is important to be able to combine data from multiple wavelengths in a 
 Gaussian Processes (GPs) are a popular way to handle these challenges.
 GPs are a flexible way to forward-model arbitrary signals, by assuming the signal is drawn from a multivariate Gaussian distribution.
 By constructing a covariance function that describes the covariance between any two points in the signal, we can model the signal as a Gaussian process.
+By doing so, we are freed from any assumptions about sampling, and can model the signal as a continuous function.
+We are also able to model the noise in the data, and thus can account for heteroscedastic noise.
+We also gain the ability to directly handle multiple wavelengths, by constructing a multi-dimensional covariance function.
+
+However, GP regression is not without its challenges.
+The most popular covariance functions are often not able to model complex signals, and thus the user must construct their own covariance function.
+GPs are also computationally expensive, and thus approximations must be used to scale to large datasets.
+
 
 In this paper we present a new Python package, `pgmuvi`, which is designed to perform Gaussian Process Regression (GPR) on multi-wavelength astronomical time-series data.
 GPR is a machine learning technique that is able to model non-periodic signals in unevenly sampled data, and is thus well suited for the analysis of astronomical time-series data.
 The package is designed to be easy to use, and to provide a quick way to perform GPR on multi-wavelength data.
 The package is also designed to be flexible, and to allow the user to customize the GPR model to their needs.
-
+`pgmuvi` exploits multiple strategies to scale regression to large datasets, making it suitable for the current era of large-scale astronomical surveys.
 
 # Method
 
@@ -85,9 +93,19 @@ By default, `pgmuvi` exploits the highly-flexible Spectral Mixture kernel [@wils
 This kernel is particularly interesting for astronomical time-series data, as it is able to effectively model multi-periodic and quasi-periodic signals.
 The spectral mixture kernel models the power spectrum of the covariance matrix as Gaussian mixture model (GMM), making it highly flexible and easy to interpret, while being able to extend to multi-dimensional input easily.
 This kernel also is known for its ability to extrapolate effectively, and is thus well suited to cases where prediction is important (for example, preparing astronomical observations of variable stars).
+By modelling the power spectrum in this way, `pgmuvi` effectively suppresses noise in the periodogram, and thus is able to find the dominant periods in the data more effectively than, for example, the Lomb-Scargle periodogram.
 
 However, the flexibility of this kernel comes at a cost; for more than one component in the mixture, the solution space becomes highly non-convex, and thus the optimization of the kernel hyperparameters becomes difficult.
 `pgmuvi` addresses this by first exploiting the Lomb-Scargle periodogram to find the dominant periods in the data, and then using these periods as initial guesses for the means of the mixture components.
+
+Multiple options are available to accelerate inference depending on the size of the dataset.
+For small datasets, the exact GPs can be used, which is able to scale to datasets of up to $\sim1000$ points.
+`pgmuvi` can also exploit the Structured Kernel Interpolation (SKI) approximation [@wilson2015kernel] to scale to datasets of up to $\sim10^5$ points.
+For larger datasets, `pgmuvi` can in principle exploit the Sparse Variational GP (SVGP) or Variational Nearest Neighbour approximations [@hensman2013gaussian; @wu2022variational] to scale to datasets of almost arbitrary size.
+
+For exact GPs and SKI, `pgmuvi` can perform maximum a posteriori (MAP) estimation of the hyperparameters, or can perform full Bayesian inference.
+MAP estimation can exploit any `pytorch` optimizer, but defaults to using ADAM [@kingma2014adam].
+Bayesian inference uses the `pyro` implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
 
 # Features
 
