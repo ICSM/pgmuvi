@@ -52,6 +52,25 @@ bibliography: paper.bib
 
 # Statement of need
 
+Astronomical objects are in general not static, but vary in brightness over time. 
+This is especially true for objects that are variable by nature, such as pulsating stars, or objects that are variable due to their orbital motion, such as eclipsing binaries. 
+The study of these objects is called time-domain astronomy, and is a rapidly growing field. 
+A wide range of approaches to time-series analysis have been developed, ranging from simple period-finding algorithms to more complex machine learning techniques.
+Perhaps the most popular in astronomy is the Lomb-Scargle periodogram, which is a Fourier-based technique that is able to find periodic signals in unevenly sampled data.
+However, the handling of unevenly sampled data is not the only challenge in time-series analysis.
+<!-- The study of time-domain astronomy is often hampered by the fact that the data is not always of the same quality, or that the data is not always available in the same wavelength. 
+This is especially true for data from space-based telescopes, which are often limited in their lifetime, and thus the amount of data that can be collected. -->
+
+A particular challenge in astronomy is handling heterogeneous, multiwavelength data.
+Data must often be combined from a wide variety of instruments, telecsope or surveys, and so the systematics or noise properties of different datasets can vary widely.
+In addition, we 
+
+In this paper we present a new Python package, `pgmuvi`, which is designed to perform Gaussian Process Regression (GPR) on multi-wavelength astronomical time-series data.
+GPR is a machine learning technique that is able to model non-periodic signals in unevenly sampled data, and is thus well suited for the analysis of astronomical time-series data.
+The package is designed to be easy to use, and to provide a quick way to perform GPR on multi-wavelength data.
+The package is also designed to be flexible, and to allow the user to customize the GPR model to their needs.
+
+
 # Method
 
 
