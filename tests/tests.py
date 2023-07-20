@@ -1,18 +1,78 @@
-# import unittest
+import unittest
 
-from ..lightcurve import LightCurve, Transformer, MinMax, ZScore, RobustZScore
+from pgmuvi.lightcurve import LightCurve, Transformer, MinMax, ZScore, RobustZScore
+from pgmuvi.trainers import train
+from pgmuvi.gps import SpectralMixtureGPModel
 import numpy as np
 
 
-
-def test_transformer():
-    transformer = Transformer()
+class TestTransformer(unittest.TestCase):
+    def test_transform_implemented(self):
+        transformer = Transformer()
+        self.assertRaises(NotImplementedError, transformer.transform, np.array([0, 0, 0, 0, 1]))
     
+    def test_inverse_transform_implemented(self):
+        transformer = Transformer()
+        self.assertRaises(NotImplementedError, transformer.inverse_transform, np.array([0, 0, 0, 0, 1]))
 
-def test_minmax_zero():
-    transformer = MinMax()
-    assert transformer.transform(np.array([0, 0, 0, 0, 1])).min() == 0
 
-def test_minmax_one():
-    transformer = MinMax()
-    assert transformer.transform(np.array([0, 0, 0, 0, 1])).max() == 1
+class TestMinMax(unittest.TestCase):
+    def test_transform(self):
+        transformer = MinMax()
+        self.assertEqual(transformer.transform(np.array([0, 0, 0, 0, 1])).min(), 0)
+        self.assertEqual(transformer.transform(np.array([0, 0, 0, 0, 1])).max(), 1)
+
+    def test_inverse_transform(self):
+        transformer = MinMax()
+        # first we have to do a forward transform to get the transformer set up:
+        x_new = transformer.transform(np.array([0, 0, 0, 0, 1]))
+        self.assertEqual(transformer.inverse_transform(x_new).min(), 0)
+        self.assertEqual(transformer.inverse_transform(x_new).max(), 1)
+
+
+class TestZScore(unittest.TestCase):
+    @unittest.skip("Not implemented")
+    def test_transform(self):
+        transformer = ZScore() # these tests need a more sensible input array to test against
+        self.assertAlmostEqual(transformer.transform(np.array([0, 0, 0, 0, 1])).mean(), 0)
+        self.assertAlmostEqual(transformer.transform(np.array([0, 0, 0, 0, 1])).std(), 1)
+
+    @unittest.skip("Not implemented")
+    def test_inverse_transform(self):
+        transformer = ZScore()
+        # first we have to do a forward transform to get the transformer set up:
+        x_new = transformer.transform(np.array([0, 0, 0, 0, 1]))
+        self.assertAlmostEqual(transformer.inverse_transform(np.array([0, 0, 0, 0, 1])).mean(), 0)
+        self.assertAlmostEqual(transformer.inverse_transform(np.array([0, 0, 0, 0, 1])).std(), 1)
+
+
+class TestRobustZScore(unittest.TestCase):
+    @unittest.skip("Not implemented")
+    def test_transform(self):
+        transformer = RobustZScore() # these tests need a more sensible input array to test against
+        self.assertAlmostEqual(transformer.transform(np.array([0, 0, 0, 0, 1])).mean(), 0)
+        self.assertAlmostEqual(transformer.transform(np.array([0, 0, 0, 0, 1])).std(), 1)
+
+    @unittest.skip("Not implemented")
+    def test_inverse_transform(self):
+        transformer = RobustZScore()
+        self.assertAlmostEqual(transformer.inverse_transform(np.array([0, 0, 0, 0, 1])).mean(), 0)
+        self.assertAlmostEqual(transformer.inverse_transform(np.array([0, 0, 0, 0, 1])).std(), 1)
+
+
+class TestLightCurve(unittest.TestCase):
+    pass
+
+
+class TestTrain(unittest.TestCase):
+    def test_train(self):
+        pass
+
+
+
+class TestSpectralMixtureGPModel(unittest.TestCase):
+    pass
+
+
+if  __name__ == '__main__':
+    unittest.main()
