@@ -236,16 +236,16 @@ class Lightcurve(object):
 
         Parameters
         ----------
-        xdata : _type_
-            _description_
-        ydata : _type_
-            _description_
-        yerr : _type_, optional
-            _description_, by default None
-        xtransform : str, optional
-            _description_, by default 'minmax'
-        ytransform : _type_, optional
-            _description_, by default None
+        xdata : torch.Tensor
+            The independent variable data
+        ydata : torch.Tensor
+            The dependent variable data
+        yerr : torch.Tensor, optional
+            The uncertainties on the dependent variable data, by default None
+        xtransform : str or Transformer, optional
+            The transform to apply to the x data, by default 'minmax'
+        ytransform : str or Transformer, optional
+            The transform to apply to the y data, by default None
         """
         
         transform_dic = {'minmax': MinMax(),
@@ -313,6 +313,13 @@ class Lightcurve(object):
 
     @property
     def ydata(self):
+        """ The dependent variable data
+        
+        :getter: Returns the dependent variable data in its raw
+        (untransformed) state
+        :setter: Takes the input data and transforms it as requested by the
+        user
+        :type: torch.Tensor"""
         return self._ydata_raw
 
     @ydata.setter
@@ -327,6 +334,14 @@ class Lightcurve(object):
 
     @property
     def yerr(self):
+        """ The uncertainties on the dependent variable data
+
+        :getter: Returns the uncertainties on the dependent variable data in
+        its raw (untransformed) state
+        :setter: Takes the input data and transforms it as requested by the
+        user
+        :type: torch.Tensor
+        """
         return self._yerr_raw
 
     @yerr.setter
