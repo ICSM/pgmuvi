@@ -98,10 +98,11 @@ By modelling the power spectrum in this way, `pgmuvi` effectively suppresses noi
 However, the flexibility of this kernel comes at a cost; for more than one component in the mixture, the solution space becomes highly non-convex, and thus the optimization of the kernel hyperparameters becomes difficult.
 `pgmuvi` addresses this by first exploiting the Lomb-Scargle periodogram to find the dominant periods in the data, and then using these periods as initial guesses for the means of the mixture components.
 
+
 Multiple options are available to accelerate inference depending on the size of the dataset.
 For small datasets, the exact GPs can be used, which is able to scale to datasets of up to $\sim1000$ points.
 `pgmuvi` can also exploit the Structured Kernel Interpolation (SKI) approximation [@wilson2015kernel] to scale to datasets of up to $\sim10^5$ points.
-For larger datasets, `pgmuvi` can in principle exploit the Sparse Variational GP (SVGP) or Variational Nearest Neighbour approximations [@hensman2013gaussian; @wu2022variational] to scale to datasets of almost arbitrary size.
+Future work will include implementing approximations for larger datasets: `pgmuvi` can in principle exploit the Sparse Variational GP (SVGP) or Variational Nearest Neighbour approximations [@hensman2013gaussian; @wu2022variational] to scale to datasets of almost arbitrary size.
 `pgmuvi` can employ GPU computing for both exact and variational GPs through a simple switch if a GPU is available.
 
 For exact GPs and SKI, `pgmuvi` can perform maximum a posteriori (MAP) estimation of the hyperparameters, or can perform full Bayesian inference.
