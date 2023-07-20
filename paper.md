@@ -48,6 +48,13 @@ bibliography: paper.bib
 
 # Summary
 
+Time-domain observations are increasingly important in astronomy, and are often the only way to study certain objects.
+The volume of time-series data is exploding as new surveys come online - for example, the Vera Rubin Observatory will produce 15 terabytes of data per night, and its Legacy Survey of Space and Time (LSST) is expected to produce five-year lightcurves for $>10^7$ sources, each consisting of 5 bands.
+Historically, astronomers have worked with Fourier-based techniques such as the Lomb-Scargle periodogram or information-theoretic approaches; however, in recent years Bayesian and data-driven approaches such as Gaussian Process Regression (GPR) have gained traction.
+However, the computational complexity and steep learning curve of GPR has limited its adoption.
+`pgmuvi` is aims to make GPR of multi-band timeseries accessible to astronomers while having a small computational footprint.
+By building on cutting-edge machine learning libraries, `pgmuvi` retains the speed and flexibility of GPR while being easy to use.
+It provides easy access to GPU acceleration and Bayesian inference of the hyperparameters (e.g. the periods), and is able to scale to large datasets.
 
 
 # Statement of need
@@ -102,7 +109,7 @@ However, the flexibility of this kernel comes at a cost; for more than one compo
 Multiple options are available to accelerate inference depending on the size of the dataset.
 For small datasets, the exact GPs can be used, which is able to scale to datasets of up to $\sim1000$ points.
 `pgmuvi` can also exploit the Structured Kernel Interpolation (SKI) approximation [@wilson2015kernel] to scale to datasets of up to $\sim10^5$ points.
-Future work will include implementing approximations for larger datasets: `pgmuvi` can in principle exploit the Sparse Variational GP (SVGP) or Variational Nearest Neighbour approximations [@hensman2013gaussian; @wu2022variational] to scale to datasets of almost arbitrary size.
+Future work will include implementing approximations for larger datasets: `pgmuvi` can in principle exploit the Sparse Variational GP (SVGP) or Variational Nearest Neighbour (VNN) approximations [@hensman2013gaussian; @wu2022variational] to scale to datasets of almost arbitrary size.
 `pgmuvi` can employ GPU computing for both exact and variational GPs through a simple switch if a GPU is available.
 
 For exact GPs and SKI, `pgmuvi` can perform maximum a posteriori (MAP) estimation of the hyperparameters, or can perform full Bayesian inference.
