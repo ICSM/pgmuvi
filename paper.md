@@ -93,7 +93,7 @@ The package is also designed to be flexible, and to allow the user to customize 
 `pgmuvi` exploits multiple strategies to scale regression to large datasets, making it suitable for the current era of large-scale astronomical surveys.
 
 <!-- Now something comparing to other GP packages -->
-A number of other software packages exist to perform GPR, some of which, such as `celerite` [@celerite1; celerite2], `tinygp` [@huijser2021tinygp] or `george` [@ambikasaran2015fast] were developed within the astronomical commnunity with astronomical time-series in mind.
+A number of other software packages exist to perform GPR, some of which, such as `celerite` [@celerite1; celerite2], `tinygp` [@tinygp] or `george` [@ambikasaran2015george] were developed within the astronomical commnunity with astronomical time-series in mind.
 However, these each have their own limitations.
 `celerite` is extremely fast, but is limited to one-dimensional inputs, and thus cannot handle multiwavelength data.
 Furthermore, since it achieves its speed through a specific form of kernel decomposition, it is not able to handle arbitrary covariance functions.
@@ -101,6 +101,7 @@ It is therefore restricted to a small number of kernels with specific forms; whi
 `tinygp` is more general, and is able to retain a high degree of flexibility while still being fast thanks to a `JAX`-based implementation.
 This makes it feasible to implement models in `tinygp` that are equivalent to those in `pgmuvi`, but `pgmuvi` is designed to provide a shallower learning curve by packaging GPs with data transforms and inference routines.
 In essence, `tinygp` could in principle be substituted for GPyTorch as the backend on which `pgmuvi` relies.
+For a summary of the state of the art of GPR in astronomy, see the recent review by @arev_2023_gps.
 
 # Method and Features
 
