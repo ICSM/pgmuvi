@@ -84,13 +84,23 @@ We also gain the ability to directly handle multiple wavelengths, by constructin
 However, GP regression is not without its challenges.
 The most popular covariance functions are often not able to model complex signals, and thus the user must construct their own covariance function.
 GPs are also computationally expensive, and thus approximations must be used to scale to large datasets.
-
+Something something something
 
 In this paper we present a new Python package, `pgmuvi`, which is designed to perform Gaussian Process Regression (GPR) on multi-wavelength astronomical time-series data.
 GPR is a machine learning technique that is able to model non-periodic signals in unevenly sampled data, and is thus well suited for the analysis of astronomical time-series data.
 The package is designed to be easy to use, and to provide a quick way to perform GPR on multi-wavelength data.
 The package is also designed to be flexible, and to allow the user to customize the GPR model to their needs.
 `pgmuvi` exploits multiple strategies to scale regression to large datasets, making it suitable for the current era of large-scale astronomical surveys.
+
+<!-- Now something comparing to other GP packages -->
+A number of other software packages exist to perform GPR, some of which, such as `celerite` [@celerite1; celerite2], `tinygp` [@huijser2021tinygp] or `george` [@ambikasaran2015fast] were developed within the astronomical commnunity with astronomical time-series in mind.
+However, these each have their own limitations.
+`celerite` is extremely fast, but is limited to one-dimensional inputs, and thus cannot handle multiwavelength data.
+Furthermore, since it achieves its speed through a specific form of kernel decomposition, it is not able to handle arbitrary covariance functions.
+It is therefore restricted to a small number of kernels with specific forms; while it is able to handle the most common astronomical timeseries by combining these kernels, not all signals can be modelled in this way.
+`tinygp` is more general, and is able to retain a high degree of flexibility while still being fast thanks to a `JAX`-based implementation.
+This makes it feasible to implement models in `tinygp` that are equivalent to those in `pgmuvi`, but `pgmuvi` is designed to provide a shallower learning curve by packaging GPs with data transforms and inference routines.
+In essence, `tinygp` could in principle be substituted for GPyTorch as the backend on which `pgmuvi` relies.
 
 # Method and Features
 
@@ -116,6 +126,9 @@ For exact GPs and SKI, `pgmuvi` can perform maximum a posteriori (MAP) estimatio
 MAP estimation can exploit any `pytorch` optimizer, but defaults to using ADAM [@kingma2014adam].
 Bayesian inference uses the `pyro` implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
 
+Finally, by allowing arbitrary GPyTorch likelihoods to be used, `pgmuvi` can be extended to a wide range of problems.
+For example, an instance of `gpytorch.likelihoods.StudentTLikelihood` can be dropped in to turn `pgmuvi` into a T-Process regressor, or missing data can be handled with `gpytorch.likelihoods.GaussianLikelihoodWithMissingObs`.
+
 To summarise, the key features of `pgmuvi` are:
 
 - Highly flexible kernel, able to model a wide range of multiwavelength signals
@@ -128,7 +141,7 @@ To summarise, the key features of `pgmuvi` are:
 
 
 
-# Mathematics
+<!-- # Mathematics
 
 Single dollars ($) are required for inline mathematics e.g. $f(x) = e^{\pi/x}$
 
@@ -166,7 +179,7 @@ Figures can be included like this:
 and referenced from text using \autoref{fig:example}.
 
 Figure sizes can be customized by adding an optional second parameter:
-![Caption for example figure.](figure.png){ width=20% }
+![Caption for example figure.](figure.png){ width=20% } -->
 
 # Acknowledgements
 

@@ -210,15 +210,23 @@ def minmax(data, dim=0):
 class Lightcurve(object):
     """ A class for storing, manipulating and fitting light curves
 
-    Long description goes here
+    This class is designed to be a convenient way to store and manipulate
+    light curve data, and to fit Gaussian Processes to that data. It is
+    designed to be used with the GPyTorch library, and to be compatible with
+    the Pyro library for MCMC fitting.
 
     Parameters
     ----------
     xdata : Tensor of floats
+        The independent variable data
     ydata : Tensor of floats
+        The dependent variable data
     yerr : Tensor of floats, optional
+        The uncertainties on the dependent variable data, by default None
     xtransform : str, optional
+        The transform to apply to the x data, by default 'minmax'
     ytransform : str, optional
+        The transform to apply to the y data, by default None
 
 
     Examples
