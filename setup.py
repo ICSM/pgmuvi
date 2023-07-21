@@ -39,6 +39,8 @@ setup(
                       'torch',
                       'gpytorch',
                       'pyro-ppl',
+                      'arviz',
+                      'xarray',
                       'tqdm'
                       ],
     python_requires=">=3.7", 
