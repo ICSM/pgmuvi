@@ -404,6 +404,8 @@ class Lightcurve(object):
         elif hasattr(self, '_yerr_transformed') and likelihood == "learn":
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
                                                                                 learn_additional_noise = True)
+        elif likelihood == "learn":
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood(learn_additional_noise = True)
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
             # In this case, the likelihood has been passed a constraint, which
             # means we want a constrained GaussianLikelihood
