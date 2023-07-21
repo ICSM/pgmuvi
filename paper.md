@@ -13,11 +13,11 @@ authors:
     corresponding: true
     affiliation: "1, 2" # (Multiple affiliations must be quoted)
   - name: Sundar Srinivasan
-    orcid: 0000-0000-0000-0000
+    orcid: 0000-0002-2996-305X
     # equal-contrib: true # (This is how you can denote equal contributions between multiple authors)
     affiliation: 3
-  - name: Diego Alejandro Vasquez
-    orcid: 0000-0000-0000-0000
+  - name: Diego A. Vasquez-Torres
+    orcid: 0009-0008-2354-0049
     # corresponding: true # (This is how to denote the corresponding author)
     affiliation: 3
   - name: Sara Jamal
@@ -52,8 +52,7 @@ Time-domain observations are increasingly important in astronomy, and are often 
 The volume of time-series data is exploding as new surveys come online - for example, the Vera Rubin Observatory will produce 15 terabytes of data per night, and its Legacy Survey of Space and Time (LSST) is expected to produce five-year lightcurves for $>10^7$ sources, each consisting of 5 bands.
 Historically, astronomers have worked with Fourier-based techniques such as the Lomb-Scargle periodogram or information-theoretic approaches; however, in recent years Bayesian and data-driven approaches such as Gaussian Process Regression (GPR) have gained traction.
 However, the computational complexity and steep learning curve of GPR has limited its adoption.
-`pgmuvi` is aims to make GPR of multi-band timeseries accessible to astronomers while having a small computational footprint.
-By building on cutting-edge machine learning libraries, `pgmuvi` retains the speed and flexibility of GPR while being easy to use.
+`pgmuvi` makes GPR of multi-band timeseries accessible to astronomers by building on cutting-edge machine learning libraries, and hence `pgmuvi` retains the speed and flexibility of GPR while being easy to use.
 It provides easy access to GPU acceleration and Bayesian inference of the hyperparameters (e.g. the periods), and is able to scale to large datasets.
 
 
@@ -69,25 +68,25 @@ However, the handling of unevenly sampled data is not the only challenge in time
 This is especially true for data from space-based telescopes, which are often limited in their lifetime, and thus the amount of data that can be collected. -->
 
 A particular challenge in astronomy is handling heterogeneous, multiwavelength data.
-Data must often be combined from a wide variety of instruments, telecsope or surveys, and so the systematics or noise properties of different datasets can vary widely.
+Data must often be combined from a wide variety of instruments, telecsopes or surveys, and so the systematics or noise properties of different datasets can vary widely.
 In addition, by combining multiple wavelengths, we can gain a better understanding of the physical processes that are driving the variability of the object.
-For example, some variability mechanisms differ across wavelength only in amplitude (e.g. eclipsing binaries), while others may vary in phase (e.g. pulsating stars) or even period with wavelength (e.g. multiperiodic systems).
+For example, some variability mechanisms differ across wavelength only in amplitude (e.g. eclipsing binaries), while others may vary in phase (e.g. pulsating stars) or even period (e.g. multiperiodic systems).
 Thus, it is important to be able to combine data from multiple wavelengths in a way that is able to account for these differences.
 
-Gaussian Processes (GPs) are a popular way to handle these challenges.
+Gaussian processes (GPs) are a popular way to handle these challenges.
 GPs are a flexible way to forward-model arbitrary signals, by assuming the signal is drawn from a multivariate Gaussian distribution.
 By constructing a covariance function that describes the covariance between any two points in the signal, we can model the signal as a Gaussian process.
 By doing so, we are freed from any assumptions about sampling, and can model the signal as a continuous function.
 We are also able to model the noise in the data, and thus can account for heteroscedastic noise.
 We also gain the ability to directly handle multiple wavelengths, by constructing a multi-dimensional covariance function.
+Hence, Gaussian Process Regression (GPR) is a machine learning technique that is able to model non-periodic signals in unevenly sampled data, and is thus well suited for the analysis of astronomical time-series data.
 
-However, GP regression is not without its challenges.
+However, GPR is not without its challenges.
 The most popular covariance functions are often not able to model complex signals, and thus the user must construct their own covariance function.
 GPs are also computationally expensive, and thus approximations must be used to scale to large datasets.
 Something something something
 
-In this paper we present a new Python package, `pgmuvi`, which is designed to perform Gaussian Process Regression (GPR) on multi-wavelength astronomical time-series data.
-GPR is a machine learning technique that is able to model non-periodic signals in unevenly sampled data, and is thus well suited for the analysis of astronomical time-series data.
+In this paper we present a new Python package, `pgmuvi`, which is designed to perform GPR on multi-wavelength astronomical time-series data.
 The package is designed to be easy to use, and to provide a quick way to perform GPR on multi-wavelength data.
 The package is also designed to be flexible, and to allow the user to customize the GPR model to their needs.
 `pgmuvi` exploits multiple strategies to scale regression to large datasets, making it suitable for the current era of large-scale astronomical surveys.
@@ -103,11 +102,16 @@ This makes it feasible to implement models in `tinygp` that are equivalent to th
 In essence, `tinygp` could in principle be substituted for GPyTorch as the backend on which `pgmuvi` relies.
 For a summary of the state of the art of GPR in astronomy, see the recent review by @arev_2023_gps.
 
+`pgmuvi` is being used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; Scicluna et al. 2022, https://evolvedstars.space). 
+This work served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood. 
+The paper will be published in 2023 (Vasquez-Torres et al.). 
+A different project related to dusty variable stars in M33 has also used `pgmuvi`` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al.)
+
 # Method and Features
 
 `pgmuvi` builds on the popular GPyTorch library.
-GPyTorch [@gardner2018gpytorch] is a Gaussian Process library for PyTorch, which is a popular machine learning library for Python.
-By default, `pgmuvi` exploits the highly-flexible Spectral Mixture kernel [@wilson:2013] in GPyTorch, which is able to model a wide range of signals.
+GPyTorch [@gardner2018gpytorch] is a Gaussian process library for PyTorch, which is a popular machine learning library for Python.
+By default, `pgmuvi` exploits the highly-flexible Spectral Mixture kernel [@wilson:2013] in GPyTorch, which is able to model a wide variety of signals.
 This kernel is particularly interesting for astronomical time-series data, as it is able to effectively model multi-periodic and quasi-periodic signals.
 The spectral mixture kernel models the power spectrum of the covariance matrix as Gaussian mixture model (GMM), making it highly flexible and easy to interpret, while being able to extend to multi-dimensional input easily.
 This kernel also is known for its ability to extrapolate effectively, and is thus well suited to cases where prediction is important (for example, preparing astronomical observations of variable stars).
@@ -187,5 +191,6 @@ Figure sizes can be customized by adding an optional second parameter:
 This project was developed in part at the 2022 Astro Hack Week, hosted by the Max Planck Institute for Astronomy  and Haus der Astronomie in Heidelberg, Germany.
 This work was partially supported by the Max Planck Institute for Astronomy, the European Space Agency, the Gordon and Betty Moore Foundation, the Alfred P. Sloan foundation.
 
+SS and DAVT acknowledge support from UNAM-PAPIIT Program IA104822.
 
 # References
