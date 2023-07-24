@@ -62,12 +62,12 @@ Astronomical objects are in general not static, but vary in brightness over time
 This is especially true for objects that are variable by nature, such as pulsating stars, or objects that are variable due to their orbital motion, such as eclipsing binaries. 
 The study of these objects is called time-domain astronomy, and is a rapidly growing field. 
 A wide range of approaches to time-series analysis have been developed, ranging from simple period-finding algorithms to more complex machine learning techniques.
-Perhaps the most popular in astronomy is the Lomb-Scargle periodogram, which is a Fourier-based technique that is able to find periodic signals in unevenly sampled data.
+Perhaps the most popular in astronomy is the Lomb-Scargle periodogram [@Lomb1976; @Scargle1982], which is a Fourier-based technique that is able to find periodic signals in unevenly sampled data.
 However, the handling of unevenly sampled data is not the only challenge in time-series analysis.
 <!-- The study of time-domain astronomy is often hampered by the fact that the data is not always of the same quality, or that the data is not always available in the same wavelength. 
 This is especially true for data from space-based telescopes, which are often limited in their lifetime, and thus the amount of data that can be collected. -->
 
-A particular challenge in astronomy is handling heterogeneous, multiwavelength data.
+A particular challenge in astronomy is handling heterogeneous, multiwavelength data [@VanderPlas2015].
 Data must often be combined from a wide variety of instruments, telecsopes or surveys, and so the systematics or noise properties of different datasets can vary widely.
 In addition, by combining multiple wavelengths, we can gain a better understanding of the physical processes that are driving the variability of the object.
 For example, some variability mechanisms differ across wavelength only in amplitude (e.g. eclipsing binaries), while others may vary in phase (e.g. pulsating stars) or even period (e.g. multiperiodic systems).
@@ -84,10 +84,10 @@ Hence, Gaussian Process Regression (GPR) is a machine learning technique that is
 However, GPR is not without its challenges.
 The most popular covariance functions are often not able to model complex signals, and thus the user must construct their own covariance function.
 GPs are also computationally expensive, and thus approximations must be used to scale to large datasets.
-Something something something
+Finally, many GP packages either have very steep learning curves or only provide limited features, and thus are not suitable for the average astronomer.
 
 In this paper we present a new Python package, `pgmuvi`, which is designed to perform GPR on multi-wavelength astronomical time-series data.
-The package is designed to be easy to use, and to provide a quick way to perform GPR on multi-wavelength data.
+The package is designed to be easy to use, and to provide a quick way to perform GPR on multi-wavelength data by exploiting uncommon but powerful kernels and appoximations.
 The package is also designed to be flexible, and to allow the user to customize the GPR model to their needs.
 `pgmuvi` exploits multiple strategies to scale regression to large datasets, making it suitable for the current era of large-scale astronomical surveys.
 
@@ -102,7 +102,7 @@ This makes it feasible to implement models in `tinygp` that are equivalent to th
 In essence, `tinygp` could in principle be substituted for GPyTorch as the backend on which `pgmuvi` relies.
 For a summary of the state of the art of GPR in astronomy, see the recent review by @arev_2023_gps.
 
-`pgmuvi` is being used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; Scicluna et al. 2022, https://evolvedstars.space). 
+`pgmuvi` is being used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, https://evolvedstars.space). 
 This work served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood. 
 The paper will be published in 2023 (Vasquez-Torres et al.). 
 A different project related to dusty variable stars in M33 has also used `pgmuvi`` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al.)
@@ -110,7 +110,7 @@ A different project related to dusty variable stars in M33 has also used `pgmuvi
 # Method and Features
 
 `pgmuvi` builds on the popular GPyTorch library.
-GPyTorch [@gardner2018gpytorch] is a Gaussian process library for PyTorch, which is a popular machine learning library for Python.
+GPyTorch [@gardner2018gpytorch] is a Gaussian process library for PyTorch [@pytorch], which is a popular machine learning library for Python.
 By default, `pgmuvi` exploits the highly-flexible Spectral Mixture kernel [@wilson:2013] in GPyTorch, which is able to model a wide variety of signals.
 This kernel is particularly interesting for astronomical time-series data, as it is able to effectively model multi-periodic and quasi-periodic signals.
 The spectral mixture kernel models the power spectrum of the covariance matrix as Gaussian mixture model (GMM), making it highly flexible and easy to interpret, while being able to extend to multi-dimensional input easily.
@@ -129,7 +129,7 @@ Future work will include implementing approximations for larger datasets: `pgmuv
 
 For exact GPs and SKI, `pgmuvi` can perform maximum a posteriori (MAP) estimation of the hyperparameters, or can perform full Bayesian inference.
 MAP estimation can exploit any `pytorch` optimizer, but defaults to using ADAM [@kingma2014adam].
-Bayesian inference uses the `pyro` implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
+Bayesian inference uses the `pyro` [@bingham2018pyro] implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
 
 Finally, by allowing arbitrary GPyTorch likelihoods to be used, `pgmuvi` can be extended to a wide range of problems.
 For example, an instance of `gpytorch.likelihoods.StudentTLikelihood` can be dropped in to turn `pgmuvi` into a T-Process regressor, or missing data can be handled with `gpytorch.likelihoods.GaussianLikelihoodWithMissingObs`.
