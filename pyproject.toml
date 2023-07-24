@@ -12,7 +12,7 @@ select = ["A",  # prevent using keywords that clobber python builtins
 # ignore = ["E501", "W503"]
 exclude = ["tests"]
 
-# include notbooks!
+# include notebooks!
 include = ["*.py", "*.pyi", "**/pyproject.toml", "*.ipynb"]
 
 [tool.black]
@@ -20,17 +20,16 @@ line-length = 88
 target-version = ['py38', 'py39']
 include = '\.pyi?$'
 
-[tool.pytest]
+# [tool.pytest]
 # TBD
-
 
 [coverage:run]
 branch = True
 source = ruff
 omit = tests/*
 
-[project]
-name = pgmuvi
-description = "A python package for astronomical timeseries with GPs"
-license = GPLv3
-requires-python = ">=3.8"
+# [project]
+# name = pgmuvi
+# description = "A python package for astronomical timeseries with GPs"
+# license = GPLv3
+# requires-python = ">=3.8"
