@@ -68,7 +68,7 @@ However, the handling of unevenly sampled data is not the only challenge in time
 This is especially true for data from space-based telescopes, which are often limited in their lifetime, and thus the amount of data that can be collected. -->
 
 A particular challenge in astronomy is handling heterogeneous, multiwavelength data [@VanderPlas2015].
-Data must often be combined from a wide variety of instruments, telecsopes or surveys, and so the systematics or noise properties of different datasets can vary widely.
+Data must often be combined from a wide variety of instruments, telescopes or surveys, and so the systematics or noise properties of different datasets can vary widely.
 In addition, by combining multiple wavelengths, we can gain a better understanding of the physical processes that are driving the variability of the object.
 For example, some variability mechanisms differ across wavelength only in amplitude (e.g. eclipsing binaries), while others may vary in phase (e.g. pulsating stars) or even period (e.g. multiperiodic systems).
 Thus, it is important to be able to combine data from multiple wavelengths in a way that is able to account for these differences.
@@ -92,7 +92,7 @@ The package is also designed to be flexible, and to allow the user to customize 
 `pgmuvi` exploits multiple strategies to scale regression to large datasets, making it suitable for the current era of large-scale astronomical surveys.
 
 <!-- Now something comparing to other GP packages -->
-A number of other software packages exist to perform GPR, some of which, such as `celerite` [@celerite1; @celerite2], `tinygp` [@tinygp] or `george` [@ambikasaran2015george] were developed within the astronomical commnunity with astronomical time-series in mind.
+A number of other software packages exist to perform GPR, some of which, such as `celerite` [@celerite1; @celerite2], `tinygp` [@tinygp] or `george` [@ambikasaran2015george] were developed within the astronomical community with astronomical time-series in mind.
 However, these each have their own limitations.
 `celerite` is extremely fast, but is limited to one-dimensional inputs, and thus cannot handle multiwavelength data.
 Furthermore, since it achieves its speed through a specific form of kernel decomposition, it is not able to handle arbitrary covariance functions.
@@ -105,7 +105,7 @@ For a summary of the state of the art of GPR in astronomy, see the recent review
 `pgmuvi` is being used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, https://evolvedstars.space). 
 This work served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood. 
 The paper will be published in 2023 (Vasquez-Torres et al.). 
-A different project related to dusty variable stars in M33 has also used `pgmuvi`` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al.)
+A different project related to dusty variable stars in M33 has also used `pgmuvi` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al.).
 
 # Method and Features
 
