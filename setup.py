@@ -43,13 +43,13 @@ setup(
                       'xarray',
                       'tqdm'
                       ],
-    python_requires=">=3.7", 
+    python_requires=">=3.8", 
 
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Intended Audience :: Science/Research',
-        'License :: OSI Approved :: GNU Public License v3.0',  
-        'Operating System :: POSIX :: Linux',        
+        'License :: OSI Approved :: GNU Public License v3.0',
+        'Operating System :: POSIX :: Linux',
         'Programming Language :: Python :: 3',
     ],
 )
