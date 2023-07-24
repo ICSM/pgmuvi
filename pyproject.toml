@@ -23,11 +23,6 @@ include = '\.pyi?$'
 # [tool.pytest]
 # TBD
 
-[coverage:run]
-branch = True
-source = ruff
-omit = tests/*
-
 # [project]
 # name = pgmuvi
 # description = "A python package for astronomical timeseries with GPs"
