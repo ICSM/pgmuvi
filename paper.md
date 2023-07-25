@@ -23,6 +23,7 @@ authors:
   - name: Sara Jamal
     affiliation: 4
   - name: Stephan Waterval
+    orcid: 0000-0002-5542-8624
     affiliation: "5, 6"
 affiliations:
  - name: European Southern Observatory, Alonso de Córdova 3107, Vitacura, Santiago, Chile
