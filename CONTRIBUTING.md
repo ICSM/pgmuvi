@@ -12,7 +12,7 @@ immediately. Failure to follow this code of conduct may result in your removal f
 the project and/or other consequences. If you believe that someone has violated
 this code of conduct, please contact the project maintainers. This code of conduct 
 extends both to interactions on the project's github page and to interactions in
-other project spaces, including but not limited to email, slack, and in-person
+other project spaces, including but not limited to email, Slack, and in-person
 meetings. 
 
 ## Getting Started
@@ -80,7 +80,7 @@ your changes, we will merge your pull request.
 ## Code Style
 
 We try to follow the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide
-as much as possible. We lint our code using [ruff](), and we recommend that you do
+as much as possible. We lint our code using [ruff](https://beta.ruff.rs/docs/), and we recommend that you do
 the same. There is a github action that will run `ruff` on your code when you open
 a pull request, and we will ask you to address any issues that it finds.
 
