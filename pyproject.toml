@@ -1,3 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.2", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pgmuvi"
+# version = "0.0.1"
+dynamic = ["version"]
+authors = [
+    {name = "Peter Scicluna", email = "peter.scicluna@eso.org"},
+    {name = "Kathryn Jones", email = "kathryn.jones@unibe.ch"},
+    {name = "Stefan Waterval", email = "sw4445@nyu.edu"},
+    {name = "Sundar Srinivasan", email = "s.srinivasan@irya.unam.mx"},
+    {name = "Diego Alejandro Vasquez-Torres" email = "d.vasquez@irya.unam.mx"}, 
+    {name = "Sara Jamal", email = "jamal@mpia.de"},
+]
+license = {text = "GPL"}
+description = "A python package to interpret multiwavelength astronomical timeseries with GPs"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Public License v3.0",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "seaborn",
+    "torch",
+    "gpytorch",
+    "pyro-ppl",
+    "arviz",
+    "xarray",
+    "tqdm",
+]
+
+[project.readme]
+file = "README.md"
+content-type = "text/markdown"
+
+[project.urls]
+Homepage = "https://github.com/icsm/pgmuvi"
+"Bug Tracker" = "https://github.com/icsm/pgmuvi/issues"
+
+[tool.setuptools]
+packages = ["pgmuvi"]
+include-package-data = false
+
+[tool.setuptools_scm]
+
 [tool.ruff]
 select = ["A",  # prevent using keywords that clobber python builtins
           "B",  # bugbear: security warnings
@@ -23,8 +75,3 @@ include = '\.pyi?$'
 # [tool.pytest]
 # TBD
 
-# [project]
-# name = pgmuvi
-# description = "A python package for astronomical timeseries with GPs"
-# license = GPLv3
-# requires-python = ">=3.8"
