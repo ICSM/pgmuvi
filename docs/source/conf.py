@@ -29,6 +29,7 @@ release = version('pgmuvi')
 # for example take major/minor
 version = '.'.join(release.split('.')[:2])
 
+master_doc = 'index'
 
 # -- General configuration ---------------------------------------------------
 
