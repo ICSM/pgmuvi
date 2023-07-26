@@ -24,6 +24,10 @@ copyright = f'{date.today().year}, Peter Scicluna, Sundar'\
              'Diego Alejandro Vasquez, Sara Jamal'
 author = 'Peter Scicluna, Sundar Srinivasan, Stefan Waterval, '\
          'Kathryn Jones, Diego Alejandro Vasquez, Sara Jamal'
+from importlib.metadata import version
+release = version('pgmuvi')
+# for example take major/minor
+version = '.'.join(release.split('.')[:2])
 
 
 # -- General configuration ---------------------------------------------------
