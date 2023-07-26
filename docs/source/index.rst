@@ -37,7 +37,7 @@ and then you can install it::
     $ pip install .
 
 
-If you want to contribute to AMPERE and develop new features, you might want an *editable* install::
+If you want to contribute to `pgmuvi` and develop new features, you might want an *editable* install::
 
     $ pip install -e .
 
