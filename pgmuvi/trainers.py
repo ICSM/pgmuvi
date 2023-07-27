@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import gpytorch
-import pyro
 from tqdm import tqdm
 
 
@@ -45,22 +44,22 @@ def train(lightcurve=None, model=None, likelihood=None,
     lr : float, default 1e-4
         The learning rate for the optimiser. Increasing this number will
         result in larger steps in the parameters each iteration. This will
-        make it easier to escape local minima, but may also result in 
+        make it easier to escape local minima, but may also result in
         instability.
-    lossfn : string or instance of 
+    lossfn : string or instance of
              gpytorch.mlls.marginal_log_likelihood.MarginalLogLikelihood,
              default 'mll'
         The loss function that will be used to evaluate the training.
         If a string, it must take one of the values 'mll' or 'elbo'.
-    optim : string or instance of torch.optim.optimizer.Optimizer, 
+    optim : string or instance of torch.optim.optimizer.Optimizer,
             default 'SGD'
         The optimizer that will be used to train the model.
         If a string, it must take one of the values 'SGD', 'Adam', 'AdamW',
-        'NUTS'. Otherwise, it may be any torch or pyro optimiser. If passing a 
-        torch or pyro optimiser, it should already have been initialised with 
+        'NUTS'. Otherwise, it may be any torch or pyro optimiser. If passing a
+        torch or pyro optimiser, it should already have been initialised with
         all arguments set
-    eps : float, default 1e-8. 
-        term added to the denominator to improve numerical stability in some 
+    eps : float, default 1e-8.
+        term added to the denominator to improve numerical stability in some
         optimisers (e.g. AdamW)
 
     Examples
@@ -102,16 +101,17 @@ def train(lightcurve=None, model=None, likelihood=None,
         # Loss function is passed as a string, must be one of the values we
         # understand:
         if lossfn == 'mll':
-            #l oss = -1* marginal log-likelihood
+            # loss = -1* marginal log-likelihood
             lossfn = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood,
                                                               model)
         elif lossfn == 'elbo':
-            # loss = -1* variational elbo, variational inference to be performed!
-            raise NotImplementedError("Currently only maximisation of the marginal log-likelihood is implemented. Using elbo will be implemented soon")
+            # loss = -1* variational elbo, 
+            # variational inference to be performed!
+            raise NotImplementedError("Currently only maximisation of the marginal log-likelihood is implemented. Using elbo will be implemented soon")  # noqa: E501
     elif isinstance(lossfn, gpytorch.mlls.marginal_log_likelihood.MarginalLogLikelihood):
-        raise NotImplementedError("Currently only maximisation of the marginal log-likelihood is implemented. Passing arbitrary MLL objects will be implemented soon.")
+        raise NotImplementedError("Currently only maximisation of the marginal log-likelihood is implemented. Passing arbitrary MLL objects will be implemented soon.")  # noqa: E501
     else:
-        raise ValueError("lossfn must be either 'mll', 'elbo', or a gpytorch, torch or pyro loss function.")
+        raise ValueError("lossfn must be either 'mll', 'elbo', or a gpytorch, torch or pyro loss function.")  # noqa: E501
 
     if isinstance(optim, str):
         if optim == "SGD":
@@ -121,7 +121,7 @@ def train(lightcurve=None, model=None, likelihood=None,
         elif optim == "AdamW":
             optimizer = torch.optim.AdamW(model.parameters(), lr=lr, eps=eps)
         elif optim == "NUTS":
-            raise NotImplementedError("Optimisation with NUTS/MCMC is not yet implemented.")
+            raise NotImplementedError("Optimisation with NUTS/MCMC is not yet implemented.")  # noqa: E501
         else:
             raise ValueError("""optim must be either 'SGD', 'Adam', 'AdamW',
                             'NUTS', or an instance of a torch or pyro optimiser.
@@ -139,10 +139,10 @@ def train(lightcurve=None, model=None, likelihood=None,
         for key, value in pars.items():
             results[key] = [value]
     else:
-        for param_name, param in model.named_parameters():
+        for param_name, param in model.named_parameters():  # noqa: B007
             p = param_name.split('.')[1] if 'raw' in param_name else param_name
             results[p] = []
-    # for param_name, param in 
+    # for param_name, param in
     for i in tqdm(range(maxiter)):
         optimizer.zero_grad()
         output = model(train_x)
@@ -162,25 +162,27 @@ def train(lightcurve=None, model=None, likelihood=None,
                 results[param_name].append(param.detach().numpy())
             # print(i, param_name," = ",param.item())
         # Finally check if convergence criterion is met
-        # optimisers are stochastic, so we average the change in loss 
+        # optimisers are stochastic, so we average the change in loss
         # function over a few iterations
         if stop and i > miniter:
             stopval = np.std(results['loss'][-stopavg:])
             if stopval < stop:
-                print("Average change in loss over the last {0} iterations was {1}.\n This is < {2}, so we will end training here.".format(stopavg,stopval, stop))
+                print(
+                    f"""Average change in loss over the last {stopavg} iterations
+                    was {stopval}.\n This is < {stop}, so we will end training here."""
+                )
                 break  # break out of the training loop early
 
     return results
 
 
-
-
-
 def train_mll():
     pass
 
+
 def train_variational():
     pass
+
 
 def train_variational_uncertain():
     pass
