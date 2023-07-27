@@ -2,19 +2,20 @@ import contextlib
 import numpy as np
 import torch
 import gpytorch
-# from gps import SpectralMixtureGPModel as SMG
-# from gps import SpectralMixtureKISSGPModel as SMKG
-# from gps import TwoDSpectralMixtureGPModel as TMG
-from .gps import * #FIX THIS LATER!
+from .gps import (SpectralMixtureLinearMeanGPModel,
+                  SpectralMixtureLinearMeanKISSGPModel,
+                  TwoDSpectralMixtureLinearMeanGPModel,
+                  TwoDSpectralMixtureLinearMeanKISSGPModel,
+                  SpectralMixtureGPModel,
+                  SpectralMixtureKISSGPModel,
+                  TwoDSpectralMixtureGPModel,
+                  TwoDSpectralMixtureKISSGPModel)
 import matplotlib.pyplot as plt
 from .trainers import train
-from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive
-from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior
+from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive  # noqa: F401
+from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior  # noqa: F401
 import pyro
 from pyro.infer.mcmc import NUTS, MCMC, HMC
-from pyro.optim import Adam
-from pyro.infer import SVI, Trace_ELBO
-import pyro.distributions as dist
 from inspect import isclass
 import xarray as xr
 import arviz as az
@@ -47,7 +48,7 @@ def _reraise_with_note(e, note):
 class Transformer(object):
     def transform(self, data, **kwargs):
         """ Transform some data and return it, storing the parameters required
-        to repeat or reverse the transform 
+        to repeat or reverse the transform
 
         This is a baseclass with no implementations, your subclass should
         implement the transform itself
@@ -255,7 +256,7 @@ class Lightcurve(object):
         ytransform : str or Transformer, optional
             The transform to apply to the y data, by default None
         """
-        
+
         transform_dic = {'minmax': MinMax(),
                          'zscore': ZScore(),
                          'robust_score': RobustZScore()}
@@ -322,7 +323,7 @@ class Lightcurve(object):
     @property
     def ydata(self):
         """ The dependent variable data
-        
+
         :getter: Returns the dependent variable data in its raw
         (untransformed) state
         :setter: Takes the input data and transforms it as requested by the
@@ -400,16 +401,16 @@ class Lightcurve(object):
 
         self.__SET_LIKELIHOOD_CALLED = True
         if hasattr(self, '_yerr_transformed') and likelihood is None:
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed)
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed)  # noqa: E501
         elif hasattr(self, '_yerr_transformed') and likelihood == "learn":
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,
-                                                                                learn_additional_noise = True)
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,  # noqa: E501
+                                                                                learn_additional_noise=True)  # noqa: E501
         elif likelihood == "learn":
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood(learn_additional_noise = True)
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood(learn_additional_noise=True)  # noqa: E501
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
             # In this case, the likelihood has been passed a constraint, which
             # means we want a constrained GaussianLikelihood
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=likelihood)
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=likelihood)  # noqa: E501
         elif likelihood is None:
             # We're just going to make the simplest assumption
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
@@ -479,8 +480,8 @@ class Lightcurve(object):
         if not hasattr(self, 'likelihood'):
             self.set_likelihood(likelihood, **kwargs)
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
-            #if no likelihood is passed, we only want to set the likelihood
-            #if it hasn't already been set
+            # if no likelihood is passed, we only want to set the likelihood
+            # if it hasn't already been set
             self.set_likelihood(likelihood, **kwargs)
         elif likelihood is not None:
             self.set_likelihood(likelihood, **kwargs)
@@ -503,7 +504,7 @@ class Lightcurve(object):
             # Add missing arguments to the model call
         else:
             raise ValueError("Insert a valid model")
-        
+
         # now we've got a model set up, we're going to make some handy lookups
         # for the parameters and modules that we'll need to access later
         self._make_parameter_dict()
@@ -511,15 +512,16 @@ class Lightcurve(object):
 
     def _make_parameter_dict(self):
         ''' Make a dictionary of the model parameters
-        
+
         This function is used to make a dictionary of the model parameters,
         providing a convenient way to access them. The dictionary is stored
         in the _model_pars attribute.
         '''
         self._model_pars = {}
-        # there are a few parameters that we want to make sure we expose a direct link to
-        # if we need them!
-        _special_pars = ['noise', 'mixture_means', 'mixture_scales', 'mixture_weights']
+        # there are a few parameters that we want to make sure we expose a
+        # direct link to if we need them!
+        _special_pars = ['noise', 'mixture_means',
+                         'mixture_scales', 'mixture_weights']
 
         for param_name, param in self.model.named_parameters():
             comps = list(param_name.split('.'))
@@ -551,9 +553,9 @@ class Lightcurve(object):
             if param_dict['constrained']:
                 param_dict['param'] = param_dict['chain'][-1]
                 try:
-                    param_dict['raw_param'] = param_dict['chain'][-2].__getattr__(comps[-1])
+                    param_dict['raw_param'] = param_dict['chain'][-2].__getattr__(comps[-1])  # noqa: E501
                 except AttributeError:
-                    param_dict['raw_param'] = param_dict['chain'][-2].__getattribute__(comps[-1])
+                    param_dict['raw_param'] = param_dict['chain'][-2].__getattribute__(comps[-1])  # noqa: E501
             else:
                 param_dict['param'] = param_dict['chain'][-1]
                 param_dict['raw_param'] = param_dict['param']
@@ -573,10 +575,10 @@ class Lightcurve(object):
                 self._model_pars[pn] = param_dict  # so we also alias the full
                                                    # name for the constrained
                                                    # parameter
-        
+
     def set_prior(self, prior=None, **kwargs):
         '''Set the prior for the model parameters
-        
+
         Parameters
         ----------
         prior : dict, optional
@@ -619,7 +621,7 @@ class Lightcurve(object):
                 # constraints must be registered to raw parameters!
                 k = key.split('.')[-1] if 'raw_' in key else f"raw_{key.split('.')[-1]}"
                 if all(p not in key
-                       for p in pars_to_transform['y'] + pars_to_transform['x']):  # no transform needed!
+                       for p in pars_to_transform['y'] + pars_to_transform['x']):  # no transform needed! # noqa: E501
                     self._model_pars[key]['module'].register_constraint(
                         k, constraint[key]
                     )
@@ -643,23 +645,25 @@ class Lightcurve(object):
                         # so we can just do 1/ for both means and scales
                         if debug:
                             print(constraint[key])
-                        if constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-torch.inf)]:
+                        if (constraint[key].lower_bound 
+                           not in [torch.tensor(0), torch.tensor(-torch.inf)]):
                             # we need to transform the lower bound
                             if debug:
                                 print(1./self.xtransform.transform(1./constraint[key].lower_bound,
                                                                     apply_to=[0],
                                                                     shift=False))
-                            constraint[key].lower_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].lower_bound,
-                                                                                       apply_to=[0],
-                                                                                       shift=False).item())
+                            constraint[key].lower_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].lower_bound,  # noqa: E501
+                                                                                                    apply_to=[0],  # noqa: E501
+                                                                                                    shift=False).item())  # noqa: E501
                             if debug:
                                 print(constraint[key].lower_bound)
                                 print(constraint[key])
-                        if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(torch.inf)]:
+                        if (constraint[key].upper_bound
+                            not in [torch.tensor(0), torch.tensor(torch.inf)]):
                             # we need to transform the upper bound
-                            constraint[key].upper_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].upper_bound,
-                                                                                       apply_to=[0],
-                                                                                       shift=False).item())
+                            constraint[key].upper_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].upper_bound,  # noqa: E501
+                                                                                                    apply_to=[0],  # noqa: E501
+                                                                                                    shift=False).item())  # noqa: E501
                             if debug:
                                 print(constraint[key].upper_bound)
                                 print(constraint[key])
@@ -677,19 +681,22 @@ class Lightcurve(object):
                         ):
                             # convert constraint to an interval with minimum equal to
                             # what zero is in the untransformed space
-                            constraint[key] = Interval(self.ytransform.transform(0), torch.inf)
+                            constraint[key] = Interval(self.ytransform.transform(0),
+                                                       torch.inf)
                             if debug:
                                 print(constraint[key])
 
-                        elif constraint[key].lower_bound not in [torch.tensor(0), torch.tensor(-torch.inf)]:
+                        elif (constraint[key].lower_bound
+                             not in [torch.tensor(0), torch.tensor(-torch.inf)]):
                             # we need to transform the lower bound
-                            constraint[key].lower_bound = torch.tensor(self.ytransform.transform(constraint[key].lower_bound).item())
+                            constraint[key].lower_bound = torch.tensor(self.ytransform.transform(constraint[key].lower_bound).item())  # noqa: E501
                             if debug:
                                 print(constraint[key].lower_bound)
                                 print(constraint[key])
-                        if constraint[key].upper_bound not in [torch.tensor(0), torch.tensor(torch.inf)]:
+                        if (constraint[key].upper_bound
+                           not in [torch.tensor(0), torch.tensor(torch.inf)]):
                             # we need to transform the upper bound
-                            constraint[key].upper_bound = torch.tensor(self.ytransform.transform(constraint[key].upper_bound).item())
+                            constraint[key].upper_bound = torch.tensor(self.ytransform.transform(constraint[key].upper_bound).item())  # noqa: E501
                             if debug:
                                 print(constraint[key].upper_bound)
                                 print(constraint[key])
@@ -740,14 +747,15 @@ class Lightcurve(object):
                 noise_scale = np.minimum(1e-4, self._yerr_transformed.min()/10)
             except AttributeError:
                 noise_scale = 1e-4*self._ydata_transformed.std()
-            #noise_prior = gpytorch.priors.HalfCauchyPrior(noise_scale)
-            noise_prior = gpytorch.priors.LogNormalPrior(torch.log(noise_scale), noise_scale)
+            # noise_prior = gpytorch.priors.HalfCauchyPrior(noise_scale)
+            noise_prior = gpytorch.priors.LogNormalPrior(torch.log(noise_scale),
+                                                         noise_scale)
             self._model_pars['noise']['module'].register_prior("noise_prior",
-                                                            noise_prior,
-                                                            'noise')
+                                                               noise_prior,
+                                                               'noise')
         with contextlib.suppress(RuntimeError):
             mean_prior = gpytorch.priors.NormalPrior(self._ydata_transformed.mean(),
-                                                self._ydata_transformed.std()/10)
+                                                     self._ydata_transformed.std()/10)
             for key in self._model_pars:
                 if 'mean_module.constant' in key:
                     self._model_pars[key]['module'].register_prior("mean_prior",
@@ -757,7 +765,7 @@ class Lightcurve(object):
         # that the means are positive, but we don't want to restrict them to
         # be close to zero. In fact, we want to penalise both very high and very low
         # frequencies, so we use a lognormal prior with mu = 0 and sigma = 1
-        mixture_means_prior = gpytorch.priors.LogNormalPrior(0, 1) #/self._xdata_transformed.max())
+        mixture_means_prior = gpytorch.priors.LogNormalPrior(0, 1)  # /self._xdata_transformed.max())  # noqa: E501
         self._model_pars['mixture_means']['module'].register_prior("mixture_means_prior",
                                                                    mixture_means_prior,
                                                                    'mixture_means')
@@ -765,8 +773,8 @@ class Lightcurve(object):
         # now we need a prior for the mixture scales
         # we want to penalise very large scales, so we use a half-cauchy prior
         # with a scale of 1/10 of the maximum frequency
-        #mixture_scales_prior = gpytorch.priors.HalfCauchyPrior(1/self._xdata_transformed.max())
-        mixture_scales_prior = gpytorch.priors.LogNormalPrior(0, 1) #1/self._xdata_transformed.max())
+        # mixture_scales_prior = gpytorch.priors.HalfCauchyPrior(1/self._xdata_transformed.max())  # noqa: E501
+        mixture_scales_prior = gpytorch.priors.LogNormalPrior(0, 1) #1/self._xdata_transformed.max())  # noqa: E501
         self._model_pars['mixture_scales']['module'].register_prior("mixture_scales_prior",
                                                                     mixture_scales_prior,
                                                                     'mixture_scales')
@@ -775,12 +783,12 @@ class Lightcurve(object):
         # to restrict them to be close to zero. In fact, we want to penalise
         # both very high and very low weights, so we use a LogNormal prior 
         # with a scale of 1/10 of the maximum frequency
-        mixture_weights_prior = gpytorch.priors.LogNormalPrior(0, 1) #1/self._xdata_transformed.max())
+        mixture_weights_prior = gpytorch.priors.LogNormalPrior(0, 1)  # 1/self._xdata_transformed.max())  # noqa: E501
         self._model_pars['mixture_weights']['module'].register_prior("mixture_weights_prior",
                                                                      mixture_weights_prior,
                                                                      'mixture_weights')
 
-        # need a more general way to assign default priors to everything, but for now 
+        # need a more general way to assign default priors to everything, but for now
         # let's see if this works!
         self.__PRIORS_SET = True
 
@@ -812,7 +820,9 @@ class Lightcurve(object):
             noise_min = np.minimum(1e-4, self._yerr_transformed.min()/10)
         except AttributeError:
             noise_min = 1e-4*self._ydata_transformed.std()
-        noise_max = self._ydata_transformed.std()  # for a non-periodic source, the noise should be less than the standard deviation
+        noise_max = self._ydata_transformed.std()  # for a non-periodic source,
+                                                # the noise should be less than
+                                                # the standard deviation
         noise_constraint = Interval(noise_min, noise_max)
         self._model_pars['noise']['module'].register_constraint("raw_noise", 
                                                                 noise_constraint)
@@ -823,16 +833,17 @@ class Lightcurve(object):
                 if 'mean_module.constant' in key:
                     self._model_pars[key]['module'].register_constraint("raw_constant",
                                                                         mean_const_constraint)
-        mixture_means_constraint = GreaterThan(1/self._xdata_transformed.max()) # this should correspond to the longest frequency entirely contained in the dataset
+        # this should correspond to the longest frequency entirely
+        # contained in the dataset:
+        mixture_means_constraint = GreaterThan(1/self._xdata_transformed.max())
         self._model_pars['mixture_means']['module'].register_constraint("raw_mixture_means",
                                                                         mixture_means_constraint)
-        
+
         # to-do - check if constraints on mixture scales are useful!
-        
 
     def set_hypers(self, hypers=None, debug=False, **kwargs):
         '''Set the hyperparameters for the model and likelihood. This is a
-        convenience function that calls the model.initialize() to set the 
+        convenience function that calls the model.initialize() to set the
         hyperparameters. However, first it applies any transforms to the
         hyperparameters, so that the user can pass the hyperparameters in
         the original data space if they wish.
@@ -872,7 +883,7 @@ class Lightcurve(object):
                     if debug:
                         print(f"Applying x-transform to {key}")
                     hypers[key] = 1/self.xtransform.transform(1/hypers[key],
-                                                          shift=False)
+                                                              shift=False)
             elif any(p in key for p in pars_to_transform['y']):
                 # now apply the y transform
                 # the mean function and noise are not defined in fourier
@@ -907,7 +918,7 @@ class Lightcurve(object):
         except AttributeError as e:
             errmsg = "You must first set the model and likelihood"
             _reraise_with_note(e, errmsg)
-    
+
     def _eval(self):
         try:
             self.model.eval()
@@ -966,8 +977,8 @@ class Lightcurve(object):
         if not hasattr(self, 'likelihood'):
             self.set_likelihood(likelihood, **kwargs)
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
-            #if no likelihood is passed, we only want to set the likelihood
-            #if it hasn't already been set
+            # if no likelihood is passed, we only want to set the likelihood
+            # if it hasn't already been set
             self.set_likelihood(likelihood, **kwargs)
         elif likelihood is not None:
             self.set_likelihood(likelihood, **kwargs)
@@ -981,7 +992,7 @@ class Lightcurve(object):
         elif model is not None:
             self.set_model(model, self.likelihood, 
                            num_mixtures=num_mixtures, **kwargs)
-            
+
         if not self.__CONTRAINTS_SET:
             self.set_default_constraints()
 
@@ -989,7 +1000,7 @@ class Lightcurve(object):
             self.cuda()
 
         if guess is not None:
-            #self.model.initialize(**guess)
+            # self.model.initialize(**guess)
             self.set_hypers(guess)
 
         if miniter is None:
@@ -1008,7 +1019,7 @@ class Lightcurve(object):
         # set training mode:
         self._train()
 
-        #for param_name, param in self.model.named_parameters():
+        # for param_name, param in self.model.named_parameters():
         #    print(f'Parameter name: {param_name:42} value = {param.data}')
         self.print_parameters()
 
@@ -1049,7 +1060,7 @@ class Lightcurve(object):
         disable_progbar : bool, optional
             Whether to disable the progress bar, by default False.
         **kwargs : dict, optional
-        
+
         Returns
         -------
         mcmc_results : dict
@@ -1067,11 +1078,11 @@ class Lightcurve(object):
             else:
                 raise ValueError("sampler must be one of 'NUTS' or 'HMC'")
         elif not isinstance(sampler, MCMC):
-            raise TypeError("sampler must be either None, a string, or an instance of pyro.infer.mcmc.MCMC")
+            raise TypeError("sampler must be either None, a string, or an instance of pyro.infer.mcmc.MCMC")  # noqa: E501
 
         # we need to make sure that the model is in train mode
-        #self._train()
-        #self._eval()
+        # self._train()
+        # self._eval()
 
         if not self.__PRIORS_SET:
             self.set_default_priors()
@@ -1079,22 +1090,13 @@ class Lightcurve(object):
         if max_cg_iterations is None:
             max_cg_iterations = 10000
 
-        # mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood,
-        #                                                self.model)
-        # at some point we will make this support approximate GPs
-        # if isinstance(self.model, ExactGP):
-        #     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
-        # elif isinstance(self.model, ApproximateGP):
-        #     mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=len(self._ydata_transformed))
-        # else:
-        #     raise
         model = self.model
 
         def pyro_model(x, y):
-            with (gpytorch.settings.fast_computations(False, False, False), 
+            with (gpytorch.settings.fast_computations(False, False, False),
                   gpytorch.settings.max_cg_iterations(max_cg_iterations)):
-                sampled_model = model.pyro_sample_from_prior()  #.detatch()
-                output = sampled_model.likelihood(sampled_model(x))#.detatch()
+                sampled_model = model.pyro_sample_from_prior()  # .detatch()
+                output = sampled_model.likelihood(sampled_model(x))  # .detatch()
                 pyro.sample("obs", output, obs=y)
             return y
 
@@ -1124,30 +1126,30 @@ class Lightcurve(object):
 
         self.post = self.inference_data.posterior
         transformed_mcmc_periods = 1/self.post['covar_module.mixture_means_prior']
-        raw_mcmc_periods = self.xtransform.inverse(torch.as_tensor(transformed_mcmc_periods.to_numpy()), shift=False)
+        raw_mcmc_periods = self.xtransform.inverse(torch.as_tensor(transformed_mcmc_periods.to_numpy()), shift=False)  # noqa: E501
         raw_mcmc_frequencies = 1/raw_mcmc_periods
-        transformed_mcmc_period_scales = 1/(2*torch.pi*self.post['covar_module.mixture_scales_prior'])
-        raw_mcmc_period_scales = self.xtransform.inverse(torch.as_tensor(transformed_mcmc_period_scales.to_numpy()), shift=False)
+        transformed_mcmc_period_scales = 1/(2*torch.pi*self.post['covar_module.mixture_scales_prior'])  # noqa: E501
+        raw_mcmc_period_scales = self.xtransform.inverse(torch.as_tensor(transformed_mcmc_period_scales.to_numpy()), shift=False)  # noqa: E501
         raw_mcmc_frequency_scales = 1/(2*torch.pi*raw_mcmc_period_scales)
 
         self.inference_data.posterior['transformed_periods'] = transformed_mcmc_periods
-        self.inference_data.posterior['raw_periods'] = xr.DataArray(raw_mcmc_periods.reshape(self.post['covar_module.mixture_means_prior'].shape),
-                                                                    coords = self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)
-        self.inference_data.posterior['raw_frequencies'] = xr.DataArray(raw_mcmc_frequencies.reshape(self.post['covar_module.mixture_means_prior'].shape),
-                                                                        coords = self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)
-        self.inference_data.posterior['transformed_period_scales'] = transformed_mcmc_period_scales
-        self.inference_data.posterior['raw_period_scales'] = xr.DataArray(raw_mcmc_period_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),
-                                                                          coords = self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)
-        self.inference_data.posterior['raw_frequency_scales'] = xr.DataArray(raw_mcmc_frequency_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),
-                                                                             coords = self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)
+        self.inference_data.posterior['raw_periods'] = xr.DataArray(raw_mcmc_periods.reshape(self.post['covar_module.mixture_means_prior'].shape),  # noqa: E501
+                                                                    coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)  # noqa: E501
+        self.inference_data.posterior['raw_frequencies'] = xr.DataArray(raw_mcmc_frequencies.reshape(self.post['covar_module.mixture_means_prior'].shape),  # noqa: E501
+                                                                        coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes) # noqa: E501
+        self.inference_data.posterior['transformed_period_scales'] = transformed_mcmc_period_scales  # noqa: E501
+        self.inference_data.posterior['raw_period_scales'] = xr.DataArray(raw_mcmc_period_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),  # noqa: E501
+                                                                          coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)  # noqa: E501
+        self.inference_data.posterior['raw_frequency_scales'] = xr.DataArray(raw_mcmc_frequency_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),  # noqa: E501
+                                                                             coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)  # noqa: E501
 
         # self.mcmc_results = mcmc(self, sampler, **kwargs)
-    
+
     def summary(self, prob=0.683, use_arviz=True,
                 var_names=None, filter_vars='like',
                 stat_focus='median', **kwargs):
         '''Print a summary of the results of the MCMC sampling
-        
+
         Parameters
         ----------
         prob : float, optional
@@ -1183,16 +1185,16 @@ class Lightcurve(object):
                                       filter_vars=filter_vars,
                                       stat_focus=stat_focus,
                                       **kwargs)
-        #self.mcmc_run.summary(prob=prob)
+        # self.mcmc_run.summary(prob=prob)
         self.diagnostics = self.mcmc_run.diagnostics()
-        #figure out how to filter these before printing!
-        #print(self.diagnostics)
+        # figure out how to filter these before printing!
+        # print(self.diagnostics)
         return self.summary
-    
+
     def plot_corner(self, kind='scatter', var_names=None, filter_vars='like',
                     marginals=True, point_estimate='median', **kwargs):
         '''Plot a corner plot of the results of the MCMC sampling
-        
+
         Parameters
         ----------
         kind : str, optional
@@ -1216,7 +1218,7 @@ class Lightcurve(object):
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         if var_names is None:
-            var_names=['mean_module', 'covar_module.mixture_weights', 'raw']
+            var_names = ['mean_module', 'covar_module.mixture_weights', 'raw']
         if point_estimate is None:
             point_estimate = 'median'
         az.plot_pair(self.inference_data, kind=kind, 
@@ -1224,7 +1226,7 @@ class Lightcurve(object):
                      marginals=marginals, point_estimate=point_estimate,
                      **kwargs)
 
-    def plot_trace(self, var_names=None, filter_vars='like', 
+    def plot_trace(self, var_names=None, filter_vars='like',
                    figsize=None, **kwargs):
         '''Plot a trace plot of the results of the MCMC sampling
 
@@ -1244,7 +1246,7 @@ class Lightcurve(object):
             # because those are in the transformed space. Instead, we want
             # to plot the extra parameters we have created, which are in the
             # raw space, as well as the periods and the mixture weights
-            var_names = ['mean_module', 'covar_module.mixture_weights', 'raw']  # ['mean_module', 'covar_module']
+            var_names = ['mean_module', 'covar_module.mixture_weights', 'raw']  # ['mean_module', 'covar_module']  # noqa: E501
         az.plot_trace(self.inference_data, var_names=var_names, 
                       filter_vars=filter_vars,
                       figsize=figsize,
@@ -1256,7 +1258,7 @@ class Lightcurve(object):
                 if self.xtransform is None:
                     p = 1/self.model.covar_module.mixture_means[i]
                 else:
-                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i],
+                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i],  # noqa: E501
                                                 shift=False).detach().numpy()[0]
                 print(f"Period {i}: "
                       f"{p}"
@@ -1266,7 +1268,7 @@ class Lightcurve(object):
                 if self.xtransform is None:
                     p = 1/self.model.covar_module.mixture_means[i, 0]
                 else:
-                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i, 0],
+                    p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i, 0],  # noqa: E501
                                                 shift=False).detach().numpy()[0, 0]
                 print(f"Period {i}: "
                       f"{p}"
@@ -1286,27 +1288,27 @@ class Lightcurve(object):
                     p = 1/self.model.sci_kernel.mixture_means[i]
                     scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]))
                 else:
-                    p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i],
+                    p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i],  # noqa: E501
                                                 shift=False).detach().numpy()[0]
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]),
-                                                shift=False).detach().numpy()[0])
+                                                          shift=False).detach().numpy()[0])
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
         elif self.ndim == 2:
             for i in range(len(self.model.sci_kernel.mixture_means[:, 0])):
                 if self.xtransform is None:
                     p = 1/self.model.sci_kernel.mixture_means[i, 0]
-                    scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]))
+                    scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]))  # noqa: E501
                 else:
                     p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i, 0],
                                                 shift=False).detach().numpy()[0, 0]
-                    scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),
+                    scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),  # noqa: E501
                                                 shift=False).detach().numpy()[0, 0])
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
 
         return periods, weights, scales
-                
+
     def get_parameters(self, raw=False, transform=True):
         '''
         Returns a dictionary of the parameters of the model, with the keys
@@ -1326,7 +1328,7 @@ class Lightcurve(object):
         raw : bool, default False
             If True, returns the raw values of the parameters, otherwise
             returns the constrained values of the parameters.
-        
+
         Returns
         -------
         pars : dict
@@ -1350,9 +1352,13 @@ class Lightcurve(object):
                         tmp = tmp.__getattr__(c)
                     except AttributeError:
                         tmp = tmp.__getattribute__(c)
-                if any(p in pn for p in pars_to_transform['x']) and transform and self.xtransform is not None:
+                if (any(p in pn for p in pars_to_transform['x'])
+                   and transform
+                   and self.xtransform is not None):
                     d = 1/self.xtransform.inverse(1/tmp.data, shift=False)
-                elif any(p in pn for p in pars_to_transform['y']) and transform and self.ytransform is not None:
+                elif (any(p in pn for p in pars_to_transform['y'])
+                      and transform
+                      and self.ytransform is not None):
                     d = self.ytransform.inverse(tmp.data)
                 else:
                     d = tmp.data
@@ -1360,15 +1366,19 @@ class Lightcurve(object):
             else:
                 # Either we actually want the raw values, or it's not a
                 # constrained parameter
-                if any(p in param_name for p in pars_to_transform['x']) and transform and self.xtransform is not None:
+                if (any(p in param_name for p in pars_to_transform['x'])
+                   and transform
+                   and self.xtransform is not None):
                     d = 1/self.xtransform.inverse(1/param.data, shift=False)
-                elif any(p in param_name for p in pars_to_transform['y']) and transform and self.ytransform is not None:
+                elif (any(p in param_name for p in pars_to_transform['y'])
+                      and transform
+                      and self.ytransform is not None):
                     d = self.ytransform.inverse(param.data)
                 else:
                     d = param.data
                 pars[param_name] = d
         return pars
-                
+
     def print_parameters(self, raw=False):
         '''
         Prints the parameters of the model, with the keys being the names of
@@ -1386,13 +1396,6 @@ class Lightcurve(object):
         pars = self.get_parameters(raw=raw)
         for key, value in pars.items():
             print(f"{key}: {value}")
-        # for param_name, param in self.model.named_parameters():
-        #     if raw:
-        #         print(f'Parameter name: {param_name:42} value = {param.data}')
-        #     else:
-
-            #if 'raw' in param_name:
-            #    print(f'Constrained Parameter name: {param_name[3:]:42} value = {param.constraint.transform(param.data)}')
 
     def print_results(self):
         for key in self.results.keys():
@@ -1408,11 +1411,10 @@ class Lightcurve(object):
                 elif sum_over_shape == 2:
                     for i in range(results_tmp.shape[-1]):
                         print(f"{key}: {results_tmp[...,i].flatten()}")
-                    # print(f"{key}: {results_tmp[...,0].flatten()}, {results_tmp[...,2].flatten()}")
-            
+
     def plot_psd(self, freq=None, means=None, scales=None, weights=None,
-                 show=True, raw=False, log=(True, False), 
-                 truncate_psd=True, logpsd=False, 
+                 show=True, raw=False, log=(True, False),
+                 truncate_psd=True, logpsd=False,
                  mcmc_samples=False, **kwargs):
         '''Plot the power spectral density of the model
 
@@ -1455,13 +1457,13 @@ class Lightcurve(object):
             using MCMC.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
-        
+
         Returns
         -------
         fig, ax : matplotlib.pyplot.Figure, matplotlib.pyplot.Axes
             The figure and axes objects of the plot.
         '''
-        
+
         if freq is None:
             if self.ndim == 1:
                 if raw:
@@ -1470,69 +1472,70 @@ class Lightcurve(object):
                     step = self.model.sci_kernel.mixture_scales.min()/5
                     # this isn't really the correct way to do this, but it will
                     # do for now
-                    diffs = self._xdata_transformed.sort().values[1:] - self._xdata_transformed.sort().values[:-1]
+                    diffs = self._xdata_transformed.sort().values[1:] - self._xdata_transformed.sort().values[:-1]  # noqa: E501
                     mindelta = (diffs[diffs>0]).min().item()
-                    freq = torch.arange(1/(self._xdata_transformed.max() - self._xdata_transformed.min()).item(),
+                    freq = torch.arange(1/(self._xdata_transformed.max() - self._xdata_transformed.min()).item(),  # noqa: E501
                                         1/(mindelta),
-                                        step.item())  
+                                        step.item())
                 else:
                     # we have to transform the step size to the original space
                     # to get the correct frequency range
-                    step = 1/self.xtransform.inverse(1/(self.model.sci_kernel.mixture_scales.min()/5),
+                    step = 1/self.xtransform.inverse(1/(self.model.sci_kernel.mixture_scales.min()/5),  # noqa: E501
                                                      shift=False)
                     # this isn't really the correct way to do this, but it will
                     # do for now
-                    diffs = self._xdata_raw.sort().values[1:] - self._xdata_raw.sort().values[:-1]
+                    diffs = self._xdata_raw.sort().values[1:] - self._xdata_raw.sort().values[:-1]  # noqa: E501
                     mindelta = (diffs[diffs>0]).min().item()
                     print(step, mindelta, 1/(mindelta/2))
-                    
-                    # we want to sample a set of frequencies that are spaced in the range
-                    # covered by the gaussian mixture, but we want to sample them
-                    # densely enough to resolve the narrowest gaussian
-                    # so we want a minimum frequency 
 
-                    freq = torch.arange(1/(self._xdata_raw.max() - self._xdata_raw.min()).item(),
+                    # we want to sample a set of frequencies that are spaced
+                    # in the range covered by the gaussian mixture, but we
+                    # want to sample them densely enough to resolve the
+                    # narrowest gaussian so we want a minimum frequency
+
+                    freq = torch.arange(1/(self._xdata_raw.max() 
+                                           - self._xdata_raw.min()
+                                           ).item(),
                                         1/(mindelta/2),
                                         step.item())
                     print(freq.shape)
-                    #exit()
+
             elif self.ndim == 2:
-                raise NotImplementedError("""Plotting PSDs in more than 1 dimension is not
-                currently supported. Please get in touch if you need this
-                functionality!
+                raise NotImplementedError("""Plotting PSDs in more than 1 dimension is
+                                          not currently supported. Please get in touch
+                                          if you need this functionality!
                 """)
             else:
-                raise NotImplementedError("""Plotting PSDs in more than 2 dimensions is not
-                currently supported. Please get in touch if you need this
-                functionality!
+                raise NotImplementedError("""Plotting PSDs in more than 2 dimensions
+                                          is not currently supported. Please get in 
+                                          touch if you need this functionality!
                 """)
-            
+
         if mcmc_samples:
             fig, ax = self._plot_psd_mcmc(freq, means=means, scales=scales,
-                                weights=weights, show=show, raw=raw,
-                                log=log, truncate_psd=truncate_psd,
-                                logpsd=logpsd, **kwargs)
+                                          weights=weights, show=show, raw=raw,
+                                          log=log, truncate_psd=truncate_psd,
+                                          logpsd=logpsd, **kwargs)
             return fig, ax
         # Computing the psd for frequencies f
         psd = self.compute_psd(freq, means=means, scales=scales,
                                weights=weights, raw=raw, log=logpsd, **kwargs)
-        
-    
+
         if truncate_psd is True:
             if logpsd:
-                freq = freq[psd>psd.max()-34.5388]
-                psd = psd[psd>psd.max()-34.5388]
+                freq = freq[psd > psd.max()-34.5388]
+                psd = psd[psd > psd.max()-34.5388]
             else:
-                freq = freq[psd>1e-6*psd.max()]
-                psd = psd[psd>1e-6*psd.max()]
+                freq = freq[psd > 1e-6*psd.max()]
+                psd = psd[psd > 1e-6*psd.max()]
         elif truncate_psd:
-            freq = freq[psd>truncate_psd]
-            psd = psd[psd>truncate_psd]
+            freq = freq[psd > truncate_psd]
+            psd = psd[psd > truncate_psd]
 
         # Initialize plot
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
 
-        #plotting psd
+        # plotting psd
         ax.plot(freq, psd)
         if log[0]:
             ax.set_xscale('log')
@@ -1542,7 +1545,7 @@ class Lightcurve(object):
             plt.show()
         else:
             return fig, ax
-        
+
     def _plot_psd_mcmc(self, freq, means=None, scales=None, weights=None,
                        show=True, raw=False, log=(True, True),
                        truncate_psd=True, logpsd=False, n_samples_to_plot=25, 
@@ -1592,7 +1595,6 @@ class Lightcurve(object):
 
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
-        # freq = freq.unsqueeze(-1) # promote shape of frequencies so they broadcast correctly
         n_samples = min(self.num_samples, n_samples_to_plot)
         if means is None:
             # this approach is slightly bugged - if more than one chain is used,
@@ -1600,38 +1602,36 @@ class Lightcurve(object):
             # will change this to generate random indices instead
             # at some point!
             # right now, this will end up having shape (1, chains, samples) (I thinkk)
-            means = torch.as_tensor(self.inference_data.posterior['raw_frequencies'].values).squeeze()[:n_samples].unsqueeze(0)
+            means = torch.as_tensor(self.inference_data.posterior['raw_frequencies'].values).squeeze()[:n_samples].unsqueeze(0)  # noqa: E501
             # print(means.shape)
             # print(freq.shape)
         if scales is None:
-            scales = torch.as_tensor(self.inference_data.posterior['raw_frequency_scales'].values).squeeze()[:n_samples].unsqueeze(0)#.unsqueeze(-1)
+            scales = torch.as_tensor(self.inference_data.posterior['raw_frequency_scales'].values).squeeze()[:n_samples].unsqueeze(0)#.unsqueeze(-1)  # noqa: E501
         if weights is None:
-            weights = torch.as_tensor(self.inference_data.posterior['covar_module.mixture_weights_prior'].values).squeeze()[:n_samples].unsqueeze(0)#.unsqueeze(-1)
-        
+            weights = torch.as_tensor(self.inference_data.posterior['covar_module.mixture_weights_prior'].values).squeeze()[:n_samples].unsqueeze(0)#.unsqueeze(-1)  # noqa: E501
+
         # computing the psd for all samples simultaneously is very expensive,
         # so we're just going to loop over them and plot them individually
         # this means we have to do things in a differnet order to the other
         # plotting routines
-        
+
         # Initialize plot
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
 
         for i in range(n_samples):
 
             # Computing the psd for frequencies f
-            psd = self.compute_psd(freq, means=means[..., i], scales=scales[..., i],
-                                weights=weights[..., i], raw=raw, log=logpsd, **kwargs)
+            psd = self.compute_psd(freq,
+                                   means=means[..., i],
+                                   scales=scales[..., i],
+                                   weights=weights[..., i],
+                                   raw=raw, log=logpsd,
+                                   **kwargs)
 
             if truncate_psd is True:
-                mask = psd > psd.max()-34.5388 if logpsd else psd>1e-6*psd.max()
-                # the frequency and psd arrays are now a different dimension to
-                # each other, so we need to mask carefully
-                #freq = freq[mask.sum(axis=0)] # this summation should be equivalent to any() along a given axis
-                #psd = psd[mask]
+                mask = psd > psd.max()-34.5388 if logpsd else psd > 1e-6*psd.max()
             elif truncate_psd:
                 mask = psd > truncate_psd
-                #freq = freq[mask.sum(axis=0)]
-                #psd = psd[mask]
             # now we can plot it:
             ax.plot(freq[mask], psd[mask], alpha=0.2, color='b')
 
@@ -1667,7 +1667,7 @@ class Lightcurve(object):
             in the original space of the data.
         **kwargs : dict, optional
             Any other keyword arguments to be passed.
-        
+
         Returns
         -------
         psd : array_like
@@ -1680,12 +1680,15 @@ class Lightcurve(object):
             if self.xtransform is not None and not raw:
                 # there's probably an easier way to do this than converting to
                 # a period and back, but this will do for now
-                means = 1/self.xtransform.inverse(1/means, shift=False).detach()#.numpy()
+                means = 1/self.xtransform.inverse(1/means, shift=False).detach()
         if scales is None:
             scales = self.model.sci_kernel.mixture_scales
             # now apply the transform too!
             if self.xtransform is not None and not raw:
-                scales = 1/(2*np.pi*self.xtransform.inverse(1/(2*torch.pi*scales), shift=False).detach())#.numpy())
+                scales = 1/(2*np.pi*self.xtransform.inverse(1/(2*torch.pi*scales),
+                                                            shift=False
+                                                            ).detach()
+                            )
         if weights is None:
             weights = self.model.sci_kernel.mixture_weights.detach()#.numpy()
 
@@ -1701,8 +1704,9 @@ class Lightcurve(object):
             print(psd.shape)
         try:
             psd = torch.logsumexp(torch.log(weights) + psd, dim=-1).squeeze()
-        except RuntimeError: # logsumexp tries to allocate a large array and then do the summation
-            # so let's do it in a loop instead and see if that avoids the problem
+        except RuntimeError:  # logsumexp tries to allocate a large array and
+            # then do the summation so let's do it in a loop instead and see
+            # if that avoids the problem
             logweights = torch.log(weights)
             for i in range(means.shape[-2]):
                 if i == 0:
@@ -1720,18 +1724,8 @@ class Lightcurve(object):
         if not log:
             psd = psd.exp().detach().numpy()
         return psd
-        # c = np.atleast_1d(np.zeros((len(means),) + freq.shape, ))  # mean = mean of each gaussian in the psd (the kernel we use uses only gaussians).
-        # for i, m in enumerate(means): # f = array of frequencies that we want to plot
-        #     s = scales[i]  # s.d
-        #     w = weights[i]  # how much power is given to each gaussian
-        #     c[i] = np.atleast_2d(np.sqrt(w)) * (norm.pdf(freq, m, s) - norm.pdf(-freq, m, s))  #subtracting negative side of psd - otherwise it would cause interference
-        #     # Each component of the PSD is the weight times the difference of the forward and reverse PDFs
-        #     # In this case, the weights are square-rooted, because the original AGW formula for the kernel uses weights**2 while gpytorch implements weights, and therefore we must adjust our interpretation of the output.
-        # # Now we just have to some over the components
-        # psd = np.sum(c, axis=0)
-        # return psd
 
-    def plot(self, ylim=None, show=True, 
+    def plot(self, ylim=None, show=True,
              mcmc_samples=False, **kwargs):
         '''Plot the model and data
 
@@ -1747,7 +1741,7 @@ class Lightcurve(object):
             This will only work if the MCMC sampler has been run.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
-        
+
         Returns
         -------
         fig : matplotlib.pyplot.Figure
@@ -1757,8 +1751,7 @@ class Lightcurve(object):
             ylim = [-3, 3]
         if mcmc_samples:
             if self.__FITTED_MCMC:
-                fig = self._plot_mcmc(ylim=ylim, show=show, **kwargs)
-                return fig
+                return self._plot_mcmc(ylim=ylim, show=show, **kwargs)
             else:
                 raise RuntimeError("You must first run the MCMC sampler")
         elif not self.__FITTED_MAP:
@@ -1776,7 +1769,7 @@ class Lightcurve(object):
                 x_raw = self.xdata
             elif self.ndim == 2:
                 x_raw = self.xdata[:, 0]
-            y_raw = self.ydata
+            # y_raw = self.ydata
 
             # creating array of 10000 test points across the range of the data
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
@@ -1794,7 +1787,7 @@ class Lightcurve(object):
                 functionality!
                 """)
         return fig
-    
+
     def _plot_mcmc(self, ylim=None, show=False, 
                    n_samples_to_plot=25,
                    **kwargs):
@@ -1811,7 +1804,7 @@ class Lightcurve(object):
             The number of samples to plot, by default 25.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
-        
+
         Returns
         -------
         fig : matplotlib.pyplot.Figure
@@ -1819,7 +1812,7 @@ class Lightcurve(object):
         '''
         # Get into evaluation (predictive posterior) mode
         self._eval()
-        
+
         if self.ndim > 1:
             raise NotImplementedError("""
             Plotting models and data in more than 1 dimension is not
@@ -1829,7 +1822,7 @@ class Lightcurve(object):
         # Importing raw x and y training data from xdata and
         # ydata functions
         x_raw = self.xdata
-        y_raw = self.ydata
+        # y_raw = self.ydata
 
         # creating array of 10000 test points across the range of the data
         x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000).unsqueeze(-1)
@@ -1841,7 +1834,7 @@ class Lightcurve(object):
         elif isinstance(self.xtransform, Transformer):
             self.x_fine_transformed = self.xtransform.transform(x_fine_raw)
 
-        self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)#.unsqueeze(0)
+        self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)#.unsqueeze(0)  # noqa: E501
         print(self.x_fine_transformed.shape)
         print(self.expanded_test_x.shape)
         output = self.model(self.expanded_test_x)
@@ -1852,16 +1845,13 @@ class Lightcurve(object):
             for i in range(min(n_samples_to_plot, self.num_samples)):
                 # Plot predictive samples as colored lines
                 ax.plot(x_fine_raw.numpy(), output[i].sample().numpy(), 'b', alpha=0.2)
-            
+
             ax.legend(['Observed Data', 'Sample means'])
             if ylim is not None:
                 ax.set_ylim(ylim)
             if show:
                 plt.show()
         return f
-
-            
-
 
     def _plot_1d(self, x_fine_raw, ylim=None, show=False,
                  save=True, **kwargs):
@@ -1937,18 +1927,18 @@ class Lightcurve(object):
                 ax.set_ylim(ylim)
             if save:
                 plt.savefig(f"{self.name}_{val}_fit.png")
-        
+
             if show:
                 plt.show()
             figs.append(fig)
         return figs
-    
+
     def _plot_nd(self):
         raise NotImplementedError("""
         Plotting models and data in more than 2 dimensions is not currently supported.
         Please get in touch if you need this functionality!
         """)
-            
+
     def plot_results(self):
         for key, value in self.results.item():
             fig = plt.figure()
