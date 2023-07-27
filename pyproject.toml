@@ -61,7 +61,7 @@ select = ["A",  # prevent using keywords that clobber python builtins
           "W",  # pycodestyle warnings
 
           ]
-# ignore = ["E501", "W503"]
+ignore = ["UP004"]  # ["E501", "W503"]
 exclude = ["tests"]
 
 # include notebooks!

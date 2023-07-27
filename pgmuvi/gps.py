@@ -114,7 +114,7 @@ class TwoDSpectralMixtureGPModel(ExactGP):
     Parameters
     ----------
     train_x : Tensor
-        The data for the independent variable (typically timestamps and 
+        The data for the independent variable (typically timestamps and
         wavelengths)
     train_y : Tensor
         The data for the dependent variable (typically flux)
@@ -162,7 +162,7 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
     Parameters
     ----------
     train_x : Tensor
-        The data for the independent variable (typically timestamps and 
+        The data for the independent variable (typically timestamps and
         wavelengths)
     train_y : Tensor
         The data for the dependent variable (typically flux)
@@ -189,7 +189,7 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
         self.covar_module.initialize_from_data(train_x, train_y)
 
         # Now we alias the covariance kernel so that we can exploit the same
-        # object properties in different classes with different kernel 
+        # object properties in different classes with different kernel
         # structure. Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
 
@@ -352,7 +352,7 @@ class TwoDSpectralMixtureKISSGPModel(ExactGP):
 
 
     '''
-    def __init__(self, train_x, train_y, likelihood, 
+    def __init__(self, train_x, train_y, likelihood,
                  num_mixtures=4, grid_size=None):
         if grid_size is None:
             grid_size = [5000, 20]

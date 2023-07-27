@@ -13,4 +13,4 @@ except PackageNotFoundError:
     # package is not installed
     __version__ = "unknown"
 
-__all__=["gps", "trainers", "lightcurve"]
+__all__ = ["gps", "trainers", "lightcurve"]

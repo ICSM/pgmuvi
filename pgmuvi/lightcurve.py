@@ -304,7 +304,7 @@ class Lightcurve(object):
         :getter: Returns the independent variable data in its raw
         (untransformed) state
         :setter: Takes the input data and transforms it as requested by the
-        user 
+        user
         :type: torch.Tensor
         """
         return self._xdata_raw
@@ -563,7 +563,7 @@ class Lightcurve(object):
                 # it's a special parameter that we want extra easy access to!
                 param_dict['special'] = True
                 j = np.argmax([s in pn_root for s in _special_pars])
-                self._model_pars[_special_pars[j]] = param_dict 
+                self._model_pars[_special_pars[j]] = param_dict
 
             #     pars[pn] = tmp.data
             # else:
@@ -645,7 +645,7 @@ class Lightcurve(object):
                         # so we can just do 1/ for both means and scales
                         if debug:
                             print(constraint[key])
-                        if (constraint[key].lower_bound 
+                        if (constraint[key].lower_bound
                            not in [torch.tensor(0), torch.tensor(-torch.inf)]):
                             # we need to transform the lower bound
                             if debug:
@@ -781,7 +781,7 @@ class Lightcurve(object):
         # we use a LogNormal prior for the mixture weights, because we want to
         # make sure that they are positive (but never zero) and we don't want
         # to restrict them to be close to zero. In fact, we want to penalise
-        # both very high and very low weights, so we use a LogNormal prior 
+        # both very high and very low weights, so we use a LogNormal prior
         # with a scale of 1/10 of the maximum frequency
         mixture_weights_prior = gpytorch.priors.LogNormalPrior(0, 1)  # 1/self._xdata_transformed.max())  # noqa: E501
         self._model_pars['mixture_weights']['module'].register_prior("mixture_weights_prior",
@@ -937,32 +937,68 @@ class Lightcurve(object):
 
         Parameters
         ----------
-        model : _type_, optional
-            _description_, by default None
-        likelihood : _type_, optional
-            _description_, by default None
+        model : string or instance of gpytorch.models.GP, optional
+            The model to use for the GP, by default None. If None, an
+            error will be raised. If a string, it must be one of the
+            following:
+                '1D': SpectralMixtureGPModel
+                '2D': TwoDSpectralMixtureGPModel
+                '1DLinear': SpectralMixtureLinearMeanGPModel
+                '2DLinear': TwoDSpectralMixtureLinearMeanGPModel
+                '1DSKI': SpectralMixtureKISSGPModel
+                '2DSKI': TwoDSpectralMixtureKISSGPModel
+                '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
+                '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+            If an instance of a GP class, that object will be used.
+        likelihood : string, None or instance of
+                        gpytorch.likelihoods.likelihood.Likelihood or Constraint,
+                        optional
+            If likelihood is passed, it will be passed along to `set_likelihood()`
+            and used to set the likelihood function for the model. For details, see
+            the documentation for `set_likelihood()`.
         num_mixtures : int, optional
-            _description_, by default 4
-        guess : _type_, optional
-            _description_, by default None
+            The number of mixtures to use in the spectral mixture kernel, by
+            default 4. If None, a default value will be used. This value
+            is passed to the constructor for the model if a string is passed
+            as the model argument.
+        guess : dict, optional
+            A dictionary of the hyperparameters to use for the model and
+            likelihood. The keys should be the names of the parameters, and the
+            values should be Tensors containing the values of the parameters.
+            If None, no hyperparameters will be set. If a hyperparameter is
+            passed for a parameter that is not a model or likelihood
+            parameter, it will be ignored.
         grid_size : int, optional
-            _description_, by default 2000
+            The number of points to use in the grid for the KISS-GP models,
+            by default 2000.
         cuda : bool, optional
-            _description_, by default False
+            Whether to use CUDA, by default False.
         training_iter : int, optional
-            _description_, by default 300
-        max_cg_iterations : _type_, optional
-            _description_, by default None
-        optim : str, optional
-            _description_, by default "AdamW"
+            The number of iterations to use for training, by default 300.
+        max_cg_iterations : int, optional
+            The maximum number of conjugate gradient iterations to use, by
+            default None. If None, gpytorch.settings.max_cg_iterations will
+            be used.
+        optim : str or torch.optim.Optimizer, optional
+            The optimizer to use for training, by default "AdamW". If a string,
+            it must be one of the following:
+                'AdamW': torch.optim.AdamW
+                'Adam': torch.optim.Adam
+                'SGD': torch.optim.SGD
+            Otherwise, it must be an instance of torch.optim.Optimizer.
         miniter : int, optional
-            _description_, by default None
-        stop : _type_, optional
-            _description_, by default 1e-5
+            The minimum number of iterations to use for training, by default
+            None. If None, training_iter will be used.
+        stop : float, optional
+            The stopping criterion for the training, by default 1e-5.
         lr : float, optional
-            _description_, by default 0.1
+            The learning rate to use for the optimizer, by default 0.1.
         stopavg : int, optional
-            _description_, by default 30
+            The number of iterations to use for the stopping criterion, by
+            default 30.
+        **kwargs : dict, optional
+            Any other keyword arguments to be passed to the model constructor,
+            likelihood constructor, or the optimizer.
 
         Returns
         -------
@@ -990,7 +1026,7 @@ class Lightcurve(object):
         if model is None and not hasattr(self, 'model'):
             raise ValueError("""You must provide a model""")
         elif model is not None:
-            self.set_model(model, self.likelihood, 
+            self.set_model(model, self.likelihood,
                            num_mixtures=num_mixtures, **kwargs)
 
         if not self.__CONTRAINTS_SET:
@@ -1103,7 +1139,7 @@ class Lightcurve(object):
         self.num_samples = num_samples
 
         nuts_kernel = sampler(pyro_model)
-        self.mcmc_run = MCMC(nuts_kernel, 
+        self.mcmc_run = MCMC(nuts_kernel,
                              num_samples=num_samples,
                              warmup_steps=warmup_steps,
                              num_chains=num_chains,
@@ -1163,7 +1199,7 @@ class Lightcurve(object):
             function will be included, by default None.
         filter_vars : str, optional
             A string specifying how to filter the variables, based on
-            `arviz.summary`. If None, the default behaviour of `arviz.summary` 
+            `arviz.summary`. If None, the default behaviour of `arviz.summary`
             will be used, by default 'like'.
         stat_focus : str, optional
             A string specifying which statistic to focus on, based on
@@ -1221,7 +1257,7 @@ class Lightcurve(object):
             var_names = ['mean_module', 'covar_module.mixture_weights', 'raw']
         if point_estimate is None:
             point_estimate = 'median'
-        az.plot_pair(self.inference_data, kind=kind, 
+        az.plot_pair(self.inference_data, kind=kind,
                      var_names=var_names, filter_vars=filter_vars,
                      marginals=marginals, point_estimate=point_estimate,
                      **kwargs)
@@ -1247,7 +1283,7 @@ class Lightcurve(object):
             # to plot the extra parameters we have created, which are in the
             # raw space, as well as the periods and the mixture weights
             var_names = ['mean_module', 'covar_module.mixture_weights', 'raw']  # ['mean_module', 'covar_module']  # noqa: E501
-        az.plot_trace(self.inference_data, var_names=var_names, 
+        az.plot_trace(self.inference_data, var_names=var_names,
                       filter_vars=filter_vars,
                       figsize=figsize,
                       **kwargs)
@@ -1276,7 +1312,7 @@ class Lightcurve(object):
 
     def get_periods(self):
         '''
-        Returns a list of the periods, scales and weights of the model. This 
+        Returns a list of the periods, scales and weights of the model. This
         is useful for getting the periods after training, for example.
         '''
         periods = []
@@ -1300,7 +1336,7 @@ class Lightcurve(object):
                     p = 1/self.model.sci_kernel.mixture_means[i, 0]
                     scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]))  # noqa: E501
                 else:
-                    p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i, 0],
+                    p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i, 0],  # noqa: E501
                                                 shift=False).detach().numpy()[0, 0]
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),  # noqa: E501
                                                 shift=False).detach().numpy()[0, 0])
@@ -1493,7 +1529,7 @@ class Lightcurve(object):
                     # want to sample them densely enough to resolve the
                     # narrowest gaussian so we want a minimum frequency
 
-                    freq = torch.arange(1/(self._xdata_raw.max() 
+                    freq = torch.arange(1/(self._xdata_raw.max()
                                            - self._xdata_raw.min()
                                            ).item(),
                                         1/(mindelta/2),
@@ -1507,7 +1543,7 @@ class Lightcurve(object):
                 """)
             else:
                 raise NotImplementedError("""Plotting PSDs in more than 2 dimensions
-                                          is not currently supported. Please get in 
+                                          is not currently supported. Please get in
                                           touch if you need this functionality!
                 """)
 
@@ -1548,7 +1584,7 @@ class Lightcurve(object):
 
     def _plot_psd_mcmc(self, freq, means=None, scales=None, weights=None,
                        show=True, raw=False, log=(True, True),
-                       truncate_psd=True, logpsd=False, n_samples_to_plot=25, 
+                       truncate_psd=True, logpsd=False, n_samples_to_plot=25,
                        **kwargs):
         '''Plot the power spectral density of the model using MCMC samples
 
@@ -1606,9 +1642,9 @@ class Lightcurve(object):
             # print(means.shape)
             # print(freq.shape)
         if scales is None:
-            scales = torch.as_tensor(self.inference_data.posterior['raw_frequency_scales'].values).squeeze()[:n_samples].unsqueeze(0)#.unsqueeze(-1)  # noqa: E501
+            scales = torch.as_tensor(self.inference_data.posterior['raw_frequency_scales'].values).squeeze()[:n_samples].unsqueeze(0)  # .unsqueeze(-1)  # noqa: E501
         if weights is None:
-            weights = torch.as_tensor(self.inference_data.posterior['covar_module.mixture_weights_prior'].values).squeeze()[:n_samples].unsqueeze(0)#.unsqueeze(-1)  # noqa: E501
+            weights = torch.as_tensor(self.inference_data.posterior['covar_module.mixture_weights_prior'].values).squeeze()[:n_samples].unsqueeze(0)  # .unsqueeze(-1)  # noqa: E501
 
         # computing the psd for all samples simultaneously is very expensive,
         # so we're just going to loop over them and plot them individually
@@ -1690,7 +1726,7 @@ class Lightcurve(object):
                                                             ).detach()
                             )
         if weights is None:
-            weights = self.model.sci_kernel.mixture_weights.detach()#.numpy()
+            weights = self.model.sci_kernel.mixture_weights.detach()  # .numpy()
 
         from torch.distributions import Normal as torchnorm
         # Computing the psd for frequencies f
@@ -1775,7 +1811,7 @@ class Lightcurve(object):
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
 
             if self.ndim == 1:
-                fig = self._plot_1d(x_fine_raw, ylim=ylim, 
+                fig = self._plot_1d(x_fine_raw, ylim=ylim,
                                     show=show, **kwargs)
             elif self.ndim == 2:
                 fig = self._plot_2d(x_fine_raw, ylim=ylim,
@@ -1788,7 +1824,7 @@ class Lightcurve(object):
                 """)
         return fig
 
-    def _plot_mcmc(self, ylim=None, show=False, 
+    def _plot_mcmc(self, ylim=None, show=False,
                    n_samples_to_plot=25,
                    **kwargs):
         '''Plot the model and data, including samples from the MCMC run
@@ -1834,7 +1870,7 @@ class Lightcurve(object):
         elif isinstance(self.xtransform, Transformer):
             self.x_fine_transformed = self.xtransform.transform(x_fine_raw)
 
-        self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)#.unsqueeze(0)  # noqa: E501
+        self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)  # .unsqueeze(0)  # noqa: E501
         print(self.x_fine_transformed.shape)
         print(self.expanded_test_x.shape)
         output = self.model(self.expanded_test_x)
@@ -1957,4 +1993,3 @@ class Lightcurve(object):
                 ax.set_ylabel(key)
                 ax.set_xlabel("Iteration")
         plt.show()
-
