@@ -824,7 +824,7 @@ class Lightcurve(object):
                                                 # the noise should be less than
                                                 # the standard deviation
         noise_constraint = Interval(noise_min, noise_max)
-        self._model_pars['noise']['module'].register_constraint("raw_noise", 
+        self._model_pars['noise']['module'].register_constraint("raw_noise",
                                                                 noise_constraint)
         with contextlib.suppress(RuntimeError):
             mean_const_constraint = Interval(self._ydata_transformed.min(),

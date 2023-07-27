@@ -4,14 +4,12 @@ import gpytorch
 from tqdm import tqdm
 
 
-class Trainer():
+class Trainer:
     def __init__():
         pass
 
 
-# class
-
-def train(lightcurve=None, model=None, likelihood=None, 
+def train(lightcurve=None, model=None, likelihood=None,
           train_x=None, train_y=None,
           maxiter=100, miniter=10, stop=None, lr=1e-4,
           lossfn='mll', optim="SGD", eps=1e-8, stopavg=9,
@@ -105,10 +103,11 @@ def train(lightcurve=None, model=None, likelihood=None,
             lossfn = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood,
                                                               model)
         elif lossfn == 'elbo':
-            # loss = -1* variational elbo, 
+            # loss = -1* variational elbo,
             # variational inference to be performed!
             raise NotImplementedError("Currently only maximisation of the marginal log-likelihood is implemented. Using elbo will be implemented soon")  # noqa: E501
-    elif isinstance(lossfn, gpytorch.mlls.marginal_log_likelihood.MarginalLogLikelihood):
+    elif isinstance(lossfn,
+                    gpytorch.mlls.marginal_log_likelihood.MarginalLogLikelihood):
         raise NotImplementedError("Currently only maximisation of the marginal log-likelihood is implemented. Passing arbitrary MLL objects will be implemented soon.")  # noqa: E501
     else:
         raise ValueError("lossfn must be either 'mll', 'elbo', or a gpytorch, torch or pyro loss function.")  # noqa: E501
@@ -129,7 +128,7 @@ def train(lightcurve=None, model=None, likelihood=None,
     elif isinstance(optim, torch.optim.Optimizer):
         optimizer = optim
     else:
-        raise ValueError("""optim must be either 'SGD', 'Adam', 'AdamW', 
+        raise ValueError("""optim must be either 'SGD', 'Adam', 'AdamW',
                         'NUTS', or an instance of a torch or pyro optimiser.
                         """)
 
@@ -139,7 +138,7 @@ def train(lightcurve=None, model=None, likelihood=None,
         for key, value in pars.items():
             results[key] = [value]
     else:
-        for param_name, param in model.named_parameters():  # noqa: B007
+        for param_name, param in model.named_parameters():
             p = param_name.split('.')[1] if 'raw' in param_name else param_name
             results[p] = []
     # for param_name, param in
