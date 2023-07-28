@@ -1,5 +1,13 @@
 name: Build JOSS paper and tex
 
+# The point of this action is to create a JOSS paper and tex files
+# The tex is stripped of JOSS formatting, so that it can be submitted
+# to arxiv (following JOSS policy articulated at: 
+# https://github.com/openjournals/joss/issues/132#issuecomment-1231338773),
+# i.e. it uses the standard 'article' class, rather than joss template.
+# Meanwhile, the paper PDF is still formatted in JOSS style.
+# 
+
 on:
   push:
     branches:
