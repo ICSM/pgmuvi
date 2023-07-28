@@ -1,0 +1,241 @@
+
+@InProceedings{wilson:2013,
+  title = 	 {Gaussian Process Kernels for Pattern Discovery and Extrapolation},
+  author = 	 {Wilson, Andrew and Adams, Ryan},
+  booktitle = 	 {Proceedings of the 30th International Conference on Machine Learning},
+  pages = 	 {1067--1075},
+  year = 	 {2013},
+  editor = 	 {Dasgupta, Sanjoy and McAllester, David},
+  volume = 	 {28},
+  number =       {3},
+  series = 	 {Proceedings of Machine Learning Research},
+  address = 	 {Atlanta, Georgia, USA},
+  month = 	 {17--19 Jun},
+  publisher =    {PMLR},
+  pdf = 	 {http://proceedings.mlr.press/v28/wilson13.pdf},
+  url = 	 {https://proceedings.mlr.press/v28/wilson13.html},
+  abstract = 	 {Gaussian processes are rich distributions over functions, which provide a Bayesian nonparametric approach to smoothing and interpolation.  We introduce simple closed form kernels that can be used with Gaussian processes to discover patterns and enable extrapolation.  These kernels are derived by modelling a spectral density – the Fourier transform of a kernel – with a Gaussian mixture.  The proposed kernels support a broad class of stationary covariances, but Gaussian process inference remains simple and analytic.  We demonstrate the proposed kernels by discovering patterns and performing long range extrapolation on synthetic examples, as well as atmospheric CO2 trends and airline passenger data.  We also show that it is possible to reconstruct several popular standard covariances within our framework.}
+}
+
+@article{gardner2018gpytorch,
+  title={Gpytorch: Blackbox matrix-matrix gaussian process inference with gpu acceleration},
+  author={Gardner, Jacob and Pleiss, Geoff and Weinberger, Kilian Q and Bindel, David and Wilson, Andrew G},
+  journal={Advances in neural information processing systems},
+  volume={31},
+  year={2018}
+}
+
+@inproceedings{wilson2015kernel,
+  title={Kernel interpolation for scalable structured Gaussian processes (KISS-GP)},
+  author={Wilson, Andrew and Nickisch, Hannes},
+  booktitle={International conference on machine learning},
+  pages={1775--1784},
+  year={2015},
+  organization={PMLR}
+}
+
+@article{hensman2013gaussian,
+  title={Gaussian processes for big data},
+  author={Hensman, James and Fusi, Nicolo and Lawrence, Neil D},
+  journal={arXiv preprint arXiv:1309.6835},
+  year={2013}
+}
+
+@inproceedings{wu2022variational,
+  title={Variational nearest neighbor Gaussian process},
+  author={Wu, Luhuan and Pleiss, Geoff and Cunningham, John P},
+  booktitle={International Conference on Machine Learning},
+  pages={24114--24130},
+  year={2022},
+  organization={PMLR}
+}
+
+@article{celerite1,
+   author = {{Foreman-Mackey}, D. and {Agol}, E. and {Ambikasaran}, S. and
+            {Angus}, R.},
+    title = "{Fast and Scalable Gaussian Process Modeling with Applications to
+              Astronomical Time Series}",
+  journal = {\aj},
+     year = 2017,
+    month = dec,
+   volume = 154,
+    pages = {220},
+      doi = {10.3847/1538-3881/aa9332},
+   adsurl = {http://adsabs.harvard.edu/abs/2017AJ....154..220F},
+  adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+@article{celerite2,
+   author = {{Foreman-Mackey}, D.},
+    title = "{Scalable Backpropagation for Gaussian Processes using Celerite}",
+  journal = {Research Notes of the American Astronomical Society},
+     year = 2018,
+    month = feb,
+   volume = 2,
+   number = 1,
+    pages = {31},
+      doi = {10.3847/2515-5172/aaaf6c},
+   adsurl = {http://adsabs.harvard.edu/abs/2018RNAAS...2a..31F},
+  adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@software{tinygp,
+  author       = {Foreman-Mackey, Daniel},
+  title        = {{dfm/tinygp: The tiniest of Gaussian Process 
+                   libraries}},
+  month        = feb,
+  year         = 2023,
+  publisher    = {Zenodo},
+  version      = {v0.2.4rc1},
+  doi          = {10.5281/zenodo.7646759},
+  url          = {https://doi.org/10.5281/zenodo.7646759}
+}
+
+@ARTICLE{ambikasaran2015george,
+        author = {{Ambikasaran}, Sivaram and {Foreman-Mackey}, Daniel and {Greengard}, Leslie and {Hogg}, David W. and {O'Neil}, Michael},
+         title = "{Fast Direct Methods for Gaussian Processes}",
+       journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+      keywords = {Mathematics - Numerical Analysis, Astrophysics - Instrumentation and Methods for Astrophysics, Mathematics - Statistics Theory, Mathematics - Numerical Analysis, Astrophysics - Instrumentation and Methods for Astrophysics, Mathematics - Statistics Theory},
+          year = 2015,
+         month = jun,
+        volume = {38},
+         pages = {252},
+           doi = {10.1109/TPAMI.2015.2448083},
+ archivePrefix = {arXiv},
+        eprint = {1403.6015},
+  primaryClass = {math.NA},
+        adsurl = {https://ui.adsabs.harvard.edu/abs/2015ITPAM..38..252A},
+       adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@article{arev_2023_gps,
+author = {Aigrain, Suzanne and Foreman-Mackey, Daniel},
+title = {Gaussian Process Regression for Astronomical Time Series},
+journal = {Annual Review of Astronomy and Astrophysics},
+volume = {61},
+number = {1},
+pages = {null},
+year = {2023},
+doi = {10.1146/annurev-astro-052920-103508},
+
+URL = { 
+    
+        https://doi.org/10.1146/annurev-astro-052920-103508
+    
+    
+
+},
+eprint = { 
+    
+        https://doi.org/10.1146/annurev-astro-052920-103508
+    
+    
+
+}
+,
+    abstract = { The past two decades have seen a major expansion in the availability, size, and precision of time-domain data sets in astronomy. Owing to their unique combination of flexibility, mathematical simplicity, and comparative robustness, Gaussian processes (GPs) have emerged recently as the solution of choice to model stochastic signals in such data sets. In this review, we provide a brief introduction to the emergence of GPs in astronomy, present the underlying mathematical theory, and give practical advice considering the key modeling choices involved in GP regression. We then review applications of GPs to time-domain data sets in the astrophysical literature so far, from exoplanets to active galactic nuclei, showcasing the power and flexibility of the method. We provide worked examples using simulated data, with links to the source code; discuss the problem of computational cost and scalability; and give a snapshot of the current ecosystem of open source GP software packages. In summary: ▪GP regression is a conceptually simple but statistically principled and powerful tool for the analysis of astronomical time series. ▪It is already widely used in some subfields, such as exoplanets, and gaining traction in many others, such as optical transients. ▪Driven by further algorithmic and conceptual advances, we expect that GPs will continue to be an important tool for robust and interpretable time domain astronomy for many years to come. Expected final online publication date for the Annual Review of Astronomy and Astrophysics, Volume 61 is August 2023. Please see http://www.annualreviews.org/page/journal/pubdates for revised estimates. }
+}
+
+@article{kingma2014adam,
+  title={Adam: A method for stochastic optimization},
+  author={Kingma, Diederik P and Ba, Jimmy},
+  journal={arXiv preprint arXiv:1412.6980},
+  year={2014}
+}
+
+@article{hoffman2014no,
+  title={The No-U-Turn sampler: adaptively setting path lengths in Hamiltonian Monte Carlo.},
+  author={Hoffman, Matthew D and Gelman, Andrew and others},
+  journal={J. Mach. Learn. Res.},
+  volume={15},
+  number={1},
+  pages={1593--1623},
+  year={2014}
+}
+
+@ARTICLE{Scicluna2022,
+       author = {{Scicluna}, P. and {Kemper}, F. and {McDonald}, I. and {Srinivasan}, S. and {Trejo}, A. and {Wallstr{\"o}m}, S.~H.~J. and {Wouterloot}, J.~G.~A. and {Cami}, J. and {Greaves}, J. and {He}, Jinhua and {Hoai}, D.~T. and {Kim}, Hyosun and {Jones}, O.~C. and {Shinnaga}, H. and {Clark}, C.~J.~R. and {Dharmawardena}, T. and {Holland}, W. and {Imai}, H. and {van Loon}, J. Th and {Menten}, K.~M. and {Wesson}, R. and {Chawner}, H. and {Feng}, S. and {Goldman}, S. and {Liu}, F.~C. and {MacIsaac}, H. and {Tang}, J. and {Zeegers}, S. and {Amada}, K. and {Antoniou}, V. and {Bemis}, A. and {Boyer}, M.~L. and {Chapman}, S. and {Chen}, X. and {Cho}, S. -H. and {Cui}, L. and {Dell'Agli}, F. and {Friberg}, P. and {Fukaya}, S. and {Gomez}, H. and {Gong}, Y. and {Hadjara}, M. and {Haswell}, C. and {Hirano}, N. and {Hony}, S. and {Izumiura}, H. and {Jeste}, M. and {Jiang}, X. and {Kaminski}, T. and {Keaveney}, N. and {Kim}, J. and {Kraemer}, K.~E. and {Kuan}, Y. -J. and {Lagadec}, E. and {Lee}, C.~F. and {Li}, D. and {Liu}, S. -Y. and {Liu}, T. and {de Looze}, I. and {Lykou}, F. and {Maraston}, C. and {Marshall}, J.~P. and {Matsuura}, M. and {Min}, C. and {Otsuka}, M. and {Oyadomari}, M. and {Parsons}, H. and {Patel}, N.~A. and {Peeters}, E. and {Pham}, T.~A. and {Qiu}, J. and {Randall}, S. and {Rau}, G. and {Redman}, M.~P. and {Richards}, A.~M.~S. and {Serjeant}, S. and {Shi}, C. and {Sloan}, G.~C. and {Smith}, M.~W.~L. and {Suh}, K. -W. and {Toal{\'a}}, J.~A. and {Uttenthaler}, S. and {Ventura}, P. and {Wang}, B. and {Yamamura}, I. and {Yang}, T. and {Yun}, Y. and {Zhang}, F. and {Zhang}, Y. and {Zhao}, G. and {Zhu}, M. and {Zijlstra}, A.~A.},
+        title = "{The Nearby Evolved Stars Survey II: Constructing a volume-limited sample and first results from the James Clerk Maxwell Telescope}",
+      journal = {\mnras},
+     keywords = {catalogues, surveys, stars: AGB and post-AGB, stars: mass-loss, stars: winds, outflows, Astrophysics - Astrophysics of Galaxies, Astrophysics - Solar and Stellar Astrophysics},
+         year = 2022,
+        month = may,
+       volume = {512},
+       number = {1},
+        pages = {1091-1110},
+          doi = {10.1093/mnras/stab2860},
+archivePrefix = {arXiv},
+       eprint = {2110.12562},
+ primaryClass = {astro-ph.GA},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2022MNRAS.512.1091S},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@ARTICLE{Lomb1976,
+       author = {{Lomb}, N.~R.},
+        title = "{Least-Squares Frequency Analysis of Unequally Spaced Data}",
+      journal = {\apss},
+     keywords = {Astronomy, Data Reduction, Least Squares Method, Background Noise, Power Spectra, Sine Waves, Spectrum Analysis, Statistical Analysis, Variable Stars, Astronomy},
+         year = 1976,
+        month = feb,
+       volume = {39},
+       number = {2},
+        pages = {447-462},
+          doi = {10.1007/BF00648343},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/1976Ap&SS..39..447L},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@ARTICLE{Scargle1982,
+       author = {{Scargle}, J.~D.},
+        title = "{Studies in astronomical time series analysis. II. Statistical aspects of spectral analysis of unevenly spaced data.}",
+      journal = {\apj},
+     keywords = {Astronomy, Signal Detection, Spectrum Analysis, Statistical Distributions, Time Series Analysis, Fourier Transformation, Frequency Response, Power Spectra, Signal To Noise Ratios, Astronomy},
+         year = 1982,
+        month = dec,
+       volume = {263},
+        pages = {835-853},
+          doi = {10.1086/160554},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/1982ApJ...263..835S},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@ARTICLE{VanderPlas2015,
+       author = {{VanderPlas}, Jacob T. and {Ivezi{\'c}}, {\v{Z}}eljko},
+        title = "{Periodograms for Multiband Astronomical Time Series}",
+      journal = {\apj},
+     keywords = {methods: data analysis, methods: statistical, surveys, Astrophysics - Instrumentation and Methods for Astrophysics},
+         year = 2015,
+        month = oct,
+       volume = {812},
+       number = {1},
+          eid = {18},
+        pages = {18},
+          doi = {10.1088/0004-637X/812/1/18},
+archivePrefix = {arXiv},
+       eprint = {1502.01344},
+ primaryClass = {astro-ph.IM},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2015ApJ...812...18V},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+
+@article{bingham2018pyro,
+author = {Bingham, Eli and Chen, Jonathan P. and Jankowiak, Martin and Obermeyer, Fritz and
+          Pradhan, Neeraj and Karaletsos, Theofanis and Singh, Rohit and Szerlip, Paul and
+          Horsfall, Paul and Goodman, Noah D.},
+title = {{Pyro: Deep Universal Probabilistic Programming}},
+journal = {Journal of Machine Learning Research},
+year = {2018}
+}
+
+@inbook{pytorch,
+author = {Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K\"{o}pf, Andreas and Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
+title = {PyTorch: An Imperative Style, High-Performance Deep Learning Library},
+year = {2019},
+publisher = {Curran Associates Inc.},
+address = {Red Hook, NY, USA},
+abstract = {Deep learning frameworks have often focused on either usability or speed, but not both. PyTorch is a machine learning library that shows that these two goals are in fact compatible: it provides an imperative and Pythonic programming style that supports code as a model, makes debugging easy and is consistent with other popular scientific computing libraries, while remaining efficient and supporting hardware accelerators such as GPUs.In this paper, we detail the principles that drove the implementation of PyTorch and how they are reflected in its architecture. We emphasize that every aspect of PyTorch is a regular Python program under the full control of its user. We also explain how the careful and pragmatic implementation of the key components of its runtime enables them to work together to achieve compelling performance. We demonstrate the efficiency of individual subsystems, as well as the overall speed of PyTorch on several common benchmarks.},
+booktitle = {Proceedings of the 33rd International Conference on Neural Information Processing Systems},
+articleno = {721},
+numpages = {12}
+}
