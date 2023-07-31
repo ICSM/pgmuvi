@@ -23,7 +23,7 @@ authors:
   - name: Sara Jamal
     orcid: 0000-0002-3929-6668
     affiliation: 4
-  - name: Stephan Waterval
+  - name: Stefan Waterval
     orcid: 0000-0002-5542-8624
     affiliation: "5, 6"
 affiliations:
@@ -37,7 +37,7 @@ affiliations:
    index: 4
  - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
    index: 5
- - name: Center for Astro, Particle and Planetary Physics (CAPPP), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+ - name: Center for Astro, Particle and Planetary Physics (CAP$^3$), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
    index: 6
 date: XX August 2023
 bibliography: paper.bib
@@ -63,7 +63,7 @@ It provides easy access to GPU acceleration and Bayesian inference of the hyperp
 Astronomical objects are in general not static, but vary in brightness over time. 
 This is especially true for objects that are variable by nature, such as pulsating stars, or objects that are variable due to their orbital motion, such as eclipsing binaries. 
 The study of these objects is called time-domain astronomy, and is a rapidly growing field. 
-A wide range of approaches to time-series analysis have been developed, ranging from simple period-finding algorithms to more complex machine learning techniques.
+A wide range of approaches to time-series analysis have been developed, ranging from simple period-finding algorithms to more complex machine learning techniques [e.g. @Huijse_2018; @Donoso-Oliva2023-transformer; @supersmoother; @Palmer_2009 and many more].
 Perhaps the most popular in astronomy is the Lomb-Scargle periodogram [@Lomb1976; @Scargle1982], which is a Fourier-based technique to find periodic signals in unevenly sampled data.
 However, the handling of unevenly sampled data is not the only challenge in time-series analysis.
 <!-- The study of time-domain astronomy is often hampered by the fact that the data is not always of the same quality, or that the data is not always available in the same wavelength. 
@@ -130,7 +130,7 @@ Future work will include implementing approximations for even larger datasets: `
 `pgmuvi` can employ also GPU computing for both exact and variational GPs. 
 
 For exact GPs and SKI, `pgmuvi` performs maximum a posteriori (MAP) estimation of the hyperparameters, or full Bayesian inference.
-MAP estimation can exploit any `pytorch` optimizer, but by default it uses ADAM [@kingma2014adam].
+MAP estimation can exploit any PyTorch optimizer, but by default it uses ADAM [@kingma2014adam].
 Bayesian inference uses the `pyro` [@bingham2018pyro] implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
 
 Finally, by allowing arbitrary GPyTorch likelihoods to be used, `pgmuvi` can be extended to a wide range of problems.
