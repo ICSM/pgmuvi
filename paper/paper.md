@@ -5,39 +5,38 @@ tags:
   - astronomy
   - timeseries
   - Gaussian processes
-  - 
 authors:
   - name: Peter Scicluna
     orcid: 0000-0002-1161-3756
     # equal-contrib: true
     corresponding: true
     affiliation: "1, 2" # (Multiple affiliations must be quoted)
-  - name: Sundar Srinivasan
-    orcid: 0000-0002-2996-305X
-    # equal-contrib: true # (This is how you can denote equal contributions between multiple authors)
-    affiliation: 3
+  - name: Stefan Waterval
+    orcid: 0000-0002-5542-8624
+    affiliation: "3, 4"
   - name: Diego A. Vasquez-Torres
     orcid: 0009-0008-2354-0049
     # corresponding: true # (This is how to denote the corresponding author)
-    affiliation: 3
+    affiliation: 5
+  - name: Sundar Srinivasan
+    orcid: 0000-0002-2996-305X
+    # equal-contrib: true # (This is how you can denote equal contributions between multiple authors)
+    affiliation: 5
   - name: Sara Jamal
     orcid: 0000-0002-3929-6668
-    affiliation: 4
-  - name: Stefan Waterval
-    orcid: 0000-0002-5542-8624
-    affiliation: "5, 6"
+    affiliation: 6
 affiliations:
  - name: European Southern Observatory, Alonso de Córdova 3107, Vitacura, Santiago, Chile
    index: 1
  - name: Space Science Institute, 4750 Walnut Street, Suite 205, Boulder, CO 80301, USA
    index: 2
- - name: IRyA, Universidad Nacional Autónoma de México, Morelia, Michoacán, México
-   index: 3
- - name: Max Planck Institute for Astronomy, Königstuhl 17, 69117 Heidelberg, Germany
-   index: 4
  - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
-   index: 5
+   index: 3
  - name: Center for Astro, Particle and Planetary Physics (CAP$^3$), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+   index: 4
+ - name: IRyA, Universidad Nacional Autónoma de México, Morelia, Michoacán, México
+   index: 5
+ - name: Max Planck Institute for Astronomy, Königstuhl 17, 69117 Heidelberg, Germany
    index: 6
 date: XX August 2023
 bibliography: paper.bib
@@ -63,7 +62,7 @@ It provides easy access to GPU acceleration and Bayesian inference of the hyperp
 Astronomical objects are in general not static, but vary in brightness over time. 
 This is especially true for objects that are variable by nature, such as pulsating stars, or objects that are variable due to their orbital motion, such as eclipsing binaries. 
 The study of these objects is called time-domain astronomy, and is a rapidly growing field. 
-A wide range of approaches to time-series analysis have been developed, ranging from simple period-finding algorithms to more complex machine learning techniques [e.g. @Huijse_2018; @Donoso-Oliva2023-transformer; @supersmoother; @Palmer_2009 and many more].
+A wide range of approaches to time-series analysis have been developed, ranging from simple period-finding algorithms to more complex machine learning techniques [e.g. @Donoso-Oliva2023-transformer; @supersmoother; @Huijse_2018; @Palmer_2009 and many more].
 Perhaps the most popular in astronomy is the Lomb-Scargle periodogram [@Lomb1976; @Scargle1982], which is a Fourier-based technique to find periodic signals in unevenly sampled data.
 However, the handling of unevenly sampled data is not the only challenge in time-series analysis.
 <!-- The study of time-domain astronomy is often hampered by the fact that the data is not always of the same quality, or that the data is not always available in the same wavelength. 
