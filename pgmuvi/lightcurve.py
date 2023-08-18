@@ -2004,27 +2004,28 @@ class Lightcurve(object):
         """
         from astropy.table import Table
         t = Table()
-        t['x'] = self.xdata
-        t['y'] = self.ydata
-        t['yerr'] = self.yerr
+        t['x'] = np.asarray(self.xdata)
+        t['y'] = np.asarray(self.ydata)
+        if hasattr(self, 'yerr'):
+            t['yerr'] = np.asarray(self.yerr)
         if self.__FITTED_MCMC or self.__FITTED_MAP:
             # These outputs can only be produced if a fit has been run.
             periods, weights, scales = self.get_periods()
-            t['period'] = periods
-            t['weights'] = weights
-            t['scales'] = scales
+            t['period'] = np.asarray(periods)
+            t['weights'] = np.asarray(weights)
+            t['scales'] = np.asarray(scales)
             for key, value in self.results.items():
-                t[key] = value
+                t[key] = np.asarray(value)
             if self.__FITTED_MAP:
                 # Loss isn't relevant for MCMC, I think
-                t['loss'] = self.results['loss']
+                t['loss'] = np.asarray(self.results['loss'])
             # Now we want the model predictions for the input times:
             if self.__FITTED_MAP:
                 with torch.no_grad():
                     observed_pred = self.likelihood(self.model(self._xdata_raw))
-                    t['y_pred_mean'] = observed_pred.mean
-                    t['y_pred_lower'] = observed_pred.confidence_region()[0]
-                    t['y_pred_upper'] = observed_pred.confidence_region()[1]
+                    t['y_pred_mean'] = np.asarray(observed_pred.mean)
+                    t['y_pred_lower'] = np.asarray(observed_pred.confidence_region()[0])
+                    t['y_pred_upper'] = np.asarray(observed_pred.confidence_region()[1])
             elif self.__FITTED_MCMC:
                 raise NotImplementedError("MCMC predictions not yet implemented")
                 # with torch.no_grad():
