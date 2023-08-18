@@ -136,7 +136,7 @@ def train(lightcurve=None, model=None, likelihood=None,
     if lightcurve is not None:
         pars = lightcurve.get_parameters()
         for key, value in pars.items():
-            results[key] = [value]
+            results[key] = [value.detach().numpy()]
     else:
         for param_name, param in model.named_parameters():
             p = param_name.split('.')[1] if 'raw' in param_name else param_name
@@ -155,7 +155,7 @@ def train(lightcurve=None, model=None, likelihood=None,
 
         if lightcurve is not None:
             for key, value in lightcurve.get_parameters().items():
-                results[key] = [value]
+                results[key].append(value.detach().numpy())
         else:
             for param_name, param in model.named_parameters():
                 results[param_name].append(param.detach().numpy())
