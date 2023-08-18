@@ -1993,3 +1993,39 @@ class Lightcurve(object):
                 ax.set_ylabel(key)
                 ax.set_xlabel("Iteration")
         plt.show()
+
+    def write_votable(self, filename):
+        """Write the results to a votable file.
+
+        Parameters
+        ----------
+        filename : str
+            The name of the file to write to.
+        """
+        from astropy.table import Table
+        t = Table()
+        t['x'] = self.xdata
+        t['y'] = self.ydata
+        t['yerr'] = self.yerr
+        if self.__FITTED_MCMC or self.__FITTED_MAP:
+            # These outputs can only be produced if a fit has been run.
+            periods, weights, scales = self.get_periods()
+            t['period'] = periods
+            t['weights'] = weights
+            t['scales'] = scales
+            for key, value in self.results.items():
+                t[key] = value
+            if self.__FITTED_MAP:
+                # Loss isn't relevant for MCMC, I think
+                t['loss'] = self.results['loss']
+            # Now we want the model predictions for the input times:
+            if self.__FITTED_MAP:
+                with torch.no_grad():
+                    observed_pred = self.likelihood(self.model(self._xdata_raw))
+                    t['y_pred_mean'] = observed_pred.mean
+                    t['y_pred_lower'] = observed_pred.confidence_region()[0]
+                    t['y_pred_upper'] = observed_pred.confidence_region()[1]
+            elif self.__FITTED_MCMC:
+                raise NotImplementedError("MCMC predictions not yet implemented")
+                # with torch.no_grad():
+        t.write(filename, format='votable', overwrite=True)
