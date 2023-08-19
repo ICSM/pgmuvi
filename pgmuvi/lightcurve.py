@@ -2012,10 +2012,19 @@ class Lightcurve(object):
             # These outputs can only be produced if a fit has been run.
             periods, weights, scales = self.get_periods()
             t['period'] = np.asarray(periods)
-            t['weights'] = np.asarray(weights)
-            t['scales'] = np.asarray(scales)
+            try:
+                t['weights'] = np.asarray(weights)
+            except RuntimeError:
+                t['weights'] = weights.detach().numpy()
+            try:
+                t['scales'] = np.asarray(scales)
+            except RuntimeError:
+                t['scales'] = scales.detach().numpy()
             for key, value in self.results.items():
-                t[key] = np.asarray(value)
+                try:
+                    t[key] = np.asarray(value)
+                except RuntimeError:
+                    t[key] = value.detach().numpy()
             if self.__FITTED_MAP:
                 # Loss isn't relevant for MCMC, I think
                 t['loss'] = np.asarray(self.results['loss'])
