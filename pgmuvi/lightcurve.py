@@ -1343,7 +1343,7 @@ class Lightcurve(object):
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
 
-        return torch.as_tensor(periods), torch.as_tensor(weights), torch.as_tensor(scales)
+        return torch.as_tensor(periods), torch.as_tensor(weights), torch.as_tensor(scales)  # noqa: E501
 
     def get_parameters(self, raw=False, transform=True):
         '''
@@ -2033,8 +2033,8 @@ class Lightcurve(object):
                 with torch.no_grad():
                     observed_pred = self.likelihood(self.model(self._xdata_raw))
                     t['y_pred_mean'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0])]
-                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]
+                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
+                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
             elif self.__FITTED_MCMC:
                 raise NotImplementedError("MCMC predictions not yet implemented")
                 # with torch.no_grad():
