@@ -1343,7 +1343,7 @@ class Lightcurve(object):
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
 
-        return periods, weights, scales
+        return torch.as_tensor(periods), torch.as_tensor(weights), torch.as_tensor(scales)
 
     def get_parameters(self, raw=False, transform=True):
         '''
@@ -2015,16 +2015,16 @@ class Lightcurve(object):
             try:
                 t['weights'] = np.asarray(weights)
             except RuntimeError:
-                t['weights'] = weights.detach().numpy()
+                t['weights'] = torch.as_tensor(weights).detach().numpy()
             try:
                 t['scales'] = np.asarray(scales)
             except RuntimeError:
-                t['scales'] = scales.detach().numpy()
+                t['scales'] = torch.as_tensor(scales).detach().numpy()
             for key, value in self.results.items():
                 try:
                     t[key] = np.asarray(value)
                 except RuntimeError:
-                    t[key] = value.detach().numpy()
+                    t[key] = torch.as_tensor(value).detach().numpy()
             if self.__FITTED_MAP:
                 # Loss isn't relevant for MCMC, I think
                 t['loss'] = np.asarray(self.results['loss'])
