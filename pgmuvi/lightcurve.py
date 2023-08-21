@@ -2030,8 +2030,29 @@ class Lightcurve(object):
                 t['loss'] = [np.asarray(self.results['loss'])]
             # Now we want the model predictions for the input times:
             if self.__FITTED_MAP:
+                self._eval()
                 with torch.no_grad():
-                    observed_pred = self.likelihood(self.model(self._xdata_raw))
+                    observed_pred = self.likelihood(self.model(self._xdata_transformed))
+                    t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean)]
+                    t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
+                    t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+
+                    if self.ndim == 1:
+                        x_raw = self.xdata
+                    elif self.ndim == 2:
+                        x_raw = self.xdata[:, 0]
+                    # y_raw = self.ydata
+
+                    # creating array of 10000 test points across the range of the data
+                    x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+                    if self.xtransform is None:
+                        x_fine_transformed = x_fine_raw
+                    elif isinstance(self.xtransform, Transformer):
+                        x_fine_transformed = self.xtransform.transform(x_fine_raw)
+
+                    # Make predictions
+                    observed_pred = self.likelihood(self.model(x_fine_transformed))
+                    t['x_fine'] = [np.asarray(x_fine_raw)]
                     t['y_pred_mean'] = [np.asarray(observed_pred.mean)]
                     t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
                     t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
