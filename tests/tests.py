@@ -7,6 +7,8 @@ import numpy as np
 import torch
 
 test_zeros_one = torch.as_tensor([0, 0, 0, 0, 1], dtype=torch.float32)
+test_zeros_one_2d = torch.as_tensor([[0, 0, 0, 1], [0, 0, 0, 1]],
+                                    dtype=torch.float32)
 
 class TestTransformer(unittest.TestCase):
     def test_transform_implemented(self):
@@ -67,7 +69,11 @@ class TestRobustZScore(unittest.TestCase):
 
 
 class TestLightCurve(unittest.TestCase):
-    pass
+    def test_ndim(self):
+        lightcurve = Lightcurve(test_zeros_one, test_zeros_one)
+        lightcurves = Lightcurve(test_zeros_one_2d, test_zeros_one_2d)
+        self.assertEqual(lightcurve.ndim(), 1)
+        self.assertEqual(lightcurves.ndim(), 4)
 
 
 class TestTrain(unittest.TestCase):
