@@ -72,8 +72,8 @@ class TestLightCurve(unittest.TestCase):
     def test_ndim(self):
         lightcurve = Lightcurve(test_zeros_one, test_zeros_one)
         lightcurves = Lightcurve(test_zeros_one_2d, test_zeros_one_2d)
-        self.assertEqual(lightcurve.ndim(), 1)
-        self.assertEqual(lightcurves.ndim(), 4)
+        self.assertEqual(lightcurve.ndim, 1)
+        self.assertEqual(lightcurves.ndim, 4)
 
 
 class TestTrain(unittest.TestCase):
