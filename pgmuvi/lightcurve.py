@@ -90,7 +90,9 @@ class MinMax(Transformer):
         """
         if recalc or not hasattr(self, "min"):
             self.min = torch.min(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('min', self.min)
             self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
+            self.register_buffer('range', self.range)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-(shift*self.min[apply_to]))/self.range[apply_to]
@@ -136,7 +138,9 @@ class ZScore(Transformer):
         """
         if recalc or not hasattr(self, 'mean'):
             self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('mean', self.mean)
             self.sd = torch.std(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('sd', self.sd)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-(shift*self.mean[apply_to]))/self.sd[apply_to]
@@ -181,8 +185,10 @@ class RobustZScore(Transformer):
         """
         if recalc or not hasattr(self, 'mad'):
             self.median = torch.median(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('median', self.median)
             self.mad = torch.median(torch.abs(data - self.median),
                                     dim=dim, keepdim=True)[0]
+            self.register_buffer('mad', self.mad)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-shift*self.median[apply_to])/self.mad[apply_to]
