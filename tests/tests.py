@@ -69,7 +69,7 @@ class TestRobustZScore(unittest.TestCase):
 class TestLightCurve(unittest.TestCase):
     def setUp(self):
         self.test_xdata = torch.as_tensor([1, 2, 3, 4], dtype=torch.float32)
-        self.test_ydata = torch.as_tensor([1, 1, 1, 1], dtype=torch.float32)
+        self.test_ydata = torch.as_tensor([1, 2, 1, 2], dtype=torch.float32)
         self.test_xdata_2d = torch.as_tensor([[1, 2, 3, 4], [1, 2, 3, 4]], dtype=torch.float32)
         self.test_ydata_2d = torch.as_tensor([[1, 1, 1, 1], [1, 1, 1, 1]], dtype=torch.float32)
         self.lightcurve = Lightcurve(self.test_xdata, self.test_ydata, yerr=self.test_ydata)
