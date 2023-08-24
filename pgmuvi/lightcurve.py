@@ -109,10 +109,9 @@ class MinMax(Transformer):
             only the range needs to be applied.
         """
         if recalc or not hasattr(self, "min"):
-            self.min = torch.min(data, dim=dim, keepdim=True)[0]
-            self.register_buffer('min', self.min)
-            self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
-            self.register_buffer('range', self.range)
+            self.register_buffer('min', torch.min(data, dim=dim, keepdim=True)[0])
+            self.register_buffer('range', torch.max(data, dim=dim, keepdim=True)[0]
+                                 - self.min)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-(shift*self.min[apply_to]))/self.range[apply_to]
