@@ -7,8 +7,6 @@ import numpy as np
 import torch
 
 test_zeros_one = torch.as_tensor([0, 0, 0, 0, 1], dtype=torch.float32)
-test_zeros_one_2d = torch.as_tensor([[0, 0, 0, 1], [0, 0, 0, 1]],
-                                    dtype=torch.float32)
 
 class TestTransformer(unittest.TestCase):
     def test_transform_implemented(self):
@@ -70,10 +68,10 @@ class TestRobustZScore(unittest.TestCase):
 
 class TestLightCurve(unittest.TestCase):
     def setUp(self):
-        self.test_xdata = torch.astensor([1, 2, 3, 4], dtype=torch.float32)
-        self.test_ydata = torch.astensor([1, 1, 1, 1], dtype=torch.float32)
-        self.test_xdata_2d = torch.astensor([[1, 2, 3, 4], [1, 2, 3, 4]], dtype=torch.float32)
-        self.test_ydata_2d = torch.astensor([[1, 1, 1, 1], [1, 1, 1, 1]], dtype=torch.float32)
+        self.test_xdata = torch.as_tensor([1, 2, 3, 4], dtype=torch.float32)
+        self.test_ydata = torch.as_tensor([1, 1, 1, 1], dtype=torch.float32)
+        self.test_xdata_2d = torch.as_tensor([[1, 2, 3, 4], [1, 2, 3, 4]], dtype=torch.float32)
+        self.test_ydata_2d = torch.as_tensor([[1, 1, 1, 1], [1, 1, 1, 1]], dtype=torch.float32)
         self.lightcurve = Lightcurve(self.test_xdata, self.test_ydata, yerr=self.test_ydata)
         self.lightcurve_2d = Lightcurve(self.test_xdata_2d, self.test_ydata_2d)
     
