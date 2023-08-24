@@ -136,7 +136,7 @@ def train(lightcurve=None, model=None, likelihood=None,
     if lightcurve is not None:
         pars = lightcurve.get_parameters()
         for key, value in pars.items():
-            results[key] = [value..cpu().detach().numpy()]
+            results[key] = [value.cpu().detach().numpy()]
     else:
         for param_name, param in model.named_parameters():
             p = param_name.split('.')[1] if 'raw' in param_name else param_name
@@ -150,15 +150,15 @@ def train(lightcurve=None, model=None, likelihood=None,
         optimizer.step()
         # Now update list of parameters
         if i > 0:
-            results['delta_loss'].append(loss..cpu().detach().numpy() - results['loss'][-1])
-        results['loss'].append(loss..cpu().detach().numpy())
+            results['delta_loss'].append(loss.cpu().detach().numpy() - results['loss'][-1])
+        results['loss'].append(loss.cpu().detach().numpy())
 
         if lightcurve is not None:
             for key, value in lightcurve.get_parameters().items():
-                results[key].append(value..cpu().detach().numpy())
+                results[key].append(value.cpu().detach().numpy())
         else:
             for param_name, param in model.named_parameters():
-                results[param_name].append(param..cpu().detach().numpy())
+                results[param_name].append(param.cpu().detach().numpy())
             # print(i, param_name," = ",param.item())
         # Finally check if convergence criterion is met
         # optimisers are stochastic, so we average the change in loss
