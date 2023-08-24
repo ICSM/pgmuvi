@@ -46,6 +46,26 @@ def _reraise_with_note(e, note):
 
 
 class Transformer(torch.nn.Module):
+    def __init__(self):
+        """Baseclass for data transformers
+
+        This is a baseclass for data transformers, which are used to transform
+        data before it is passed to the GP.
+
+        Parameters
+        ----------
+
+        Examples
+        --------
+
+        Notes
+        -----
+        The baseclass has no implementation, and should not be used directly.
+        `__init__` is only implemented to allow the class to be subclassed and
+        ensure that `nn.Module` stuff is setup correctly. Subclasses should
+        implement the `transform` and `inverse` methods."""
+        super().__init__()
+
     def transform(self, data, **kwargs):
         """ Transform some data and return it, storing the parameters required
         to repeat or reverse the transform
@@ -262,6 +282,7 @@ class Lightcurve(torch.nn.Module):
         ytransform : str or Transformer, optional
             The transform to apply to the y data, by default None
         """
+        super().__init__()
 
         transform_dic = {'minmax': MinMax(),
                          'zscore': ZScore(),
