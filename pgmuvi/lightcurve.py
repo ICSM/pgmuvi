@@ -1325,7 +1325,7 @@ class Lightcurve(torch.nn.Module):
                     p = 1/self.model.covar_module.mixture_means[i]
                 else:
                     p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i],  # noqa: E501
-                                                shift=False).detach().numpy()[0]
+                                                shift=False)..cpu().detach().numpy()[0]
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
@@ -1335,7 +1335,7 @@ class Lightcurve(torch.nn.Module):
                     p = 1/self.model.covar_module.mixture_means[i, 0]
                 else:
                     p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i, 0],  # noqa: E501
-                                                shift=False).detach().numpy()[0, 0]
+                                                shift=False)..cpu().detach().numpy()[0, 0]
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
@@ -1355,9 +1355,9 @@ class Lightcurve(torch.nn.Module):
                     scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]))
                 else:
                     p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i],  # noqa: E501
-                                                shift=False).detach().numpy()[0]
+                                                shift=False)..cpu().detach().numpy()[0]
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]),
-                                                          shift=False).detach().numpy()[0])
+                                                          shift=False)..cpu().detach().numpy()[0])
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
         elif self.ndim == 2:
@@ -1367,9 +1367,9 @@ class Lightcurve(torch.nn.Module):
                     scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]))  # noqa: E501
                 else:
                     p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i, 0],  # noqa: E501
-                                                shift=False).detach().numpy()[0, 0]
+                                                shift=False)..cpu().detach().numpy()[0, 0]
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),  # noqa: E501
-                                                shift=False).detach().numpy()[0, 0])
+                                                shift=False)..cpu().detach().numpy()[0, 0])
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
 
@@ -1788,7 +1788,7 @@ class Lightcurve(torch.nn.Module):
         if debug:
             print(psd.shape)
         if not log:
-            psd = psd.exp().detach().numpy()
+            psd = psd.exp()..cpu().detach().numpy()
         return psd
 
     def plot(self, ylim=None, show=True,
@@ -2045,16 +2045,16 @@ class Lightcurve(torch.nn.Module):
             try:
                 t['weights'] = [np.asarray(weights)]
             except RuntimeError:
-                t['weights'] = [torch.as_tensor(weights).detach().numpy()]
+                t['weights'] = [torch.as_tensor(weights)..cpu().detach().numpy()]
             try:
                 t['scales'] = [np.asarray(scales)]
             except RuntimeError:
-                t['scales'] = [torch.as_tensor(scales).detach().numpy()]
+                t['scales'] = [torch.as_tensor(scales)..cpu().detach().numpy()]
             for key, value in self.results.items():
                 try:
                     t[key] = [np.asarray(value)]
                 except RuntimeError:
-                    t[key] = [torch.as_tensor(value).detach().numpy()]
+                    t[key] = [torch.as_tensor(value)..cpu().detach().numpy()]
             if self.__FITTED_MAP:
                 # Loss isn't relevant for MCMC, I think
                 t['loss'] = [np.asarray(self.results['loss'])]
