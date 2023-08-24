@@ -1898,7 +1898,7 @@ class Lightcurve(torch.nn.Module):
         if self.xtransform is None:
             self.x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
-            self.x_fine_transformed = self.xtransform.transform(x_fine_raw)
+            self.x_fine_transformed = self.xtransform.transform(x_fine_raw.to(self.xtransform.min.device))  # noqa: E501
 
         self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)  # .unsqueeze(0)  # noqa: E501
         print(self.x_fine_transformed.shape)
@@ -1910,7 +1910,8 @@ class Lightcurve(torch.nn.Module):
             ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), 'k*')
             for i in range(min(n_samples_to_plot, self.num_samples)):
                 # Plot predictive samples as colored lines
-                ax.plot(x_fine_raw.cpu().numpy(), output[i].sample().cpu().numpy(), 'b', alpha=0.2)
+                ax.plot(x_fine_raw.cpu().numpy(), output[i].sample().cpu().numpy(), 'b',
+                        alpha=0.2)
 
             ax.legend(['Observed Data', 'Sample means'])
             if ylim is not None:
@@ -1926,7 +1927,7 @@ class Lightcurve(torch.nn.Module):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
-            x_fine_transformed = self.xtransform.transform(x_fine_raw)
+            x_fine_transformed = self.xtransform.transform(x_fine_raw.to(self.xtransform.min.device))  # noqa: E501
 
         # Make predictions
         observed_pred = self.likelihood(self.model(x_fine_transformed))
@@ -1961,7 +1962,7 @@ class Lightcurve(torch.nn.Module):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
-            x_fine_transformed = self.xtransform.transform(x_fine_raw,
+            x_fine_transformed = self.xtransform.transform(x_fine_raw.to(self.xtransform.min.device), # noqa: E501
                                                            apply_to=(0, 0))
         unique_values_axis2 = torch.unique(self.xdata[:,1])
         figs = []
@@ -2078,7 +2079,7 @@ class Lightcurve(torch.nn.Module):
                     if self.xtransform is None:
                         x_fine_transformed = x_fine_raw
                     elif isinstance(self.xtransform, Transformer):
-                        x_fine_transformed = self.xtransform.transform(x_fine_raw)
+                        x_fine_transformed = self.xtransform.transform(x_fine_raw.to(self.xtransform.min.device))  # noqa: E501
 
                     # Make predictions
                     observed_pred = self.likelihood(self.model(x_fine_transformed))
