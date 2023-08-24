@@ -45,7 +45,7 @@ def _reraise_with_note(e, note):
     raise e
 
 
-class Transformer(object):
+class Transformer(torch.nn.Module):
     def transform(self, data, **kwargs):
         """ Transform some data and return it, storing the parameters required
         to repeat or reverse the transform
@@ -208,7 +208,7 @@ def minmax(data, dim=0):
     return (data-m)/r, m, r
 
 
-class Lightcurve(object):
+class Lightcurve(torch.nn.Module):
     """ A class for storing, manipulating and fitting light curves
 
     This class is designed to be a convenient way to store and manipulate
