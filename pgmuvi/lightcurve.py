@@ -1182,7 +1182,11 @@ class Lightcurve(torch.nn.Module):
                              disable_progbar=disable_progbar)
         import linear_operator.utils.errors as linear
         try:
-            self.mcmc_run.run(self._xdata_transformed, self._ydata_transformed)
+            if cuda:
+                self.mcmc_run.run(self._xdata_transformed.cuda(),
+                                  self._ydata_transformed.cuda())
+            else:
+                self.mcmc_run.run(self._xdata_transformed, self._ydata_transformed)
         except linear.NanError as e:
             print("NaNError encountered, returning None")
             print(list(model.named_parameters()))
