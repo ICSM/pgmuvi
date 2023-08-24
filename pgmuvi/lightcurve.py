@@ -1907,10 +1907,10 @@ class Lightcurve(torch.nn.Module):
         with torch.no_grad():
             f, ax = plt.subplots(1, 1, figsize=(8, 6))
             # Plot training data as black stars
-            ax.plot(self.xdata.numpy(), self.ydata.numpy(), 'k*')
+            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), 'k*')
             for i in range(min(n_samples_to_plot, self.num_samples)):
                 # Plot predictive samples as colored lines
-                ax.plot(x_fine_raw.numpy(), output[i].sample().numpy(), 'b', alpha=0.2)
+                ax.plot(x_fine_raw.cpu().numpy(), output[i].sample().cpu().numpy(), 'b', alpha=0.2)
 
             ax.legend(['Observed Data', 'Sample means'])
             if ylim is not None:
@@ -1938,14 +1938,14 @@ class Lightcurve(torch.nn.Module):
         lower, upper = observed_pred.confidence_region()
 
         # Plot training data as black stars
-        ax.plot(self.xdata.numpy(), self.ydata.numpy(), 'k*')
+        ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), 'k*')
 
         # Plot predictive GP mean as blue line
-        ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
+        ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), 'b')
 
         # Shade between the lower and upper confidence bounds
-        ax.fill_between(x_fine_raw.numpy(),
-                        lower.numpy(), upper.numpy(),
+        ax.fill_between(x_fine_raw.cpu().numpy(),
+                        lower.cpu().numpy(), upper.cpu().numpy(),
                         alpha=0.5)
         if ylim is not None:
             ax.set_ylim(ylim)
@@ -1978,11 +1978,11 @@ class Lightcurve(torch.nn.Module):
                                    dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
+            ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), 'b')
 
             lower, upper = observed_pred.confidence_region()
-            ax.fill_between(x_fine_raw.numpy(),
-                            lower.numpy(), upper.numpy(),
+            ax.fill_between(x_fine_raw.cpu().numpy(),
+                            lower.cpu().numpy(), upper.cpu().numpy(),
                             alpha=0.5)
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
 
