@@ -318,13 +318,14 @@ class Lightcurve(torch.nn.Module):
     @xdata.setter
     def xdata(self, values):
         # first, store the raw data internally
-        self._xdata_raw = values
+        self.register_buffer('_xdata_raw', values)
         # then, apply the transformation to the values, so it can be used to
         # train the GP
         if self.xtransform is None:
-            self._xdata_transformed = values
+            self.register_buffer('_xdata_transformed', values)
         elif isinstance(self.xtransform, Transformer):
-            self._xdata_transformed = self.xtransform.transform(values)
+            self.register_buffer('_xdata_transformed',
+                                 self.xtransform.transform(values))
 
     @property
     def ydata(self):
@@ -340,12 +341,13 @@ class Lightcurve(torch.nn.Module):
     @ydata.setter
     def ydata(self, values):
         # first, store the raw data internally
-        self._ydata_raw = values
+        self.register_buffer('_ydata_raw', values)
         # then, apply the transformation to the values
         if self.ytransform is None:
-            self._ydata_transformed = values
+            self.register_buffer('_ydata_transformed', values)
         elif isinstance(self.ytransform, Transformer):
-            self._ydata_transformed = self.ytransform.transform(values)
+            self.register_buffer('_ydata_transformed',
+                                 self.ytransform.transform(values))
 
     @property
     def yerr(self):
@@ -361,12 +363,14 @@ class Lightcurve(torch.nn.Module):
 
     @yerr.setter
     def yerr(self, values):
-        self._yerr_raw = values
+        # first, store the raw data internally
+        self.register_buffer('_yerr_raw', values)
         # now apply the same transformation that was applied to the ydata
         if self.ytransform is None:
-            self._yerr_transformed = values
+            self.register_buffer('_yerr_transformed', values)
         elif isinstance(self.ytransform, Transformer):
-            self._yerr_transformed = self.ytransform.transform(values)
+            self.register_buffer('_yerr_transformed',
+                                 self.ytransform.transform(values))
 
     def append_data(self, new_values_x, new_values_y):
         pass
@@ -909,13 +913,13 @@ class Lightcurve(torch.nn.Module):
     def _set_hypers_raw(self, hypers=None, **kwargs):
         pass
 
-    def cuda(self):
-        try:
-            self.model.cuda()
-            self.likelihood.cuda()
-        except AttributeError as e:
-            errmsg = "You must first set the model and likelihood"
-            _reraise_with_note(e, errmsg)
+    # def cuda(self):
+    #     try:
+    #         self.model.cuda()
+    #         self.likelihood.cuda()
+    #     except AttributeError as e:
+    #         errmsg = "You must first set the model and likelihood"
+    #         _reraise_with_note(e, errmsg)
 
     def _train(self):
         try:
