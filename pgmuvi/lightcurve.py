@@ -1161,6 +1161,7 @@ class Lightcurve(torch.nn.Module):
             self.cuda()
 
         model = self.model
+        print(model.device)
 
         def pyro_model(x, y):
             with (gpytorch.settings.fast_computations(False, False, False),
