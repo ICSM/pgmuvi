@@ -96,6 +96,22 @@ class TestLightCurve(unittest.TestCase):
         self.assertTrue(torch.equal(self.lightcurve._xdata_raw, self.test_xdata))
         self.assertTrue(torch.equal(self.lightcurve._xdata_transformed, self.test_xdata_transformed))
 
+    def test_ydata_getter(self):
+        self.assertTrue(torch.equal(self.lightcurve.ydata, self.test_ydata))
+    
+    def test_ydata_setter_no_transform(self):
+        self.lightcurve.ydata = self.test_ydata
+        self.assertTrue(torch.equal(self.lightcurve._ydata_raw, self.test_ydata))
+        self.assertTrue(torch.equal(self.lightcurve._ydata_transformed, self.test_ydata))
+    
+    def test_ydata_setter_with_transform(self):
+        self.lightcurve.ytransform = 'minmax'
+        self.test_ydata_transformed = self.lightcurve.ytransform.transform(self.test_ydata)
+        
+        self.lightcurve.ydata = self.test_ydata
+        self.assertTrue(torch.equal(self.lightcurve._ydata_raw, self.test_ydata))
+        self.assertTrue(torch.equal(self.lightcurve._ydata_transformed, self.test_ydata_transformed))
+
 class TestTrain(unittest.TestCase):
     def test_train(self):
         pass
