@@ -2034,10 +2034,10 @@ class Lightcurve(torch.nn.Module):
         """
         from astropy.table import Table
         t = Table()
-        t['x'] = [np.asarray(self.xdata)]
-        t['y'] = [np.asarray(self.ydata)]
+        t['x'] = [np.asarray(self.xdata.cpu())]
+        t['y'] = [np.asarray(self.ydata.cpu())]
         if hasattr(self, 'yerr'):
-            t['yerr'] = [np.asarray(self.yerr)]
+            t['yerr'] = [np.asarray(self.yerr.cpu())]
         if self.__FITTED_MCMC or self.__FITTED_MAP:
             # These outputs can only be produced if a fit has been run.
             periods, weights, scales = self.get_periods()
@@ -2063,9 +2063,9 @@ class Lightcurve(torch.nn.Module):
                 self._eval()
                 with torch.no_grad():
                     observed_pred = self.likelihood(self.model(self._xdata_transformed))
-                    t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
-                    t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+                    t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean.cpu())]
+                    t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0].cpu())]  # noqa: E501
+                    t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1].cpu())]   # noqa: E501
 
                     if self.ndim == 1:
                         x_raw = self.xdata
@@ -2082,10 +2082,10 @@ class Lightcurve(torch.nn.Module):
 
                     # Make predictions
                     observed_pred = self.likelihood(self.model(x_fine_transformed))
-                    t['x_fine'] = [np.asarray(x_fine_raw)]
-                    t['y_pred_mean'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
-                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+                    t['x_fine'] = [np.asarray(x_fine_raw.cpu())]
+                    t['y_pred_mean'] = [np.asarray(observed_pred.mean.cpu())]
+                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0].cpu())]  # noqa: E501
+                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1].cpu())]   # noqa: E501
             elif self.__FITTED_MCMC:
                 raise NotImplementedError("MCMC predictions not yet implemented")
                 # with torch.no_grad():
