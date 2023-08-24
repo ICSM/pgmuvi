@@ -1164,7 +1164,7 @@ class Lightcurve(torch.nn.Module):
 
         model = self.model
 
-        mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, model)
 
         def pyro_model(x, y):
             model.pyro_sample_from_prior()
