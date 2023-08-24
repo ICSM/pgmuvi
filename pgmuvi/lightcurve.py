@@ -1164,21 +1164,21 @@ class Lightcurve(torch.nn.Module):
 
         model = self.model
 
-        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, model)
-
-        def pyro_model(x, y):
-            model.pyro_sample_from_prior()
-            output = model(x)
-            loss = mll.pyro_factor(output, y)
-            return y
+        # mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, model)
 
         # def pyro_model(x, y):
-        #     with (gpytorch.settings.fast_computations(False, False, False),
-        #           gpytorch.settings.max_cg_iterations(max_cg_iterations)):
-        #         sampled_model = model.pyro_sample_from_prior()  # .detatch()
-        #         output = sampled_model.likelihood(sampled_model(x))  # .detatch()
-        #         pyro.sample("obs", output, obs=y)
+        #     model.pyro_sample_from_prior()
+        #     output = model(x)
+        #     loss = mll.pyro_factor(output, y)
         #     return y
+
+        def pyro_model(x, y):
+            with (gpytorch.settings.fast_computations(False, False, False),
+                  gpytorch.settings.max_cg_iterations(max_cg_iterations)):
+                sampled_model = model.pyro_sample_from_prior()  # .detatch()
+                output = sampled_model.likelihood(sampled_model(x))  # .detatch()
+                pyro.sample("obs", output, obs=y)
+            return y
 
         self.num_samples = num_samples
 
