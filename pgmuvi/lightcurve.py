@@ -1104,6 +1104,7 @@ class Lightcurve(torch.nn.Module):
              warmup_steps=100, num_chains=1,
              disable_progbar=False,
              max_cg_iterations=None,
+             cuda=False,
              **kwargs):
         '''Run an MCMC sampler on the model
 
@@ -1155,6 +1156,9 @@ class Lightcurve(torch.nn.Module):
 
         if max_cg_iterations is None:
             max_cg_iterations = 10000
+
+        if cuda:
+            self.cuda()
 
         model = self.model
 
