@@ -1151,14 +1151,16 @@ class Lightcurve(torch.nn.Module):
         # self._train()
         # self._eval()
 
+        if cuda:
+            self.cuda()
+
         if not self.__PRIORS_SET:
             self.set_default_priors()
 
         if max_cg_iterations is None:
             max_cg_iterations = 10000
 
-        if cuda:
-            self.cuda()
+
 
         model = self.model
 
