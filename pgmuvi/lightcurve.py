@@ -1153,6 +1153,13 @@ class Lightcurve(torch.nn.Module):
 
         if cuda:
             self.cuda()
+            for key in self.state_dict().keys():
+                print(key)
+                try:
+                    print(self.state_dict()[key].device)
+                #self.state_dict()[key] = self.state_dict()[key].cuda()
+            for param_name, param in self.model.named_parameters():
+                print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
 
         if not self.__PRIORS_SET:
             self.set_default_priors()
