@@ -1157,6 +1157,8 @@ class Lightcurve(torch.nn.Module):
                 print(key)
                 try:
                     print(self.state_dict()[key].device)
+                except AttributeError:
+                    pass
                 #self.state_dict()[key] = self.state_dict()[key].cuda()
             for param_name, param in self.model.named_parameters():
                 print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
