@@ -44,6 +44,24 @@ def _reraise_with_note(e, note):
         e.args = (arg0,) + args[1:]
     raise e
 
+# Function to walk through nested dict and yield all values
+# Taken from https://stackoverflow.com/a/12507546/16164384
+def dict_walk_generator(indict, pre=None):
+    pre = pre[:] if pre else []
+    if isinstance(indict, dict):
+        for key, value in indict.items():
+            if isinstance(value, dict):
+                for d in dict_generator(value, pre + [key]):
+                    yield d
+            elif isinstance(value, list) or isinstance(value, tuple):
+                for v in value:
+                    for d in dict_generator(v, pre + [key]):
+                        yield d
+            else:
+                yield pre + [key, value]
+    else:
+        yield pre + [indict]
+
 
 class Transformer(torch.nn.Module):
     def __init__(self):
@@ -933,13 +951,40 @@ class Lightcurve(torch.nn.Module):
     def _set_hypers_raw(self, hypers=None, **kwargs):
         pass
 
-    # def cuda(self):
-    #     try:
-    #         self.model.cuda()
-    #         self.likelihood.cuda()
-    #     except AttributeError as e:
-    #         errmsg = "You must first set the model and likelihood"
-    #         _reraise_with_note(e, errmsg)
+    def cpu(self):
+        self.device = torch.device('cpu')
+        super().cpu()
+        for _ in dict_walk_generator(self._model_pars):
+            with contextlib.suppress(AttributeError):
+                _.cpu()
+
+
+    def cuda(self, device=0):
+        # First we should check that CUDA is available
+        if not torch.cuda.is_available():
+            raise RuntimeError("Cannot call cuda() if CUDA is not available")
+        # next we should log that we're using CUDA
+        self.device = torch.device(f"cuda:{device}")
+
+        # now we need to make sure that the usual nn.Module.cuda() method
+        # is called, so that all of the modules and buffers are moved to the GPU
+        super().cuda(device=device)
+
+        # but we've created a few extra things that need to be tracked.
+        # We have to make sure any tensors in those are also moved to the same device
+        for _ in dict_walk_generator(self._model_pars):
+            with contextlib.suppress(AttributeError):
+                _.cuda(device=device)
+
+        # for key in self._model_pars:
+        #     with contextlib.suppress(AttributeError):
+        #         self._model_pars[key]['param'] = self._model_pars[key]['param'].cuda(device=device)
+        # try:
+        #     self.model.cuda()
+        #     self.likelihood.cuda()
+        # except AttributeError as e:
+        #     errmsg = "You must first set the model and likelihood"
+        #     _reraise_with_note(e, errmsg)
 
     def _train(self):
         try:
