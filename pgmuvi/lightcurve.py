@@ -1184,9 +1184,12 @@ class Lightcurve(torch.nn.Module):
                     #self.state_dict()[key] = self.state_dict()[key].cuda()
                 for param_name, param in self.model.named_parameters():
                     print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
+                print('----')
+                print("Lookup dict:")
                 for param_name, param in self._model_pars.items():
                     print(param)
-                    print(f'Parameter name: {param_name:42} value = {param["module"].raw_value}, device = {param["module"].raw_value.device}')  # noqa: E501
+                    print('----')
+                    #print(f'Parameter name: {param_name:42} value = {param["module"].value}, device = {param["module"].value.device}')  # noqa: E501
                 sampled_model = model.pyro_sample_from_prior()  # .detatch()
                 output = sampled_model.likelihood(sampled_model(x))  # .detatch()
                 pyro.sample("obs", output, obs=y)
