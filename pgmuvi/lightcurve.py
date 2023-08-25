@@ -1229,10 +1229,10 @@ class Lightcurve(torch.nn.Module):
                     #self.state_dict()[key] = self.state_dict()[key].cuda()
                 for param_name, param in self.model.named_parameters():
                     print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
-                print(self.model.mixture_means)
-                print(self.model.mixture_scales)
-                print(self.model.mixture_weights)
-                # print(self.model.mixture_means_prior)
+                print(self.model.covar_module.mixture_means)
+                print(self.model.covar_module.mixture_scales)
+                print(self.model.covar_module.mixture_weights)
+                print(self.model.covar_module.mixture_means_prior)
                 print('----')
                 print("Lookup dict:")
                 for param_name, param in self._model_pars.items():
