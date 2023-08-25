@@ -51,11 +51,11 @@ def dict_walk_generator(indict, pre=None):
     if isinstance(indict, dict):
         for key, value in indict.items():
             if isinstance(value, dict):
-                for d in dict_generator(value, pre + [key]):
+                for d in dict_walk_generator(value, pre + [key]):
                     yield d
             elif isinstance(value, list) or isinstance(value, tuple):
                 for v in value:
-                    for d in dict_generator(v, pre + [key]):
+                    for d in dict_walk_generator(v, pre + [key]):
                         yield d
             else:
                 yield pre + [key, value]
