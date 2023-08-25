@@ -1175,6 +1175,15 @@ class Lightcurve(torch.nn.Module):
         def pyro_model(x, y):
             with (gpytorch.settings.fast_computations(False, False, False),
                   gpytorch.settings.max_cg_iterations(max_cg_iterations)):
+                for key in self.state_dict().keys():
+                    print(key)
+                    try:
+                        print(self.state_dict()[key].device)
+                    except AttributeError:
+                        pass
+                    #self.state_dict()[key] = self.state_dict()[key].cuda()
+                for param_name, param in self.model.named_parameters():
+                    print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
                 sampled_model = model.pyro_sample_from_prior()  # .detatch()
                 output = sampled_model.likelihood(sampled_model(x))  # .detatch()
                 pyro.sample("obs", output, obs=y)
