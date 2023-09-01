@@ -1994,13 +1994,18 @@ class Lightcurve(object):
                 ax.set_xlabel("Iteration")
         plt.show()
 
-    def write_votable(self, filename):
-        """Write the results to a votable file.
+
+    def to_table(self):
+        """Create an astropy table with the results.
 
         Parameters
         ----------
-        filename : str
-            The name of the file to write to.
+        none
+
+        Returns
+        -------
+        tab_results : astropy.table.Table
+            Astropy table with the results.
         """
         from astropy.table import Table
         t = Table()
@@ -2011,31 +2016,31 @@ class Lightcurve(object):
         if self.__FITTED_MCMC or self.__FITTED_MAP:
             # These outputs can only be produced if a fit has been run.
             periods, weights, scales = self.get_periods()
-            t['period'] = [np.asarray(periods)]
+            t['period'] = [np.asarray(periods).squeeze()]
             try:
-                t['weights'] = [np.asarray(weights)]
+                t['weights'] = [np.asarray(weights).squeeze()]
             except RuntimeError:
-                t['weights'] = [torch.as_tensor(weights).detach().numpy()]
+                t['weights'] = [torch.as_tensor(weights).detach().numpy().squeeze()]
             try:
-                t['scales'] = [np.asarray(scales)]
+                t['scales'] = [np.asarray(scales).squeeze()]
             except RuntimeError:
-                t['scales'] = [torch.as_tensor(scales).detach().numpy()]
+                t['scales'] = [torch.as_tensor(scales).detach().numpy().squeeze()]
             for key, value in self.results.items():
                 try:
-                    t[key] = [np.asarray(value)]
+                    t[key] = [np.asarray(value).squeeze()]
                 except RuntimeError:
-                    t[key] = [torch.as_tensor(value).detach().numpy()]
+                    t[key] = [torch.as_tensor(value).detach().numpy().squeeze()]
             if self.__FITTED_MAP:
                 # Loss isn't relevant for MCMC, I think
-                t['loss'] = [np.asarray(self.results['loss'])]
+                t['loss'] = [np.asarray(self.results['loss']).squeeze()]
             # Now we want the model predictions for the input times:
             if self.__FITTED_MAP:
                 self._eval()
                 with torch.no_grad():
                     observed_pred = self.likelihood(self.model(self._xdata_transformed))
-                    t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
-                    t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+                    t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean).squeeze()]
+                    t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0]).squeeze()]  # noqa: E501
+                    t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1]).squeeze()]   # noqa: E501
 
                     if self.ndim == 1:
                         x_raw = self.xdata
@@ -2052,11 +2057,23 @@ class Lightcurve(object):
 
                     # Make predictions
                     observed_pred = self.likelihood(self.model(x_fine_transformed))
-                    t['x_fine'] = [np.asarray(x_fine_raw)]
-                    t['y_pred_mean'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
-                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+                    t['x_fine'] = [np.asarray(x_fine_raw).squeeze()]
+                    t['y_pred_mean'] = [np.asarray(observed_pred.mean).squeeze()]
+                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0]).squeeze()]  # noqa: E501
+                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1]).squeeze()]   # noqa: E501
             elif self.__FITTED_MCMC:
                 raise NotImplementedError("MCMC predictions not yet implemented")
                 # with torch.no_grad():
+
+        return t
+
+    def write_votable(self, filename):
+        """Write the results to a votable file.
+
+        Parameters
+        ----------
+        filename : str
+            The name of the file to write to.
+        """
+        t = self.to_table()
         t.write(filename, format='votable', overwrite=True)
