@@ -1994,13 +1994,18 @@ class Lightcurve(object):
                 ax.set_xlabel("Iteration")
         plt.show()
 
-    def write_votable(self, filename):
-        """Write the results to a votable file.
+
+    def to_table(self):
+        """Create an astropy table with the results.
 
         Parameters
         ----------
-        filename : str
-            The name of the file to write to.
+        none
+
+        Returns
+        -------
+        tab_results : astropy.table.Table
+            Astropy table with the results.
         """
         from astropy.table import Table
         t = Table()
@@ -2059,4 +2064,16 @@ class Lightcurve(object):
             elif self.__FITTED_MCMC:
                 raise NotImplementedError("MCMC predictions not yet implemented")
                 # with torch.no_grad():
+
+        return t
+
+    def write_votable(self, filename):
+        """Write the results to a votable file.
+
+        Parameters
+        ----------
+        filename : str
+            The name of the file to write to.
+        """
+        t = self.to_table()
         t.write(filename, format='votable', overwrite=True)
