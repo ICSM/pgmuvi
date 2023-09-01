@@ -1994,16 +1994,20 @@ class Lightcurve(object):
                 ax.set_xlabel("Iteration")
         plt.show()
 
-    def write_votable(self, filename):
-        """Write the results to a votable file.
 
-        Parameters
-        ----------
-        filename : str
-            The name of the file to write to.
-        """
-        from astropy.table import Table
-        t = Table()
+    def to_table(self):
+      """Create an astropy table with the results.
+
+      Parameters
+      ----------
+      none
+
+      Returns
+      -------
+      tab_results : astropy.table.Table
+          Astropy table with the results.
+      """
+      from astropy.table import Table
         t['x'] = [np.asarray(self.xdata)]
         t['y'] = [np.asarray(self.ydata)]
         if hasattr(self, 'yerr'):
@@ -2058,5 +2062,16 @@ class Lightcurve(object):
                     t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
             elif self.__FITTED_MCMC:
                 raise NotImplementedError("MCMC predictions not yet implemented")
-                # with torch.no_grad():
+                # with torch.no_grad():      
+      return t
+
+    def write_votable(self, filename):
+        """Write the results to a votable file.
+
+        Parameters
+        ----------
+        filename : str
+            The name of the file to write to.
+        """
+        t = self.to_table()
         t.write(filename, format='votable', overwrite=True)
