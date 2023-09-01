@@ -2008,62 +2008,61 @@ class Lightcurve(object):
           Astropy table with the results.
       """
       from astropy.table import Table
-        t['x'] = [np.asarray(self.xdata)]
-        t['y'] = [np.asarray(self.ydata)]
-        if hasattr(self, 'yerr'):
-            t['yerr'] = [np.asarray(self.yerr)]
-        if self.__FITTED_MCMC or self.__FITTED_MAP:
-            # These outputs can only be produced if a fit has been run.
-            periods, weights, scales = self.get_periods()
-            t['period'] = [np.asarray(periods)]
-            try:
-                t['weights'] = [np.asarray(weights)]
-            except RuntimeError:
-                t['weights'] = [torch.as_tensor(weights).detach().numpy()]
-            try:
-                t['scales'] = [np.asarray(scales)]
-            except RuntimeError:
-                t['scales'] = [torch.as_tensor(scales).detach().numpy()]
-            for key, value in self.results.items():
-                try:
-                    t[key] = [np.asarray(value)]
-                except RuntimeError:
-                    t[key] = [torch.as_tensor(value).detach().numpy()]
-            if self.__FITTED_MAP:
-                # Loss isn't relevant for MCMC, I think
-                t['loss'] = [np.asarray(self.results['loss'])]
-            # Now we want the model predictions for the input times:
-            if self.__FITTED_MAP:
-                self._eval()
-                with torch.no_grad():
-                    observed_pred = self.likelihood(self.model(self._xdata_transformed))
-                    t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
-                    t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+      t['x'] = [np.asarray(self.xdata)]
+      t['y'] = [np.asarray(self.ydata)]
+      if hasattr(self, 'yerr'):
+          t['yerr'] = [np.asarray(self.yerr)]
+      if self.__FITTED_MCMC or self.__FITTED_MAP:
+          # These outputs can only be produced if a fit has been run.
+          periods, weights, scales = self.get_periods()
+          t['period'] = [np.asarray(periods)]
+          try:
+              t['weights'] = [np.asarray(weights)]
+          except RuntimeError:
+              t['weights'] = [torch.as_tensor(weights).detach().numpy()]
+          try:
+              t['scales'] = [np.asarray(scales)]
+          except RuntimeError:
+              t['scales'] = [torch.as_tensor(scales).detach().numpy()]
+          for key, value in self.results.items():
+              try:
+                  t[key] = [np.asarray(value)]
+              except RuntimeError:
+                  t[key] = [torch.as_tensor(value).detach().numpy()]
+          if self.__FITTED_MAP:
+              # Loss isn't relevant for MCMC, I think
+              t['loss'] = [np.asarray(self.results['loss'])]
+          # Now we want the model predictions for the input times:
+          if self.__FITTED_MAP:
+              self._eval()
+              with torch.no_grad():
+                  observed_pred = self.likelihood(self.model(self._xdata_transformed))
+                  t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean)]
+                  t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
+                  t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501    
+                if self.ndim == 1:
+                    x_raw = self.xdata
+                elif self.ndim == 2:
+                    x_raw = self.xdata[:, 0]
+                # y_raw = self.ydata
 
-                    if self.ndim == 1:
-                        x_raw = self.xdata
-                    elif self.ndim == 2:
-                        x_raw = self.xdata[:, 0]
-                    # y_raw = self.ydata
+                # creating array of 10000 test points across the range of the data
+                x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+                if self.xtransform is None:
+                    x_fine_transformed = x_fine_raw
+                elif isinstance(self.xtransform, Transformer):
+                    x_fine_transformed = self.xtransform.transform(x_fine_raw)
 
-                    # creating array of 10000 test points across the range of the data
-                    x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
-                    if self.xtransform is None:
-                        x_fine_transformed = x_fine_raw
-                    elif isinstance(self.xtransform, Transformer):
-                        x_fine_transformed = self.xtransform.transform(x_fine_raw)
-
-                    # Make predictions
-                    observed_pred = self.likelihood(self.model(x_fine_transformed))
-                    t['x_fine'] = [np.asarray(x_fine_raw)]
-                    t['y_pred_mean'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
-                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
-            elif self.__FITTED_MCMC:
-                raise NotImplementedError("MCMC predictions not yet implemented")
-                # with torch.no_grad():      
-      return t
+                # Make predictions
+                observed_pred = self.likelihood(self.model(x_fine_transformed))
+                t['x_fine'] = [np.asarray(x_fine_raw)]
+                t['y_pred_mean'] = [np.asarray(observed_pred.mean)]
+                t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
+                t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+        elif self.__FITTED_MCMC:
+            raise NotImplementedError("MCMC predictions not yet implemented")
+            # with torch.no_grad():      
+    return t
 
     def write_votable(self, filename):
         """Write the results to a votable file.
