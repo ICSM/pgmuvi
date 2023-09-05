@@ -251,7 +251,7 @@ def minmax(data, dim=0):
     return (data-m)/r, m, r
 
 
-class Lightcurve(torch.nn.Module):
+class Lightcurve(gpytorch.Module):
     """ A class for storing, manipulating and fitting light curves
 
     This class is designed to be a convenient way to store and manipulate
