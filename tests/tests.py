@@ -7,8 +7,6 @@ import numpy as np
 import torch
 
 test_zeros_one = torch.as_tensor([0, 0, 0, 0, 1], dtype=torch.float32)
-test_zeros_one_2d = torch.as_tensor([[0, 0, 0, 1], [0, 0, 0, 1]],
-                                    dtype=torch.float32)
 
 class TestTransformer(unittest.TestCase):
     def test_transform_implemented(self):
@@ -69,11 +67,67 @@ class TestRobustZScore(unittest.TestCase):
 
 
 class TestLightCurve(unittest.TestCase):
+    def setUp(self):
+        self.test_xdata = torch.as_tensor([1, 2, 3, 4], dtype=torch.float32)
+        self.test_ydata = torch.as_tensor([1, 2, 1, 2], dtype=torch.float32)
+        self.test_xdata_2d = torch.as_tensor([[1, 2, 3, 4], [1, 2, 3, 4]], dtype=torch.float32)
+        self.test_ydata_2d = torch.as_tensor([[1, 1, 1, 1], [1, 1, 1, 1]], dtype=torch.float32)
+        self.lightcurve = Lightcurve(self.test_xdata, self.test_ydata, yerr=self.test_ydata)
+        self.lightcurve_2d = Lightcurve(self.test_xdata_2d, self.test_ydata_2d)
+    
     def test_ndim(self):
-        lightcurve = Lightcurve(test_zeros_one, test_zeros_one)
-        lightcurves = Lightcurve(test_zeros_one_2d, test_zeros_one_2d)
-        self.assertEqual(lightcurve.ndim, 1)
-        self.assertEqual(lightcurves.ndim, 4)
+        self.assertEqual(self.lightcurve.ndim, 1)
+        self.assertEqual(self.lightcurve_2d.ndim, 4)
+        
+    def test_xdata_getter(self):
+        self.assertTrue(torch.equal(self.lightcurve.xdata, self.test_xdata))
+    
+    def test_xdata_setter_no_transform(self):
+        self.lightcurve.xtransform = None
+        self.lightcurve.xdata = self.test_xdata
+        self.assertTrue(torch.equal(self.lightcurve._xdata_raw, self.test_xdata))
+        self.assertTrue(torch.equal(self.lightcurve._xdata_transformed, self.test_xdata))
+    
+    def test_xdata_setter_with_transform(self):
+        xtransformer = self.lightcurve.xtransform
+        self.test_xdata_transformed = xtransformer.transform(self.test_xdata)
+        
+        self.lightcurve.xdata = self.test_xdata
+        self.assertTrue(torch.equal(self.lightcurve._xdata_raw, self.test_xdata))
+        self.assertTrue(torch.equal(self.lightcurve._xdata_transformed, self.test_xdata_transformed))
+
+    def test_ydata_getter(self):
+        self.assertTrue(torch.equal(self.lightcurve.ydata, self.test_ydata))
+    
+    def test_ydata_setter_no_transform(self):
+        self.lightcurve.ydata = self.test_ydata
+        self.assertTrue(torch.equal(self.lightcurve._ydata_raw, self.test_ydata))
+        self.assertTrue(torch.equal(self.lightcurve._ydata_transformed, self.test_ydata))
+    
+    def test_ydata_setter_with_transform(self):
+        self.lightcurve.ytransform = MinMax()
+        self.test_ydata_transformed = self.lightcurve.ytransform.transform(self.test_ydata)
+        
+        self.lightcurve.ydata = self.test_ydata
+        self.assertTrue(torch.equal(self.lightcurve._ydata_raw, self.test_ydata))
+        self.assertTrue(torch.equal(self.lightcurve._ydata_transformed, self.test_ydata_transformed))
+
+    def test_yerr_getter(self):
+        self.assertTrue(torch.equal(self.lightcurve.yerr, self.test_ydata))
+    
+    def test_yerr_setter_no_transform(self):
+        self.lightcurve.yerr = self.test_ydata
+        self.assertTrue(torch.equal(self.lightcurve._yerr_raw, self.test_ydata))
+        self.assertTrue(torch.equal(self.lightcurve._yerr_transformed, self.test_ydata))
+    
+    def test_yerr_setter_with_transform(self):
+        self.lightcurve.ytransform = MinMax()
+        self.test_yerr_transformed = self.lightcurve.ytransform.transform(self.test_ydata)
+        
+        self.lightcurve.yerr = self.test_ydata
+        self.assertTrue(torch.equal(self.lightcurve._yerr_raw, self.test_ydata))
+        self.assertTrue(torch.equal(self.lightcurve._yerr_transformed, self.test_yerr_transformed))
+
 
 
 class TestTrain(unittest.TestCase):
