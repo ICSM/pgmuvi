@@ -19,6 +19,7 @@ from pyro.infer.mcmc import NUTS, MCMC, HMC
 from inspect import isclass
 import xarray as xr
 import arviz as az
+import warnings
 
 
 def _reraise_with_note(e, note):
@@ -311,7 +312,13 @@ class Lightcurve(object):
 
     @xdata.setter
     def xdata(self, values):
-        # first, store the raw data internally
+        # first, check that the input is a tensor
+        # and modifiy it if necessary
+        values = self._ensure_tensor(values)
+        # check that the input has more than one element
+        # and raise an exception if not
+        #self._ensure_dim(values)
+        # then, store the raw data internally
         self._xdata_raw = values
         # then, apply the transformation to the values, so it can be used to
         # train the GP
@@ -333,7 +340,10 @@ class Lightcurve(object):
 
     @ydata.setter
     def ydata(self, values):
-        # first, store the raw data internally
+        # first, check that the input is a tensor
+        # and modifiy it if necessary
+        values = self._ensure_tensor(values)
+        # then, store the raw data internally
         self._ydata_raw = values
         # then, apply the transformation to the values
         if self.ytransform is None:
@@ -355,12 +365,29 @@ class Lightcurve(object):
 
     @yerr.setter
     def yerr(self, values):
+        # first, check that the input is a tensor
+        # and modifiy it if necessary
+        values = self._ensure_tensor(values)
+        # then, store the raw data internally
         self._yerr_raw = values
         # now apply the same transformation that was applied to the ydata
         if self.ytransform is None:
             self._yerr_transformed = values
         elif isinstance(self.ytransform, Transformer):
             self._yerr_transformed = self.ytransform.transform(values)
+            
+    def _ensure_tensor(self, values):
+        # Ensures that the input data has type torch.Tensor
+        # Transforms the data if necessary
+        if not isinstance(values, torch.Tensor):
+            warnings.warn('The function expects a torch.Tensor as input. Your data will be converted to a tensor.')
+            values = torch.as_tensor(values, dtype=torch.float32)
+        return values
+    
+    def _ensure_dim(self, values):
+        # Ensures that the input data has more than one element
+        # Returns an exception if not
+        pass
 
     def append_data(self, new_values_x, new_values_y):
         pass
