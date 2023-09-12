@@ -317,7 +317,7 @@ class Lightcurve(object):
         values = self._ensure_tensor(values)
         # check that the input has more than one element
         # and raise an exception if not
-        #self._ensure_dim(values)
+        values = self._ensure_dim(values)
         # then, store the raw data internally
         self._xdata_raw = values
         # then, apply the transformation to the values, so it can be used to
@@ -375,19 +375,27 @@ class Lightcurve(object):
             self._yerr_transformed = values
         elif isinstance(self.ytransform, Transformer):
             self._yerr_transformed = self.ytransform.transform(values)
-            
+
     def _ensure_tensor(self, values):
         # Ensures that the input data has type torch.Tensor
         # Transforms the data if necessary
         if not isinstance(values, torch.Tensor):
-            warnings.warn('The function expects a torch.Tensor as input. Your data will be converted to a tensor.')
+            warnings.warn('The function expects a torch.Tensor as input.' \
+                'Your data will be converted to a tensor.',
+                stacklevel=2)
             values = torch.as_tensor(values, dtype=torch.float32)
         return values
-    
+
     def _ensure_dim(self, values):
         # Ensures that the input data has more than one element
         # Returns an exception if not
-        pass
+        if values.numel() == 1:
+            raise ValueError('The input data must have more than one element.')
+        #elif values.numel() < threshold:
+        #    warnings.warn('The input data has less than threshold elements.' \
+        #        'This may lead to poor performance.',
+        #        stacklevel=2)
+        return values
 
     def append_data(self, new_values_x, new_values_y):
         pass
