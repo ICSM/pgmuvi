@@ -380,9 +380,9 @@ class Lightcurve(object):
         # Ensures that the input data has type torch.Tensor
         # Transforms the data if necessary
         if not isinstance(values, torch.Tensor):
-            warnings.warn('The function expects a torch.Tensor as input.' \
-                'Your data will be converted to a tensor.',
-                stacklevel=2)
+            warnings.warn(('The function expects a torch.Tensor as input.'
+                           'Your data will be converted to a tensor.'),
+                          stacklevel=2)
             values = torch.as_tensor(values, dtype=torch.float32)
         return values
 
@@ -392,8 +392,8 @@ class Lightcurve(object):
         if values.numel() == 1:
             raise ValueError('The input data must have more than one element.')
         #elif values.numel() < threshold:
-        #    warnings.warn('The input data has less than threshold elements.' \
-        #        'This may lead to poor performance.',
+        #    warnings.warn(('The input data has less than threshold elements.'
+        #        'This may lead to poor performance.'),
         #        stacklevel=2)
         return values
 
