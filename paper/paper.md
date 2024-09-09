@@ -49,7 +49,7 @@ bibliography: paper.bib
 
 # Summary
 
-Time-domain observations are increasingly important in astronomy, and are often the only way to study certain objects.
+Time-domain observations have long been central to astronomy, providing critical insights into various celestial phenomena, and their importance continues to grow as modern surveys expand the volume and scope of available data. They are often the only way to study certain objects.
 The volume of time-series data is increasing dramatically as new surveys come online - for example, the Vera Rubin Observatory will produce 15 terabytes of data per night, and its Legacy Survey of Space and Time (LSST) is expected to produce five-year lightcurves for $>10^7$ sources, each consisting of 5 photometric bands.
 Historically, astronomers have worked with Fourier-based techniques such as the Lomb-Scargle periodogram or information-theoretic approaches; however, in recent years Bayesian and data-driven approaches such as Gaussian Process Regression (GPR) have gained traction.
 However, the computational complexity and steep learning curve of GPR has limited its adoption.
