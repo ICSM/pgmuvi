@@ -98,7 +98,7 @@ However, these each have their own limitations.
 `celerite` is extremely fast, but is limited to one-dimensional inputs, and thus cannot handle multiwavelength data, except under certain restrictive assumptions.
 Furthermore, since it achieves its speed through a specific form of kernel decomposition, it is not able to handle arbitrary covariance functions.
 It is therefore restricted to a small number of kernels with specific forms; while it is able to handle the most common astronomical timeseries by combining these kernels, not all signals can be modelled in this way.
-`tinygp` is a more general package, able to retain a high degree of flexibility while still being fast thanks to a `JAX`-based implementation, whic makes it feasible to implement models in `tinygp` that are equivalent to those in `pgmuvi`. 
+`tinygp` is a more general package, able to retain a high degree of flexibility while still being fast thanks to a `JAX`-based implementation, which makes it feasible to implement models in `tinygp` that are equivalent to those in `pgmuvi`. 
 However, `pgmuvi` is designed to provide an easier learning curve by packaging GPs with data transforms and inference routines.
 In essence, `tinygp` could in principle be used by `pgmuvi` as a GP backend instead of GPyTorch. 
 For a summary of the state of the art of GPR in astronomy, see the recent review by @arev_2023_gps.
