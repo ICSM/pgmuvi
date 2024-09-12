@@ -19,6 +19,7 @@ from pyro.infer.mcmc import NUTS, MCMC, HMC
 from inspect import isclass
 import xarray as xr
 import arviz as az
+import warnings
 
 
 def _reraise_with_note(e, note):
@@ -355,7 +356,13 @@ class Lightcurve(gpytorch.Module):
 
     @xdata.setter
     def xdata(self, values):
-        # first, store the raw data internally
+        # first, check that the input is a tensor
+        # and modifiy it if necessary
+        values = self._ensure_tensor(values)
+        # check that the input has more than one element
+        # and raise an exception if not
+        values = self._ensure_dim(values)
+        # then, store the raw data internally
         self.register_buffer('_xdata_raw', values)
         # then, apply the transformation to the values, so it can be used to
         # train the GP
@@ -378,7 +385,10 @@ class Lightcurve(gpytorch.Module):
 
     @ydata.setter
     def ydata(self, values):
-        # first, store the raw data internally
+        # first, check that the input is a tensor
+        # and modifiy it if necessary
+        values = self._ensure_tensor(values)
+        # then, store the raw data internally
         self.register_buffer('_ydata_raw', values)
         # then, apply the transformation to the values
         if self.ytransform is None:
@@ -401,7 +411,10 @@ class Lightcurve(gpytorch.Module):
 
     @yerr.setter
     def yerr(self, values):
-        # first, store the raw data internally
+        # first, check that the input is a tensor
+        # and modifiy it if necessary
+        values = self._ensure_tensor(values)
+        # then, store the raw data internally
         self.register_buffer('_yerr_raw', values)
         # now apply the same transformation that was applied to the ydata
         if self.ytransform is None:
@@ -409,6 +422,27 @@ class Lightcurve(gpytorch.Module):
         elif isinstance(self.ytransform, Transformer):
             self.register_buffer('_yerr_transformed',
                                  self.ytransform.transform(values))
+
+    def _ensure_tensor(self, values):
+        # Ensures that the input data has type torch.Tensor
+        # Transforms the data if necessary
+        if not isinstance(values, torch.Tensor):
+            warnings.warn(('The function expects a torch.Tensor as input.'
+                           'Your data will be converted to a tensor.'),
+                          stacklevel=2)
+            values = torch.as_tensor(values, dtype=torch.float32)
+        return values
+
+    def _ensure_dim(self, values):
+        # Ensures that the input data has more than one element
+        # Returns an exception if not
+        if values.numel() == 1:
+            raise ValueError('The input data must have more than one element.')
+        #elif values.numel() < threshold:
+        #    warnings.warn(('The input data has less than threshold elements.'
+        #        'This may lead to poor performance.'),
+        #        stacklevel=2)
+        return values
 
     def append_data(self, new_values_x, new_values_y):
         pass
@@ -1857,7 +1891,7 @@ class Lightcurve(gpytorch.Module):
         if debug:
             print(psd.shape)
         try:
-            psd = torch.logsumexp(torch.log(weights) + psd, dim=-1).squeeze()
+            psd = torch.logsumexp(torch.log(weights) + psd, dim=-3).squeeze()
         except RuntimeError:  # logsumexp tries to allocate a large array and
             # then do the summation so let's do it in a loop instead and see
             # if that avoids the problem
@@ -2113,13 +2147,18 @@ class Lightcurve(gpytorch.Module):
                 ax.set_xlabel("Iteration")
         plt.show()
 
-    def write_votable(self, filename):
-        """Write the results to a votable file.
+
+    def to_table(self):
+        """Create an astropy table with the results.
 
         Parameters
         ----------
-        filename : str
-            The name of the file to write to.
+        none
+
+        Returns
+        -------
+        tab_results : astropy.table.Table
+            Astropy table with the results.
         """
         from astropy.table import Table
         t = Table()
@@ -2178,4 +2217,16 @@ class Lightcurve(gpytorch.Module):
             elif self.__FITTED_MCMC:
                 raise NotImplementedError("MCMC predictions not yet implemented")
                 # with torch.no_grad():
+
+        return t
+
+    def write_votable(self, filename):
+        """Write the results to a votable file.
+
+        Parameters
+        ----------
+        filename : str
+            The name of the file to write to.
+        """
+        t = self.to_table()
         t.write(filename, format='votable', overwrite=True)
