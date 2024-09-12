@@ -150,7 +150,7 @@ def train(lightcurve=None, model=None, likelihood=None,
         optimizer.step()
         # Now update list of parameters
         if i > 0:
-            results['delta_loss'].append(loss.cpu().detach().numpy() - results['loss'][-1])
+            results['delta_loss'].append(loss.cpu().detach().numpy() - results['loss'][-1])  # noqa: E501
         results['loss'].append(loss.cpu().detach().numpy())
 
         if lightcurve is not None:
