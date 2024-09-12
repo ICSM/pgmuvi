@@ -1495,6 +1495,10 @@ class Lightcurve(gpytorch.Module):
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
 
+        weights = np.array(weights)
+        periods = np.array(periods)
+        scales = np.array(scales)
+
         return torch.as_tensor(periods), torch.as_tensor(weights), torch.as_tensor(scales)  # noqa: E501
 
     def get_parameters(self, raw=False, transform=True):
