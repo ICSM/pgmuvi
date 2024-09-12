@@ -1770,7 +1770,9 @@ class Lightcurve(object):
         norm = torchnorm(means, scales)
         if debug:
             print(norm)
-        psd = norm.log_prob(freq.unsqueeze(-1))
+        psd1 = norm.log_prob(freq.unsqueeze(-1))
+        psd2 = norm.log_prob(-freq.unsqueeze(-1))
+        psd = torch.log(0.5 * (torch.exp(psd1) + torch.exp(psd2)))
         if debug:
             print(psd.shape)
         try:
