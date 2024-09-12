@@ -13,4 +13,4 @@ jobs:
       with:
         # version: "latest"
         src: "./pgmuvi"
-        args: "check -v --show-source"
+        args: "check -v --output-format=full --show-fixes"

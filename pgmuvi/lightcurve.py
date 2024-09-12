@@ -45,8 +45,46 @@ def _reraise_with_note(e, note):
         e.args = (arg0,) + args[1:]
     raise e
 
+# Function to walk through nested dict and yield all values
+# Taken from https://stackoverflow.com/a/12507546/16164384
+def dict_walk_generator(indict, pre=None):
+    pre = pre[:] if pre else []
+    if isinstance(indict, dict):
+        for key, value in indict.items():
+            if isinstance(value, dict):
+                for d in dict_walk_generator(value, pre + [key]):
+                    yield d
+            elif isinstance(value, list) or isinstance(value, tuple):
+                for v in value:
+                    for d in dict_walk_generator(v, pre + [key]):
+                        yield d
+            else:
+                yield pre + [key, value]
+    else:
+        yield pre + [indict]
 
-class Transformer(object):
+
+class Transformer(torch.nn.Module):
+    def __init__(self):
+        """Baseclass for data transformers
+
+        This is a baseclass for data transformers, which are used to transform
+        data before it is passed to the GP.
+
+        Parameters
+        ----------
+
+        Examples
+        --------
+
+        Notes
+        -----
+        The baseclass has no implementation, and should not be used directly.
+        `__init__` is only implemented to allow the class to be subclassed and
+        ensure that `nn.Module` stuff is setup correctly. Subclasses should
+        implement the `transform` and `inverse` methods."""
+        super().__init__()
+
     def transform(self, data, **kwargs):
         """ Transform some data and return it, storing the parameters required
         to repeat or reverse the transform
@@ -90,8 +128,9 @@ class MinMax(Transformer):
             only the range needs to be applied.
         """
         if recalc or not hasattr(self, "min"):
-            self.min = torch.min(data, dim=dim, keepdim=True)[0]
-            self.range = torch.max(data, dim=dim, keepdim=True)[0] - self.min
+            self.register_buffer('min', torch.min(data, dim=dim, keepdim=True)[0])
+            self.register_buffer('range', torch.max(data, dim=dim, keepdim=True)[0]
+                                 - self.min)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-(shift*self.min[apply_to]))/self.range[apply_to]
@@ -137,7 +176,9 @@ class ZScore(Transformer):
         """
         if recalc or not hasattr(self, 'mean'):
             self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('mean', self.mean)
             self.sd = torch.std(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('sd', self.sd)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-(shift*self.mean[apply_to]))/self.sd[apply_to]
@@ -182,8 +223,10 @@ class RobustZScore(Transformer):
         """
         if recalc or not hasattr(self, 'mad'):
             self.median = torch.median(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('median', self.median)
             self.mad = torch.median(torch.abs(data - self.median),
                                     dim=dim, keepdim=True)[0]
+            self.register_buffer('mad', self.mad)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-shift*self.median[apply_to])/self.mad[apply_to]
@@ -209,7 +252,7 @@ def minmax(data, dim=0):
     return (data-m)/r, m, r
 
 
-class Lightcurve(object):
+class Lightcurve(gpytorch.Module):
     """ A class for storing, manipulating and fitting light curves
 
     This class is designed to be a convenient way to store and manipulate
@@ -257,6 +300,7 @@ class Lightcurve(object):
         ytransform : str or Transformer, optional
             The transform to apply to the y data, by default None
         """
+        super().__init__()
 
         transform_dic = {'minmax': MinMax(),
                          'zscore': ZScore(),
@@ -319,13 +363,14 @@ class Lightcurve(object):
         # and raise an exception if not
         values = self._ensure_dim(values)
         # then, store the raw data internally
-        self._xdata_raw = values
+        self.register_buffer('_xdata_raw', values)
         # then, apply the transformation to the values, so it can be used to
         # train the GP
         if self.xtransform is None:
-            self._xdata_transformed = values
+            self.register_buffer('_xdata_transformed', values)
         elif isinstance(self.xtransform, Transformer):
-            self._xdata_transformed = self.xtransform.transform(values)
+            self.register_buffer('_xdata_transformed',
+                                 self.xtransform.transform(values))
 
     @property
     def ydata(self):
@@ -344,12 +389,13 @@ class Lightcurve(object):
         # and modifiy it if necessary
         values = self._ensure_tensor(values)
         # then, store the raw data internally
-        self._ydata_raw = values
+        self.register_buffer('_ydata_raw', values)
         # then, apply the transformation to the values
         if self.ytransform is None:
-            self._ydata_transformed = values
+            self.register_buffer('_ydata_transformed', values)
         elif isinstance(self.ytransform, Transformer):
-            self._ydata_transformed = self.ytransform.transform(values)
+            self.register_buffer('_ydata_transformed',
+                                 self.ytransform.transform(values))
 
     @property
     def yerr(self):
@@ -369,12 +415,13 @@ class Lightcurve(object):
         # and modifiy it if necessary
         values = self._ensure_tensor(values)
         # then, store the raw data internally
-        self._yerr_raw = values
+        self.register_buffer('_yerr_raw', values)
         # now apply the same transformation that was applied to the ydata
         if self.ytransform is None:
-            self._yerr_transformed = values
+            self.register_buffer('_yerr_transformed', values)
         elif isinstance(self.ytransform, Transformer):
-            self._yerr_transformed = self.ytransform.transform(values)
+            self.register_buffer('_yerr_transformed',
+                                 self.ytransform.transform(values))
 
     def _ensure_tensor(self, values):
         # Ensures that the input data has type torch.Tensor
@@ -439,7 +486,7 @@ class Lightcurve(object):
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed)  # noqa: E501
         elif hasattr(self, '_yerr_transformed') and likelihood == "learn":
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,  # noqa: E501
-                                                                                learn_additional_noise=True)  # noqa: E501
+                                                                                learn_additional_noise=True)
         elif likelihood == "learn":
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood(learn_additional_noise=True)  # noqa: E501
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
@@ -688,8 +735,8 @@ class Lightcurve(object):
                                                                     apply_to=[0],
                                                                     shift=False))
                             constraint[key].lower_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].lower_bound,  # noqa: E501
-                                                                                                    apply_to=[0],  # noqa: E501
-                                                                                                    shift=False).item())  # noqa: E501
+                                                                                                    apply_to=[0],
+                                                                                                    shift=False).item())
                             if debug:
                                 print(constraint[key].lower_bound)
                                 print(constraint[key])
@@ -697,8 +744,8 @@ class Lightcurve(object):
                             not in [torch.tensor(0), torch.tensor(torch.inf)]):
                             # we need to transform the upper bound
                             constraint[key].upper_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].upper_bound,  # noqa: E501
-                                                                                                    apply_to=[0],  # noqa: E501
-                                                                                                    shift=False).item())  # noqa: E501
+                                                                                                    apply_to=[0],
+                                                                                                    shift=False).item())
                             if debug:
                                 print(constraint[key].upper_bound)
                                 print(constraint[key])
@@ -938,13 +985,40 @@ class Lightcurve(object):
     def _set_hypers_raw(self, hypers=None, **kwargs):
         pass
 
-    def cuda(self):
-        try:
-            self.model.cuda()
-            self.likelihood.cuda()
-        except AttributeError as e:
-            errmsg = "You must first set the model and likelihood"
-            _reraise_with_note(e, errmsg)
+    def cpu(self):
+        self.device = torch.device('cpu')
+        super().cpu()
+        for _ in dict_walk_generator(self._model_pars):
+            with contextlib.suppress(AttributeError):
+                _.cpu()
+
+
+    def cuda(self, device=0):
+        # First we should check that CUDA is available
+        if not torch.cuda.is_available():
+            raise RuntimeError("Cannot call cuda() if CUDA is not available")
+        # next we should log that we're using CUDA
+        self.device = torch.device(f"cuda:{device}")
+
+        # now we need to make sure that the usual nn.Module.cuda() method
+        # is called, so that all of the modules and buffers are moved to the GPU
+        super().cuda(device=device)
+
+        # but we've created a few extra things that need to be tracked.
+        # We have to make sure any tensors in those are also moved to the same device
+        for _ in dict_walk_generator(self._model_pars):
+            with contextlib.suppress(AttributeError):
+                _.cuda(device=device)
+
+        # for key in self._model_pars:
+        #     with contextlib.suppress(AttributeError):
+        #         self._model_pars[key]['param'] = self._model_pars[key]['param'].cuda(device=device) # noqa: E501
+        # try:
+        #     self.model.cuda()
+        #     self.likelihood.cuda()
+        # except AttributeError as e:
+        #     errmsg = "You must first set the model and likelihood"
+        #     _reraise_with_note(e, errmsg)
 
     def _train(self):
         try:
@@ -1109,6 +1183,7 @@ class Lightcurve(object):
              warmup_steps=100, num_chains=1,
              disable_progbar=False,
              max_cg_iterations=None,
+             cuda=False,
              **kwargs):
         '''Run an MCMC sampler on the model
 
@@ -1155,17 +1230,46 @@ class Lightcurve(object):
         # self._train()
         # self._eval()
 
+        if cuda:
+            self.cuda()
+
         if not self.__PRIORS_SET:
             self.set_default_priors()
 
         if max_cg_iterations is None:
             max_cg_iterations = 10000
 
+
+
         model = self.model
 
+        # mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, model)
+
+        # def pyro_model(x, y):
+        #     model.pyro_sample_from_prior()
+        #     output = model(x)
+        #     loss = mll.pyro_factor(output, y)
+        #     return y
+
         def pyro_model(x, y):
-            with (gpytorch.settings.fast_computations(False, False, False),
-                  gpytorch.settings.max_cg_iterations(max_cg_iterations)):
+            with (gpytorch.settings.fast_computations(False, False, False), gpytorch.settings.max_cg_iterations(max_cg_iterations)):  # noqa: E501
+                for key in self.state_dict().keys():
+                    print(key)
+                    with contextlib.suppress(AttributeError):
+                        print(self.state_dict()[key].device)
+                                #self.state_dict()[key] = self.state_dict()[key].cuda()
+                for param_name, param in self.model.named_parameters():
+                    print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
+                print(self.model.covar_module.mixture_means)
+                print(self.model.covar_module.mixture_scales)
+                print(self.model.covar_module.mixture_weights)
+                print(self.model.covar_module.mixture_means_prior)
+                print('----')
+                print("Lookup dict:")
+                for param_name, param in self._model_pars.items():
+                    print(param)
+                    print('----')
+                    #print(f'Parameter name: {param_name:42} value = {param["module"].value}, device = {param["module"].value.device}')  # noqa: E501
                 sampled_model = model.pyro_sample_from_prior()  # .detatch()
                 output = sampled_model.likelihood(sampled_model(x))  # .detatch()
                 pyro.sample("obs", output, obs=y)
@@ -1180,8 +1284,21 @@ class Lightcurve(object):
                              num_chains=num_chains,
                              disable_progbar=disable_progbar)
         import linear_operator.utils.errors as linear
+        for key in self.state_dict().keys():
+            print(key)
+            with contextlib.suppress(AttributeError):
+                print(self.state_dict()[key].device)
+                #self.state_dict()[key] = self.state_dict()[key].cuda()
+        for param_name, param in self.model.named_parameters():
+            print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
+
+
         try:
-            self.mcmc_run.run(self._xdata_transformed, self._ydata_transformed)
+            if cuda:
+                self.mcmc_run.run(self._xdata_transformed.cuda(),
+                                  self._ydata_transformed.cuda())
+            else:
+                self.mcmc_run.run(self._xdata_transformed, self._ydata_transformed)
         except linear.NanError as e:
             print("NaNError encountered, returning None")
             print(list(model.named_parameters()))
@@ -1205,14 +1322,14 @@ class Lightcurve(object):
 
         self.inference_data.posterior['transformed_periods'] = transformed_mcmc_periods
         self.inference_data.posterior['raw_periods'] = xr.DataArray(raw_mcmc_periods.reshape(self.post['covar_module.mixture_means_prior'].shape),  # noqa: E501
-                                                                    coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)  # noqa: E501
+                                                                    coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)
         self.inference_data.posterior['raw_frequencies'] = xr.DataArray(raw_mcmc_frequencies.reshape(self.post['covar_module.mixture_means_prior'].shape),  # noqa: E501
-                                                                        coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes) # noqa: E501
+                                                                        coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)
         self.inference_data.posterior['transformed_period_scales'] = transformed_mcmc_period_scales  # noqa: E501
         self.inference_data.posterior['raw_period_scales'] = xr.DataArray(raw_mcmc_period_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),  # noqa: E501
-                                                                          coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)  # noqa: E501
+                                                                          coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)
         self.inference_data.posterior['raw_frequency_scales'] = xr.DataArray(raw_mcmc_frequency_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),  # noqa: E501
-                                                                             coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)  # noqa: E501
+                                                                             coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)
 
         # self.mcmc_results = mcmc(self, sampler, **kwargs)
 
@@ -1330,7 +1447,7 @@ class Lightcurve(object):
                     p = 1/self.model.covar_module.mixture_means[i]
                 else:
                     p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i],  # noqa: E501
-                                                shift=False).detach().numpy()[0]
+                                                shift=False).cpu().detach().numpy()[0]
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
@@ -1340,7 +1457,7 @@ class Lightcurve(object):
                     p = 1/self.model.covar_module.mixture_means[i, 0]
                 else:
                     p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i, 0],  # noqa: E501
-                                                shift=False).detach().numpy()[0, 0]
+                                                shift=False).cpu().detach().numpy()[0, 0]  # noqa: E501
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
@@ -1360,9 +1477,9 @@ class Lightcurve(object):
                     scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]))
                 else:
                     p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i],  # noqa: E501
-                                                shift=False).detach().numpy()[0]
+                                                shift=False).cpu().detach().numpy()[0]
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]),
-                                                          shift=False).detach().numpy()[0])
+                                                          shift=False).cpu().detach().numpy()[0])
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
         elif self.ndim == 2:
@@ -1372,9 +1489,9 @@ class Lightcurve(object):
                     scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]))  # noqa: E501
                 else:
                     p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i, 0],  # noqa: E501
-                                                shift=False).detach().numpy()[0, 0]
+                                                shift=False).cpu().detach().numpy()[0, 0]  # noqa: E501
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),  # noqa: E501
-                                                shift=False).detach().numpy()[0, 0])
+                                                shift=False).cpu().detach().numpy()[0, 0])  # noqa: E501
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
 
@@ -1795,7 +1912,7 @@ class Lightcurve(object):
         if debug:
             print(psd.shape)
         if not log:
-            psd = psd.exp().detach().numpy()
+            psd = psd.exp().cpu().detach().numpy()
         return psd
 
     def plot(self, ylim=None, show=True,
@@ -1905,7 +2022,7 @@ class Lightcurve(object):
         if self.xtransform is None:
             self.x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
-            self.x_fine_transformed = self.xtransform.transform(x_fine_raw)
+            self.x_fine_transformed = self.xtransform.transform(x_fine_raw.to(self.xtransform.min.device))  # noqa: E501
 
         self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(self.num_samples, 1, 1)  # .unsqueeze(0)  # noqa: E501
         print(self.x_fine_transformed.shape)
@@ -1914,10 +2031,11 @@ class Lightcurve(object):
         with torch.no_grad():
             f, ax = plt.subplots(1, 1, figsize=(8, 6))
             # Plot training data as black stars
-            ax.plot(self.xdata.numpy(), self.ydata.numpy(), 'k*')
+            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), 'k*')
             for i in range(min(n_samples_to_plot, self.num_samples)):
                 # Plot predictive samples as colored lines
-                ax.plot(x_fine_raw.numpy(), output[i].sample().numpy(), 'b', alpha=0.2)
+                ax.plot(x_fine_raw.cpu().numpy(), output[i].sample().cpu().numpy(), 'b',
+                        alpha=0.2)
 
             ax.legend(['Observed Data', 'Sample means'])
             if ylim is not None:
@@ -1933,7 +2051,7 @@ class Lightcurve(object):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
-            x_fine_transformed = self.xtransform.transform(x_fine_raw)
+            x_fine_transformed = self.xtransform.transform(x_fine_raw.to(self.xtransform.min.device))  # noqa: E501
 
         # Make predictions
         observed_pred = self.likelihood(self.model(x_fine_transformed))
@@ -1945,14 +2063,14 @@ class Lightcurve(object):
         lower, upper = observed_pred.confidence_region()
 
         # Plot training data as black stars
-        ax.plot(self.xdata.numpy(), self.ydata.numpy(), 'k*')
+        ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), 'k*')
 
         # Plot predictive GP mean as blue line
-        ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
+        ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), 'b')
 
         # Shade between the lower and upper confidence bounds
-        ax.fill_between(x_fine_raw.numpy(),
-                        lower.numpy(), upper.numpy(),
+        ax.fill_between(x_fine_raw.cpu().numpy(),
+                        lower.cpu().numpy(), upper.cpu().numpy(),
                         alpha=0.5)
         if ylim is not None:
             ax.set_ylim(ylim)
@@ -1968,7 +2086,7 @@ class Lightcurve(object):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
-            x_fine_transformed = self.xtransform.transform(x_fine_raw,
+            x_fine_transformed = self.xtransform.transform(x_fine_raw.to(self.xtransform.min.device), # noqa: E501
                                                            apply_to=(0, 0))
         unique_values_axis2 = torch.unique(self.xdata[:,1])
         figs = []
@@ -1985,11 +2103,11 @@ class Lightcurve(object):
                                    dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            ax.plot(x_fine_raw.numpy(), observed_pred.mean.numpy(), 'b')
+            ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), 'b')
 
             lower, upper = observed_pred.confidence_region()
-            ax.fill_between(x_fine_raw.numpy(),
-                            lower.numpy(), upper.numpy(),
+            ax.fill_between(x_fine_raw.cpu().numpy(),
+                            lower.cpu().numpy(), upper.cpu().numpy(),
                             alpha=0.5)
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
 
@@ -2046,10 +2164,10 @@ class Lightcurve(object):
         """
         from astropy.table import Table
         t = Table()
-        t['x'] = [np.asarray(self.xdata)]
-        t['y'] = [np.asarray(self.ydata)]
+        t['x'] = [np.asarray(self.xdata.cpu())]
+        t['y'] = [np.asarray(self.ydata.cpu())]
         if hasattr(self, 'yerr'):
-            t['yerr'] = [np.asarray(self.yerr)]
+            t['yerr'] = [np.asarray(self.yerr.cpu())]
         if self.__FITTED_MCMC or self.__FITTED_MAP:
             # These outputs can only be produced if a fit has been run.
             periods, weights, scales = self.get_periods()
@@ -2057,16 +2175,16 @@ class Lightcurve(object):
             try:
                 t['weights'] = [np.asarray(weights)]
             except RuntimeError:
-                t['weights'] = [torch.as_tensor(weights).detach().numpy()]
+                t['weights'] = [torch.as_tensor(weights).cpu().detach().numpy()]
             try:
                 t['scales'] = [np.asarray(scales)]
             except RuntimeError:
-                t['scales'] = [torch.as_tensor(scales).detach().numpy()]
+                t['scales'] = [torch.as_tensor(scales).cpu().detach().numpy()]
             for key, value in self.results.items():
                 try:
                     t[key] = [np.asarray(value)]
                 except RuntimeError:
-                    t[key] = [torch.as_tensor(value).detach().numpy()]
+                    t[key] = [torch.as_tensor(value).cpu().detach().numpy()]
             if self.__FITTED_MAP:
                 # Loss isn't relevant for MCMC, I think
                 t['loss'] = [np.asarray(self.results['loss'])]
@@ -2075,9 +2193,9 @@ class Lightcurve(object):
                 self._eval()
                 with torch.no_grad():
                     observed_pred = self.likelihood(self.model(self._xdata_transformed))
-                    t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
-                    t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+                    t['y_pred_mean_obs'] = [np.asarray(observed_pred.mean.cpu())]
+                    t['y_pred_lower_obs'] = [np.asarray(observed_pred.confidence_region()[0].cpu())]  # noqa: E501
+                    t['y_pred_upper_obs'] = [np.asarray(observed_pred.confidence_region()[1].cpu())]   # noqa: E501
 
                     if self.ndim == 1:
                         x_raw = self.xdata
@@ -2090,14 +2208,14 @@ class Lightcurve(object):
                     if self.xtransform is None:
                         x_fine_transformed = x_fine_raw
                     elif isinstance(self.xtransform, Transformer):
-                        x_fine_transformed = self.xtransform.transform(x_fine_raw)
+                        x_fine_transformed = self.xtransform.transform(x_fine_raw.to(self.xtransform.min.device))  # noqa: E501
 
                     # Make predictions
                     observed_pred = self.likelihood(self.model(x_fine_transformed))
-                    t['x_fine'] = [np.asarray(x_fine_raw)]
-                    t['y_pred_mean'] = [np.asarray(observed_pred.mean)]
-                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0])]  # noqa: E501
-                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1])]   # noqa: E501
+                    t['x_fine'] = [np.asarray(x_fine_raw.cpu())]
+                    t['y_pred_mean'] = [np.asarray(observed_pred.mean.cpu())]
+                    t['y_pred_lower'] = [np.asarray(observed_pred.confidence_region()[0].cpu())]  # noqa: E501
+                    t['y_pred_upper'] = [np.asarray(observed_pred.confidence_region()[1].cpu())]   # noqa: E501
             elif self.__FITTED_MCMC:
                 raise NotImplementedError("MCMC predictions not yet implemented")
                 # with torch.no_grad():
