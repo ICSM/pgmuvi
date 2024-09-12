@@ -452,7 +452,7 @@ class Lightcurve(gpytorch.Module):
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed)  # noqa: E501
         elif hasattr(self, '_yerr_transformed') and likelihood == "learn":
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(self._yerr_transformed,  # noqa: E501
-                                                                                learn_additional_noise=True)  # noqa: E501
+                                                                                learn_additional_noise=True)
         elif likelihood == "learn":
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood(learn_additional_noise=True)  # noqa: E501
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
@@ -701,8 +701,8 @@ class Lightcurve(gpytorch.Module):
                                                                     apply_to=[0],
                                                                     shift=False))
                             constraint[key].lower_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].lower_bound,  # noqa: E501
-                                                                                                    apply_to=[0],  # noqa: E501
-                                                                                                    shift=False).item())  # noqa: E501
+                                                                                                    apply_to=[0],
+                                                                                                    shift=False).item())
                             if debug:
                                 print(constraint[key].lower_bound)
                                 print(constraint[key])
@@ -710,8 +710,8 @@ class Lightcurve(gpytorch.Module):
                             not in [torch.tensor(0), torch.tensor(torch.inf)]):
                             # we need to transform the upper bound
                             constraint[key].upper_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].upper_bound,  # noqa: E501
-                                                                                                    apply_to=[0],  # noqa: E501
-                                                                                                    shift=False).item())  # noqa: E501
+                                                                                                    apply_to=[0],
+                                                                                                    shift=False).item())
                             if debug:
                                 print(constraint[key].upper_bound)
                                 print(constraint[key])
@@ -978,7 +978,7 @@ class Lightcurve(gpytorch.Module):
 
         # for key in self._model_pars:
         #     with contextlib.suppress(AttributeError):
-        #         self._model_pars[key]['param'] = self._model_pars[key]['param'].cuda(device=device)
+        #         self._model_pars[key]['param'] = self._model_pars[key]['param'].cuda(device=device) # noqa: E501
         # try:
         #     self.model.cuda()
         #     self.likelihood.cuda()
@@ -1218,15 +1218,12 @@ class Lightcurve(gpytorch.Module):
         #     return y
 
         def pyro_model(x, y):
-            with (gpytorch.settings.fast_computations(False, False, False),
-                  gpytorch.settings.max_cg_iterations(max_cg_iterations)):
+            with (gpytorch.settings.fast_computations(False, False, False), gpytorch.settings.max_cg_iterations(max_cg_iterations)):  # noqa: E501
                 for key in self.state_dict().keys():
                     print(key)
-                    try:
+                    with contextlib.suppress(AttributeError):
                         print(self.state_dict()[key].device)
-                    except AttributeError:
-                        pass
-                    #self.state_dict()[key] = self.state_dict()[key].cuda()
+                                #self.state_dict()[key] = self.state_dict()[key].cuda()
                 for param_name, param in self.model.named_parameters():
                     print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
                 print(self.model.covar_module.mixture_means)
@@ -1255,11 +1252,9 @@ class Lightcurve(gpytorch.Module):
         import linear_operator.utils.errors as linear
         for key in self.state_dict().keys():
             print(key)
-            try:
+            with contextlib.suppress(AttributeError):
                 print(self.state_dict()[key].device)
-            except AttributeError:
-                pass
-            #self.state_dict()[key] = self.state_dict()[key].cuda()
+                #self.state_dict()[key] = self.state_dict()[key].cuda()
         for param_name, param in self.model.named_parameters():
             print(f'Parameter name: {param_name:42} value = {param.data}, device = {param.data.device}')  # noqa: E501
 
@@ -1293,14 +1288,14 @@ class Lightcurve(gpytorch.Module):
 
         self.inference_data.posterior['transformed_periods'] = transformed_mcmc_periods
         self.inference_data.posterior['raw_periods'] = xr.DataArray(raw_mcmc_periods.reshape(self.post['covar_module.mixture_means_prior'].shape),  # noqa: E501
-                                                                    coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)  # noqa: E501
+                                                                    coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)
         self.inference_data.posterior['raw_frequencies'] = xr.DataArray(raw_mcmc_frequencies.reshape(self.post['covar_module.mixture_means_prior'].shape),  # noqa: E501
-                                                                        coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes) # noqa: E501
+                                                                        coords=self.inference_data.posterior['covar_module.mixture_means_prior'].indexes)
         self.inference_data.posterior['transformed_period_scales'] = transformed_mcmc_period_scales  # noqa: E501
         self.inference_data.posterior['raw_period_scales'] = xr.DataArray(raw_mcmc_period_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),  # noqa: E501
-                                                                          coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)  # noqa: E501
+                                                                          coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)
         self.inference_data.posterior['raw_frequency_scales'] = xr.DataArray(raw_mcmc_frequency_scales.reshape(self.post['covar_module.mixture_scales_prior'].shape),  # noqa: E501
-                                                                             coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)  # noqa: E501
+                                                                             coords=self.inference_data.posterior['covar_module.mixture_scales_prior'].indexes)
 
         # self.mcmc_results = mcmc(self, sampler, **kwargs)
 
@@ -1428,7 +1423,7 @@ class Lightcurve(gpytorch.Module):
                     p = 1/self.model.covar_module.mixture_means[i, 0]
                 else:
                     p = self.xtransform.inverse(1/self.model.covar_module.mixture_means[i, 0],  # noqa: E501
-                                                shift=False).cpu().detach().numpy()[0, 0]
+                                                shift=False).cpu().detach().numpy()[0, 0]  # noqa: E501
                 print(f"Period {i}: "
                       f"{p}"
                       f" weight: {self.model.covar_module.mixture_weights[i]}")
@@ -1460,9 +1455,9 @@ class Lightcurve(gpytorch.Module):
                     scales.append(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]))  # noqa: E501
                 else:
                     p = self.xtransform.inverse(1/self.model.sci_kernel.mixture_means[i, 0],  # noqa: E501
-                                                shift=False).cpu().detach().numpy()[0, 0]
+                                                shift=False).cpu().detach().numpy()[0, 0]  # noqa: E501
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),  # noqa: E501
-                                                shift=False).cpu().detach().numpy()[0, 0])
+                                                shift=False).cpu().detach().numpy()[0, 0])  # noqa: E501
                 periods.append(p)
                 weights.append(self.model.sci_kernel.mixture_weights[i])
 
