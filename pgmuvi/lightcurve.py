@@ -1739,7 +1739,7 @@ class Lightcurve(object):
         if debug:
             print(psd.shape)
         try:
-            psd = torch.logsumexp(torch.log(weights) + psd, dim=-1).squeeze()
+            psd = torch.logsumexp(torch.log(weights) + psd, dim=-3).squeeze()
         except RuntimeError:  # logsumexp tries to allocate a large array and
             # then do the summation so let's do it in a loop instead and see
             # if that avoids the problem
