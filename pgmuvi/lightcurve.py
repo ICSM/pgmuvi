@@ -1896,9 +1896,13 @@ class Lightcurve(gpytorch.Module):
         norm = torchnorm(means, scales)
         if debug:
             print(norm)
-        if isinstance(freq, tuple):
+        if self.ndim > 1:
+          if not isinstance(freq, tuple):
+            raise ValueError("freq must be a tuple of array_likes for multidimensional light curves!")
           if len(freq) > 2:
             raise NotImplementedError("PSD for more than two duals not implemented yet")
+          if len(freq) != self.ndim:
+            raise ValueError("freq must have the same number of duals as the number of light curve dimensions!")
           f1, f2 = freq
           norm1 = torchnorm(means[..., -2], scales[..., -2])
           norm2 = torchnorm(means[..., -1], scales[..., -1])
@@ -1911,7 +1915,7 @@ class Lightcurve(gpytorch.Module):
             print(f"{e}. Chunking not implemented yet in compute_psd.")
         else:
           if len(freq.shape) > 1:
-            raise ValueError("array-like freq must be one-dimensional!")
+            raise ValueError("array-like freq must be one-dimensional for 1D light curves!")
           f1 = torch.as_tensor(freq)
           # marginalise over Fourier dual variables
           psd1 = norm.log_prob(f1.unsqueeze(-1)).sum(dim=-1)
