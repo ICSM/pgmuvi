@@ -1889,35 +1889,27 @@ class Lightcurve(gpytorch.Module):
         norm = torchnorm(means, scales)
         if debug:
             print(norm)
-        psd1 = norm.log_prob(freq.unsqueeze(-1))
-        psd2 = norm.log_prob(-freq.unsqueeze(-1))
-        psd = torch.log(0.5 * (torch.exp(psd1) + torch.exp(psd2)))
-        if len(psd.shape) < len(means.shape):
-          psd = psd.unsqueeze(-1)
-        if debug:
-            print(psd.shape)
+        psd1 = norm.log_prob(freq.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
+        psd2 = norm.log_prob(-freq.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
+        psd = torch.log(torch.Tensor([0.5])) + psd1 + torch.log(1.0 + torch.exp(psd2 - psd1))
+        # psd = torch.log(0.5 * (torch.exp(psd1) + torch.exp(psd2)))
+        # if len(psd.shape) < len(means.shape):
+        #   psd = psd.unsqueeze(-1)
+        # if debug:
+        #     print(psd.shape)
         try:
-            psd = torch.logsumexp(torch.log(weights) + psd, dim=-3).squeeze()
+            psd_tot = torch.logsumexp(torch.log(weights.unsqueeze(-1)) + psd, dim=-2)
         except RuntimeError:  # logsumexp tries to allocate a large array and
             # then do the summation so let's do it in a loop instead and see
             # if that avoids the problem
-            logweights = torch.log(weights)
-            for i in range(means.shape[-2]):
-                if i == 0:
-                    psd = logweights[..., i] + psd[..., i]
-                else:
-                    psd += logweights[..., i] + psd[..., i]
-            psd = logweights + psd
-            for i in range(len(weights)):
-                if i == 0:
-                    psd = weights[i] * torch.exp(psd[i])
-                else:
-                    psd += weights[i] * torch.exp(psd[i])
+            psd_tot = torch.zeros_like(freq)
+            for i in range(len(freq[0])):
+              psd_tot[i] = torch.logsumexp(torch.log(weights) + psd[..., i], dim=-1)
         if debug:
-            print(psd.shape)
+            print(psd_tot.shape)
         if not log:
-            psd = psd.exp().cpu().detach().numpy()
-        return psd
+            psd_tot = psd_tot.exp().cpu().detach().numpy()
+        return psd_tot
 
     def plot(self, ylim=None, show=True,
              mcmc_samples=False, **kwargs):
