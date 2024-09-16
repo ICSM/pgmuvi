@@ -1902,23 +1902,14 @@ class Lightcurve(gpytorch.Module):
         except RuntimeError:  # logsumexp tries to allocate a large array and
             # then do the summation so let's do it in a loop instead and see
             # if that avoids the problem
-            logweights = torch.log(weights)
-            for i in range(means.shape[-2]):
-                if i == 0:
-                    psd = logweights[..., i] + psd[..., i]
-                else:
-                    psd += logweights[..., i] + psd[..., i]
-            psd = logweights + psd
-            for i in range(len(weights)):
-                if i == 0:
-                    psd = weights[i] * torch.exp(psd[i])
-                else:
-                    psd += weights[i] * torch.exp(psd[i])
+            psd_tot = torch.zeros_like(freq)
+            for i in range(len(freq[0])):
+              psd_tot[i] = torch.logsumexp(torch.log(weights) + psd[..., i], dim=-1)
         if debug:
-            print(psd.shape)
+            print(psd_tot.shape)
         if not log:
-            psd = psd.exp().cpu().detach().numpy()
-        return psd
+            psd_tot = psd_tot.exp().cpu().detach().numpy()
+        return psd_tot
 
     def plot(self, ylim=None, show=True,
              mcmc_samples=False, **kwargs):
