@@ -1479,7 +1479,7 @@ class Lightcurve(gpytorch.Module):
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]),
                                                           shift=False).cpu().detach().numpy()[0])
                 periods.append(p)
-                weights.append(self.model.sci_kernel.mixture_weights[i])
+                weights.append(self.model.sci_kernel.mixture_weights[i].detach().numpy())
         elif self.ndim == 2:
             for i in range(len(self.model.sci_kernel.mixture_means[:, 0])):
                 if self.xtransform is None:
@@ -1491,7 +1491,7 @@ class Lightcurve(gpytorch.Module):
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),  # noqa: E501
                                                 shift=False).cpu().detach().numpy()[0, 0])  # noqa: E501
                 periods.append(p)
-                weights.append(self.model.sci_kernel.mixture_weights[i])
+                weights.append(self.model.sci_kernel.mixture_weights[i].detach().numpy())
 
         weights = np.array(weights)
         periods = np.array(periods)
