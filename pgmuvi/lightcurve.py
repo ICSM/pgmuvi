@@ -915,6 +915,11 @@ class Lightcurve(gpytorch.Module):
                                                                         mean_const_constraint)
         # this should correspond to the longest frequency entirely
         # contained in the dataset:
+        if self.ndim > 1:
+            print("""\033[31mWARNING:\033[0m default constraints on mixture means
+                  are not yet implemented for 2D data \n
+                  \033[31mPLEASE SET CONSTRAINTS MANUALLY\033[0m""")
+            return
         mixture_means_constraint = GreaterThan(1/self._xdata_transformed.max())
         self._model_pars['mixture_means']['module'].register_constraint("raw_mixture_means",
                                                                         mixture_means_constraint)
