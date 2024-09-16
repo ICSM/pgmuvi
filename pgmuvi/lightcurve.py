@@ -915,6 +915,11 @@ class Lightcurve(gpytorch.Module):
                                                                         mean_const_constraint)
         # this should correspond to the longest frequency entirely
         # contained in the dataset:
+        if self.ndim > 1:
+            print("""\033[31mWARNING:\033[0m default constraints on mixture means
+                  are not yet implemented for 2D data \n
+                  \033[31mPLEASE SET CONSTRAINTS MANUALLY\033[0m""")
+            return
         mixture_means_constraint = GreaterThan(1/self._xdata_transformed.max())
         self._model_pars['mixture_means']['module'].register_constraint("raw_mixture_means",
                                                                         mixture_means_constraint)
@@ -1479,7 +1484,7 @@ class Lightcurve(gpytorch.Module):
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i]),
                                                           shift=False).cpu().detach().numpy()[0])
                 periods.append(p)
-                weights.append(self.model.sci_kernel.mixture_weights[i])
+                weights.append(self.model.sci_kernel.mixture_weights[i].detach().numpy())
         elif self.ndim == 2:
             for i in range(len(self.model.sci_kernel.mixture_means[:, 0])):
                 if self.xtransform is None:
@@ -1491,7 +1496,7 @@ class Lightcurve(gpytorch.Module):
                     scales.append(self.xtransform.inverse(1/(2*torch.pi*self.model.sci_kernel.mixture_scales[i, 0]),  # noqa: E501
                                                 shift=False).cpu().detach().numpy()[0, 0])  # noqa: E501
                 periods.append(p)
-                weights.append(self.model.sci_kernel.mixture_weights[i])
+                weights.append(self.model.sci_kernel.mixture_weights[i].detach().numpy())
 
         weights = np.array(weights)
         periods = np.array(periods)
