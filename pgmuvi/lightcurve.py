@@ -1899,7 +1899,8 @@ class Lightcurve(gpytorch.Module):
           norm2 = torchnorm(means[..., -1], scales[..., -1])
           psd = norm1.log_prob(f1).unsqueeze(-1) + norm2.log_prob(f2).unsqueeze(1)
           try:
-            psd_tot = torch.logsumexp(torch.log(weights.unsqueeze(-1).unsqueeze(-1)) + psd, dim=-3)
+            psd_tot = torch.logsumexp(torch.log(weights.unsqueeze(-1).unsqueeze(-1))
+                                      + psd, dim=-3)
           except RuntimeError as e:
             #chunk it
             print(f"{e}. Chunking not implemented yet in compute_psd.")
@@ -1907,17 +1908,25 @@ class Lightcurve(gpytorch.Module):
           if len(freq.shape) > 1:
             raise ValueError("array-like freq must be one-dimensional!")
           f1 = torch.as_tensor(freq)
-          psd1 = norm.log_prob(f1.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
-          psd2 = norm.log_prob(-f1.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
-          psd = torch.log(torch.Tensor([0.5])) + psd1 + torch.log(1.0 + torch.exp(psd2 - psd1))
+          # marginalise over Fourier dual variables
+          psd1 = norm.log_prob(f1.unsqueeze(-1)).sum(dim=-1)
+          # marginalise over Fourier dual variables
+          psd2 = norm.log_prob(-f1.unsqueeze(-1)).sum(dim=-1)
+          psd = (torch.log(torch.Tensor([0.5]))
+                 + psd1
+                 + torch.log(1.0 + torch.exp(psd2 - psd1)))
           try:
-              psd_tot = torch.logsumexp(torch.log(weights.unsqueeze(-1)) + psd, dim=-2)
+              psd_tot = torch.logsumexp(torch.log(weights.unsqueeze(-1))
+                                        + psd,
+                                        dim=-2)
           except RuntimeError:  # logsumexp tries to allocate a large array and
               # then do the summation so let's do it in a loop instead and see
               # if that avoids the problem
               psd_tot = torch.zeros_like(f1)
               for i in range(len(freq[0])):
-                  psd_tot[i] = torch.logsumexp(torch.log(weights) + psd[..., i], dim=-1)
+                  psd_tot[i] = torch.logsumexp(torch.log(weights)
+                                               + psd[..., i],
+                                               dim=-1)
         if debug:
             print(psd_tot.shape)
         if not log:
