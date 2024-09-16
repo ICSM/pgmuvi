@@ -1889,9 +1889,14 @@ class Lightcurve(gpytorch.Module):
         norm = torchnorm(means, scales)
         if debug:
             print(norm)
-        psd1 = norm.log_prob(freq.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
-        psd2 = norm.log_prob(-freq.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
-        psd = torch.log(torch.Tensor([0.5])) + psd1 + torch.log(1.0 + torch.exp(psd2 - psd1))
+        # marginalise over Fourier dual variables
+        psd1 = norm.log_prob(freq.unsqueeze(-1)).sum(dim=-1)
+        # marginalise over Fourier dual variables
+        psd2 = norm.log_prob(-freq.unsqueeze(-1)).sum(dim=-1)
+        psd = (torch.log(torch.Tensor([0.5]))
+               + psd1 
+               + torch.log(1.0 + torch.exp(psd2 - psd1))
+        )
         # psd = torch.log(0.5 * (torch.exp(psd1) + torch.exp(psd2)))
         # if len(psd.shape) < len(means.shape):
         #   psd = psd.unsqueeze(-1)
