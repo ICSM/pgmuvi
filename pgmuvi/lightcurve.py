@@ -1840,8 +1840,10 @@ class Lightcurve(gpytorch.Module):
 
         Parameters
         ----------
-        freq : array_like
-            The frequencies at which to compute the PSD
+        freq : array_like or tuple(array_likes)
+            The Fourier duals at which to compute the PSD
+            If array_like, assumes only one dual present.
+            If tuple, duals are unpacked from it.
         means : array_like, optional
             The means of the gaussians in the spectral mixture kernel, by
             default None. If None, the means from the model will be used.
@@ -1889,22 +1891,33 @@ class Lightcurve(gpytorch.Module):
         norm = torchnorm(means, scales)
         if debug:
             print(norm)
-        psd1 = norm.log_prob(freq.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
-        psd2 = norm.log_prob(-freq.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
-        psd = torch.log(torch.Tensor([0.5])) + psd1 + torch.log(1.0 + torch.exp(psd2 - psd1))
-        # psd = torch.log(0.5 * (torch.exp(psd1) + torch.exp(psd2)))
-        # if len(psd.shape) < len(means.shape):
-        #   psd = psd.unsqueeze(-1)
-        # if debug:
-        #     print(psd.shape)
-        try:
-            psd_tot = torch.logsumexp(torch.log(weights.unsqueeze(-1)) + psd, dim=-2)
-        except RuntimeError:  # logsumexp tries to allocate a large array and
-            # then do the summation so let's do it in a loop instead and see
-            # if that avoids the problem
-            psd_tot = torch.zeros_like(freq)
-            for i in range(len(freq[0])):
-              psd_tot[i] = torch.logsumexp(torch.log(weights) + psd[..., i], dim=-1)
+        if isinstance(freq, tuple):
+          if len(freq) > 2:
+            raise NotImplementedError("PSD for more than two duals not implemented yet")
+          f1, f2 = freq
+          norm1 = torchnorm(means[..., -2], scales[..., -2])
+          norm2 = torchnorm(means[..., -1], scales[..., -1])
+          psd = norm1.log_prob(f1).unsqueeze(-1) + norm2.log_prob(f2).unsqueeze(1)
+          try:
+            psd_tot = torch.logsumexp(torch.log(weights.unsqueeze(-1).unsqueeze(-1)) + psd, dim=-3)
+          except RuntimeError as e:
+            #chunk it
+            print(f"{e}. Chunking not implemented yet in compute_psd.")
+        else:
+          if len(freq.shape) > 1:
+            raise ValueError("array-like freq must be one-dimensional!")
+          f1 = torch.as_tensor(freq)
+          psd1 = norm.log_prob(f1.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
+          psd2 = norm.log_prob(-f1.unsqueeze(-1)).sum(dim=-1)  # marginalise over Fourier dual variables
+          psd = torch.log(torch.Tensor([0.5])) + psd1 + torch.log(1.0 + torch.exp(psd2 - psd1))
+          try:
+              psd_tot = torch.logsumexp(torch.log(weights.unsqueeze(-1)) + psd, dim=-2)
+          except RuntimeError:  # logsumexp tries to allocate a large array and
+              # then do the summation so let's do it in a loop instead and see
+              # if that avoids the problem
+              psd_tot = torch.zeros_like(f1)
+              for i in range(len(freq[0])):
+                  psd_tot[i] = torch.logsumexp(torch.log(weights) + psd[..., i], dim=-1)
         if debug:
             print(psd_tot.shape)
         if not log:
