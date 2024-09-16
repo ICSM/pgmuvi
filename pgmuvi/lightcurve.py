@@ -1894,7 +1894,7 @@ class Lightcurve(gpytorch.Module):
         # marginalise over Fourier dual variables
         psd2 = norm.log_prob(-freq.unsqueeze(-1)).sum(dim=-1)
         psd = (torch.log(torch.Tensor([0.5]))
-               + psd1 
+               + psd1
                + torch.log(1.0 + torch.exp(psd2 - psd1))
         )
         # psd = torch.log(0.5 * (torch.exp(psd1) + torch.exp(psd2)))
