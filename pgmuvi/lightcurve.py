@@ -896,16 +896,18 @@ class Lightcurve(gpytorch.Module):
         **kwargs : dict, optional
             Any keyword arguments to be passed to the Constraint constructors.
         '''
-        try:
-            noise_min = np.minimum(1e-4, self._yerr_transformed.min()/10)
-        except AttributeError:
-            noise_min = 1e-4*self._ydata_transformed.std()
-        noise_max = self._ydata_transformed.std()  # for a non-periodic source,
-                                                # the noise should be less than
-                                                # the standard deviation
-        noise_constraint = Interval(noise_min, noise_max)
-        self._model_pars['noise']['module'].register_constraint("raw_noise",
-                                                                noise_constraint)
+        if 'noise' in self._model_pars:
+            #only apply the noise constraint if we're using a learnable noise
+            try:
+                noise_min = np.minimum(1e-4, self._yerr_transformed.min()/10)
+            except AttributeError:
+                noise_min = 1e-4*self._ydata_transformed.std()
+            noise_max = self._ydata_transformed.std()  # for a non-periodic source,
+                                                    # the noise should be less than
+                                                    # the standard deviation
+            noise_constraint = Interval(noise_min, noise_max)
+            self._model_pars['noise']['module'].register_constraint("raw_noise",
+                                                                    noise_constraint)
         with contextlib.suppress(RuntimeError):
             mean_const_constraint = Interval(self._ydata_transformed.min(),
                                              self._ydata_transformed.max())
@@ -917,8 +919,8 @@ class Lightcurve(gpytorch.Module):
         # contained in the dataset:
         if self.ndim > 1:
             print("""\033[31mWARNING:\033[0m default constraints on mixture means
-                  are not yet implemented for 2D data \n
-                  \033[31mPLEASE SET CONSTRAINTS MANUALLY\033[0m""")
+are not yet implemented for 2D data
+\033[31mPLEASE SET CONSTRAINTS MANUALLY\033[0m""")
             return
         mixture_means_constraint = GreaterThan(1/self._xdata_transformed.max())
         self._model_pars['mixture_means']['module'].register_constraint("raw_mixture_means",
