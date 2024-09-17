@@ -360,6 +360,10 @@ class Lightcurve(gpytorch.Module):
         # check that the input has more than one element
         # and raise an exception if not
         values = self._ensure_dim(values)
+        # check if there are any NaNs in the inputs
+        if torch.isnan(values).any():
+            errmsg = f'The x values contain {torch.isnan(values).sum()} NaNs.'
+            raise ValueError(errmsg)
         # then, store the raw data internally
         self.register_buffer('_xdata_raw', values)
         # then, apply the transformation to the values, so it can be used to
@@ -387,6 +391,10 @@ class Lightcurve(gpytorch.Module):
         # and modifiy it if necessary
         values = self._ensure_tensor(values)
         # then, store the raw data internally
+        # check if there are any NaNs in the inputs
+        if torch.isnan(values).any():
+            errmsg = f'The y values contain {torch.isnan(values).sum()} NaNs.'
+            raise ValueError(errmsg)
         self.register_buffer('_ydata_raw', values)
         # then, apply the transformation to the values
         if self.ytransform is None:
@@ -412,6 +420,10 @@ class Lightcurve(gpytorch.Module):
         # first, check that the input is a tensor
         # and modifiy it if necessary
         values = self._ensure_tensor(values)
+        # check if there are any NaNs in the inputs
+        if torch.isnan(values).any():
+            errmsg = f'The y uncertainties contain {torch.isnan(values).sum()} NaNs.'
+            raise ValueError(errmsg)
         # then, store the raw data internally
         self.register_buffer('_yerr_raw', values)
         # now apply the same transformation that was applied to the ydata
