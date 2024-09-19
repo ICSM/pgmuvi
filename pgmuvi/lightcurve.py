@@ -329,12 +329,16 @@ class Lightcurve(gpytorch.Module):
         self.__FITTED_MCMC = False
 
     @classmethod
-    def from_table(cls, VOTable, xcol='x', ycol='y', yerrcol='yerr', **kwargs):
+    def from_table(cls, table_file, format='votable', xcol='x', ycol='y', yerrcol='yerr', **kwargs):
         """Instantiate a Lightcurve object with
         data read in from a VOTable.
 
         Parameters
         ----------
+        table_file: str
+            Name (with extension) of file containing the astropy Table with input data
+        format: str
+            Format of file containing input data. Must be a format supported by Table.read.
         VOTable : str
             Name (with extension) of the VOTable containing input data
         xcol: str
@@ -351,7 +355,7 @@ class Lightcurve(gpytorch.Module):
         Lightcurve object
         """
         from astropy.table import Table
-        data = Table.read(VOTable, format='votable')
+        data = Table.read(table_name, format=format)
         c = data.colnames
         if xcol not in c:
             raise ValueError(f"Table does not have column '{xcol}'")
