@@ -329,7 +329,7 @@ class Lightcurve(gpytorch.Module):
         self.__FITTED_MCMC = False
 
     @classmethod
-    def from_table(cls, VOTable, **kwargs):
+    def from_table(cls, VOTable, xcol='x', ycol='y', yerrcol='yerr', **kwargs):
         """Instantiate a Lightcurve object with
         data read in from a VOTable.
 
@@ -337,6 +337,12 @@ class Lightcurve(gpytorch.Module):
         ----------
         VOTable : str
             Name (with extension) of the VOTable containing input data
+        xcol: str
+            Name of column in table that contains the x data
+        ycol: str
+            Name of column in table that contains the y data
+        yerrcol: str
+            Name of column in table that contains the yerr data
         kwargs:
             Arguments to be passed to the Lightcurve call
         
@@ -347,18 +353,21 @@ class Lightcurve(gpytorch.Module):
         from astropy.table import Table
         data = Table.read(VOTable, format='votable')
         c = data.colnames
-        if ('x' not in c) or ('y' not in c):
-            raise ValueError('Table must have columns x and y')
-        ndim = data['x'].squeeze().shape
-        x = torch.Tensor(data['x']).squeeze()
-        y = torch.Tensor(data['y']).squeeze()
+        if xcol not in c:
+            raise ValueError(f"Table does not have column '{xcol}'")
+        if ycol not in c:
+            raise ValueError(f"Table does not have column '{ycol}'")
+        
+        ndim = data[xcol].squeeze().shape
+        x = torch.Tensor(data[xcol]).squeeze()
+        y = torch.Tensor(data[ycol]).squeeze()
         if (len(ndim) == 1) or (len(ndim) == 2):
-            if 'yerr' not in c:
+            if yerrcol not in c:
                 yerr = None
             else:
-                yerr = torch.Tensor(data['yerr']).squeeze()
+                yerr = torch.Tensor(data[yerrcol]).squeeze()
         else:
-            mesg = "Column 'x' must have shape (1, nsamples) or (1, 2, nsamples)"
+            mesg = f"Column '{xcol}' must have shape (1, nsamples) or (1, 2, nsamples)"
             raise ValueError(mesg)
     
         return cls(x, y, yerr, **kwargs)
