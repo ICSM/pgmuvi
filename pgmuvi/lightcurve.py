@@ -335,7 +335,7 @@ class Lightcurve(gpytorch.Module):
 
         Parameters
         ----------
-        tab: astropy.table.Table object or str
+        tab: astropy.table.Table object or str or pathlib.Path instance
             Table containing the input data. If str, name (with extension) of file
             containing the input data. In this case, the format keyword must be set
             accordingly.
@@ -355,12 +355,16 @@ class Lightcurve(gpytorch.Module):
         ----------
         Lightcurve object
         """
+        from pathlib import Path
         from astropy.table import Table
         if isinstance(tab, str):
-            data = Table.read(table_name, format=format)
+            data = Table.read(tab, format=format)
+        elif isinstance(tab, Path):
+            data = Table.read(str(tab), format=format)
+        elif isinstance(tab, astropy.table.Table):
+            pass
         else:
-            if not isinstance(tab, astropy.table.Table):
-                raise ValueError("tab is neither a string nor an astropy Table object!")
+            raise ValueError("Input tab must be an instance of str, pathlib.Path, or astropy.table.Table!")
         c = data.colnames
         if xcol not in c:
             raise ValueError(f"Table does not have column '{xcol}'")
