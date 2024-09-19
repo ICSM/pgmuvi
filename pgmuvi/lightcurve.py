@@ -357,9 +357,7 @@ class Lightcurve(gpytorch.Module):
         """
         from pathlib import Path
         from astropy.table import Table
-        if isinstance(tab, str):
-            data = Table.read(tab, format=format)
-        elif isinstance(tab, Path):
+        if isinstance(tab, str) or isinstance(tab, Path):
             data = Table.read(str(tab), format=format)
         elif isinstance(tab, astropy.table.Table):
             pass
