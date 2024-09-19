@@ -348,7 +348,7 @@ class Lightcurve(gpytorch.Module):
         data = Table.read(VOTable, format='votable')
         c = data.colnames
         if ('x' not in c) or ('y' not in c):
-            raise ValueError('Table must have columns x, y, and yerr')
+            raise ValueError('Table must have columns x and y')
         ndim = data['x'].squeeze().shape
         x = torch.Tensor(data['x']).squeeze()
         y = torch.Tensor(data['y']).squeeze()
