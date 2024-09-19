@@ -328,6 +328,61 @@ class Lightcurve(gpytorch.Module):
         self.__FITTED_MAP = False
         self.__FITTED_MCMC = False
 
+    @classmethod
+    def from_table(cls, tab, format='votable', xcol='x', ycol='y', yerrcol='yerr', **kwargs):
+        """Instantiate a Lightcurve object with
+        data read in from a VOTable.
+
+        Parameters
+        ----------
+        tab: astropy.table.Table object or str or pathlib.Path instance
+            Table containing the input data. If str, name (with extension) of file
+            containing the input data. In this case, the format keyword must be set
+            accordingly.
+        format: str
+            Format of file containing input data. Must be a format supported by Table.read.
+            Only required if type(tab) is str.
+        xcol: str
+            Name of column in table that contains the x data
+        ycol: str
+            Name of column in table that contains the y data
+        yerrcol: str
+            Name of column in table that contains the yerr data
+        kwargs:
+            Arguments to be passed to the Lightcurve call
+        
+        Returns
+        ----------
+        Lightcurve object
+        """
+        from pathlib import Path
+        from astropy.table import Table
+        if isinstance(tab, str) or isinstance(tab, Path):
+            data = Table.read(tab, format=format)
+        elif isinstance(tab, astropy.table.Table):
+            data = tab
+        else:
+            raise ValueError("Input tab must be an instance of str, pathlib.Path, or astropy.table.Table!")
+        c = data.colnames
+        if xcol not in c:
+            raise ValueError(f"Table does not have column '{xcol}'")
+        if ycol not in c:
+            raise ValueError(f"Table does not have column '{ycol}'")
+        
+        ndim = len(data[xcol].squeeze().shape)
+        x = torch.Tensor(data[xcol]).squeeze()
+        y = torch.Tensor(data[ycol]).squeeze()
+        if (ndim == 1) or (ndim == 2):
+            if yerrcol not in c:
+                yerr = None
+            else:
+                yerr = torch.Tensor(data[yerrcol]).squeeze()
+        else:
+            mesg = f"Column '{xcol}' must have shape (1, nsamples) or (1, 2, nsamples)"
+            raise ValueError(mesg)
+    
+        return cls(x, y, yerr, **kwargs)
+    
     @property
     def ndim(self):
         return self.xdata.shape[-1] if self.xdata.dim() > 1 else 1
@@ -1910,9 +1965,13 @@ are not yet implemented for 2D data
         norm = torchnorm(means, scales)
         if debug:
             print(norm)
-        if isinstance(freq, tuple):
+        if self.ndim > 1:
+          if not isinstance(freq, tuple):
+            raise ValueError("freq must be a tuple of array_likes for multidimensional light curves!")
           if len(freq) > 2:
             raise NotImplementedError("PSD for more than two duals not implemented yet")
+          if len(freq) != self.ndim:
+            raise ValueError("freq must have the same number of duals as the number of light curve dimensions!")
           f1, f2 = freq
           norm1 = torchnorm(means[..., -2], scales[..., -2])
           norm2 = torchnorm(means[..., -1], scales[..., -1])
@@ -1925,7 +1984,7 @@ are not yet implemented for 2D data
             print(f"{e}. Chunking not implemented yet in compute_psd.")
         else:
           if len(freq.shape) > 1:
-            raise ValueError("array-like freq must be one-dimensional!")
+            raise ValueError("array-like freq must be one-dimensional for 1D light curves!")
           f1 = torch.as_tensor(freq)
           # marginalise over Fourier dual variables
           psd1 = norm.log_prob(f1.unsqueeze(-1)).sum(dim=-1)
