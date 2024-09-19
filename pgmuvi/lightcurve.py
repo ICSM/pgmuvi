@@ -358,10 +358,10 @@ class Lightcurve(gpytorch.Module):
         if ycol not in c:
             raise ValueError(f"Table does not have column '{ycol}'")
         
-        ndim = data[xcol].squeeze().shape
+        ndim = len(data[xcol].squeeze().shape)
         x = torch.Tensor(data[xcol]).squeeze()
         y = torch.Tensor(data[ycol]).squeeze()
-        if (len(ndim) == 1) or (len(ndim) == 2):
+        if (ndim == 1) or (ndim == 2):
             if yerrcol not in c:
                 yerr = None
             else:
