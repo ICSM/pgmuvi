@@ -2035,6 +2035,8 @@ are not yet implemented for 2D data
         '''
         if ylim is None:
             ylim = [-3, 3]
+        elif ylim is False:
+            ylim=None
         if mcmc_samples:
             if self.__FITTED_MCMC:
                 return self._plot_mcmc(ylim=ylim, show=show, **kwargs)

@@ -3,6 +3,8 @@ import gpytorch as gpt
 from gpytorch.means import ConstantMean, LinearMean
 from gpytorch.kernels import SpectralMixtureKernel as SMK
 from gpytorch.kernels import GridInterpolationKernel as GIK
+from gpytorch.kernels import RBFKernel, MaternKernel
+from gpytorch.kernels import ScaleKernel
 from gpytorch.distributions import MultivariateNormal as MVN
 from gpytorch.models import ExactGP, ApproximateGP
 from gpytorch.variational import CholeskyVariationalDistribution
@@ -485,3 +487,67 @@ class SparseSpectralMixtureGPModel(ApproximateGP):
 
 
 # TBD: Implement SVGP and VNN-GP versions of the above models
+
+
+# FIRST WE HAVE SOME Naive GPs
+class SpectralMixtureTimesRBFGPModel(ExactGP):
+    ''' A one-dimensional GP model using a spectral mixture kernel
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model. The
+    Spectral Mixture Kernel is applied to the time-domain, and the RBF kernel
+    is applied to the wavelength-domain. In addition, an second RBF kernel is
+    added in both domains, with different lengthscales. This kernel is used to
+    model any non-periodic signal.
+    This model assumes the mean is constant.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps)
+    train_y : Tensor
+        The data for the dependent variable (typically flux)
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model
+    num_mixtures : int
+        Number of components in the Mixture Model. More mixtures gives more
+        flexibility, but more hyperparameters and more complex inference
+
+    Examples
+    --------
+
+
+    Notes
+    ------
+
+
+
+    '''
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4,
+                 nu_lambda=2.5, nu_2d=2.5
+                 ):
+        super().__init__(train_x, train_y, likelihood)
+        self.mean_module = ConstantMean()
+        self.covar_module = (ScaleKernel(
+            SMK(num_mixtures=num_mixtures, ard_num_dims=1,
+                                 active_dims=[1,])
+                                         ) *
+                             ScaleKernel(RBFKernel(ard_num_dims=1,
+                                                      active_dims=[0,]))
+                            ) + ScaleKernel(
+            RBFKernel(ard_num_dims=2, active_dims=[0, 1])
+                                )
+        for name, param in self.covar_module.named_parameters():
+            print(name, param)
+        # self.covar_module.initialize_from_data(train_x, train_y)
+
+        # Now we alias the covariance kernel so that we can exploit the
+        # same object properties in different classes with different kernel
+        # structure
+        # Will turn this into an @property at some point.
+        self.sci_kernel = self.covar_module
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return MVN(mean_x, covar_x)
