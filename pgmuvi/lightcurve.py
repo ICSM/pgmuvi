@@ -1108,6 +1108,103 @@ are not yet implemented for 2D data
             errmsg = "You must first set the model and likelihood"
             _reraise_with_note(e, errmsg)
 
+    def fit_LS(self, freq_only=False, num_peaks=1, single_threshold=0.05,
+               Nyquist_factor=5, **kwargs):
+        """
+        Compute the (multiband) Lomb-Scargle periodogram.
+        Periods returned for the num_peaks highest peaks in the periodogram.
+        For a 1D lightcurve, the false-alarm probability is used
+            to estimate the significance of the periods, which are also
+            returned. These can be used to filter out insignificant periods.
+        For a multi-band lightcurve, the significances will be set to NaN.
+
+        The method can also be used to simply return the grid of frequencies,
+        which can be used by other methods such as compute_psd and plot_psd.
+
+        Parameters:
+        ----------------
+        - freq_only: bool, optional, default=False
+            If True, only the frequency grid will be returned.
+            This can be useful for methods such as compute_psd and plot_psd.
+        - num_peaks: int, optional, default=1
+            The number of peaks to extract from the Lomb-Scargle periodogram.
+        - single_threshold: float, optional, default=0.05
+            The false alarm probability threshold for a single peak to be
+            considered significant.
+        - Nyquist_factor: int, optional, default=5
+            The factor by which to multiply the Nyquist frequency to
+            determine the maximum frequency to search for in the
+            Lomb-Scargle periodogram.
+            This will be approximately the number of points sampling
+            the maximum in the resulting periodogram.
+        - kwargs: dict, optional
+            Additional keyword arguments to be passed to the
+            LombScargle(Multiband) constructor.
+        """
+        from astropy.timeseries import LombScargle, LombScargleMultiband
+        from scipy.signal import find_peaks
+
+        def fdr_bh(fap_values, alpha=0.05):
+            """
+            Benjamini-Hochberg procedure to control the False Discovery Rate.
+            See https://www.statsmodels.org/dev/generated/statsmodels.stats.multitest.fdrcorrection.html
+                for the statsmodels implementation
+            Parameters:
+            ----------------
+            - fap_values: Array of false alarm probabilities (FAP) for peaks.
+            - alpha: Desired FDR threshold (e.g., 0.05 for 5% FDR).
+
+            Returns:
+            ----------------
+            - result: array(bool), True for statistically significant peaks.
+            - threshold: array, the FAP threshold for each peak.
+            """
+            # Sort FAP values in ascending order and get their original indices
+            sorted_indices = np.argsort(fap_values)
+            sorted_fap = fap_values[sorted_indices]
+            N = len(fap_values)
+            # Find the largest i such that fap(i) <= (i / N) * alpha
+            threshold = np.arange(1, N+1) / N * alpha
+            significant = sorted_fap <= threshold
+            # If there are significant results, keep the largest index
+            if np.any(significant):
+                max_signif_index = np.where(significant)[0].max()
+                significant_indices = sorted_indices[:max_signif_index + 1]
+                result = np.zeros(N, dtype=bool)
+                result[significant_indices] = True
+            else:
+                result = np.zeros(N, dtype=bool)
+            return result, threshold
+
+        if self.ndim > 1:
+            # t, y, yerr = self.xdata[0], self.ydata, self.yerr
+            NotImplementedError("Multiband Lomb-Scargle not yet implemented.")
+        else:
+            t, y, yerr = self.xdata, self.ydata, self.yerr
+            mask = torch.isfinite(t) & torch.isfinite(y) & torch.isfinite(yerr)
+            t, y, yerr = t[mask], y[mask], yerr[mask]
+            LS = LombScargle(t, y, yerr)
+            freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
+            if freq_only:
+                return freq
+            power = LS.power(freq)
+            # distance set to Nyquist_factor for LS frequency grid computation
+            peaks, _ = find_peaks(power, distance=Nyquist_factor)
+            # sort by decreasing power
+            peaks = peaks[np.argsort(power[peaks])][::-1]
+            # Calculate the false alarm probability for the highest peak
+            fap_max = LS.false_alarm_probability(power.max())
+            if fap_max < single_threshold:
+                return freq[peaks[:num_peaks]], np.array([False, False, False])
+            # Calculate the false alarm probability for each peak independently
+            fap_single = LS.false_alarm_probability(power[peaks],
+                                                    method='single')
+            # Apply the FDR (Benjamini-Hochberg) correction
+            significant_mask, threshold = fdr_bh(fap_single,
+                                                 alpha=single_threshold)
+            significant_mask[0] = True  # since fap_max >= single_threshold
+            return freq[peaks[:num_peaks]], significant_mask[:num_peaks]
+
     def fit(self, model=None, likelihood=None, num_mixtures=4,
             guess=None, grid_size=2000, cuda=False,
             training_iter=300, max_cg_iterations=None,
