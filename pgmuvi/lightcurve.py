@@ -1143,13 +1143,13 @@ are not yet implemented for 2D data
 
         Returns:
         ----------------
-        - freq: array of floats
+        - freq: torch.Tensor of floats
           frequencies corresponding to the num_peaks periodogram peaks.
           If freq_only is set, the entire frequency grid is returned.
-        - mask: array of bool
+        - mask: torch.Tensor of bool
           identifies statistically significant peaks. Only returned if
           freq_only is not set.
-        - power: array of floats
+        - power: torch.Tensor of floats
           PSD for the entire frequency grid. Returned if freq_only is set.
         """
         from astropy.timeseries import LombScargle, LombScargleMultiband
@@ -1198,7 +1198,7 @@ are not yet implemented for 2D data
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
             power = LS.power(freq)
             if freq_only:
-                return freq, power
+                return torch.Tensor(freq), torch.Tensor(power)
             # distance set to Nyquist_factor for LS frequency grid computation
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
             # sort by decreasing power
@@ -1206,7 +1206,7 @@ are not yet implemented for 2D data
             # Calculate the false alarm probability for the highest peak
             fap_max = LS.false_alarm_probability(power.max())
             if fap_max > single_threshold:
-                return freq[peaks[:num_peaks]], np.array([False] * num_peaks)
+                return torch.Tensor(freq[peaks[:num_peaks]]), torch.Tensor(np.array([False] * num_peaks))
             # Calculate the false alarm probability for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
                                                     method='single')
@@ -1214,7 +1214,7 @@ are not yet implemented for 2D data
             significant_mask, threshold = fdr_bh(fap_single,
                                                  alpha=single_threshold)
             significant_mask[0] = True  # since fap_max >= single_threshold
-            return freq[peaks[:num_peaks]], significant_mask[:num_peaks]
+            return torch.Tensor(freq[peaks[:num_peaks]]), torch.Tensor(significant_mask[:num_peaks])
 
     def fit(self, model=None, likelihood=None, num_mixtures=4,
             guess=None, grid_size=2000, cuda=False,
