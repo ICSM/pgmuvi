@@ -2142,7 +2142,8 @@ are not yet implemented for 2D data
             The figure object of the plot.
         '''
         if ylim is None:
-            ylim = [-3, 3]
+            # ylim = [-3, 3]
+            ylim = [0.9 * self.ydata.min(), 1.1 * self.ydata.max()]
         if mcmc_samples:
             if self.__FITTED_MCMC:
                 return self._plot_mcmc(ylim=ylim, show=show, **kwargs)
