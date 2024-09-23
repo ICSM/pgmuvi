@@ -1118,7 +1118,7 @@ are not yet implemented for 2D data
             returned. These can be used to filter out insignificant periods.
         For a multi-band lightcurve, the significances will be set to NaN.
 
-        The method can also be used to simply return the grid of frequencies,
+        The method can also be used to return the entire grid of frequencies,
         which can be used by other methods such as compute_psd and plot_psd.
 
         Parameters:
@@ -1144,9 +1144,13 @@ are not yet implemented for 2D data
         Returns:
         ----------------
         - freq: array of floats
-          frequencies corresponding to the num_peaks periodogram peaks
+          frequencies corresponding to the num_peaks periodogram peaks.
+          If freq_only is set, the entire frequency grid is returned.
         - mask: array of bool
-          identifies statistically significant peaks
+          identifies statistically significant peaks. Only returned if
+          freq_only is not set.
+        - power: array of floats
+          PSD for the entire frequency grid. Returned if freq_only is set.
         """
         from astropy.timeseries import LombScargle, LombScargleMultiband
         from scipy.signal import find_peaks
@@ -1192,9 +1196,9 @@ are not yet implemented for 2D data
             t, y, yerr = t[mask], y[mask], yerr[mask]
             LS = LombScargle(t, y, yerr)
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
-            if freq_only:
-                return freq
             power = LS.power(freq)
+            if freq_only:
+                return freq, power
             # distance set to Nyquist_factor for LS frequency grid computation
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
             # sort by decreasing power
