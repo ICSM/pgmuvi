@@ -1140,6 +1140,13 @@ are not yet implemented for 2D data
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
+
+        Returns:
+        ----------------
+        - freq: array of floats
+          frequencies corresponding to the num_peaks periodogram peaks
+        - mask: array of bool
+          identifies statistically significant peaks
         """
         from astropy.timeseries import LombScargle, LombScargleMultiband
         from scipy.signal import find_peaks
