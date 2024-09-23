@@ -1205,8 +1205,8 @@ are not yet implemented for 2D data
             peaks = peaks[np.argsort(power[peaks])][::-1]
             # Calculate the false alarm probability for the highest peak
             fap_max = LS.false_alarm_probability(power.max())
-            if fap_max < single_threshold:
-                return freq[peaks[:num_peaks]], np.array([False, False, False])
+            if fap_max > single_threshold:
+                return freq[peaks[:num_peaks]], np.array([True] * num_peaks)
             # Calculate the false alarm probability for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
                                                     method='single')
