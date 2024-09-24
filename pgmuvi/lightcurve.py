@@ -359,7 +359,7 @@ class Lightcurve(gpytorch.Module):
         from astropy.table import Table
         if isinstance(tab, str) or isinstance(tab, Path):
             data = Table.read(tab, format=format)
-        elif isinstance(tab, astropy.table.Table):
+        elif isinstance(tab, Table):
             data = tab
         else:
             raise ValueError("Input tab must be an instance of str, pathlib.Path, or astropy.table.Table!")
