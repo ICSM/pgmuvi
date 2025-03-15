@@ -300,19 +300,19 @@ class Lightcurve(gpytorch.Module):
         """
         super().__init__()
 
-        transform_dic = {'minmax': MinMax(),
-                         'zscore': ZScore(),
-                         'robust_score': RobustZScore()}
+        transform_dic = {'minmax': MinMax,
+                         'zscore': ZScore,
+                         'robust_score': RobustZScore}
 
         if xtransform is None or isinstance(xtransform, Transformer):
             self.xtransform = xtransform
         else:
-            self.xtransform = transform_dic[xtransform]
+            self.xtransform = transform_dic[xtransform]()
 
         if ytransform is None or isinstance(ytransform, Transformer):
             self.ytransform = ytransform
         else:
-            self.ytransform = transform_dic[ytransform]
+            self.ytransform = transform_dic[ytransform]()
 
         self.xdata = xdata
         self.ydata = ydata
