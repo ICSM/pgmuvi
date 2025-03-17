@@ -132,6 +132,10 @@ class MinMax(Transformer):
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-(shift*self.min[apply_to]))/self.range[apply_to]
+        # try:
+        #     out = (data - shift*self.min)/self.range
+        # except RuntimeError:
+        #     import pdb; pdb.set_trace()
         return (data-(shift*self.min))/self.range
 
     def inverse(self, data, shift=True, **kwargs):
@@ -173,10 +177,10 @@ class ZScore(Transformer):
             only the standard deviation needs to be applied.
         """
         if recalc or not hasattr(self, 'mean'):
-            self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
-            self.register_buffer('mean', self.mean)
-            self.sd = torch.std(data, dim=dim, keepdim=True)[0]
-            self.register_buffer('sd', self.sd)
+            mean = torch.mean(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('mean', mean)
+            sd = torch.std(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('sd', sd)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-(shift*self.mean[apply_to]))/self.sd[apply_to]
@@ -323,7 +327,7 @@ class Lightcurve(gpytorch.Module):
 
         self.__SET_LIKELIHOOD_CALLED = False
         self.__SET_MODEL_CALLED = False
-        self.__CONTRAINTS_SET = False
+        self.__CONSTRAINTS_SET = False
         self.__PRIORS_SET = False
         self.__FITTED_MAP = False
         self.__FITTED_MCMC = False
@@ -1204,13 +1208,14 @@ are not yet implemented for 2D data
         # elif likelihood is not None:
         #     self.set_likelihood(likelihood, **kwargs)
 
+
         if model is None and not hasattr(self, 'model'):
             raise ValueError("""You must provide a model""")
         elif model is not None:
             self.set_model(model, self.likelihood,
                            num_mixtures=num_mixtures, **kwargs)
 
-        if not self.__CONTRAINTS_SET:
+        if not self.__CONSTRAINTS_SET:
             self.set_default_constraints()
 
         if cuda:
@@ -2159,6 +2164,10 @@ are not yet implemented for 2D data
 
         # Get upper and lower confidence bounds
         lower, upper = observed_pred.confidence_region()
+        if self.ytransform is not None:
+            lower = self.ytransform.inverse(lower)
+            upper = self.ytransform.inverse(upper)
+            observed_pred.mean = self.ytransform.inverse(observed_pred.mean)
 
         # Plot training data as black stars
         ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), 'k*')
@@ -2201,12 +2210,17 @@ are not yet implemented for 2D data
                                    dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), 'b')
+            mean = observed_pred.mean
 
             lower, upper = observed_pred.confidence_region()
+            if self.ytransform is not None:
+                lower = self.ytransform.inverse(lower)
+                upper = self.ytransform.inverse(upper)
+                mean = self.ytransform.inverse(mean)
             ax.fill_between(x_fine_raw.cpu().numpy(),
                             lower.cpu().numpy(), upper.cpu().numpy(),
                             alpha=0.5)
+            ax.plot(x_fine_raw.cpu().numpy(), mean.cpu().numpy(), 'b')
             ax.legend(['Observed Data', 'Mean', 'Confidence'])
 
             ax.set_ylabel("y")

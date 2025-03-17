@@ -534,9 +534,9 @@ class SpectralMixtureTimesRBFGPModel(ExactGP):
                                          ) *
                              ScaleKernel(RBFKernel(ard_num_dims=1,
                                                       active_dims=[1,]))
-                            ) + ScaleKernel(
-            RBFKernel(ard_num_dims=2, active_dims=[0, 1])
-                                )
+                            ) # + ScaleKernel(
+            # RBFKernel(ard_num_dims=2, active_dims=[0, 1])
+                                # )
         for name, param in self.covar_module.named_parameters():
             print(name, param)
         # self.covar_module.initialize_from_data(train_x, train_y)
