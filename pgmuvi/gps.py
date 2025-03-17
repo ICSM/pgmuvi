@@ -529,9 +529,7 @@ class SpectralMixtureTimesRBFGPModel(ExactGP):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
         self.covar_module = (ScaleKernel(
-            SMK(num_mixtures=num_mixtures, ard_num_dims=1,
-                                 active_dims=[0,])
-                                         ) *
+            SMK(num_mixtures=num_mixtures, ard_num_dims=1, active_dims=[0,])) *
                              ScaleKernel(RBFKernel(ard_num_dims=1,
                                                       active_dims=[1,]))
                             ) # + ScaleKernel(
