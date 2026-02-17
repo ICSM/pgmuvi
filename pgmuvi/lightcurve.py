@@ -1116,7 +1116,8 @@ are not yet implemented for 2D data
         For a 1D lightcurve, the false-alarm probability is used
             to estimate the significance of the periods, which are also
             returned. These can be used to filter out insignificant periods.
-        For a multi-band lightcurve, the significances will be set to NaN.
+        Multi-band lightcurves are currently not supported and will raise
+            NotImplementedError.
 
         The method can also be used to return the entire grid of frequencies,
         which can be used by other methods such as compute_psd and plot_psd.
