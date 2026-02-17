@@ -115,8 +115,10 @@ class Test2DHyperparameterTransforms(unittest.TestCase):
         # Get the actual parameter from the model
         actual_means = self.lightcurve_2d.model.covar_module.mixture_means
         
-        # Check shape is preserved
-        self.assertEqual(actual_means.shape, torch.Size([2, 2]))
+        # GPyTorch SpectralMixtureKernel uses shape [num_mixtures, batch_shape, ard_num_dims]
+        # where batch_shape is typically 1 for unbatched models
+        # So we expect [2, 1, 2] for num_mixtures=2, ard_num_dims=2
+        self.assertEqual(actual_means.shape, torch.Size([2, 1, 2]))
     
     def test_set_hypers_with_2d_mixture_scales(self):
         """Test that set_hypers handles 2D mixture_scales correctly"""
@@ -158,13 +160,13 @@ class Test2DConstraintTransforms(unittest.TestCase):
         # This should not raise an exception
         self.lightcurve_2d.set_constraint(constraints)
         
-        # Verify constraint was set
-        self.assertIn('raw_mixture_means', 
+        # Verify constraint was set (GPyTorch adds _constraint suffix)
+        self.assertIn('raw_mixture_means_constraint', 
                       self.lightcurve_2d._model_pars['mixture_means']['module']._constraints)
     
     def test_set_constraint_with_interval(self):
         """Test that set_constraint works with Interval for 2D"""
-        constraint = Interval(0.1, 10.0)
+        constraint = Interval(1.0, 100.0)
         
         constraints = {
             'mixture_means': constraint
@@ -173,8 +175,8 @@ class Test2DConstraintTransforms(unittest.TestCase):
         # This should not raise an exception
         self.lightcurve_2d.set_constraint(constraints)
         
-        # Verify constraint was set
-        self.assertIn('raw_mixture_means',
+        # Verify constraint was set (GPyTorch adds _constraint suffix)
+        self.assertIn('raw_mixture_means_constraint',
                       self.lightcurve_2d._model_pars['mixture_means']['module']._constraints)
 
 

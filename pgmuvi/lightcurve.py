@@ -802,7 +802,8 @@ class Lightcurve(gpytorch.Module):
                             # Handle both 1D and 2D cases
                             if transformed_bound.numel() > 1:
                                 # For 2D case, use the first dimension's transformation
-                                transformed_bound = transformed_bound[0]
+                                # Take element [0, 0] to get a scalar
+                                transformed_bound = transformed_bound.flatten()[0]
                             if debug:
                                 print(f"Transformed lower bound: {transformed_bound}")
                             constraint[key].lower_bound = torch.tensor(transformed_bound.item())
@@ -817,7 +818,8 @@ class Lightcurve(gpytorch.Module):
                             # Handle both 1D and 2D cases
                             if transformed_bound.numel() > 1:
                                 # For 2D case, use the first dimension's transformation
-                                transformed_bound = transformed_bound[0]
+                                # Take element [0, 0] to get a scalar
+                                transformed_bound = transformed_bound.flatten()[0]
                             constraint[key].upper_bound = torch.tensor(transformed_bound.item())
                             if debug:
                                 print(constraint[key].upper_bound)

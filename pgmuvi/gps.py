@@ -186,7 +186,9 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
     '''
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
         super().__init__(train_x, train_y, likelihood)
-        self.mean_module = LinearMean()
+        # LinearMean requires input_size for 2D data
+        input_size = train_x.shape[-1] if train_x.dim() > 1 else 1
+        self.mean_module = LinearMean(input_size=input_size)
         self.covar_module = SMK(ard_num_dims=2, num_mixtures=num_mixtures)
         # Note: initialize_from_data can fail for 2D data due to constraint violations
         # Users should set hyperparameters manually or via set_hypers
@@ -422,7 +424,9 @@ class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
         if grid_size is None:
             grid_size = [5000, 20]
         super().__init__(train_x, train_y, likelihood)
-        self.mean_module = LinearMean()
+        # LinearMean requires input_size for 2D data
+        input_size = train_x.shape[-1] if train_x.dim() > 1 else 1
+        self.mean_module = LinearMean(input_size=input_size)
         self.covar_module = GIK(SMK(ard_num_dims=2, num_mixtures=num_mixtures),
                                 num_dims=2, grid_size=grid_size
                                 )
