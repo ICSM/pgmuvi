@@ -1215,7 +1215,8 @@ are not yet implemented for 2D data
             significant_mask, threshold = fdr_bh(fap_single,
                                                  alpha=single_threshold)
             significant_mask[0] = True  # since fap_max >= single_threshold
-            return torch.Tensor(freq[peaks[:num_peaks]]), torch.Tensor(significant_mask[:num_peaks])
+            return (torch.Tensor(freq[peaks[:num_peaks]]), 
+                torch.Tensor(significant_mask[:num_peaks]))
 
     def fit(self, model=None, likelihood=None, num_mixtures=4,
             guess=None, grid_size=2000, cuda=False,
