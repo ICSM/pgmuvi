@@ -795,8 +795,11 @@ class Lightcurve(gpytorch.Module):
                         if (constraint[key].lower_bound
                            not in [torch.tensor(0), torch.tensor(-torch.inf)]):
                             # we need to transform the lower bound
-                            # For 2D data, we compute the transform for dimension 0 only
-                            # since constraints are scalar and apply to all elements
+                            # NOTE: For 2D data, GPyTorch constraints are scalar and apply
+                            # element-wise to all parameter elements (time and wavelength).
+                            # We transform using dimension 0 (time) as it's typically the
+                            # primary independent variable. Users setting manual constraints
+                            # should be aware that the same constraint applies to both dimensions.
                             transformed_bound = 1./self.xtransform.transform(1./constraint[key].lower_bound,
                                                                             shift=False)
                             # Handle both 1D and 2D cases
@@ -813,6 +816,7 @@ class Lightcurve(gpytorch.Module):
                         if (constraint[key].upper_bound
                             not in [torch.tensor(0), torch.tensor(torch.inf)]):
                             # we need to transform the upper bound
+                            # (Same dimension-0 transformation logic as lower_bound above)
                             transformed_bound = 1./self.xtransform.transform(1./constraint[key].upper_bound,
                                                                             shift=False)
                             # Handle both 1D and 2D cases
@@ -1068,7 +1072,13 @@ class Lightcurve(gpytorch.Module):
             wavelength_span = self._xdata_transformed[:, 1].max() - self._xdata_transformed[:, 1].min()
             min_wavelength_frequency = 1.0 / wavelength_span if wavelength_span > 0 else 1e-6
             
-            # Use the minimum of the two to ensure all mixture components satisfy at least one dimension
+            # GPyTorch limitation: Constraints on ARD parameters apply element-wise
+            # to ALL elements (cannot set different constraints per dimension).
+            # For mixture_means with shape (num_mixtures, 1, ard_num_dims), we must
+            # use a single scalar constraint. We use the minimum to ensure both
+            # dimensions satisfy their respective physical constraints:
+            # - Time frequencies >= 1/time_span (prevent periods longer than data)
+            # - Wavelength frequencies >= ~0 (allow achromatic variability)
             overall_min_frequency = min(min_time_frequency, min_wavelength_frequency)
             mixture_means_constraint = GreaterThan(overall_min_frequency)
         else:
