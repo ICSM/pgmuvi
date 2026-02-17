@@ -38,10 +38,12 @@ n_samples_band2 = 100  # Red band - sparser sampling
 time_band1 = np.sort(np.random.uniform(0, 100, n_samples_band1))
 time_band2 = np.sort(np.random.uniform(0, 100, n_samples_band2))
 
-# Wavelength identifiers (normalized)
-# In practice, these could be actual wavelengths in nm, or band identifiers
-wavelength_band1 = np.ones(n_samples_band1) * 0.45  # Blue band (~450nm)
-wavelength_band2 = np.ones(n_samples_band2) * 0.65  # Red band (~650nm)
+# Wavelength identifiers (normalized to [0, 1] range)
+# These represent actual wavelength bands:
+#   0.45 corresponds to blue band (~450nm)
+#   0.65 corresponds to red band (~650nm)
+wavelength_band1 = np.ones(n_samples_band1) * 0.45  # Blue band
+wavelength_band2 = np.ones(n_samples_band2) * 0.65  # Red band
 
 # Combine data from both bands
 time_all = np.concatenate([time_band1, time_band2])

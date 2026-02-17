@@ -1063,6 +1063,8 @@ class Lightcurve(gpytorch.Module):
             
             # For wavelength dimension, we want to allow achromatic variability
             # (same behavior across wavelengths), so we use a very small minimum
+            # 1e-6 allows frequencies near zero, enabling the model to capture
+            # achromatic (wavelength-independent) variability patterns
             wavelength_span = self._xdata_transformed[:, 1].max() - self._xdata_transformed[:, 1].min()
             min_wavelength_frequency = 1.0 / wavelength_span if wavelength_span > 0 else 1e-6
             
@@ -1130,8 +1132,10 @@ class Lightcurve(gpytorch.Module):
                         for dim in range(ard_num_dims):
                             # Get the range for this dimension from the fitted transformer
                             if hasattr(self.xtransform, 'range') and self.xtransform.range.shape[0] > dim:
-                                # Apply transform using this dimension's range
-                                # The 1/x transformation for Fourier space parameters
+                                # Apply dimension-specific scaling to the Fourier space parameters
+                                # Formula: f_transformed = 1 / ((1 / f_raw) / range)
+                                # This accounts for the data transformation applied to each dimension
+                                # The 1/x transformations handle the Fourier space representation
                                 dim_values = hypers[key][:, dim]
                                 # Transform back to real space, apply scaling, then back to Fourier
                                 transformed[:, dim] = 1 / ((1 / dim_values) / self.xtransform.range[0, dim])
