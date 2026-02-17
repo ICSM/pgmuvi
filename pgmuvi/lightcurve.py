@@ -1189,7 +1189,7 @@ are not yet implemented for 2D data
 
         if self.ndim > 1:
             # t, y, yerr = self.xdata[0], self.ydata, self.yerr
-            NotImplementedError("Multiband Lomb-Scargle not yet implemented.")
+            raise NotImplementedError("Multiband Lomb-Scargle not yet implemented.")
         else:
             t, y, yerr = self.xdata, self.ydata, self.yerr
             mask = torch.isfinite(t) & torch.isfinite(y) & torch.isfinite(yerr)
