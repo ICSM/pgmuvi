@@ -4,7 +4,7 @@
 
 **pgmuvi** (Python Gaussian Processes for Multiwavelength Variability Inference) is a Python package for inferring properties of astronomical sources with multiwavelength variability using Gaussian processes. It is built on GPyTorch and uses spectral-mixture kernels to learn approximations of the Power Spectral Density (PSD) of variability.
 
-- **Language**: Python (3.8+, excluding 3.9.13)
+- **Language**: Python (3.8+, excluding 3.9.13 due to compatibility issues)
 - **Size**: ~3,000 lines of Python code
 - **Framework**: GPyTorch, PyTorch
 - **Package Type**: Scientific computing library for astronomy
@@ -67,7 +67,15 @@ Or to see detailed output with fixes:
 ruff check -v --output-format=full --show-fixes pgmuvi/
 ```
 
-**Note**: Ruff configuration is in `pyproject.toml` under `[tool.ruff]`. Tests are excluded from linting. The following checks are enabled: A, B, E, F, ISC, UP, RUF, W.
+**Note**: Ruff configuration is in `pyproject.toml` under `[tool.ruff]`. Tests are excluded from linting. The following checks are enabled:
+- A (prevent using keywords that clobber Python builtins)
+- B (bugbear: security warnings)
+- E (pycodestyle errors)
+- F (pyflakes)
+- ISC (implicit string concatenation)
+- UP (alert when better syntax is available)
+- RUF (Ruff-specific rules)
+- W (pycodestyle warnings)
 
 ### Code Style
 
