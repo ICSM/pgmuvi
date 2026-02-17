@@ -2143,7 +2143,17 @@ are not yet implemented for 2D data
         '''
         if ylim is None:
             # ylim = [-3, 3]
-            ylim = [0.9 * self.ydata.min(), 1.1 * self.ydata.max()]
+            y_min = float(self.ydata.min())
+            y_max = float(self.ydata.max())
+            y_range = y_max - y_min
+            if y_range != 0.0:
+                padding = 0.1 * abs(y_range)
+            else:
+                # If all y values are identical, pad based on their magnitude,
+                # or fall back to a small absolute padding.
+                base = abs(y_max) if y_max != 0.0 else 1.0
+                padding = 0.1 * base
+            ylim = [y_min - padding, y_max + padding]
         if mcmc_samples:
             if self.__FITTED_MCMC:
                 return self._plot_mcmc(ylim=ylim, show=show, **kwargs)
