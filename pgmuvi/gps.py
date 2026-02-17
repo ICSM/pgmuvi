@@ -138,7 +138,9 @@ class TwoDSpectralMixtureGPModel(ExactGP):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
         self.covar_module = SMK(ard_num_dims=2, num_mixtures=num_mixtures)
-        self.covar_module.initialize_from_data(train_x, train_y)
+        # Note: initialize_from_data can fail for 2D data due to constraint violations
+        # Users should set hyperparameters manually or via set_hypers
+        # self.covar_module.initialize_from_data(train_x, train_y)
 
         # Now we alias the covariance kernel so that we can exploit the
         # same object properties in different classes with different kernel
@@ -186,7 +188,9 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
         self.covar_module = SMK(ard_num_dims=2, num_mixtures=num_mixtures)
-        self.covar_module.initialize_from_data(train_x, train_y)
+        # Note: initialize_from_data can fail for 2D data due to constraint violations
+        # Users should set hyperparameters manually or via set_hypers
+        # self.covar_module.initialize_from_data(train_x, train_y)
 
         # Now we alias the covariance kernel so that we can exploit the same
         # object properties in different classes with different kernel
@@ -361,7 +365,9 @@ class TwoDSpectralMixtureKISSGPModel(ExactGP):
         self.covar_module = GIK(SMK(ard_num_dims=2, num_mixtures=num_mixtures),
                                 num_dims=2, grid_size=grid_size
                                 )
-        self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
+        # Note: initialize_from_data can fail for 2D data due to constraint violations
+        # Users should set hyperparameters manually or via set_hypers
+        # self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 
         # Now we alias the covariance kernel so that we can exploit the
         # same object properties in different classes with different kernel
@@ -420,7 +426,9 @@ class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
         self.covar_module = GIK(SMK(ard_num_dims=2, num_mixtures=num_mixtures),
                                 num_dims=2, grid_size=grid_size
                                 )
-        self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
+        # Note: initialize_from_data can fail for 2D data due to constraint violations
+        # Users should set hyperparameters manually or via set_hypers
+        # self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 
         # Now we alias the covariance kernel so that we can exploit the
         # same object properties in different classes with different kernel

@@ -173,10 +173,10 @@ class ZScore(Transformer):
             only the standard deviation needs to be applied.
         """
         if recalc or not hasattr(self, 'mean'):
-            self.mean = torch.mean(data, dim=dim, keepdim=True)[0]
-            self.register_buffer('mean', self.mean)
-            self.sd = torch.std(data, dim=dim, keepdim=True)[0]
-            self.register_buffer('sd', self.sd)
+            mean = torch.mean(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('mean', mean)
+            sd = torch.std(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('sd', sd)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-(shift*self.mean[apply_to]))/self.sd[apply_to]
@@ -220,11 +220,11 @@ class RobustZScore(Transformer):
             only the median absolute deviation needs to be applied.
         """
         if recalc or not hasattr(self, 'mad'):
-            self.median = torch.median(data, dim=dim, keepdim=True)[0]
-            self.register_buffer('median', self.median)
-            self.mad = torch.median(torch.abs(data - self.median),
+            median = torch.median(data, dim=dim, keepdim=True)[0]
+            self.register_buffer('median', median)
+            mad = torch.median(torch.abs(data - median),
                                     dim=dim, keepdim=True)[0]
-            self.register_buffer('mad', self.mad)
+            self.register_buffer('mad', mad)
             shift = True  # if we're recalculating, we need to shift
         if apply_to is not None:
             return (data-shift*self.median[apply_to])/self.mad[apply_to]
@@ -795,22 +795,30 @@ class Lightcurve(gpytorch.Module):
                         if (constraint[key].lower_bound
                            not in [torch.tensor(0), torch.tensor(-torch.inf)]):
                             # we need to transform the lower bound
+                            # For 2D data, we compute the transform for dimension 0 only
+                            # since constraints are scalar and apply to all elements
+                            transformed_bound = 1./self.xtransform.transform(1./constraint[key].lower_bound,
+                                                                            shift=False)
+                            # Handle both 1D and 2D cases
+                            if transformed_bound.numel() > 1:
+                                # For 2D case, use the first dimension's transformation
+                                transformed_bound = transformed_bound[0]
                             if debug:
-                                print(1./self.xtransform.transform(1./constraint[key].lower_bound,
-                                                                    apply_to=[0],
-                                                                    shift=False))
-                            constraint[key].lower_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].lower_bound,  # noqa: E501
-                                                                                                    apply_to=[0],
-                                                                                                    shift=False).item())
+                                print(f"Transformed lower bound: {transformed_bound}")
+                            constraint[key].lower_bound = torch.tensor(transformed_bound.item())
                             if debug:
                                 print(constraint[key].lower_bound)
                                 print(constraint[key])
                         if (constraint[key].upper_bound
                             not in [torch.tensor(0), torch.tensor(torch.inf)]):
                             # we need to transform the upper bound
-                            constraint[key].upper_bound = torch.tensor(1./self.xtransform.transform(1./constraint[key].upper_bound,  # noqa: E501
-                                                                                                    apply_to=[0],
-                                                                                                    shift=False).item())
+                            transformed_bound = 1./self.xtransform.transform(1./constraint[key].upper_bound,
+                                                                            shift=False)
+                            # Handle both 1D and 2D cases
+                            if transformed_bound.numel() > 1:
+                                # For 2D case, use the first dimension's transformation
+                                transformed_bound = transformed_bound[0]
+                            constraint[key].upper_bound = torch.tensor(transformed_bound.item())
                             if debug:
                                 print(constraint[key].upper_bound)
                                 print(constraint[key])
@@ -1065,6 +1073,7 @@ class Lightcurve(gpytorch.Module):
                                                                         mixture_means_constraint)
 
         # to-do - check if constraints on mixture scales are useful!
+        self.__CONTRAINTS_SET = True
 
     def set_hypers(self, hypers=None, debug=False, **kwargs):
         '''Set the hyperparameters for the model and likelihood. This is a
@@ -1110,16 +1119,23 @@ class Lightcurve(gpytorch.Module):
                     # Check if the parameter is 2D (for multi-dimensional data)
                     if hypers[key].dim() == 2:
                         # For 2D hyperparameters (num_mixtures, ard_num_dims),
-                        # apply transform dimension by dimension
+                        # the transform should be applied considering each dimension's range
+                        # Since transform was fit on (n_samples, 2) data, we need to handle this carefully
                         num_mixtures, ard_num_dims = hypers[key].shape
                         transformed = torch.zeros_like(hypers[key])
+                        
+                        # For each dimension of the 2D parameter
                         for dim in range(ard_num_dims):
-                            dim_values = hypers[key][:, dim]
-                            transformed[:, dim] = 1 / self.xtransform.transform(
-                                1 / dim_values,
-                                apply_to=[dim],
-                                shift=False
-                            )
+                            # Get the range for this dimension from the fitted transformer
+                            if hasattr(self.xtransform, 'range') and self.xtransform.range.shape[0] > dim:
+                                # Apply transform using this dimension's range
+                                # The 1/x transformation for Fourier space parameters
+                                dim_values = hypers[key][:, dim]
+                                # Transform back to real space, apply scaling, then back to Fourier
+                                transformed[:, dim] = 1 / ((1 / dim_values) / self.xtransform.range[0, dim])
+                            else:
+                                # Fallback: just copy the values
+                                transformed[:, dim] = hypers[key][:, dim]
                         hypers[key] = transformed
                     else:
                         # 1D case - original behavior
