@@ -939,6 +939,66 @@ class Lightcurve(gpytorch.Module):
         # let's see if this works!
         self.__PRIORS_SET = True
 
+    def _validate_2d_setup(self):
+        """Validate that the 2D setup is correct
+        
+        This method checks that:
+        - Data shapes are correct for 2D (xdata has shape [n_samples, 2])
+        - Model has appropriate ard_num_dims parameter
+        - Transforms can handle 2D data
+        
+        Raises
+        ------
+        ValueError
+            If the 2D setup is invalid
+        
+        Warnings
+        --------
+        If there are potential issues with the setup
+        """
+        if self.ndim <= 1:
+            return  # Only validate for 2D data
+        
+        # Check xdata shape
+        if self._xdata_transformed.dim() != 2:
+            raise ValueError(
+                f"For 2D data, xdata must be 2-dimensional, got {self._xdata_transformed.dim()}D"
+            )
+        
+        if self._xdata_transformed.shape[1] != 2:
+            raise ValueError(
+                f"For 2D data, xdata must have 2 columns (time, wavelength), "
+                f"got {self._xdata_transformed.shape[1]} columns"
+            )
+        
+        # Check if model is set
+        if not hasattr(self, 'model'):
+            warnings.warn(
+                "Model not set yet. Cannot validate ard_num_dims. "
+                "Ensure your model has ard_num_dims=2 for 2D data."
+            )
+            return
+        
+        # Check if the model's kernel has ard_num_dims set correctly
+        if hasattr(self.model, 'covar_module'):
+            covar = self.model.covar_module
+            # For KISS-GP models, check the base_kernel
+            if hasattr(covar, 'base_kernel'):
+                covar = covar.base_kernel
+            
+            if hasattr(covar, 'ard_num_dims'):
+                if covar.ard_num_dims != 2:
+                    raise ValueError(
+                        f"Model's ard_num_dims is {covar.ard_num_dims}, "
+                        f"but data has {self.ndim} dimensions. "
+                        f"Use a 2D model (e.g., '2D', '2DLinear', '2DSKI', '2DLinearSKI')."
+                    )
+        
+        # Check transform compatibility
+        if self.xtransform is not None:
+            if not hasattr(self.xtransform, 'transform'):
+                raise ValueError("xtransform must have a 'transform' method")
+
     def set_default_constraints(self, **kwargs):
         '''Set the default constraints for the model and likelihood parameters
 
@@ -985,11 +1045,22 @@ class Lightcurve(gpytorch.Module):
         # this should correspond to the longest frequency entirely
         # contained in the dataset:
         if self.ndim > 1:
-            print("""\033[31mWARNING:\033[0m default constraints on mixture means
-are not yet implemented for 2D data
-\033[31mPLEASE SET CONSTRAINTS MANUALLY\033[0m""")
-            return
-        mixture_means_constraint = GreaterThan(1/self._xdata_transformed.max())
+            # For 2D data, calculate minimum frequency per dimension
+            # Dimension 0 (time): based on temporal data span
+            # Dimension 1 (wavelength): allow near-zero for achromatic variability
+            time_span = self._xdata_transformed[:, 0].max() - self._xdata_transformed[:, 0].min()
+            min_time_frequency = 1.0 / time_span
+            
+            # For wavelength dimension, we want to allow achromatic variability
+            # (same behavior across wavelengths), so we use a very small minimum
+            wavelength_span = self._xdata_transformed[:, 1].max() - self._xdata_transformed[:, 1].min()
+            min_wavelength_frequency = 1.0 / wavelength_span if wavelength_span > 0 else 1e-6
+            
+            # Use the minimum of the two to ensure all mixture components satisfy at least one dimension
+            overall_min_frequency = min(min_time_frequency, min_wavelength_frequency)
+            mixture_means_constraint = GreaterThan(overall_min_frequency)
+        else:
+            mixture_means_constraint = GreaterThan(1/self._xdata_transformed.max())
         self._model_pars['mixture_means']['module'].register_constraint("raw_mixture_means",
                                                                         mixture_means_constraint)
 
@@ -1036,8 +1107,24 @@ are not yet implemented for 2D data
                 if self.xtransform is not None:
                     if debug:
                         print(f"Applying x-transform to {key}")
-                    hypers[key] = 1/self.xtransform.transform(1/hypers[key],
-                                                              shift=False)
+                    # Check if the parameter is 2D (for multi-dimensional data)
+                    if hypers[key].dim() == 2:
+                        # For 2D hyperparameters (num_mixtures, ard_num_dims),
+                        # apply transform dimension by dimension
+                        num_mixtures, ard_num_dims = hypers[key].shape
+                        transformed = torch.zeros_like(hypers[key])
+                        for dim in range(ard_num_dims):
+                            dim_values = hypers[key][:, dim]
+                            transformed[:, dim] = 1 / self.xtransform.transform(
+                                1 / dim_values,
+                                apply_to=[dim],
+                                shift=False
+                            )
+                        hypers[key] = transformed
+                    else:
+                        # 1D case - original behavior
+                        hypers[key] = 1/self.xtransform.transform(1/hypers[key],
+                                                                  shift=False)
             elif any(p in key for p in pars_to_transform['y']):
                 # now apply the y transform
                 # the mean function and noise are not defined in fourier
@@ -1209,6 +1296,10 @@ are not yet implemented for 2D data
         elif model is not None:
             self.set_model(model, self.likelihood,
                            num_mixtures=num_mixtures, **kwargs)
+
+        # Validate 2D setup if we have 2D data
+        if self.ndim > 1:
+            self._validate_2d_setup()
 
         if not self.__CONTRAINTS_SET:
             self.set_default_constraints()
