@@ -41,11 +41,6 @@ pgmuvi/
 pip install -e .
 ```
 
-For development with all dependencies:
-```bash
-pip install -e .
-```
-
 ### Testing
 
 **Run tests using tox (recommended):**
