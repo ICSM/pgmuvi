@@ -51,7 +51,7 @@ wavelength_all = np.concatenate([wavelength_band1, wavelength_band2])
 
 # Stack into (n_samples, 2) format for 2D data
 # Column 0: time, Column 1: wavelength
-xdata_2d = torch.tensor(np.column_stack([time_all, wavelength_all]), 
+xdata_2d = torch.tensor(np.column_stack([time_all, wavelength_all]),
                         dtype=torch.float32)
 
 print(f"   - Total samples: {len(xdata_2d)}")
@@ -86,7 +86,7 @@ ydata_2d = torch.tensor(signal + noise, dtype=torch.float32)
 print(f"   - True period: {true_period:.2f} days")
 print(f"   - True frequency: {true_freq:.4f} day⁻¹")
 print(f"   - Noise level: {noise_level:.2f}")
-print(f"   - Wavelength-dependent amplitude: Yes")
+print("   - Wavelength-dependent amplitude: Yes")
 
 # ============================================================================
 # Step 3: Create Lightcurve Object
@@ -119,9 +119,9 @@ results = lightcurve.fit(
     stop=1e-4  # Early stopping threshold
 )
 
-print(f"   - Model type: 2D Spectral Mixture GP")
-print(f"   - Number of mixture components: 3")
-print(f"   - Training completed!")
+print("   - Model type: 2D Spectral Mixture GP")
+print("   - Number of mixture components: 3")
+print("   - Training completed!")
 
 # ============================================================================
 # Step 5: Check Fitted Parameters
@@ -133,21 +133,25 @@ print("\n5. Inspecting fitted parameters...")
 mixture_means = lightcurve.model.covar_module.mixture_means.detach()
 
 print(f"   - Mixture means shape: {mixture_means.shape}")
-print(f"   - (num_mixtures, batch, ard_num_dims)")
+print("   - (num_mixtures, batch, ard_num_dims)")
 
 # Extract frequencies for time dimension (dimension 0)
 time_frequencies = mixture_means[:, 0, 0].numpy()
 
-print(f"\n   Fitted frequencies (time dimension):")
+print("\n   Fitted frequencies (time dimension):")
 for i, freq in enumerate(time_frequencies):
     period = 1.0 / freq if freq > 0 else float('inf')
     print(f"      Component {i+1}: f={freq:.4f} day⁻¹, P={period:.2f} days")
 
 # Check if we recovered the true period
-closest_period = min([1/f for f in time_frequencies if f > 0], 
+closest_period = min([1/f for f in time_frequencies if f > 0],
                      key=lambda x: abs(x - true_period))
-print(f"\n   Closest to true period ({true_period:.2f} days): {closest_period:.2f} days")
-print(f"   Relative error: {abs(closest_period - true_period) / true_period * 100:.1f}%")
+print(
+    f"\n   Closest to true period ({true_period:.2f} days): "
+    f"{closest_period:.2f} days"
+)
+rel_error = abs(closest_period - true_period) / true_period * 100
+print(f"   Relative error: {rel_error:.1f}%")
 
 # ============================================================================
 # Step 6: Visualize Results
@@ -162,7 +166,7 @@ fig.suptitle('2D Multiwavelength Light Curve Fitting Results', fontsize=16)
 # ---- Plot 1: Training Loss ----
 ax = axes[0, 0]
 losses = results['loss']
-ax.plot([float(l) for l in losses], 'b-', alpha=0.7)
+ax.plot([float(loss) for loss in losses], 'b-', alpha=0.7)
 ax.set_xlabel('Iteration')
 ax.set_ylabel('Negative Log Likelihood')
 ax.set_title('Training Loss')
@@ -180,9 +184,9 @@ time_red = time_all[red_mask]
 ydata_blue = ydata_2d.numpy()[blue_mask]
 ydata_red = ydata_2d.numpy()[red_mask]
 
-ax.scatter(time_blue, ydata_blue, c='blue', alpha=0.5, s=20, 
+ax.scatter(time_blue, ydata_blue, c='blue', alpha=0.5, s=20,
            label='Blue band (450nm)')
-ax.scatter(time_red, ydata_red, c='red', alpha=0.5, s=20, 
+ax.scatter(time_red, ydata_red, c='red', alpha=0.5, s=20,
            label='Red band (650nm)')
 ax.set_xlabel('Time (days)')
 ax.set_ylabel('Flux (arbitrary units)')
@@ -206,11 +210,11 @@ with torch.no_grad():
     mean_blue = predictions_blue.mean.numpy()
     std_blue = predictions_blue.stddev.numpy()
 
-ax.scatter(time_blue, ydata_blue, c='blue', alpha=0.5, s=20, 
+ax.scatter(time_blue, ydata_blue, c='blue', alpha=0.5, s=20,
            label='Observations')
 ax.plot(test_time.numpy(), mean_blue, 'b-', linewidth=2, label='GP Mean')
-ax.fill_between(test_time.numpy(), 
-                mean_blue - 2*std_blue, 
+ax.fill_between(test_time.numpy(),
+                mean_blue - 2*std_blue,
                 mean_blue + 2*std_blue,
                 alpha=0.3, color='blue', label='95% CI')
 ax.set_xlabel('Time (days)')
@@ -231,11 +235,11 @@ with torch.no_grad():
     mean_red = predictions_red.mean.numpy()
     std_red = predictions_red.stddev.numpy()
 
-ax.scatter(time_red, ydata_red, c='red', alpha=0.5, s=20, 
+ax.scatter(time_red, ydata_red, c='red', alpha=0.5, s=20,
            label='Observations')
 ax.plot(test_time.numpy(), mean_red, 'r-', linewidth=2, label='GP Mean')
-ax.fill_between(test_time.numpy(), 
-                mean_red - 2*std_red, 
+ax.fill_between(test_time.numpy(),
+                mean_red - 2*std_red,
                 mean_red + 2*std_red,
                 alpha=0.3, color='red', label='95% CI')
 ax.set_xlabel('Time (days)')
@@ -246,7 +250,7 @@ ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.savefig('2d_multiwavelength_example_results.png', dpi=150, bbox_inches='tight')
-print(f"   - Figure saved as '2d_multiwavelength_example_results.png'")
+print("   - Figure saved as '2d_multiwavelength_example_results.png'")
 
 # ============================================================================
 # Summary
@@ -255,11 +259,11 @@ print(f"   - Figure saved as '2d_multiwavelength_example_results.png'")
 print("\n" + "=" * 70)
 print("Summary")
 print("=" * 70)
-print(f"✓ Successfully fitted 2D GP model to multiwavelength data")
+print("✓ Successfully fitted 2D GP model to multiwavelength data")
 print(f"✓ Model captured periodic signal with period ≈ {closest_period:.2f} days")
-print(f"✓ Default constraints were set automatically for 2D data")
-print(f"✓ Model handles different sampling patterns in each band")
-print(f"✓ Wavelength-dependent behavior captured by ARD structure")
+print("✓ Default constraints were set automatically for 2D data")
+print("✓ Model handles different sampling patterns in each band")
+print("✓ Wavelength-dependent behavior captured by ARD structure")
 print("\nKey features of 2D multiwavelength fitting:")
 print("  • Automatic constraint setup for 2D parameters")
 print("  • ARD (Automatic Relevance Determination) for time & wavelength")

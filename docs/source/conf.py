@@ -15,16 +15,21 @@
 # sys.path.insert(0, os.path.abspath('.'))
 
 from datetime import date
+from importlib.metadata import version
 
 # -- Project information -----------------------------------------------------
 
 project = 'pgmuvi'
-copyright = f'{date.today().year}, Peter Scicluna, Sundar'\
-             ' Srinivasan, Stefan Waterval, Kathryn Jones, '\
-             'Diego Alejandro Vasquez, Sara Jamal'
-author = 'Peter Scicluna, Sundar Srinivasan, Stefan Waterval, '\
-         'Kathryn Jones, Diego Alejandro Vasquez, Sara Jamal'
-from importlib.metadata import version
+project_copyright = (
+    f'{date.today().year}, Peter Scicluna, Sundar'
+    ' Srinivasan, Stefan Waterval, Kathryn Jones, '
+    'Diego Alejandro Vasquez, Sara Jamal'
+)
+copyright = project_copyright  # noqa: A001
+author = (
+    'Peter Scicluna, Sundar Srinivasan, Stefan Waterval, '
+    'Kathryn Jones, Diego Alejandro Vasquez, Sara Jamal'
+)
 release = version('pgmuvi')
 # for example take major/minor
 version = '.'.join(release.split('.')[:2])
