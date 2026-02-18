@@ -34,6 +34,8 @@ dependencies = [
     "arviz",
     "xarray",
     "tqdm",
+    "astropy",
+    "scipy",
 ]
 
 [project.readme]

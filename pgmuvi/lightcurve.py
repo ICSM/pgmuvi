@@ -1227,16 +1227,17 @@ class Lightcurve(gpytorch.Module):
             errmsg = "You must first set the model and likelihood"
             _reraise_with_note(e, errmsg)
 
-    def fit_LS(self, freq_only=False, num_peaks=1, single_threshold=0.05,
-               Nyquist_factor=5, **kwargs):
+    def fit_LS(self, freq_only: bool = False, num_peaks: int = 1,
+               single_threshold: float = 0.05,
+               Nyquist_factor: int = 5, **kwargs) -> tuple:
         """
         Compute the (multiband) Lomb-Scargle periodogram.
         Periods returned for the num_peaks highest peaks in the periodogram.
         For a 1D lightcurve, the false-alarm probability is used
             to estimate the significance of the periods, which are also
             returned. These can be used to filter out insignificant periods.
-        Multi-band lightcurves are currently not supported and will raise
-            NotImplementedError.
+        For multi-band lightcurves (2D data), LombScargleMultiband is used
+            to compute periods across all bands simultaneously.
 
         The method can also be used to return the entire grid of frequencies,
         which can be used by other methods such as compute_psd and plot_psd.
@@ -1248,6 +1249,7 @@ class Lightcurve(gpytorch.Module):
             This can be useful for methods such as compute_psd and plot_psd.
         - num_peaks: int, optional, default=1
             The number of peaks to extract from the Lomb-Scargle periodogram.
+            If fewer peaks are found, only the available peaks will be returned.
         - single_threshold: float, optional, default=0.05
             The false alarm probability threshold for a single peak to be
             considered significant.
@@ -1275,11 +1277,23 @@ class Lightcurve(gpytorch.Module):
         from astropy.timeseries import LombScargle, LombScargleMultiband
         from scipy.signal import find_peaks
 
-        def fdr_bh(fap_values, alpha=0.05):
+        def fdr_bh(fap_values: np.ndarray, alpha: float = 0.05) -> np.ndarray:
             """
             Benjamini-Hochberg procedure to control the False Discovery Rate.
+
+            The Benjamini-Hochberg (BH) procedure is a method for controlling the
+            False Discovery Rate (FDR) when performing multiple hypothesis tests.
+            It works by:
+            1. Sorting the p-values (FAPs) in ascending order
+            2. Finding the largest i such that p(i) <= (i/N) * alpha
+            3. Rejecting all hypotheses with p-values <= p(i)
+
+            This is less conservative than Bonferroni correction while still
+            controlling the expected proportion of false discoveries.
+
             See https://www.statsmodels.org/dev/generated/statsmodels.stats.multitest.fdrcorrection.html
                 for the statsmodels implementation
+
             Parameters:
             ----------------
             - fap_values: Array of false alarm probabilities (FAP) for peaks.
@@ -1288,7 +1302,6 @@ class Lightcurve(gpytorch.Module):
             Returns:
             ----------------
             - result: array(bool), True for statistically significant peaks.
-            - threshold: array, the FAP threshold for each peak.
             """
             # Sort FAP values in ascending order and get their original indices
             sorted_indices = np.argsort(fap_values)
@@ -1305,38 +1318,130 @@ class Lightcurve(gpytorch.Module):
                 result[significant_indices] = True
             else:
                 result = np.zeros(N, dtype=bool)
-            return result, threshold
+            return result
 
         if self.ndim > 1:
-            # t, y, yerr = self.xdata[0], self.ydata, self.yerr
-            raise NotImplementedError("Multiband Lomb-Scargle not yet implemented.")
+            # Multi-band case: xdata[:, 0] is time, xdata[:, 1] is band/wavelength
+            t = self.xdata[:, 0]
+            bands = self.xdata[:, 1]
+            y = self.ydata
+            
+            has_yerr = (hasattr(self, '_yerr_transformed') and
+                        self._yerr_transformed is not None)
+            
+            if has_yerr:
+                yerr = self.yerr
+                mask = (torch.isfinite(t) & torch.isfinite(bands) & 
+                        torch.isfinite(y) & torch.isfinite(yerr))
+                t, bands, y, yerr = t[mask], bands[mask], y[mask], yerr[mask]
+                LS = LombScargleMultiband(t, y, bands, dy=yerr, **kwargs)
+            else:
+                mask = (torch.isfinite(t) & torch.isfinite(bands) & 
+                        torch.isfinite(y))
+                t, bands, y = t[mask], bands[mask], y[mask]
+                LS = LombScargleMultiband(t, y, bands, **kwargs)
+            
+            freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
+            power = LS.power(freq)
+            
+            if freq_only:
+                return (
+                    torch.as_tensor(freq, dtype=self.xdata.dtype,
+                                    device=self.xdata.device),
+                    torch.as_tensor(power, dtype=self.xdata.dtype,
+                                    device=self.xdata.device)
+                )
+            
+            # Find peaks in the multiband periodogram
+            peaks, _ = find_peaks(power, distance=Nyquist_factor)
+            peaks = peaks[np.argsort(power[peaks])][::-1]
+            
+            # Handle case when no peaks found
+            if len(peaks) == 0:
+                return (
+                    torch.as_tensor([], dtype=self.xdata.dtype,
+                                    device=self.xdata.device),
+                    torch.as_tensor([], dtype=torch.bool,
+                                    device=self.xdata.device)
+                )
+            
+            # For multiband, we don't have false_alarm_probability method
+            # so we return frequencies with all True masks
+            # (user should interpret power values directly)
+            n_return = min(num_peaks, len(peaks))
+            return (
+                torch.as_tensor(freq[peaks[:n_return]],
+                                dtype=self.xdata.dtype,
+                                device=self.xdata.device),
+                torch.as_tensor(np.array([True] * n_return),
+                                dtype=torch.bool,
+                                device=self.xdata.device)
+            )
         else:
-            t, y, yerr = self.xdata, self.ydata, self.yerr
-            mask = torch.isfinite(t) & torch.isfinite(y) & torch.isfinite(yerr)
-            t, y, yerr = t[mask], y[mask], yerr[mask]
-            LS = LombScargle(t, y, yerr)
+            t, y = self.xdata, self.ydata
+            has_yerr = (hasattr(self, '_yerr_transformed') and
+                        self._yerr_transformed is not None)
+            if has_yerr:
+                yerr = self.yerr
+                mask = torch.isfinite(t) & torch.isfinite(y) & torch.isfinite(yerr)
+                t, y, yerr = t[mask], y[mask], yerr[mask]
+                LS = LombScargle(t, y, yerr)
+            else:
+                mask = torch.isfinite(t) & torch.isfinite(y)
+                t, y = t[mask], y[mask]
+                LS = LombScargle(t, y)
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
             power = LS.power(freq)
             if freq_only:
-                return torch.Tensor(freq), torch.Tensor(power)
+                return (
+                    torch.as_tensor(freq, dtype=self.xdata.dtype,
+                                    device=self.xdata.device),
+                    torch.as_tensor(power, dtype=self.xdata.dtype,
+                                    device=self.xdata.device)
+                )
             # distance set to Nyquist_factor for LS frequency grid computation
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
             # sort by decreasing power
             peaks = peaks[np.argsort(power[peaks])][::-1]
+
+            # Handle case when no peaks or fewer peaks than requested
+            if len(peaks) == 0:
+                # No peaks found, return empty tensors
+                return (
+                    torch.as_tensor([], dtype=self.xdata.dtype,
+                                    device=self.xdata.device),
+                    torch.as_tensor([], dtype=torch.bool,
+                                    device=self.xdata.device)
+                )
+
             # Calculate the false alarm probability for the highest peak
             fap_max = LS.false_alarm_probability(power.max())
+            n_return = min(num_peaks, len(peaks))
+
             if fap_max > single_threshold:
-                return (torch.Tensor(freq[peaks[:num_peaks]]), 
-                    torch.Tensor(np.array([False] * num_peaks)))
+                return (
+                    torch.as_tensor(freq[peaks[:n_return]],
+                                    dtype=self.xdata.dtype,
+                                    device=self.xdata.device),
+                    torch.as_tensor(np.array([False] * n_return),
+                                    dtype=torch.bool,
+                                    device=self.xdata.device)
+                )
             # Calculate the false alarm probability for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
                                                     method='single')
             # Apply the FDR (Benjamini-Hochberg) correction
-            significant_mask, threshold = fdr_bh(fap_single,
-                                                 alpha=single_threshold)
-            significant_mask[0] = True  # since fap_max >= single_threshold
-            return (torch.Tensor(freq[peaks[:num_peaks]]), 
-                torch.Tensor(significant_mask[:num_peaks]))
+            significant_mask = fdr_bh(fap_single,
+                                      alpha=single_threshold)
+            significant_mask[0] = True  # since fap_max <= single_threshold
+            return (
+                torch.as_tensor(freq[peaks[:n_return]],
+                                dtype=self.xdata.dtype,
+                                device=self.xdata.device),
+                torch.as_tensor(significant_mask[:n_return],
+                                dtype=torch.bool,
+                                device=self.xdata.device)
+            )
 
     def fit(self, model=None, likelihood=None, num_mixtures=4,
             guess=None, grid_size=2000, cuda=False,
