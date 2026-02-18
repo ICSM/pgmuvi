@@ -42,7 +42,7 @@ def _reraise_with_note(e, note):
     except AttributeError:
         args = e.args
         arg0 = f"{args[0]}\n{note}" if args else note
-        e.args = (arg0,) + args[1:]
+        e.args = (arg0, *args[1:])
     raise e
 
 # Function to walk through nested dict and yield all values
@@ -329,19 +329,22 @@ class Lightcurve(gpytorch.Module):
         self.__FITTED_MCMC = False
 
     @classmethod
-    def from_table(cls, tab, format='votable', xcol='x', ycol='y', yerrcol='yerr', **kwargs):
+    def from_table(
+        cls, tab, file_format='votable', xcol='x', ycol='y', yerrcol='yerr',
+        **kwargs
+    ):
         """Instantiate a Lightcurve object with
         data read in from a VOTable.
 
         Parameters
         ----------
         tab: astropy.table.Table object or str or pathlib.Path instance
-            Table containing the input data. If str, name (with extension) of file
-            containing the input data. In this case, the format keyword must be set
-            accordingly.
-        format: str
-            Format of file containing input data. Must be a format supported by Table.read.
-            Only required if type(tab) is str.
+            Table containing the input data. If str, name (with extension) of
+            file containing the input data. In this case, the file_format
+            keyword must be set accordingly.
+        file_format: str
+            Format of file containing input data. Must be a format supported
+            by Table.read. Only required if type(tab) is str.
         xcol: str
             Name of column in table that contains the x data
         ycol: str
@@ -350,7 +353,7 @@ class Lightcurve(gpytorch.Module):
             Name of column in table that contains the yerr data
         kwargs:
             Arguments to be passed to the Lightcurve call
-        
+
         Returns
         ----------
         Lightcurve object
@@ -358,17 +361,20 @@ class Lightcurve(gpytorch.Module):
         from pathlib import Path
         from astropy.table import Table
         if isinstance(tab, str) or isinstance(tab, Path):
-            data = Table.read(tab, format=format)
+            data = Table.read(tab, format=file_format)
         elif isinstance(tab, Table):
             data = tab
         else:
-            raise ValueError("Input tab must be an instance of str, pathlib.Path, or astropy.table.Table!")
+            raise ValueError(
+                "Input tab must be an instance of str, pathlib.Path, "
+                "or astropy.table.Table!"
+            )
         c = data.colnames
         if xcol not in c:
             raise ValueError(f"Table does not have column '{xcol}'")
         if ycol not in c:
             raise ValueError(f"Table does not have column '{ycol}'")
-        
+
         ndim = len(data[xcol].squeeze().shape)
         x = torch.Tensor(data[xcol]).squeeze()
         y = torch.Tensor(data[ycol]).squeeze()
@@ -380,9 +386,9 @@ class Lightcurve(gpytorch.Module):
         else:
             mesg = f"Column '{xcol}' must have shape (1, nsamples) or (1, 2, nsamples)"
             raise ValueError(mesg)
-    
+
         return cls(x, y, yerr, **kwargs)
-    
+
     @property
     def ndim(self):
         return self.xdata.shape[-1] if self.xdata.dim() > 1 else 1
@@ -795,36 +801,50 @@ class Lightcurve(gpytorch.Module):
                         if (constraint[key].lower_bound
                            not in [torch.tensor(0), torch.tensor(-torch.inf)]):
                             # we need to transform the lower bound
-                            # NOTE: For 2D data, GPyTorch constraints are scalar and apply
-                            # element-wise to all parameter elements (time and wavelength).
-                            # We transform using dimension 0 (time) as it's typically the
-                            # primary independent variable. Users setting manual constraints
-                            # should be aware that the same constraint applies to both dimensions.
-                            transformed_bound = 1./self.xtransform.transform(1./constraint[key].lower_bound,
-                                                                            shift=False)
+                            # NOTE: For 2D data, GPyTorch constraints are scalar
+                            # and apply element-wise to all parameter elements
+                            # (time and wavelength).
+                            # We transform using dimension 0 (time) as it's
+                            # typically the primary independent variable.
+                            # Users setting manual constraints should be aware
+                            # that the same constraint applies to both
+                            # dimensions.
+                            transformed_bound = 1. / self.xtransform.transform(
+                                1. / constraint[key].lower_bound,
+                                shift=False
+                            )
                             # Handle both 1D and 2D cases
                             if transformed_bound.numel() > 1:
-                                # For 2D case, use the first dimension's transformation
-                                # Take element [0, 0] to get a scalar
+                                # For 2D case, use the first dimension's
+                                # transformation. Take element [0, 0] to get
+                                # a scalar
                                 transformed_bound = transformed_bound.flatten()[0]
                             if debug:
                                 print(f"Transformed lower bound: {transformed_bound}")
-                            constraint[key].lower_bound = torch.tensor(transformed_bound.item())
+                            constraint[key].lower_bound = torch.tensor(
+                                transformed_bound.item()
+                            )
                             if debug:
                                 print(constraint[key].lower_bound)
                                 print(constraint[key])
                         if (constraint[key].upper_bound
                             not in [torch.tensor(0), torch.tensor(torch.inf)]):
                             # we need to transform the upper bound
-                            # (Same dimension-0 transformation logic as lower_bound above)
-                            transformed_bound = 1./self.xtransform.transform(1./constraint[key].upper_bound,
-                                                                            shift=False)
+                            # (Same dimension-0 transformation logic as
+                            # lower_bound above)
+                            transformed_bound = 1. / self.xtransform.transform(
+                                1. / constraint[key].upper_bound,
+                                shift=False
+                            )
                             # Handle both 1D and 2D cases
                             if transformed_bound.numel() > 1:
-                                # For 2D case, use the first dimension's transformation
-                                # Take element [0, 0] to get a scalar
+                                # For 2D case, use the first dimension's
+                                # transformation. Take element [0, 0] to get
+                                # a scalar
                                 transformed_bound = transformed_bound.flatten()[0]
-                            constraint[key].upper_bound = torch.tensor(transformed_bound.item())
+                            constraint[key].upper_bound = torch.tensor(
+                                transformed_bound.item()
+                            )
                             if debug:
                                 print(constraint[key].upper_bound)
                                 print(constraint[key])
@@ -955,59 +975,62 @@ class Lightcurve(gpytorch.Module):
 
     def _validate_2d_setup(self):
         """Validate that the 2D setup is correct
-        
+
         This method checks that:
         - Data shapes are correct for 2D (xdata has shape [n_samples, 2])
         - Model has appropriate ard_num_dims parameter
         - Transforms can handle 2D data
-        
+
         Raises
         ------
         ValueError
             If the 2D setup is invalid
-        
+
         Warnings
         --------
         If there are potential issues with the setup
         """
         if self.ndim <= 1:
             return  # Only validate for 2D data
-        
+
         # Check xdata shape
         if self._xdata_transformed.dim() != 2:
             raise ValueError(
-                f"For 2D data, xdata must be 2-dimensional, got {self._xdata_transformed.dim()}D"
+                f"For 2D data, xdata must be 2-dimensional, "
+                f"got {self._xdata_transformed.dim()}D"
             )
-        
+
         if self._xdata_transformed.shape[1] != 2:
             raise ValueError(
                 f"For 2D data, xdata must have 2 columns (time, wavelength), "
                 f"got {self._xdata_transformed.shape[1]} columns"
             )
-        
+
         # Check if model is set
         if not hasattr(self, 'model'):
             warnings.warn(
                 "Model not set yet. Cannot validate ard_num_dims. "
-                "Ensure your model has ard_num_dims=2 for 2D data."
+                "Ensure your model has ard_num_dims=2 for 2D data.",
+                stacklevel=2
             )
             return
-        
+
         # Check if the model's kernel has ard_num_dims set correctly
         if hasattr(self.model, 'covar_module'):
             covar = self.model.covar_module
             # For KISS-GP models, check the base_kernel
             if hasattr(covar, 'base_kernel'):
                 covar = covar.base_kernel
-            
+
             if hasattr(covar, 'ard_num_dims'):
                 if covar.ard_num_dims != 2:
                     raise ValueError(
                         f"Model's ard_num_dims is {covar.ard_num_dims}, "
                         f"but data has {self.ndim} dimensions. "
-                        f"Use a 2D model (e.g., '2D', '2DLinear', '2DSKI', '2DLinearSKI')."
+                        "Use a 2D model (e.g., '2D', '2DLinear', '2DSKI', "
+                        "'2DLinearSKI')."
                     )
-        
+
         # Check transform compatibility
         if self.xtransform is not None:
             if not hasattr(self.xtransform, 'transform'):
@@ -1061,17 +1084,27 @@ class Lightcurve(gpytorch.Module):
         if self.ndim > 1:
             # For 2D data, calculate minimum frequency per dimension
             # Dimension 0 (time): based on temporal data span
-            # Dimension 1 (wavelength): allow near-zero for achromatic variability
-            time_span = self._xdata_transformed[:, 0].max() - self._xdata_transformed[:, 0].min()
+            # Dimension 1 (wavelength): allow near-zero for achromatic
+            # variability
+            time_span = (
+                self._xdata_transformed[:, 0].max() -
+                self._xdata_transformed[:, 0].min()
+            )
             min_time_frequency = 1.0 / time_span
-            
-            # For wavelength dimension, we want to allow achromatic variability
-            # (same behavior across wavelengths), so we use a very small minimum
-            # 1e-6 allows frequencies near zero, enabling the model to capture
-            # achromatic (wavelength-independent) variability patterns
-            wavelength_span = self._xdata_transformed[:, 1].max() - self._xdata_transformed[:, 1].min()
-            min_wavelength_frequency = 1.0 / wavelength_span if wavelength_span > 0 else 1e-6
-            
+
+            # For wavelength dimension, we want to allow achromatic
+            # variability (same behavior across wavelengths), so we use a
+            # very small minimum. 1e-6 allows frequencies near zero,
+            # enabling the model to capture achromatic (wavelength-
+            # independent) variability patterns
+            wavelength_span = (
+                self._xdata_transformed[:, 1].max() -
+                self._xdata_transformed[:, 1].min()
+            )
+            min_wavelength_frequency = (
+                1.0 / wavelength_span if wavelength_span > 0 else 1e-6
+            )
+
             # GPyTorch limitation: Constraints on ARD parameters apply element-wise
             # to ALL elements (cannot set different constraints per dimension).
             # For mixture_means with shape (num_mixtures, 1, ard_num_dims), we must
@@ -1133,22 +1166,34 @@ class Lightcurve(gpytorch.Module):
                     # Check if the parameter is 2D (for multi-dimensional data)
                     if hypers[key].dim() == 2:
                         # For 2D hyperparameters (num_mixtures, ard_num_dims),
-                        # the transform should be applied considering each dimension's range
-                        # Since transform was fit on (n_samples, 2) data, we need to handle this carefully
-                        num_mixtures, ard_num_dims = hypers[key].shape
+                        # the transform should be applied considering each
+                        # dimension's range. Since transform was fit on
+                        # (n_samples, 2) data, we need to handle this
+                        # carefully
+                        _num_mixtures, ard_num_dims = hypers[key].shape
                         transformed = torch.zeros_like(hypers[key])
-                        
+
                         # For each dimension of the 2D parameter
                         for dim in range(ard_num_dims):
-                            # Get the range for this dimension from the fitted transformer
-                            if hasattr(self.xtransform, 'range') and self.xtransform.range.shape[0] > dim:
-                                # Apply dimension-specific scaling to the Fourier space parameters
-                                # Formula: f_transformed = 1 / ((1 / f_raw) / range)
-                                # This accounts for the data transformation applied to each dimension
-                                # The 1/x transformations handle the Fourier space representation
+                            # Get the range for this dimension from the
+                            # fitted transformer
+                            if (hasattr(self.xtransform, 'range') and
+                                    self.xtransform.range.shape[0] > dim):
+                                # Apply dimension-specific scaling to the
+                                # Fourier space parameters
+                                # Formula: f_transformed = 1 / ((1 / f_raw)
+                                # / range)
+                                # This accounts for the data transformation
+                                # applied to each dimension
+                                # The 1/x transformations handle the Fourier
+                                # space representation
                                 dim_values = hypers[key][:, dim]
-                                # Transform back to real space, apply scaling, then back to Fourier
-                                transformed[:, dim] = 1 / ((1 / dim_values) / self.xtransform.range[0, dim])
+                                # Transform back to real space, apply
+                                # scaling, then back to Fourier
+                                transformed[:, dim] = 1 / (
+                                    (1 / dim_values) /
+                                    self.xtransform.range[0, dim]
+                                )
                             else:
                                 # Fallback: just copy the values
                                 transformed[:, dim] = hypers[key][:, dim]
@@ -1325,25 +1370,25 @@ class Lightcurve(gpytorch.Module):
             t = self.xdata[:, 0]
             bands = self.xdata[:, 1]
             y = self.ydata
-            
+
             has_yerr = (hasattr(self, '_yerr_transformed') and
                         self._yerr_transformed is not None)
-            
+
             if has_yerr:
                 yerr = self.yerr
-                mask = (torch.isfinite(t) & torch.isfinite(bands) & 
+                mask = (torch.isfinite(t) & torch.isfinite(bands) &
                         torch.isfinite(y) & torch.isfinite(yerr))
                 t, bands, y, yerr = t[mask], bands[mask], y[mask], yerr[mask]
                 LS = LombScargleMultiband(t, y, bands, dy=yerr, **kwargs)
             else:
-                mask = (torch.isfinite(t) & torch.isfinite(bands) & 
+                mask = (torch.isfinite(t) & torch.isfinite(bands) &
                         torch.isfinite(y))
                 t, bands, y = t[mask], bands[mask], y[mask]
                 LS = LombScargleMultiband(t, y, bands, **kwargs)
-            
+
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
             power = LS.power(freq)
-            
+
             if freq_only:
                 return (
                     torch.as_tensor(freq, dtype=self.xdata.dtype,
@@ -1351,11 +1396,11 @@ class Lightcurve(gpytorch.Module):
                     torch.as_tensor(power, dtype=self.xdata.dtype,
                                     device=self.xdata.device)
                 )
-            
+
             # Find peaks in the multiband periodogram
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
             peaks = peaks[np.argsort(power[peaks])][::-1]
-            
+
             # Handle case when no peaks found
             if len(peaks) == 0:
                 return (
@@ -1364,7 +1409,7 @@ class Lightcurve(gpytorch.Module):
                     torch.as_tensor([], dtype=torch.bool,
                                     device=self.xdata.device)
                 )
-            
+
             # For multiband, we don't have false_alarm_probability method
             # so we return frequencies with all True masks
             # (user should interpret power values directly)
@@ -1663,7 +1708,8 @@ class Lightcurve(gpytorch.Module):
         #     return y
 
         def pyro_model(x, y):
-            with (gpytorch.settings.fast_computations(False, False, False), gpytorch.settings.max_cg_iterations(max_cg_iterations)):  # noqa: E501
+            with gpytorch.settings.fast_computations(False, False, False), \
+                    gpytorch.settings.max_cg_iterations(max_cg_iterations):
                 for key in self.state_dict().keys():
                     print(key)
                     with contextlib.suppress(AttributeError):
@@ -2306,11 +2352,19 @@ class Lightcurve(gpytorch.Module):
             print(norm)
         if self.ndim > 1:
           if not isinstance(freq, tuple):
-            raise ValueError("freq must be a tuple of array_likes for multidimensional light curves!")
+            raise ValueError(
+                "freq must be a tuple of array_likes for "
+                "multidimensional light curves!"
+            )
           if len(freq) > 2:
-            raise NotImplementedError("PSD for more than two duals not implemented yet")
+            raise NotImplementedError(
+                "PSD for more than two duals not implemented yet"
+            )
           if len(freq) != self.ndim:
-            raise ValueError("freq must have the same number of duals as the number of light curve dimensions!")
+            raise ValueError(
+                "freq must have the same number of duals as the number "
+                "of light curve dimensions!"
+            )
           f1, f2 = freq
           norm1 = torchnorm(means[..., -2], scales[..., -2])
           norm2 = torchnorm(means[..., -1], scales[..., -1])
@@ -2323,7 +2377,10 @@ class Lightcurve(gpytorch.Module):
             print(f"{e}. Chunking not implemented yet in compute_psd.")
         else:
           if len(freq.shape) > 1:
-            raise ValueError("array-like freq must be one-dimensional for 1D light curves!")
+            raise ValueError(
+                "array-like freq must be one-dimensional for 1D light "
+                "curves!"
+            )
           f1 = torch.as_tensor(freq)
           # marginalise over Fourier dual variables
           psd1 = norm.log_prob(f1.unsqueeze(-1)).sum(dim=-1)

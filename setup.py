@@ -18,7 +18,7 @@ def get_version(rel_path):
         raise RuntimeError("Unable to find version string.")
 
 # pyproject should be used instead of setup.py
-with open("README.md", "r", encoding="utf-8") as fh:
+with open("README.md", encoding="utf-8") as fh:
     long_description = fh.read()
 
 
@@ -30,7 +30,7 @@ setup()
 
 # setup(
 #     name='pgmuvi',
-#     version=get_version("pgmuvi/__init__.py"),    
+#     version=get_version("pgmuvi/__init__.py"),
 #     description='A package for GP inference of multiwavelength variability',
 #     long_description=long_description,
 #     long_description_content_type="text/markdown",
@@ -53,7 +53,7 @@ setup()
 #                       'xarray',
 #                       'tqdm'
 #                       ],
-#     python_requires=">=3.8", 
+#     python_requires=">=3.8",
 
 #     classifiers=[
 #         'Development Status :: 3 - Alpha',
