@@ -53,6 +53,11 @@ include-package-data = false
 [tool.setuptools_scm]
 
 [tool.ruff]
+exclude = ["tests"]
+# include notebooks!
+include = ["*.py", "*.pyi", "**/pyproject.toml", "*.ipynb"]
+
+[tool.ruff.lint]
 select = ["A",  # prevent using keywords that clobber python builtins
           "B",  # bugbear: security warnings
           "E",  # pycodestyle
@@ -64,10 +69,6 @@ select = ["A",  # prevent using keywords that clobber python builtins
 
           ]
 ignore = ["UP004", "B007"]  # ["E501", "W503"]
-exclude = ["tests"]
-
-# include notebooks!
-include = ["*.py", "*.pyi", "**/pyproject.toml", "*.ipynb"]
 
 [tool.black]
 line-length = 88
