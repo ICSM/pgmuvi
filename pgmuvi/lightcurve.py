@@ -1236,8 +1236,8 @@ class Lightcurve(gpytorch.Module):
         For a 1D lightcurve, the false-alarm probability is used
             to estimate the significance of the periods, which are also
             returned. These can be used to filter out insignificant periods.
-        Multi-band lightcurves are currently not supported and will raise
-            NotImplementedError.
+        For multi-band lightcurves (2D data), LombScargleMultiband is used
+            to compute periods across all bands simultaneously.
 
         The method can also be used to return the entire grid of frequencies,
         which can be used by other methods such as compute_psd and plot_psd.
@@ -1274,7 +1274,7 @@ class Lightcurve(gpytorch.Module):
         - power: torch.Tensor of floats
           PSD for the entire frequency grid. Returned if freq_only is set.
         """
-        from astropy.timeseries import LombScargle
+        from astropy.timeseries import LombScargle, LombScargleMultiband
         from scipy.signal import find_peaks
 
         def fdr_bh(fap_values: np.ndarray, alpha: float = 0.05) -> np.ndarray:
@@ -1321,8 +1321,62 @@ class Lightcurve(gpytorch.Module):
             return result
 
         if self.ndim > 1:
-            # t, y, yerr = self.xdata[0], self.ydata, self.yerr
-            raise NotImplementedError("Multiband Lomb-Scargle not yet implemented.")
+            # Multi-band case: xdata[:, 0] is time, xdata[:, 1] is band/wavelength
+            t = self.xdata[:, 0]
+            bands = self.xdata[:, 1]
+            y = self.ydata
+            
+            has_yerr = (hasattr(self, '_yerr_transformed') and
+                        self._yerr_transformed is not None)
+            
+            if has_yerr:
+                yerr = self.yerr
+                mask = (torch.isfinite(t) & torch.isfinite(bands) & 
+                        torch.isfinite(y) & torch.isfinite(yerr))
+                t, bands, y, yerr = t[mask], bands[mask], y[mask], yerr[mask]
+                LS = LombScargleMultiband(t, y, bands, dy=yerr, **kwargs)
+            else:
+                mask = (torch.isfinite(t) & torch.isfinite(bands) & 
+                        torch.isfinite(y))
+                t, bands, y = t[mask], bands[mask], y[mask]
+                LS = LombScargleMultiband(t, y, bands, **kwargs)
+            
+            freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
+            power = LS.power(freq)
+            
+            if freq_only:
+                return (
+                    torch.as_tensor(freq, dtype=self.xdata.dtype,
+                                    device=self.xdata.device),
+                    torch.as_tensor(power, dtype=self.xdata.dtype,
+                                    device=self.xdata.device)
+                )
+            
+            # Find peaks in the multiband periodogram
+            peaks, _ = find_peaks(power, distance=Nyquist_factor)
+            peaks = peaks[np.argsort(power[peaks])][::-1]
+            
+            # Handle case when no peaks found
+            if len(peaks) == 0:
+                return (
+                    torch.as_tensor([], dtype=self.xdata.dtype,
+                                    device=self.xdata.device),
+                    torch.as_tensor([], dtype=torch.bool,
+                                    device=self.xdata.device)
+                )
+            
+            # For multiband, we don't have false_alarm_probability method
+            # so we return frequencies with all True masks
+            # (user should interpret power values directly)
+            n_return = min(num_peaks, len(peaks))
+            return (
+                torch.as_tensor(freq[peaks[:n_return]],
+                                dtype=self.xdata.dtype,
+                                device=self.xdata.device),
+                torch.as_tensor(np.array([True] * n_return),
+                                dtype=torch.bool,
+                                device=self.xdata.device)
+            )
         else:
             t, y = self.xdata, self.ydata
             has_yerr = (hasattr(self, '_yerr_transformed') and

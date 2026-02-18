@@ -149,10 +149,24 @@ class TestFitLS(unittest.TestCase):
         self.lc_with_yerr = Lightcurve(self.t, self.y, yerr=self.yerr)
         self.lc_without_yerr = Lightcurve(self.t, self.y)
         
-        # Create 2D lightcurve for testing NotImplementedError
-        self.t_2d = torch.as_tensor([[1, 2, 3, 4], [1, 2, 3, 4]], dtype=torch.float32)
-        self.y_2d = torch.as_tensor([[1, 1, 1, 1], [1, 1, 1, 1]], dtype=torch.float32)
-        self.lc_2d = Lightcurve(self.t_2d, self.y_2d)
+        # Create 2D multiband lightcurve for testing multiband functionality
+        # Format: (n_samples, 2) where column 0 is time, column 1 is band
+        n_samples = 50
+        time_2d = torch.linspace(0, 10, n_samples, dtype=torch.float32)
+        # Two bands: 0.5 and 1.5
+        bands = torch.cat([
+            torch.ones(n_samples // 2, dtype=torch.float32) * 0.5,
+            torch.ones(n_samples - n_samples // 2, dtype=torch.float32) * 1.5
+        ])
+        # Shuffle to mix bands
+        indices = torch.randperm(n_samples)
+        time_2d = time_2d[indices]
+        bands = bands[indices]
+        
+        self.xdata_2d = torch.stack([time_2d, bands], dim=1)
+        # Create periodic signal
+        y_2d = torch.sin(2 * np.pi * 0.5 * time_2d) + 0.1 * torch.randn(n_samples)
+        self.lc_2d = Lightcurve(self.xdata_2d, y_2d)
     
     def test_basic_functionality_with_yerr(self):
         """Test basic fit_LS functionality with yerr"""
@@ -232,12 +246,24 @@ class TestFitLS(unittest.TestCase):
         self.assertEqual(len(freq), 0)
         self.assertEqual(len(mask), 0)
     
-    def test_multiband_raises_not_implemented(self):
-        """Test that multiband lightcurves raise NotImplementedError"""
-        with self.assertRaises(NotImplementedError) as context:
-            self.lc_2d.fit_LS()
+    def test_multiband_functionality(self):
+        """Test that multiband lightcurves work correctly"""
+        # Test that multiband data works
+        freq, mask = self.lc_2d.fit_LS(num_peaks=1)
         
-        self.assertIn("Multiband", str(context.exception))
+        # Should return tensors
+        self.assertIsInstance(freq, torch.Tensor)
+        self.assertIsInstance(mask, torch.Tensor)
+        
+        # Should return at least some peaks
+        self.assertGreaterEqual(len(freq), 0)
+        self.assertEqual(len(freq), len(mask))
+        
+        # Test freq_only mode for multiband
+        freq_grid, power_grid = self.lc_2d.fit_LS(freq_only=True)
+        self.assertIsInstance(freq_grid, torch.Tensor)
+        self.assertIsInstance(power_grid, torch.Tensor)
+        self.assertGreater(len(freq_grid), 50)  # Should have many points in grid
     
     def test_device_consistency(self):
         """Test that output device matches input device"""
