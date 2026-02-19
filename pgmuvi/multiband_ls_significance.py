@@ -154,6 +154,12 @@ class MultibandLSWithSignificance:
         **Performance**: For n_samples=100, bootstrap typically takes
         1-2 seconds for ~100 data points. Use n_samples=1000 for
         publication-quality results if time permits.
+
+        **Note for pgmuvi users**: Since the primary use case in pgmuvi
+        is to generate initial guesses for periods rather than final
+        significance testing, n_samples=100 (default) is typically
+        sufficient. Higher values like n_samples=1000 are only needed
+        for publication-quality significance statements.
         """
         if freq_grid is None:
             freq_grid = self.autofrequency()
@@ -349,18 +355,16 @@ class MultibandLSWithSignificance:
         # that accounts for the number of bands
         2 * n_bands  # Degrees of freedom per frequency
 
-        fap = np.zeros_like(power_values)
-        for i, z in enumerate(power_values):
-            # Single trial probability
-            # Using exponential approximation for high powers
-            prob_single = np.exp(-z)
+        # Vectorized computation
+        # Single trial probability using exponential approximation
+        probs = np.exp(-power_values)
 
-            # Account for multiple trials
-            # FAP = 1 - (1 - prob_single)^N_indep
-            fap[i] = 1.0 - (1.0 - prob_single) ** N_indep
+        # Account for multiple trials
+        # FAP = 1 - (1 - prob_single)^N_indep
+        fap = 1.0 - (1.0 - probs) ** N_indep
 
-            # Ensure FAP is in [0, 1]
-            fap[i] = np.clip(fap[i], 0.0, 1.0)
+        # Ensure FAP is in [0, 1]
+        fap = np.clip(fap, 0.0, 1.0)
 
         return fap
 
@@ -388,7 +392,24 @@ class MultibandLSWithSignificance:
         -----
         This method is conservative and may overestimate FAP. It's useful
         as a sanity check or when computational resources are limited.
+
+        **Warning**: This method applies a single-band approach to multiband
+        data by analyzing each band separately and combining results with
+        Bonferroni correction. This may not fully capture multiband
+        correlations and tends to be conservative. For more accurate
+        multiband FAP estimates, use the 'bootstrap' method.
         """
+        import warnings
+
+        warnings.warn(
+            "The 'calibrated' method uses a single-band approach for "
+            "multiband data, which may not fully capture multiband "
+            "correlations. Consider using 'bootstrap' for more accurate "
+            "multiband FAP estimates.",
+            UserWarning,
+            stacklevel=3
+        )
+
         unique_bands = np.unique(self.bands)
         n_bands = len(unique_bands)
 
