@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import torch
 try:
     import imageio.v2 as imageio
-except Exception:
+except (ImportError, ModuleNotFoundError):
     import imageio
 from ..utils.helpers import _clean_errors
 import logging
