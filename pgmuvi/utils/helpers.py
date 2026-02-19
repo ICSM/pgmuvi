@@ -6,7 +6,14 @@ import numpy as np
 
 
 def ensure_dir(path: str):
-    """Create directory `path` if missing (mkdir -p semantics)."""
+    """
+    Create directory `path` if missing (mkdir -p semantics).
+
+    Parameters
+    ----------
+    path : str
+        The directory path to create.
+    """
     os.makedirs(path, exist_ok=True)
 
 
