@@ -1388,8 +1388,9 @@ class Lightcurve(gpytorch.Module):
         - power: torch.Tensor of floats
           PSD for the entire frequency grid. Returned if freq_only is set.
         """
-        from astropy.timeseries import LombScargle, LombScargleMultiband
+        from astropy.timeseries import LombScargle
         from scipy.signal import find_peaks
+        from .multiband_ls_significance import MultibandLSWithSignificance
 
         def fdr_bh(fap_values: np.ndarray, alpha: float = 0.05) -> np.ndarray:
             """
@@ -1454,12 +1455,12 @@ class Lightcurve(gpytorch.Module):
                     & torch.isfinite(yerr)
                 )
                 t, bands, y, yerr = t[mask], bands[mask], y[mask], yerr[mask]
-                LS = LombScargleMultiband(t, y, bands, dy=yerr, **kwargs)
+                LS = MultibandLSWithSignificance(t, y, bands, dy=yerr, **kwargs)
             else:
                 mask = torch.isfinite(t) & torch.isfinite(bands) & torch.isfinite(y)
                 t, bands, y = t[mask], bands[mask], y[mask]
-                LS = LombScargleMultiband(t, y, bands, **kwargs)
-
+                LS = MultibandLSWithSignificance(t, y, bands, **kwargs)
+            
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
             power = LS.power(freq)
 
@@ -1485,22 +1486,41 @@ class Lightcurve(gpytorch.Module):
                     ),
                     torch.as_tensor([], dtype=torch.bool, device=self.xdata.device),
                 )
-
-            # For multiband, we don't have false_alarm_probability method
-            # so we return frequencies with all True masks
-            # (user should interpret power values directly)
+            
+            # Compute FAP for multiband periodogram
+            fap_max = LS.false_alarm_probability(power.max(), method='bootstrap')
             n_return = min(num_peaks, len(peaks))
+            
+            if fap_max > single_threshold:
+                # Highest peak is not significant, mark all as insignificant
+                return (
+                    torch.as_tensor(freq[peaks[:n_return]],
+                                    dtype=self.xdata.dtype,
+                                    device=self.xdata.device),
+                    torch.as_tensor(np.array([False] * n_return),
+                                    dtype=torch.bool,
+                                    device=self.xdata.device)
+                )
+            
+            # Calculate FAP for each peak independently
+            fap_single = LS.false_alarm_probability(power[peaks],
+                                                    method='bootstrap')
+            
+            # Apply the FDR (Benjamini-Hochberg) correction
+            significant_mask = fdr_bh(fap_single, alpha=single_threshold)
+            significant_mask[0] = True  # since fap_max <= single_threshold
+            
             return (
                 torch.as_tensor(
                     freq[peaks[:n_return]],
                     dtype=self.xdata.dtype,
-                    device=self.xdata.device,
+                    device=self.xdata.device
                 ),
                 torch.as_tensor(
-                    np.array([True] * n_return),
+                    significant_mask[:n_return],
                     dtype=torch.bool,
-                    device=self.xdata.device,
-                ),
+                    device=self.xdata.device
+                )
             )
         else:
             t, y = self.xdata, self.ydata
