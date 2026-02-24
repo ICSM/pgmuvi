@@ -13,4 +13,18 @@ jobs:
       with:
         # version: "latest"
         src: "./pgmuvi"
-        args: "check -v --output-format=full --show-fixes"
+        # Pass the --fix argument to automatically resolve fixable linting issues
+        args: "check -v --output-format=full --show-fixes --fix"
+        # Optional: specify a particular version of Ruff to use
+        version: "latest"
+
+    - name: Commit changes
+      # Use a separate action to commit the fixed files back to the branch
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: Apply Ruff fixes
+        # Optional: customize committer and author
+        committer_name: GitHub Actions Bot
+        committer_email: actions@github.com
+        author_name: GitHub Actions Bot
+        author_email: actions@github.com
