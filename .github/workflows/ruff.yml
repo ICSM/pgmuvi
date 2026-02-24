@@ -9,14 +9,12 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     - name: Run Ruff
-      uses: chartboost/ruff-action@v1
+      uses: chartboost/ruff-action@v3
       with:
         # version: "latest"
         src: "./pgmuvi"
         # Pass the --fix argument to automatically resolve fixable linting issues
         args: "check -v --output-format=full --show-fixes --fix"
-        # Optional: specify a particular version of Ruff to use
-        version: "latest"
 
     - name: Commit changes
       # Use a separate action to commit the fixed files back to the branch
