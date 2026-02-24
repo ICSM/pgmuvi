@@ -59,13 +59,13 @@ It provides easy access to GPU acceleration and Bayesian inference of the hyperp
 
 # Statement of need
 
-Astronomical objects are in general not static, but vary in brightness over time. 
-This is especially true for objects that are variable by nature, such as pulsating stars, or objects that are variable due to their orbital motion, such as eclipsing binaries. 
-The study of these objects is called time-domain astronomy, and is a rapidly growing field. 
+Astronomical objects are in general not static, but vary in brightness over time.
+This is especially true for objects that are variable by nature, such as pulsating stars, or objects that are variable due to their orbital motion, such as eclipsing binaries.
+The study of these objects is called time-domain astronomy, and is a rapidly growing field.
 A wide range of approaches to time-series analysis have been developed, ranging from simple period-finding algorithms to more complex machine learning techniques [e.g. @Donoso-Oliva2023-transformer; @supersmoother; @Huijse_2018; @Palmer_2009 and many more].
 Perhaps the most popular in astronomy is the Lomb-Scargle periodogram [@Lomb1976; @Scargle1982], which is a Fourier-based technique to find periodic signals in unevenly sampled data.
 However, the handling of unevenly sampled data is not the only challenge in time-series analysis.
-<!-- The study of time-domain astronomy is often hampered by the fact that the data is not always of the same quality, or that the data is not always available in the same wavelength. 
+<!-- The study of time-domain astronomy is often hampered by the fact that the data is not always of the same quality, or that the data is not always available in the same wavelength.
 This is especially true for data from space-based telescopes, which are often limited in their lifetime, and thus the amount of data that can be collected. -->
 
 A particular challenge in astronomy is handling heterogeneous, multiwavelength data [@VanderPlas2015].
@@ -98,14 +98,14 @@ However, these each have their own limitations.
 `celerite` is extremely fast, but is limited to one-dimensional inputs, and thus cannot handle multiwavelength data, except under certain restrictive assumptions.
 Furthermore, since it achieves its speed through a specific form of kernel decomposition, it is not able to handle arbitrary covariance functions.
 It is therefore restricted to a small number of kernels with specific forms; while it is able to handle the most common astronomical timeseries by combining these kernels, not all signals can be modelled in this way.
-`tinygp` is a more general package, able to retain a high degree of flexibility while still being fast thanks to a `JAX`-based implementation, which makes it feasible to implement models in `tinygp` that are equivalent to those in `pgmuvi`. 
+`tinygp` is a more general package, able to retain a high degree of flexibility while still being fast thanks to a `JAX`-based implementation, which makes it feasible to implement models in `tinygp` that are equivalent to those in `pgmuvi`.
 However, `pgmuvi` is designed to provide an easier learning curve by packaging GPs with data transforms and inference routines.
-In essence, `tinygp` could in principle be used by `pgmuvi` as a GP backend instead of GPyTorch. 
+In essence, `tinygp` could in principle be used by `pgmuvi` as a GP backend instead of GPyTorch.
 For a summary of the state of the art of GPR in astronomy, see the recent review by @arev_2023_gps.
 
-`pgmuvi` is used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)). 
-This work served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood. 
-The paper will be published in 2023 (Vasquez-Torres et al., in prep.). 
+`pgmuvi` is used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)).
+This work served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood.
+The paper will be published in 2023 (Vasquez-Torres et al., in prep.).
 A different project related to dusty variable stars in M33 has also used `pgmuvi` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al., in prep.).
 
 # Method and Features
@@ -126,7 +126,7 @@ Multiple options are available to accelerate inference depending on the size of 
 For small datasets, the exact GPs can be used to scale to datasets of up to $\sim1000$ points.
 `pgmuvi` can exploit the Structured Kernel Interpolation (SKI) approximation [@wilson2015kernel] to scale to datasets of up to $\sim10^5$ points.
 Future work will include implementing approximations for even larger datasets: `pgmuvi` can in principle exploit the Sparse Variational GP (SVGP) or Variational Nearest Neighbour (VNN) approximations [@hensman2013gaussian; @wu2022variational] to scale to datasets of arbitrary size.
-`pgmuvi` can employ also GPU computing for both exact and variational GPs. 
+`pgmuvi` can employ also GPU computing for both exact and variational GPs.
 
 For exact GPs and SKI, `pgmuvi` performs maximum a posteriori (MAP) estimation of the hyperparameters, or full Bayesian inference.
 MAP estimation can exploit any PyTorch optimizer, but by default it uses ADAM [@kingma2014adam].

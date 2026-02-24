@@ -5,7 +5,7 @@ Python gaussian processes for multiwavelength variability inference
 [![DOI](https://zenodo.org/badge/387371146.svg)](https://zenodo.org/badge/latestdoi/387371146)
 
 
-pgmuvi is based on GPyTorch and intended for us in infering the properties of astronomical sources with multiwavelength variability. It uses spectral-mixture kernels to learn an approximation of the PSD of the variability, which have been shown to be very effective for pattern discovery (see https://arxiv.org/pdf/1302.4245.pdf). 
+pgmuvi is based on GPyTorch and intended for us in infering the properties of astronomical sources with multiwavelength variability. It uses spectral-mixture kernels to learn an approximation of the PSD of the variability, which have been shown to be very effective for pattern discovery (see https://arxiv.org/pdf/1302.4245.pdf).
 
 ## Installation and Quickstart
 
@@ -18,7 +18,7 @@ You can also clone the latest version of pgmuvi from Github, for all the latest 
     $ git clone git://github.com/ICSM/pgmuvi.git
 
 and then you can install it::
-  
+
     $ cd pgmuvi
     $ pip install .
 
@@ -36,7 +36,7 @@ But don't forget to read our [code of conduct](https://github.com/ICSM/pgmuvi/bl
 
 ## Citing pgmuvi
 
-pgmuvi is currently under review in the Journal of Open Source Software. 
+pgmuvi is currently under review in the Journal of Open Source Software.
 If you use pgmuvi in your research, please cite the paper (details will be given here when the paper is accepted!)
 
 

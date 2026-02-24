@@ -11,7 +11,7 @@ from gpytorch.variational import VariationalStrategy
 
 # FIRST WE HAVE SOME Naive GPs
 class SpectralMixtureGPModel(ExactGP):
-    ''' A one-dimensional GP model using a spectral mixture kernel
+    """A one-dimensional GP model using a spectral mixture kernel
 
     A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
     Spectral Density of the covariance matrix as a Gaussian Mixture Model.
@@ -38,7 +38,8 @@ class SpectralMixtureGPModel(ExactGP):
 
 
 
-    '''
+    """
+
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
@@ -58,7 +59,7 @@ class SpectralMixtureGPModel(ExactGP):
 
 
 class SpectralMixtureLinearMeanGPModel(ExactGP):
-    ''' A one-dimensional GP model using a spectral mixture kernel
+    """A one-dimensional GP model using a spectral mixture kernel
 
     A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
     Spectral Density of the covariance matrix as a Gaussian Mixture Model.
@@ -85,7 +86,8 @@ class SpectralMixtureLinearMeanGPModel(ExactGP):
 
 
 
-    '''
+    """
+
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
@@ -104,7 +106,7 @@ class SpectralMixtureLinearMeanGPModel(ExactGP):
 
 
 class TwoDSpectralMixtureGPModel(ExactGP):
-    ''' A two-dimensional GP model using a spectral mixture kernel
+    """A two-dimensional GP model using a spectral mixture kernel
 
     A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
     Spectral Density of the covariance matrix as a Gaussian Mixture Model.
@@ -133,7 +135,8 @@ class TwoDSpectralMixtureGPModel(ExactGP):
 
 
 
-    '''
+    """
+
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
@@ -154,7 +157,7 @@ class TwoDSpectralMixtureGPModel(ExactGP):
 
 
 class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
-    ''' A two-dimensional GP model using a spectral mixture kernel
+    """A two-dimensional GP model using a spectral mixture kernel
 
     A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
     Spectral Density of the covariance matrix as a Gaussian Mixture Model.
@@ -183,7 +186,8 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
 
 
 
-    '''
+    """
+
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
         super().__init__(train_x, train_y, likelihood)
         # LinearMean requires input_size for 2D data
@@ -207,7 +211,7 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
 
 # Now we define some that use KISS-GP/SKI to try to accelerate inference
 class SpectralMixtureKISSGPModel(ExactGP):
-    ''' A one-dimensional GP model using a spectral mixture kernel
+    """A one-dimensional GP model using a spectral mixture kernel
 
     A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
     Spectral Density of the covariance matrix as a Gaussian Mixture Model.
@@ -240,20 +244,21 @@ class SpectralMixtureKISSGPModel(ExactGP):
 
 
 
-    '''
-    def __init__(self, train_x, train_y, likelihood, num_mixtures=4,
-                 grid_size=2000):
+    """
+
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=2000):
         super().__init__(train_x, train_y, likelihood)
         if not grid_size:
             grid_size = gpt.utils.grid.choose_grid_size(train_x, 1.0)
             print(f"Using a grid of size {grid_size} for SKI")
         grid_bounds = [[t.min(train_x), t.max(train_x)]]
         self.mean_module = ConstantMean()
-        self.covar_module = GIK(SMK(num_mixtures=num_mixtures),
-                                grid_size=grid_size,
-                                num_dims=1,
-                                grid_bounds=grid_bounds
-                                )
+        self.covar_module = GIK(
+            SMK(num_mixtures=num_mixtures),
+            grid_size=grid_size,
+            num_dims=1,
+            grid_bounds=grid_bounds,
+        )
 
         self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 
@@ -267,7 +272,7 @@ class SpectralMixtureKISSGPModel(ExactGP):
 
 
 class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
-    ''' A one-dimensional GP model using a spectral mixture kernel
+    """A one-dimensional GP model using a spectral mixture kernel
 
     A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
     Spectral Density of the covariance matrix as a Gaussian Mixture Model.
@@ -300,14 +305,12 @@ class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
 
 
-    '''
-    def __init__(self, train_x, train_y, likelihood,
-                 num_mixtures=4, grid_size=2000):
+    """
+
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=2000):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean()
-        self.covar_module = GIK(SMK(num_mixtures=num_mixtures),
-                                grid_size=grid_size
-                                )
+        self.covar_module = GIK(SMK(num_mixtures=num_mixtures), grid_size=grid_size)
         self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 
         # Now we alias the covariance kernel so that we can exploit the
@@ -322,7 +325,7 @@ class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
 
 class TwoDSpectralMixtureKISSGPModel(ExactGP):
-    ''' A two-dimensional GP model using a spectral mixture kernel
+    """A two-dimensional GP model using a spectral mixture kernel
 
     A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
     Spectral Density of the covariance matrix as a Gaussian Mixture Model.
@@ -357,16 +360,18 @@ class TwoDSpectralMixtureKISSGPModel(ExactGP):
 
 
 
-    '''
-    def __init__(self, train_x, train_y, likelihood,
-                 num_mixtures=4, grid_size=None):
+    """
+
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=None):
         if grid_size is None:
             grid_size = [5000, 20]
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
-        self.covar_module = GIK(SMK(ard_num_dims=2, num_mixtures=num_mixtures),
-                                num_dims=2, grid_size=grid_size
-                                )
+        self.covar_module = GIK(
+            SMK(ard_num_dims=2, num_mixtures=num_mixtures),
+            num_dims=2,
+            grid_size=grid_size,
+        )
         # Note: initialize_from_data can fail for 2D data due to constraint violations
         # Users should set hyperparameters manually or via set_hypers
         # self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
@@ -383,7 +388,7 @@ class TwoDSpectralMixtureKISSGPModel(ExactGP):
 
 
 class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
-    ''' A two-dimensional GP model using a spectral mixture kernel
+    """A two-dimensional GP model using a spectral mixture kernel
 
     A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
     Spectral Density of the covariance matrix as a Gaussian Mixture Model.
@@ -418,18 +423,20 @@ class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
 
 
-    '''
-    def __init__(self, train_x, train_y, likelihood,
-                 num_mixtures=4, grid_size=None):
+    """
+
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=None):
         if grid_size is None:
             grid_size = [5000, 20]
         super().__init__(train_x, train_y, likelihood)
         # LinearMean requires input_size for 2D data
         input_size = train_x.shape[-1] if train_x.dim() > 1 else 1
         self.mean_module = LinearMean(input_size=input_size)
-        self.covar_module = GIK(SMK(ard_num_dims=2, num_mixtures=num_mixtures),
-                                num_dims=2, grid_size=grid_size
-                                )
+        self.covar_module = GIK(
+            SMK(ard_num_dims=2, num_mixtures=num_mixtures),
+            num_dims=2,
+            grid_size=grid_size,
+        )
         # Note: initialize_from_data can fail for 2D data due to constraint violations
         # Users should set hyperparameters manually or via set_hypers
         # self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
@@ -447,7 +454,7 @@ class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
 # We can also implement sparse/variational GPs here
 class SparseSpectralMixtureGPModel(ApproximateGP):
-    ''' A one-dimensional GP model using a spectral mixture kernel
+    """A one-dimensional GP model using a spectral mixture kernel
 
     A longer description goes here
 
@@ -472,14 +479,20 @@ class SparseSpectralMixtureGPModel(ApproximateGP):
 
 
 
-    '''
-    def __init__(self, train_x, train_y, likelihood,
-                 num_mixtures=4, inducing_points=None):
-        variational_distribution = CholeskyVariationalDistribution(inducing_points.size(0))  # noqa: E501
-        variational_strategy = VariationalStrategy(self,
-                                                   inducing_points,
-                                                   variational_distribution,
-                                                   learn_inducing_locations=True)
+    """
+
+    def __init__(
+        self, train_x, train_y, likelihood, num_mixtures=4, inducing_points=None
+    ):
+        variational_distribution = CholeskyVariationalDistribution(
+            inducing_points.size(0)
+        )
+        variational_strategy = VariationalStrategy(
+            self,
+            inducing_points,
+            variational_distribution,
+            learn_inducing_locations=True,
+        )
         super().__init__(variational_strategy)
         self.mean_module = ConstantMean()
         self.covar_module = SMK(num_mixtures=num_mixtures)

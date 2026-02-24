@@ -51,8 +51,9 @@ wavelength_all = np.concatenate([wavelength_band1, wavelength_band2])
 
 # Stack into (n_samples, 2) format for 2D data
 # Column 0: time, Column 1: wavelength
-xdata_2d = torch.tensor(np.column_stack([time_all, wavelength_all]),
-                        dtype=torch.float32)
+xdata_2d = torch.tensor(
+    np.column_stack([time_all, wavelength_all]), dtype=torch.float32
+)
 
 print(f"   - Total samples: {len(xdata_2d)}")
 print(f"   - Blue band: {n_samples_band1} observations")
@@ -110,13 +111,13 @@ print("\n4. Setting up 2D Spectral Mixture GP model...")
 # Use '2D' model for multiwavelength data
 # num_mixtures controls model flexibility (more = more complex)
 results = lightcurve.fit(
-    model='2D',  # Critical: Use 2D model for multiwavelength data
+    model="2D",  # Critical: Use 2D model for multiwavelength data
     likelihood=None,  # Uses default Gaussian likelihood
     num_mixtures=3,  # Number of spectral mixture components
     training_iter=100,  # Training iterations
     miniter=50,  # Minimum iterations before early stopping
     lr=0.1,  # Learning rate
-    stop=1e-4  # Early stopping threshold
+    stop=1e-4,  # Early stopping threshold
 )
 
 print("   - Model type: 2D Spectral Mixture GP")
@@ -140,12 +141,13 @@ time_frequencies = mixture_means[:, 0, 0].numpy()
 
 print("\n   Fitted frequencies (time dimension):")
 for i, freq in enumerate(time_frequencies):
-    period = 1.0 / freq if freq > 0 else float('inf')
+    period = 1.0 / freq if freq > 0 else float("inf")
     print(f"      Component {i+1}: f={freq:.4f} day⁻¹, P={period:.2f} days")
 
 # Check if we recovered the true period
-closest_period = min([1/f for f in time_frequencies if f > 0],
-                     key=lambda x: abs(x - true_period))
+closest_period = min(
+    [1 / f for f in time_frequencies if f > 0], key=lambda x: abs(x - true_period)
+)
 print(
     f"\n   Closest to true period ({true_period:.2f} days): "
     f"{closest_period:.2f} days"
@@ -161,15 +163,15 @@ print("\n6. Creating visualizations...")
 
 # Create figure with subplots
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-fig.suptitle('2D Multiwavelength Light Curve Fitting Results', fontsize=16)
+fig.suptitle("2D Multiwavelength Light Curve Fitting Results", fontsize=16)
 
 # ---- Plot 1: Training Loss ----
 ax = axes[0, 0]
-losses = results['loss']
-ax.plot([float(loss) for loss in losses], 'b-', alpha=0.7)
-ax.set_xlabel('Iteration')
-ax.set_ylabel('Negative Log Likelihood')
-ax.set_title('Training Loss')
+losses = results["loss"]
+ax.plot([float(loss) for loss in losses], "b-", alpha=0.7)
+ax.set_xlabel("Iteration")
+ax.set_ylabel("Negative Log Likelihood")
+ax.set_title("Training Loss")
 ax.grid(True, alpha=0.3)
 
 # ---- Plot 2: Data by Wavelength Band ----
@@ -184,13 +186,11 @@ time_red = time_all[red_mask]
 ydata_blue = ydata_2d.numpy()[blue_mask]
 ydata_red = ydata_2d.numpy()[red_mask]
 
-ax.scatter(time_blue, ydata_blue, c='blue', alpha=0.5, s=20,
-           label='Blue band (450nm)')
-ax.scatter(time_red, ydata_red, c='red', alpha=0.5, s=20,
-           label='Red band (650nm)')
-ax.set_xlabel('Time (days)')
-ax.set_ylabel('Flux (arbitrary units)')
-ax.set_title('Observed Data by Wavelength Band')
+ax.scatter(time_blue, ydata_blue, c="blue", alpha=0.5, s=20, label="Blue band (450nm)")
+ax.scatter(time_red, ydata_red, c="red", alpha=0.5, s=20, label="Red band (650nm)")
+ax.set_xlabel("Time (days)")
+ax.set_ylabel("Flux (arbitrary units)")
+ax.set_title("Observed Data by Wavelength Band")
 ax.legend()
 ax.grid(True, alpha=0.3)
 
@@ -210,16 +210,19 @@ with torch.no_grad():
     mean_blue = predictions_blue.mean.numpy()
     std_blue = predictions_blue.stddev.numpy()
 
-ax.scatter(time_blue, ydata_blue, c='blue', alpha=0.5, s=20,
-           label='Observations')
-ax.plot(test_time.numpy(), mean_blue, 'b-', linewidth=2, label='GP Mean')
-ax.fill_between(test_time.numpy(),
-                mean_blue - 2*std_blue,
-                mean_blue + 2*std_blue,
-                alpha=0.3, color='blue', label='95% CI')
-ax.set_xlabel('Time (days)')
-ax.set_ylabel('Flux (arbitrary units)')
-ax.set_title('Fitted Model - Blue Band (450nm)')
+ax.scatter(time_blue, ydata_blue, c="blue", alpha=0.5, s=20, label="Observations")
+ax.plot(test_time.numpy(), mean_blue, "b-", linewidth=2, label="GP Mean")
+ax.fill_between(
+    test_time.numpy(),
+    mean_blue - 2 * std_blue,
+    mean_blue + 2 * std_blue,
+    alpha=0.3,
+    color="blue",
+    label="95% CI",
+)
+ax.set_xlabel("Time (days)")
+ax.set_ylabel("Flux (arbitrary units)")
+ax.set_title("Fitted Model - Blue Band (450nm)")
 ax.legend()
 ax.grid(True, alpha=0.3)
 
@@ -235,21 +238,24 @@ with torch.no_grad():
     mean_red = predictions_red.mean.numpy()
     std_red = predictions_red.stddev.numpy()
 
-ax.scatter(time_red, ydata_red, c='red', alpha=0.5, s=20,
-           label='Observations')
-ax.plot(test_time.numpy(), mean_red, 'r-', linewidth=2, label='GP Mean')
-ax.fill_between(test_time.numpy(),
-                mean_red - 2*std_red,
-                mean_red + 2*std_red,
-                alpha=0.3, color='red', label='95% CI')
-ax.set_xlabel('Time (days)')
-ax.set_ylabel('Flux (arbitrary units)')
-ax.set_title('Fitted Model - Red Band (650nm)')
+ax.scatter(time_red, ydata_red, c="red", alpha=0.5, s=20, label="Observations")
+ax.plot(test_time.numpy(), mean_red, "r-", linewidth=2, label="GP Mean")
+ax.fill_between(
+    test_time.numpy(),
+    mean_red - 2 * std_red,
+    mean_red + 2 * std_red,
+    alpha=0.3,
+    color="red",
+    label="95% CI",
+)
+ax.set_xlabel("Time (days)")
+ax.set_ylabel("Flux (arbitrary units)")
+ax.set_title("Fitted Model - Red Band (650nm)")
 ax.legend()
 ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('2d_multiwavelength_example_results.png', dpi=150, bbox_inches='tight')
+plt.savefig("2d_multiwavelength_example_results.png", dpi=150, bbox_inches="tight")
 print("   - Figure saved as '2d_multiwavelength_example_results.png'")
 
 # ============================================================================

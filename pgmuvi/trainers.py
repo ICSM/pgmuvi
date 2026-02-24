@@ -9,12 +9,23 @@ class Trainer:
         pass
 
 
-def train(lightcurve=None, model=None, likelihood=None,
-          train_x=None, train_y=None,
-          maxiter=100, miniter=10, stop=None, lr=1e-4,
-          lossfn='mll', optim="SGD", eps=1e-8, stopavg=9,
-          **kwargs):
-    ''' Given a GP model, a likelihood, and some training data, optimise a
+def train(
+    lightcurve=None,
+    model=None,
+    likelihood=None,
+    train_x=None,
+    train_y=None,
+    maxiter=100,
+    miniter=10,
+    stop=None,
+    lr=1e-4,
+    lossfn="mll",
+    optim="SGD",
+    eps=1e-8,
+    stopavg=9,
+    **kwargs,
+):
+    """Given a GP model, a likelihood, and some training data, optimise a
     loss function to fit the training data.
 
     Parameters
@@ -63,28 +74,33 @@ def train(lightcurve=None, model=None, likelihood=None,
     Examples
     --------
 
-    '''
+    """
 
     if lightcurve is not None:
-        if any([model is not None,
+        if any(
+            [
+                model is not None,
                 likelihood is not None,
                 train_x is not None,
-                train_y is not None]):
-            print("""A lightcurve object was passed to train(), but one or
+                train_y is not None,
+            ]
+        ):
+            print(
+                """A lightcurve object was passed to train(), but one or
                   more of model, likelihood, train_x and train_y were also
                   passed. The lightcurve object will be used, and the other
-                  parameters will be ignored.""")
+                  parameters will be ignored."""
+            )
         model = lightcurve.model
         likelihood = lightcurve.likelihood
         train_x = lightcurve._xdata_transformed
         train_y = lightcurve._ydata_transformed
-    elif any([model is None,
-              likelihood is None,
-              train_x is None,
-              train_y is None]):
-        raise ValueError("""If a lightcurve object is not passed to train(),
+    elif any([model is None, likelihood is None, train_x is None, train_y is None]):
+        raise ValueError(
+            """If a lightcurve object is not passed to train(),
                          **all** of model, likelihood, train_x and train_y
-                         **must** be passed to train().""")
+                         **must** be passed to train()."""
+        )
 
     # We're going to be doing some training, so our first step should be to
     # put the model and likelihood into training mode:
@@ -98,19 +114,29 @@ def train(lightcurve=None, model=None, likelihood=None,
     if isinstance(lossfn, str):
         # Loss function is passed as a string, must be one of the values we
         # understand:
-        if lossfn == 'mll':
+        if lossfn == "mll":
             # loss = -1* marginal log-likelihood
-            lossfn = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood,
-                                                              model)
-        elif lossfn == 'elbo':
+            lossfn = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+        elif lossfn == "elbo":
             # loss = -1* variational elbo,
             # variational inference to be performed!
-            raise NotImplementedError("Currently only maximisation of the marginal log-likelihood is implemented. Using elbo will be implemented soon")  # noqa: E501
-    elif isinstance(lossfn,
-                    gpytorch.mlls.marginal_log_likelihood.MarginalLogLikelihood):
-        raise NotImplementedError("Currently only maximisation of the marginal log-likelihood is implemented. Passing arbitrary MLL objects will be implemented soon.")  # noqa: E501
+            raise NotImplementedError(
+                "Currently only maximisation of the marginal log-likelihood is "
+                "implemented. Using elbo will be implemented soon"
+            )
+    elif isinstance(
+        lossfn, gpytorch.mlls.marginal_log_likelihood.MarginalLogLikelihood
+    ):
+        raise NotImplementedError(
+            "Currently only maximisation of the marginal log-likelihood is "
+            "implemented. Passing arbitrary MLL objects will be implemented "
+            "soon."
+        )
     else:
-        raise ValueError("lossfn must be either 'mll', 'elbo', or a gpytorch, torch or pyro loss function.")  # noqa: E501
+        raise ValueError(
+            "lossfn must be either 'mll', 'elbo', or a gpytorch, torch or "
+            "pyro loss function."
+        )
 
     if isinstance(optim, str):
         if optim == "SGD":
@@ -120,26 +146,32 @@ def train(lightcurve=None, model=None, likelihood=None,
         elif optim == "AdamW":
             optimizer = torch.optim.AdamW(model.parameters(), lr=lr, eps=eps)
         elif optim == "NUTS":
-            raise NotImplementedError("Optimisation with NUTS/MCMC is not yet implemented.")  # noqa: E501
+            raise NotImplementedError(
+                "Optimisation with NUTS/MCMC is not yet implemented."
+            )
         else:
-            raise ValueError("""optim must be either 'SGD', 'Adam', 'AdamW',
+            raise ValueError(
+                """optim must be either 'SGD', 'Adam', 'AdamW',
                             'NUTS', or an instance of a torch or pyro optimiser.
-                            """)
+                            """
+            )
     elif isinstance(optim, torch.optim.Optimizer):
         optimizer = optim
     else:
-        raise ValueError("""optim must be either 'SGD', 'Adam', 'AdamW',
+        raise ValueError(
+            """optim must be either 'SGD', 'Adam', 'AdamW',
                         'NUTS', or an instance of a torch or pyro optimiser.
-                        """)
+                        """
+        )
 
-    results = {'loss': [], 'delta_loss': []}
+    results = {"loss": [], "delta_loss": []}
     if lightcurve is not None:
         pars = lightcurve.get_parameters()
         for key, value in pars.items():
             results[key] = [value.cpu().detach().numpy()]
     else:
         for param_name, param in model.named_parameters():
-            p = param_name.split('.')[1] if 'raw' in param_name else param_name
+            p = param_name.split(".")[1] if "raw" in param_name else param_name
             results[p] = []
     # for param_name, param in
     for i in tqdm(range(maxiter)):
@@ -150,8 +182,10 @@ def train(lightcurve=None, model=None, likelihood=None,
         optimizer.step()
         # Now update list of parameters
         if i > 0:
-            results['delta_loss'].append(loss.cpu().detach().numpy() - results['loss'][-1])  # noqa: E501
-        results['loss'].append(loss.cpu().detach().numpy())
+            results["delta_loss"].append(
+                loss.cpu().detach().numpy() - results["loss"][-1]
+            )
+        results["loss"].append(loss.cpu().detach().numpy())
 
         if lightcurve is not None:
             for key, value in lightcurve.get_parameters().items():
@@ -164,7 +198,7 @@ def train(lightcurve=None, model=None, likelihood=None,
         # optimisers are stochastic, so we average the change in loss
         # function over a few iterations
         if stop and i > miniter:
-            stopval = np.std(results['loss'][-stopavg:])
+            stopval = np.std(results["loss"][-stopavg:])
             if stopval < stop:
                 print(
                     f"""Average change in loss over the last {stopavg} iterations
