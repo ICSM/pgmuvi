@@ -1708,8 +1708,8 @@ class Lightcurve(gpytorch.Module):
         #     return y
 
         def pyro_model(x, y):
-            with gpytorch.settings.fast_computations(False, False, False), \
-                    gpytorch.settings.max_cg_iterations(max_cg_iterations):
+            with (gpytorch.settings.fast_computations(False, False, False),
+                    gpytorch.settings.max_cg_iterations(max_cg_iterations)):
                 for key in self.state_dict().keys():
                     print(key)
                     with contextlib.suppress(AttributeError):
