@@ -9,7 +9,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     - name: Run Ruff
-      uses: chartboost/ruff-action@v3
+      uses: ashtral-sh/ruff-action@v3
       with:
         # version: "latest"
         src: "./pgmuvi"
