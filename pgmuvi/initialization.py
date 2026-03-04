@@ -244,7 +244,7 @@ def _to_numpy(x):
 
 
 def _fallback_init(train_x, train_y):
-    """Return default initialisation when periodogram fails."""
+    """Return default initialization when periodogram fails."""
     x_np = _to_numpy(train_x).ravel()
     y_np = _to_numpy(train_y).ravel()
     span = float(x_np.max() - x_np.min()) if len(x_np) > 1 else 1.0
@@ -258,7 +258,7 @@ def _fallback_init(train_x, train_y):
 
 
 def _fallback_separable_init(train_x, train_y):
-    """Return default separable initialisation when per-band analysis fails."""
+    """Return default separable initialization when per-band analysis fails."""
     x_np = _to_numpy(train_x)
     y_np = _to_numpy(train_y).ravel()
     times = x_np[:, 0] if x_np.ndim == 2 else x_np
