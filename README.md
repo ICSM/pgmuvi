@@ -43,3 +43,48 @@ If you use pgmuvi in your research, please cite the paper (details will be given
 ## Using pgmuvi
 
 You can find full documentation for pgmuvi at [https://pgmuvi.readthedocs.io/](https://pgmuvi.readthedocs.io/). This includes a quickstart guide and a set of tutorials intended to get you up and running.
+
+## Variability Detection
+
+Before fitting a GP, you can check if your lightcurve shows significant variability
+using the built-in three-tier statistical testing framework
+(weighted chi-square, F_var excess variance, and Stetson K index):
+
+```python
+from pgmuvi.lightcurve import Lightcurve
+
+lc = Lightcurve(t, y, yerr)
+
+# Check variability
+diagnostics = lc.check_variability(verbose=True)
+
+if diagnostics['decision'] == 'VARIABLE':
+    # Proceed with fitting
+    lc.fit(...)
+else:
+    print(f"Not variable: {diagnostics['decision']}")
+```
+
+You can also enable automatic variability checking inside `fit()`:
+
+```python
+# Raises ValueError if lightcurve is not variable
+lc.fit(..., check_variability=True)
+
+# To force fitting of a non-variable source:
+lc.fit(..., check_variability=False)
+```
+
+For multiband data, each band can be checked independently:
+
+```python
+lc2d = Lightcurve(xdata_2d, flux, error)
+
+# Check each band
+results = lc2d.check_variability_per_band(verbose=True)
+print(f"{results['summary']['n_variable']} variable bands")
+
+# Create a new Lightcurve with only variable bands retained
+lc_var = lc2d.filter_variable_bands()
+lc_var.fit(...)
+```
