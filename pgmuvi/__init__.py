@@ -13,4 +13,12 @@ except PackageNotFoundError:
     # package is not installed
     __version__ = "unknown"
 
-__all__ = ["gps", "lightcurve", "trainers"]
+__all__ = [
+    "constraints",
+    "gps",
+    "initialization",
+    "kernels",
+    "lightcurve",
+    "models",
+    "trainers",
+]

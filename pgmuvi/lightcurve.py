@@ -12,6 +12,15 @@ from .gps import (
     TwoDSpectralMixtureGPModel,
     TwoDSpectralMixtureKISSGPModel,
 )
+from .models import (
+    QuasiPeriodicGPModel,
+    MaternGPModel,
+    PeriodicPlusStochasticGPModel,
+    SeparableGPModel,
+    AchromaticGPModel,
+    WavelengthDependentGPModel,
+    LinearMeanQuasiPeriodicGPModel,
+)
 import matplotlib.pyplot as plt
 from .trainers import train
 from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive  # noqa: F401
@@ -614,6 +623,8 @@ class Lightcurve(gpytorch.Module):
             The model to use for the GP, by default None. If None, an
             error will be raised. If a string, it must be one of the
             following:
+
+            Spectral mixture models (default):
                 '1D': SpectralMixtureGPModel
                 '2D': TwoDSpectralMixtureGPModel
                 '1DLinear': SpectralMixtureLinearMeanGPModel
@@ -622,6 +633,18 @@ class Lightcurve(gpytorch.Module):
                 '2DSKI': TwoDSpectralMixtureKISSGPModel
                 '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
                 '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+
+            Alternative 1D models:
+                '1DQuasiPeriodic': QuasiPeriodicGPModel
+                '1DMatern': MaternGPModel
+                '1DPeriodicStochastic': PeriodicPlusStochasticGPModel
+                '1DLinearQuasiPeriodic': LinearMeanQuasiPeriodicGPModel
+
+            Separable 2D models:
+                '2DSeparable': SeparableGPModel
+                '2DAchromatic': AchromaticGPModel
+                '2DWavelengthDependent': WavelengthDependentGPModel
+
             If an instance of a GP class, that object will be used.
             _description_, by default None
         likelihood : string, None or instance of
@@ -653,6 +676,17 @@ class Lightcurve(gpytorch.Module):
             "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel,
         }
 
+        # Alternative kernel models — do not require num_mixtures
+        model_dic_alt = {
+            "1DQuasiPeriodic": QuasiPeriodicGPModel,
+            "1DMatern": MaternGPModel,
+            "1DPeriodicStochastic": PeriodicPlusStochasticGPModel,
+            "1DLinearQuasiPeriodic": LinearMeanQuasiPeriodicGPModel,
+            "2DSeparable": SeparableGPModel,
+            "2DAchromatic": AchromaticGPModel,
+            "2DWavelengthDependent": WavelengthDependentGPModel,
+        }
+
         if not hasattr(self, "likelihood"):
             self.set_likelihood(likelihood, **kwargs)
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
@@ -681,7 +715,13 @@ class Lightcurve(gpytorch.Module):
                 num_mixtures=num_mixtures,
                 **kwargs,
             )
-            # Add missing arguments to the model call
+        elif model in model_dic_alt:
+            self.model = model_dic_alt[model](
+                self._xdata_transformed,
+                self._ydata_transformed,
+                self.likelihood,
+                **kwargs,
+            )
         else:
             raise ValueError("Insert a valid model")
 
@@ -1598,6 +1638,104 @@ class Lightcurve(gpytorch.Module):
                 ),
             )
 
+    def auto_select_model(self, verbose=True):
+        """Automatically select the best model type based on data characteristics.
+
+        Analyses the data to recommend an appropriate GP model. For 1D data,
+        the Lomb-Scargle periodogram is computed and the peak power used to
+        decide between a quasi-periodic, periodic+stochastic, or Matérn model.
+        For 2D multiwavelength data, per-band periodograms are compared to
+        determine whether the variability is achromatic or wavelength-dependent.
+
+        Parameters
+        ----------
+        verbose : bool, optional
+            If True, print a summary of the recommendation, by default True.
+
+        Returns
+        -------
+        model_str : str
+            Recommended model string suitable for passing directly to
+            ``fit()`` or ``set_model()``.
+        diagnostics : dict
+            Dictionary containing:
+            - ``'model'`` — same as ``model_str``.
+            - ``'reason'`` — human-readable explanation.
+            - Additional data-dependent keys (e.g. ``'max_ls_power'``).
+
+        Examples
+        --------
+        >>> from pgmuvi.lightcurve import Lightcurve
+        >>> import torch
+        >>> import numpy as np
+        >>> t = torch.linspace(0, 20, 100)
+        >>> y = torch.sin(2 * np.pi * t / 5)
+        >>> lc = Lightcurve(t, y)
+        >>> model_str, diag = lc.auto_select_model()
+        """
+        from .initialization import initialize_separable_from_data
+
+        diagnostics = {}
+
+        if self.ndim == 1:
+            # 1D data — use Lomb-Scargle to assess periodicity strength
+            _freq, power = self.fit_LS(freq_only=True)
+            max_power = float(power.max()) if len(power) > 0 else 0.0
+            diagnostics["max_ls_power"] = max_power
+
+            if max_power > 0.5:
+                model_str = "1DQuasiPeriodic"
+                diagnostics["reason"] = (
+                    f"Strong periodic signal detected (LS power={max_power:.2f}); "
+                    "quasi-periodic kernel recommended."
+                )
+            elif max_power > 0.2:
+                model_str = "1DPeriodicStochastic"
+                diagnostics["reason"] = (
+                    f"Moderate periodicity with stochastic component "
+                    f"(LS power={max_power:.2f}); "
+                    "periodic+stochastic kernel recommended."
+                )
+            else:
+                model_str = "1DMatern"
+                diagnostics["reason"] = (
+                    f"No strong periodicity detected (LS power={max_power:.2f}); "
+                    "Matérn kernel recommended for stochastic variability."
+                )
+        else:
+            # 2D data — check whether periods are consistent across wavelengths
+            init_params = initialize_separable_from_data(
+                self._xdata_raw,
+                self._ydata_raw,
+            )
+            diagnostics["init_params"] = init_params
+
+            if init_params.get("is_achromatic", True):
+                model_str = "2DAchromatic"
+                diagnostics["reason"] = (
+                    "Periods consistent across wavelengths (achromatic variability); "
+                    "achromatic separable kernel recommended."
+                )
+            else:
+                model_str = "2DWavelengthDependent"
+                diagnostics["reason"] = (
+                    "Periods vary with wavelength (chromatic variability); "
+                    "wavelength-dependent separable kernel recommended."
+                )
+
+        diagnostics["model"] = model_str
+
+        if verbose:
+            sep = "=" * 70
+            print(sep)
+            print("AUTO MODEL SELECTION")
+            print(sep)
+            print(f"Recommended model: {model_str}")
+            print(f"Reason: {diagnostics['reason']}")
+            print(sep)
+
+        return model_str, diagnostics
+
     def fit(
         self,
         model=None,
@@ -1623,6 +1761,8 @@ class Lightcurve(gpytorch.Module):
             The model to use for the GP, by default None. If None, an
             error will be raised. If a string, it must be one of the
             following:
+
+            Spectral mixture models:
                 '1D': SpectralMixtureGPModel
                 '2D': TwoDSpectralMixtureGPModel
                 '1DLinear': SpectralMixtureLinearMeanGPModel
@@ -1631,6 +1771,18 @@ class Lightcurve(gpytorch.Module):
                 '2DSKI': TwoDSpectralMixtureKISSGPModel
                 '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
                 '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+
+            Alternative 1D models:
+                '1DQuasiPeriodic': QuasiPeriodicGPModel
+                '1DMatern': MaternGPModel
+                '1DPeriodicStochastic': PeriodicPlusStochasticGPModel
+                '1DLinearQuasiPeriodic': LinearMeanQuasiPeriodicGPModel
+
+            Separable 2D models:
+                '2DSeparable': SeparableGPModel
+                '2DAchromatic': AchromaticGPModel
+                '2DWavelengthDependent': WavelengthDependentGPModel
+
             If an instance of a GP class, that object will be used.
         likelihood : string, None or instance of
                         gpytorch.likelihoods.likelihood.Likelihood or Constraint,
