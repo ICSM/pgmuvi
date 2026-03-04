@@ -1460,7 +1460,7 @@ class Lightcurve(gpytorch.Module):
                 mask = torch.isfinite(t) & torch.isfinite(bands) & torch.isfinite(y)
                 t, bands, y = t[mask], bands[mask], y[mask]
                 LS = MultibandLSWithSignificance(t, y, bands, **kwargs)
-            
+
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
             power = LS.power(freq)
 
@@ -1486,11 +1486,11 @@ class Lightcurve(gpytorch.Module):
                     ),
                     torch.as_tensor([], dtype=torch.bool, device=self.xdata.device),
                 )
-            
+
             # Compute FAP for multiband periodogram
             fap_max = LS.false_alarm_probability(power.max(), method='bootstrap')
             n_return = min(num_peaks, len(peaks))
-            
+
             if fap_max > single_threshold:
                 # Highest peak is not significant, mark all as insignificant
                 return (
@@ -1501,15 +1501,15 @@ class Lightcurve(gpytorch.Module):
                                     dtype=torch.bool,
                                     device=self.xdata.device)
                 )
-            
+
             # Calculate FAP for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
                                                     method='bootstrap')
-            
+
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
             significant_mask[0] = True  # since fap_max <= single_threshold
-            
+
             return (
                 torch.as_tensor(
                     freq[peaks[:n_return]],
