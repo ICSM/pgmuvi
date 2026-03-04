@@ -254,8 +254,9 @@ class SeparableGPModel(ExactGP):
 class AchromaticGPModel(ExactGP):
     """2D GP model for achromatic (wavelength-independent) variability.
 
-    Uses a separable kernel where the wavelength kernel is a white-noise term,
-    meaning all wavelengths share the same temporal variability pattern.
+    Uses a separable kernel where the wavelength kernel is a constant term,
+    enforcing perfect correlation across wavelengths so that all wavelengths
+    share the same temporal variability pattern.
 
     Parameters
     ----------

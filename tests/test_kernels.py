@@ -141,6 +141,21 @@ class TestSeparableKernel(unittest.TestCase):
         expected_diag = cov_full.diagonal()
         self.assertTrue(torch.allclose(cov_diag, expected_diag, atol=1e-5))
 
+    def test_preserves_lazy_structure(self):
+        """SeparableKernel.forward() preserves lazy linear-operator structure."""
+        from linear_operator.operators import MulLinearOperator
+
+        # Invoke the kernel on data — forward() should return a MulLinearOperator,
+        # not a dense tensor, so that GPyTorch's lazy machinery is preserved.
+        result = self.kernel(self.x, self.x)
+
+        # The underlying representation should be a MulLinearOperator.
+        # We evaluate the lazy kernel tensor to get to the inner operator.
+        inner = result.evaluate_kernel()
+        self.assertIsInstance(inner, MulLinearOperator)
+        # Confirm it can still be materialized correctly.
+        self.assertIsNotNone(inner.to_dense())
+
 
 class TestAchromaticKernel(unittest.TestCase):
     """Tests for AchromaticKernel."""

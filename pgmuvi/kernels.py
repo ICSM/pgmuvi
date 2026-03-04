@@ -9,6 +9,7 @@ import math
 import torch
 import gpytorch
 from gpytorch.kernels import Kernel, RBFKernel, MaternKernel
+from linear_operator.operators import MulLinearOperator
 
 
 class QuasiPeriodicKernel(Kernel):
@@ -177,22 +178,23 @@ class SeparableKernel(Kernel):
         time_cov = self.time_kernel(t1, t2)
         wavelength_cov = self.wavelength_kernel(w1, w2)
 
-        # Elementwise product of the two covariance matrices
-        time_mat = time_cov.to_dense()
-        wavelength_mat = wavelength_cov.to_dense()
-        result = time_mat * wavelength_mat
-
         if diag:
-            return result.diagonal(dim1=-1, dim2=-2)
-        return result
+            # Return elementwise product of the diagonals
+            return time_cov.diagonal(dim1=-2, dim2=-1) * wavelength_cov.diagonal(
+                dim1=-2, dim2=-1
+            )
+
+        # Use MulLinearOperator to preserve lazy/linear-operator structure
+        # and avoid materializing O(n^2) dense matrices.
+        return MulLinearOperator(time_cov, wavelength_cov)
 
 
 class AchromaticKernel(SeparableKernel):
     """Separable kernel for achromatic (wavelength-independent) variability.
 
-    Uses a white-noise kernel in the wavelength dimension, meaning all
-    wavelengths share the same temporal covariance structure (e.g. eclipses,
-    transits).
+    Uses a constant kernel in the wavelength dimension, enforcing perfectly
+    correlated behaviour across wavelengths so that all wavelengths share the
+    same temporal covariance structure (e.g. eclipses, transits).
 
     Parameters
     ----------

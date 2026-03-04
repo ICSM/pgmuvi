@@ -51,7 +51,11 @@ def initialize_quasi_periodic_from_data(train_x, train_y, yerr=None):
 
     span = x_np.max() - x_np.min()
     diffs = np.diff(np.sort(x_np))
-    typical_spacing = np.median(diffs[diffs > 0]) if len(diffs) > 0 else 1.0
+    positive_diffs = diffs[diffs > 0]
+    if positive_diffs.size > 0:
+        typical_spacing = np.median(positive_diffs)
+    else:
+        return _fallback_init(train_x, train_y)
 
     min_freq = 1.0 / span if span > 0 else 1e-3
     max_freq = 1.0 / (2.0 * typical_spacing) if typical_spacing > 0 else 10.0
@@ -147,7 +151,11 @@ def initialize_separable_from_data(train_x, train_y, yerr=None):
 
     span = times.max() - times.min()
     diffs = np.diff(np.sort(times))
-    typical_spacing = np.median(diffs[diffs > 0]) if len(diffs) > 0 else 1.0
+    positive_diffs = diffs[diffs > 0]
+    if positive_diffs.size > 0:
+        typical_spacing = np.median(positive_diffs)
+    else:
+        typical_spacing = 1.0
 
     min_freq = 1.0 / span if span > 0 else 1e-3
     max_freq = 1.0 / (2.0 * typical_spacing) if typical_spacing > 0 else 10.0

@@ -13,7 +13,7 @@ from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive
 def period_constraint(data_span, min_periods=2, max_factor=1.0):
     """Constraint on a period parameter based on the data time span.
 
-    Restricts the period to be at least ``data_span / (Nyquist * min_periods)``
+    Restricts the period to be at least ``data_span / (10 * min_periods)``
     and at most ``max_factor * data_span``.
 
     Parameters
