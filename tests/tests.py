@@ -467,5 +467,14 @@ class TestSpectralMixtureGPModel(unittest.TestCase):
     pass
 
 
-if  __name__ == '__main__':
+# Import variability tests so they are discovered when this file is run
+from test_variability import (  # noqa: E402, F401
+    TestComputeFvar,
+    TestComputeStetsonK,
+    TestIsVariable,
+    TestLightcurveVariability,
+    TestWeightedChi2,
+)
+
+if __name__ == '__main__':
     unittest.main()

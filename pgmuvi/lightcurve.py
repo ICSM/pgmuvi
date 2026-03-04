@@ -1598,9 +1598,21 @@ class Lightcurve(gpytorch.Module):
                 ),
             )
 
+    def _get_variability_arrays(self):
+        """Return (y, yerr) as float64 NumPy arrays, safe for CPU and GPU tensors."""
+        y = self._ydata_raw.detach().cpu().numpy()
+        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+            yerr = self._yerr_raw.detach().cpu().numpy()
+        else:
+            yerr = np.ones_like(y)
+        return y, yerr
+
     def check_variability(self, **kwargs) -> dict:
         """
         Check if lightcurve shows significant variability.
+
+        Only applicable for 1-D lightcurves. For multiband data use
+        :meth:`check_variability_per_band`.
 
         Parameters
         ----------
@@ -1616,19 +1628,26 @@ class Lightcurve(gpytorch.Module):
         dict
             Variability diagnostics from is_variable()
 
+        Raises
+        ------
+        ValueError
+            If the lightcurve is multiband (ndim > 1). Use
+            check_variability_per_band() instead.
+
         Examples
         --------
         >>> lc = Lightcurve(t, y, yerr)
         >>> diag = lc.check_variability(verbose=True)
         >>> print(f"Variable: {diag['decision']}")
         """
+        if self.ndim > 1:
+            raise ValueError(
+                "check_variability() is for 1-D lightcurves. "
+                "For multiband data use check_variability_per_band()."
+            )
         from pgmuvi.preprocess.variability import is_variable
 
-        y = self._ydata_raw.numpy()
-        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
-            yerr = self._yerr_raw.numpy()
-        else:
-            yerr = np.ones_like(y)
+        y, yerr = self._get_variability_arrays()
         _is_var, diagnostics = is_variable(y, yerr, **kwargs)
         return diagnostics
 
@@ -1658,6 +1677,12 @@ class Lightcurve(gpytorch.Module):
                 }
             }
 
+        Raises
+        ------
+        ValueError
+            If the lightcurve is not 2-D multiband data (ndim != 2 columns
+            with time in column 0 and wavelength in column 1).
+
         Examples
         --------
         >>> lc2d = Lightcurve(xdata_2d, y, yerr)
@@ -1666,19 +1691,31 @@ class Lightcurve(gpytorch.Module):
         >>> n_bands = results['summary']['n_bands']
         >>> print(f"{n_var}/{n_bands} bands variable")
         """
+        if self._xdata_raw.dim() != 2 or self._xdata_raw.shape[1] < 2:
+            raise ValueError(
+                "check_variability_per_band() requires 2-D multiband data "
+                "with shape (N, 2) where column 0 is time and column 1 is "
+                "the band/wavelength. Got shape "
+                f"{tuple(self._xdata_raw.shape)}."
+            )
         from pgmuvi.preprocess.variability import is_variable
 
-        wavelengths = np.unique(self._xdata_raw[:, 1].numpy())
+        # Convert to NumPy once; safe for both CPU and CUDA tensors
+        xdata_band = self._xdata_raw[:, 1].detach().cpu().numpy()
+        ydata = self._ydata_raw.detach().cpu().numpy()
+        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+            yerr_data = self._yerr_raw.detach().cpu().numpy()
+        else:
+            yerr_data = None
+
+        wavelengths = np.unique(xdata_band)
         results = {}
         variable_bands = []
 
         for wl in wavelengths:
-            mask = self._xdata_raw[:, 1].numpy() == wl
-            y = self._ydata_raw.numpy()[mask]
-            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
-                yerr = self._yerr_raw.numpy()[mask]
-            else:
-                yerr = np.ones_like(y)
+            mask = xdata_band == wl
+            y = ydata[mask]
+            yerr = yerr_data[mask] if yerr_data is not None else np.ones_like(y)
 
             is_var, diag = is_variable(y, yerr, **kwargs)
             results[float(wl)] = diag
@@ -1731,9 +1768,13 @@ class Lightcurve(gpytorch.Module):
             )
 
         keep_wl = results["summary"]["variable_wavelengths"]
-        wl_array = self._xdata_raw[:, 1].numpy()
+        wl_array = self._xdata_raw[:, 1].detach().cpu().numpy()
         keep_mask = np.isin(wl_array, keep_wl)
-        keep_tensor = torch.as_tensor(keep_mask)
+        keep_tensor = torch.as_tensor(
+            keep_mask,
+            dtype=torch.bool,
+            device=self._xdata_raw.device,
+        )
 
         new_x = self._xdata_raw[keep_tensor].clone()
         new_y = self._ydata_raw[keep_tensor].clone()
@@ -1852,11 +1893,7 @@ class Lightcurve(gpytorch.Module):
             from pgmuvi.preprocess.variability import is_variable
 
             vkwargs = variability_kwargs or {}
-            y = self._ydata_raw.numpy()
-            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
-                yerr = self._yerr_raw.numpy()
-            else:
-                yerr = np.ones_like(y)
+            y, yerr = self._get_variability_arrays()
             is_var, diag = is_variable(y, yerr, **vkwargs)
 
             if not is_var:

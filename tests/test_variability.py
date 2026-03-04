@@ -45,6 +45,42 @@ class TestWeightedChi2(unittest.TestCase):
         self.assertGreaterEqual(pval, 0.0)
         self.assertLessEqual(pval, 1.0)
 
+    def test_input_validation_too_few_points(self):
+        """weighted_chi2_test should raise ValueError for N < 2."""
+        y = np.array([1.0])
+        yerr = np.array([0.1])
+        with self.assertRaises(ValueError):
+            weighted_chi2_test(y, yerr)
+
+    def test_input_validation_non_positive_yerr(self):
+        """weighted_chi2_test should raise ValueError for yerr <= 0."""
+        y = np.array([1.0, 1.1, 0.9])
+        yerr = np.array([0.1, 0.0, 0.1])
+        with self.assertRaises(ValueError):
+            weighted_chi2_test(y, yerr)
+
+    def test_input_validation_nan(self):
+        """weighted_chi2_test should raise ValueError for NaN values."""
+        y = np.array([1.0, float("nan"), 0.9])
+        yerr = np.full(3, 0.1)
+        with self.assertRaises(ValueError):
+            weighted_chi2_test(y, yerr)
+
+    def test_input_validation_shape_mismatch(self):
+        """weighted_chi2_test should raise ValueError for shape mismatch."""
+        y = np.array([1.0, 1.1, 0.9])
+        yerr = np.full(4, 0.1)
+        with self.assertRaises(ValueError):
+            weighted_chi2_test(y, yerr)
+
+    def test_accepts_torch_tensor(self):
+        """weighted_chi2_test should accept torch tensors."""
+        import torch
+        y = torch.tensor([1.0, 1.1, 0.9, 1.05])
+        yerr = torch.full((4,), 0.1)
+        chi2, dof, ybar, pval = weighted_chi2_test(y, yerr)
+        self.assertIsInstance(chi2, float)
+
 
 class TestComputeFvar(unittest.TestCase):
     def test_no_intrinsic_variability(self):
@@ -167,6 +203,72 @@ class TestIsVariable(unittest.TestCase):
         output = captured.getvalue()
         self.assertIn("Variability assessment", output)
         self.assertIn("Decision", output)
+
+
+class TestLightcurveVariability(unittest.TestCase):
+    """Tests for Lightcurve.check_variability and related methods."""
+
+    def setUp(self):
+        import torch
+        from pgmuvi.lightcurve import Lightcurve
+
+        np.random.seed(42)
+        t = np.linspace(0, 100, 50)
+        y = np.ones(50) + np.random.normal(0, 0.01, 50)
+        yerr = np.full(50, 0.01)
+
+        self.lc = Lightcurve(
+            torch.as_tensor(t, dtype=torch.float32),
+            torch.as_tensor(y, dtype=torch.float32),
+            yerr=torch.as_tensor(yerr, dtype=torch.float32),
+        )
+
+        # 2D multiband lightcurve (two bands)
+        n = 50
+        t2 = np.linspace(0, 100, n)
+        y2 = np.ones(n) + np.random.normal(0, 0.01, n)
+        wl1 = np.ones(n) * 1.0
+        wl2 = np.ones(n) * 2.0
+        t_all = np.concatenate([t2, t2])
+        y_all = np.concatenate([y2, y2])
+        wl_all = np.concatenate([wl1, wl2])
+        yerr_all = np.full(2 * n, 0.01)
+
+        xdata_2d = torch.stack([
+            torch.as_tensor(t_all, dtype=torch.float32),
+            torch.as_tensor(wl_all, dtype=torch.float32),
+        ], dim=1)
+        self.lc2d = Lightcurve(
+            xdata_2d,
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(yerr_all, dtype=torch.float32),
+        )
+
+    def test_check_variability_1d(self):
+        """check_variability should return a diagnostics dict for 1D data."""
+        diag = self.lc.check_variability()
+        self.assertIn("decision", diag)
+        self.assertIn("tests_passed", diag)
+
+    def test_check_variability_raises_for_2d(self):
+        """check_variability should raise ValueError for multiband data."""
+        from pgmuvi.lightcurve import Lightcurve
+        with self.assertRaises(ValueError):
+            self.lc2d.check_variability()
+
+    def test_check_variability_per_band_raises_for_1d(self):
+        """check_variability_per_band should raise ValueError for 1D data."""
+        with self.assertRaises(ValueError):
+            self.lc.check_variability_per_band()
+
+    def test_check_variability_per_band_summary(self):
+        """check_variability_per_band should return a summary dict."""
+        results = self.lc2d.check_variability_per_band()
+        self.assertIn("summary", results)
+        summary = results["summary"]
+        self.assertEqual(summary["n_bands"], 2)
+        self.assertIn("n_variable", summary)
+        self.assertIn("variable_wavelengths", summary)
 
 
 if __name__ == "__main__":

@@ -13,8 +13,44 @@ import numpy as np
 from scipy.special import gammaincc
 
 
+def _to_numpy(arr) -> np.ndarray:
+    """Convert array-like or torch.Tensor to a 1-D float64 NumPy array.
+
+    Handles CPU and CUDA torch tensors safely via `.detach().cpu()`.
+
+    Parameters
+    ----------
+    arr : array-like or torch.Tensor
+        Input data.
+
+    Returns
+    -------
+    np.ndarray
+        1-D float64 array.
+
+    Raises
+    ------
+    ValueError
+        If the result is not 1-D.
+    """
+    try:
+        import torch
+
+        if isinstance(arr, torch.Tensor):
+            arr = arr.detach().cpu().numpy()
+    except ImportError:
+        pass
+    result = np.asarray(arr, dtype=float)
+    if result.ndim != 1:
+        raise ValueError(
+            f"Expected a 1-D array, got shape {result.shape}. "
+            "Pass a 1-D array of flux values."
+        )
+    return result
+
+
 def weighted_chi2_test(
-    y: np.ndarray, yerr: np.ndarray
+    y, yerr
 ) -> tuple[float, int, float, float]:
     """
     Weighted chi-square test against a constant mean model.
@@ -23,30 +59,51 @@ def weighted_chi2_test(
 
     Parameters
     ----------
-    y : np.ndarray
-        Flux values (finite, positive)
-    yerr : np.ndarray
-        1-sigma uncertainties (finite, positive)
+    y : array-like or torch.Tensor
+        Flux values (1-D, finite).
+    yerr : array-like or torch.Tensor
+        1-sigma uncertainties (1-D, finite, positive).
 
     Returns
     -------
     chi2 : float
-        Test statistic: Σ w_i * (y_i - ȳ_w)²
+        Test statistic: sum(w_i * (y_i - ybar_w)**2)
     dof : int
         Degrees of freedom (N - 1)
     ybar_w : float
-        Weighted mean: sum(y_i/sig_i^2) / sum(1/sig_i^2)
+        Weighted mean: sum(y_i/sig_i**2) / sum(1/sig_i**2)
     p_value : float
-        Right-tail p-value: P(χ² >= chi2 | dof)
+        Right-tail p-value: P(chi2 >= chi2_stat | dof)
 
     Notes
     -----
     Uses scipy.special.gammaincc for chi-square tail probability.
     This is the uniformly most powerful test for non-constant mean
     under Gaussian heteroscedastic errors with known variances.
+
+    Raises
+    ------
+    ValueError
+        If inputs are not 1-D, have mismatched shapes, contain non-finite
+        values, contain non-positive yerr, or have fewer than 2 points.
     """
-    y = np.asarray(y, dtype=float)
-    yerr = np.asarray(yerr, dtype=float)
+    y = _to_numpy(y)
+    yerr = _to_numpy(yerr)
+
+    if y.shape != yerr.shape:
+        raise ValueError(
+            f"y and yerr must have the same shape; got {y.shape} and {yerr.shape}."
+        )
+    if len(y) < 2:
+        raise ValueError(
+            f"At least 2 data points are required; got {len(y)}."
+        )
+    if not np.all(np.isfinite(y)):
+        raise ValueError("y contains non-finite values (NaN or Inf).")
+    if not np.all(np.isfinite(yerr)):
+        raise ValueError("yerr contains non-finite values (NaN or Inf).")
+    if not np.all(yerr > 0):
+        raise ValueError("All yerr values must be strictly positive.")
 
     weights = 1.0 / yerr**2
     ybar_w = np.sum(weights * y) / np.sum(weights)
@@ -54,29 +111,29 @@ def weighted_chi2_test(
     chi2 = np.sum(weights * (y - ybar_w) ** 2)
     dof = len(y) - 1
 
-    # Right-tail p-value: P(χ² >= chi2 | dof)
-    # gammaincc(a, x) = P(χ²/2 >= x) with a = dof/2
+    # Right-tail p-value: P(chi2 >= chi2_stat | dof)
+    # gammaincc(a, x) = P(chi2/2 >= x) with a = dof/2
     p_value = gammaincc(dof / 2.0, chi2 / 2.0)
 
     return float(chi2), int(dof), float(ybar_w), float(p_value)
 
 
-def compute_fvar(y: np.ndarray, yerr: np.ndarray) -> float:
+def compute_fvar(y, yerr) -> float:
     """
     Compute normalized excess variance (F_var).
 
-    F_var = sqrt(max(s² - mean_err², 0)) / |ȳ|
+    F_var = np.sqrt(max(s**2 - mean_err**2, 0)) / |ybar|
 
     where:
-      s² = sample variance of y
-      mean_err^2 = mean(sig_i^2)
+      s**2 = sample variance of y
+      mean_err**2 = mean(sig_i**2)
 
     Parameters
     ----------
-    y : np.ndarray
-        Flux values
-    yerr : np.ndarray
-        1-sigma uncertainties
+    y : array-like or torch.Tensor
+        Flux values (1-D).
+    yerr : array-like or torch.Tensor
+        1-sigma uncertainties (1-D, positive).
 
     Returns
     -------
@@ -89,9 +146,24 @@ def compute_fvar(y: np.ndarray, yerr: np.ndarray) -> float:
     -----
     This effect size prevents keeping bands that are statistically
     significant but astrophysically tiny (common with large N).
+
+    Raises
+    ------
+    ValueError
+        If inputs are not 1-D, have mismatched shapes, or have fewer than 2
+        points.
     """
-    y = np.asarray(y, dtype=float)
-    yerr = np.asarray(yerr, dtype=float)
+    y = _to_numpy(y)
+    yerr = _to_numpy(yerr)
+
+    if y.shape != yerr.shape:
+        raise ValueError(
+            f"y and yerr must have the same shape; got {y.shape} and {yerr.shape}."
+        )
+    if len(y) < 2:
+        raise ValueError(
+            f"At least 2 data points are required; got {len(y)}."
+        )
 
     s2 = np.var(y, ddof=1)
     mean_err2 = np.mean(yerr**2)
@@ -104,20 +176,20 @@ def compute_fvar(y: np.ndarray, yerr: np.ndarray) -> float:
     return float(np.sqrt(excess) / np.abs(ybar))
 
 
-def compute_stetson_k(y: np.ndarray, yerr: np.ndarray) -> float:
+def compute_stetson_k(y, yerr) -> float:
     """
     Compute Stetson K index for robustness assessment.
 
-    K = (1/N) * Σ|δ_i| / sqrt((1/N) * Σδ_i²)
+    K = (1/N) * sum(|delta_i|) / np.sqrt((1/N) * sum(delta_i**2))
 
-    where delta_i = sqrt(N/(N-1)) * (y_i - ybar) / sig_i
+    where delta_i = np.sqrt(N/(N-1)) * (y_i - ybar) / sig_i
 
     Parameters
     ----------
-    y : np.ndarray
-        Flux values
-    yerr : np.ndarray
-        1-sigma uncertainties
+    y : array-like or torch.Tensor
+        Flux values (1-D).
+    yerr : array-like or torch.Tensor
+        1-sigma uncertainties (1-D, positive).
 
     Returns
     -------
@@ -134,9 +206,24 @@ def compute_stetson_k(y: np.ndarray, yerr: np.ndarray) -> float:
     References
     ----------
     Stetson, P. B. 1996, PASP, 108, 851
+
+    Raises
+    ------
+    ValueError
+        If inputs are not 1-D, have mismatched shapes, or have fewer than 2
+        points.
     """
-    y = np.asarray(y, dtype=float)
-    yerr = np.asarray(yerr, dtype=float)
+    y = _to_numpy(y)
+    yerr = _to_numpy(yerr)
+
+    if y.shape != yerr.shape:
+        raise ValueError(
+            f"y and yerr must have the same shape; got {y.shape} and {yerr.shape}."
+        )
+    if len(y) < 2:
+        raise ValueError(
+            f"At least 2 data points are required; got {len(y)}."
+        )
 
     n = len(y)
     ybar = np.mean(y)
@@ -152,8 +239,8 @@ def compute_stetson_k(y: np.ndarray, yerr: np.ndarray) -> float:
 
 
 def is_variable(
-    y: np.ndarray,
-    yerr: np.ndarray,
+    y,
+    yerr,
     alpha: float = 0.01,
     fvar_min: float = 0.05,
     stetson_k_min: float = 0.95,
@@ -165,10 +252,10 @@ def is_variable(
 
     Parameters
     ----------
-    y : np.ndarray
-        Flux measurements
-    yerr : np.ndarray
-        1-sigma uncertainties
+    y : array-like or torch.Tensor
+        Flux measurements (1-D).
+    yerr : array-like or torch.Tensor
+        1-sigma uncertainties (1-D, positive).
     alpha : float, default=0.01
         Significance level for chi-square test
     fvar_min : float, default=0.05
@@ -209,6 +296,8 @@ def is_variable(
     3. F_var >= fvar_min (astrophysically significant)
     4. K >= stetson_k_min (robust to outliers)
 
+    Both numpy arrays and torch tensors (including CUDA tensors) are accepted.
+
     Examples
     --------
     >>> from pgmuvi.preprocess.variability import is_variable
@@ -218,8 +307,10 @@ def is_variable(
     ... else:
     ...     print(f"Skipping: {diag['decision']}")
     """
-    y = np.asarray(y, dtype=float)
-    yerr = np.asarray(yerr, dtype=float)
+    # Convert once here; individual helpers also call _to_numpy but that is
+    # idempotent for plain ndarray inputs.
+    y = _to_numpy(y)
+    yerr = _to_numpy(yerr)
 
     n = len(y)
     enough_points = n >= min_points
