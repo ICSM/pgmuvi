@@ -17,8 +17,6 @@ __all__ = [
     "constraints",
     "gps",
     "initialization",
-    "kernels",
     "lightcurve",
-    "models",
     "trainers",
 ]

@@ -99,6 +99,8 @@ class TestInitializeSeparable(unittest.TestCase):
         for key in ["period", "is_achromatic", "wavelength_lengthscale",
                     "periods_per_band", "outputscale"]:
             self.assertIn(key, params, f"Missing key: {key}")
+        # is_significant is a new key from MultibandLSWithSignificance
+        self.assertIn("is_significant", params)
 
     def test_period_positive(self):
         """Estimated mean period is positive."""

@@ -95,9 +95,11 @@ def initialize_quasi_periodic_from_data(train_x, train_y, yerr=None):
 def initialize_separable_from_data(train_x, train_y, yerr=None):
     """Initialize separable 2D kernel parameters from multiwavelength data.
 
-    Uses per-band Lomb-Scargle periodograms to determine the dominant temporal
-    period in each band and checks whether the variability is achromatic
-    (consistent periods) or chromatic (varying periods).
+    Uses :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`
+    to compute a single multiband Lomb-Scargle periodogram over all bands
+    simultaneously and to assess the significance of the dominant period.
+    Per-band single-band periodograms are then used to check whether the
+    variability is achromatic (consistent periods across bands) or chromatic.
 
     Parameters
     ----------
@@ -113,8 +115,11 @@ def initialize_separable_from_data(train_x, train_y, yerr=None):
     -------
     dict
         Dictionary with keys:
-        - ``'period'`` — mean period across bands.
-        - ``'is_achromatic'`` — True if periods agree within 10 %.
+
+        - ``'period'`` — dominant multiband period (or per-band mean if
+          the multiband approach fails).
+        - ``'is_significant'`` — True if the peak FAP < 0.05.
+        - ``'is_achromatic'`` — True if per-band periods agree within 10 %.
         - ``'wavelength_lengthscale'`` — half the wavelength range.
         - ``'periods_per_band'`` — list of per-band peak periods.
         - ``'outputscale'`` — std of the observed data.
@@ -133,6 +138,7 @@ def initialize_separable_from_data(train_x, train_y, yerr=None):
     """
     try:
         from astropy.timeseries import LombScargle
+        from .multiband_ls_significance import MultibandLSWithSignificance
     except ImportError:
         return _fallback_separable_init(train_x, train_y)
 
@@ -144,7 +150,6 @@ def initialize_separable_from_data(train_x, train_y, yerr=None):
     wavelengths = x_np[:, 1]
 
     unique_wls = np.unique(wavelengths)
-    periods_per_band = []
 
     wl_span = float(wavelengths.max() - wavelengths.min())
     wavelength_lengthscale = max(wl_span / 2.0, 1.0)
@@ -160,40 +165,78 @@ def initialize_separable_from_data(train_x, train_y, yerr=None):
     min_freq = 1.0 / span if span > 0 else 1e-3
     max_freq = 1.0 / (2.0 * typical_spacing) if typical_spacing > 0 else 10.0
 
+    if max_freq <= min_freq:
+        return _fallback_separable_init(train_x, train_y)
+
+    outputscale = float(np.std(y_np)) if np.std(y_np) > 0 else 1.0
+
+    # --- Step 1: multiband periodogram for the dominant period ---
+    period_multiband = None
+    is_significant = False
+    try:
+        ls_mb = MultibandLSWithSignificance(
+            times, y_np, wavelengths, dy=dy_np
+        )
+        freq_grid = ls_mb.autofrequency(
+            minimum_frequency=min_freq, maximum_frequency=max_freq
+        )
+        power = ls_mb.power(freq_grid)
+        if len(power) > 0:
+            peak_idx = int(np.argmax(power))
+            period_multiband = float(1.0 / freq_grid[peak_idx])
+            fap = ls_mb.false_alarm_probability(
+                float(power[peak_idx]), method="analytical"
+            )
+            is_significant = bool(fap < 0.05)
+    except Exception:
+        period_multiband = None
+
+    # --- Step 2: per-band periodograms for achromatic vs chromatic ---
+    periods_per_band = []
     for wl in unique_wls:
         mask = wavelengths == wl
         t_band = times[mask]
         y_band = y_np[mask]
         dy_band = dy_np[mask] if dy_np is not None else None
 
-        if len(t_band) < 5 or max_freq <= min_freq:
+        if len(t_band) < 5:
             continue
 
         try:
             ls = LombScargle(t_band, y_band, dy=dy_band)
-            frequency, power = ls.autopower(
+            frequency, power_band = ls.autopower(
                 minimum_frequency=min_freq,
                 maximum_frequency=max_freq,
             )
-            if len(power) > 0 and power.max() > 0.01:
-                peak_idx = np.argmax(power)
+            if len(power_band) > 0 and power_band.max() > 0.01:
+                peak_idx = np.argmax(power_band)
                 periods_per_band.append(float(1.0 / frequency[peak_idx]))
         except Exception:
             continue
 
-    if len(periods_per_band) == 0:
+    # Decide period: prefer multiband estimate; fall back to per-band mean
+    if period_multiband is not None:
+        period_out = period_multiband
+    elif len(periods_per_band) > 0:
+        period_out = float(np.mean(periods_per_band))
+    else:
         return _fallback_separable_init(train_x, train_y)
 
-    period_mean = float(np.mean(periods_per_band))
-    period_std = float(np.std(periods_per_band))
-    is_achromatic = (period_std / period_mean) < 0.1 if period_mean > 0 else True
+    # Achromatic check: per-band periods should agree within 10 %
+    if len(periods_per_band) >= 2:
+        period_std = float(np.std(periods_per_band))
+        period_mean = float(np.mean(periods_per_band))
+        is_achromatic = (period_std / period_mean) < 0.1 if period_mean > 0 else True
+    else:
+        is_achromatic = True
 
     return {
-        "period": period_mean,
+        "period": period_out,
+        "is_significant": is_significant,
         "is_achromatic": is_achromatic,
         "wavelength_lengthscale": wavelength_lengthscale,
         "periods_per_band": periods_per_band,
-        "outputscale": float(np.std(y_np)) if np.std(y_np) > 0 else 1.0,
+        "outputscale": outputscale,
     }
 
 
@@ -279,6 +322,7 @@ def _fallback_separable_init(train_x, train_y):
 
     return {
         "period": span / 2.0,
+        "is_significant": False,
         "is_achromatic": True,
         "wavelength_lengthscale": max(wl_span / 2.0, 1.0),
         "periods_per_band": [],

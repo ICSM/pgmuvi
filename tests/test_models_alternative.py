@@ -1,10 +1,11 @@
-"""Tests for alternative GP model classes in pgmuvi/models.py."""
+"""Tests for alternative GP model classes in pgmuvi/gps.py."""
 
 import unittest
 import torch
 import gpytorch
 
-from pgmuvi.models import (
+# All alternative models now live in gps.py
+from pgmuvi.gps import (
     QuasiPeriodicGPModel,
     MaternGPModel,
     PeriodicPlusStochasticGPModel,
@@ -61,17 +62,33 @@ class TestQuasiPeriodicGPModel(unittest.TestCase):
         self.assertTrue(hasattr(self.model, "sci_kernel"))
 
     def test_period_initialized(self):
-        """Period is initialized to the provided value."""
-        period = float(self.model.covar_module.base_kernel.period)
+        """Period is initialized to the provided value.
+
+        The quasi-periodic kernel is ScaleKernel(ProductKernel(
+        PeriodicKernel(), RBFKernel())).  The period lives at
+        covar_module.base_kernel.kernels[0].period_length.
+        """
+        period = float(
+            self.model.covar_module.base_kernel.kernels[0].period_length.detach()
+        )
         self.assertAlmostEqual(period, 5.0, places=3)
 
     def test_default_period(self):
         """Default period is half the data span."""
         lik = gpytorch.likelihoods.GaussianLikelihood()
         model = QuasiPeriodicGPModel(self.t, self.y, lik)
-        period = float(model.covar_module.base_kernel.period)
+        period = float(
+            model.covar_module.base_kernel.kernels[0].period_length.detach()
+        )
         expected = float((self.t.max() - self.t.min()) / 2.0)
         self.assertAlmostEqual(period, expected, places=3)
+
+    def test_covar_is_scale_product(self):
+        """Covariance module is ScaleKernel(ProductKernel(Periodic, RBF))."""
+        self.assertIsInstance(self.model.covar_module, gpytorch.kernels.ScaleKernel)
+        self.assertIsInstance(
+            self.model.covar_module.base_kernel, gpytorch.kernels.ProductKernel
+        )
 
     def test_named_parameters_not_empty(self):
         """Model has trainable parameters."""
@@ -113,7 +130,7 @@ class TestMaternGPModel(unittest.TestCase):
         """Default lengthscale is quarter of data span."""
         lik = gpytorch.likelihoods.GaussianLikelihood()
         model = MaternGPModel(self.t, self.y, lik)
-        ls = float(model.covar_module.base_kernel.lengthscale)
+        ls = float(model.covar_module.base_kernel.lengthscale.detach())
         expected = float((self.t.max() - self.t.min()) / 4.0)
         self.assertAlmostEqual(ls, expected, places=3)
 
@@ -151,15 +168,17 @@ class TestSeparableGPModel(unittest.TestCase):
             pred = self.model(self.x)
         self.assertEqual(pred.mean.shape, self.y.shape)
 
+    def test_covar_is_product_kernel(self):
+        """SeparableGPModel uses a ProductKernel (no custom forward code)."""
+        self.assertIsInstance(self.model.covar_module, gpytorch.kernels.ProductKernel)
+
     def test_custom_kernels(self):
         """SeparableGPModel accepts custom kernels."""
-        from pgmuvi.kernels import SeparableKernel
-
         lik = gpytorch.likelihoods.GaussianLikelihood()
         t_k = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
         w_k = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
         model = SeparableGPModel(self.x, self.y, lik, time_kernel=t_k, wavelength_kernel=w_k)
-        self.assertIsInstance(model.covar_module, SeparableKernel)
+        self.assertIsInstance(model.covar_module, gpytorch.kernels.ProductKernel)
 
 
 class TestAchromaticGPModel(unittest.TestCase):
@@ -198,6 +217,15 @@ class TestAchromaticGPModel(unittest.TestCase):
         lik = gpytorch.likelihoods.GaussianLikelihood()
         with self.assertRaises(ValueError):
             AchromaticGPModel(self.x, self.y, lik, time_kernel_type="invalid")
+
+    def test_wavelength_kernel_is_constant(self):
+        """Achromatic model uses a ConstantKernel for wavelength."""
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        model = AchromaticGPModel(self.x, self.y, lik)
+        # covar_module is a ProductKernel with two sub-kernels
+        self.assertIsInstance(model.covar_module, gpytorch.kernels.ProductKernel)
+        wl_kernel = model.covar_module.kernels[1]
+        self.assertIsInstance(wl_kernel, gpytorch.kernels.ConstantKernel)
 
 
 class TestWavelengthDependentGPModel(unittest.TestCase):

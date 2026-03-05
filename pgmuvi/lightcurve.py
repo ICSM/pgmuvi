@@ -11,8 +11,6 @@ from .gps import (
     SpectralMixtureKISSGPModel,
     TwoDSpectralMixtureGPModel,
     TwoDSpectralMixtureKISSGPModel,
-)
-from .models import (
     QuasiPeriodicGPModel,
     MaternGPModel,
     PeriodicPlusStochasticGPModel,

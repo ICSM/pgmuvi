@@ -10,21 +10,28 @@ import gpytorch  # noqa: F401
 from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive
 
 
-def period_constraint(data_span, min_periods=2, max_factor=1.0):
+def period_constraint(data_span, min_period_fraction=0.05, max_factor=1.0):
     """Constraint on a period parameter based on the data time span.
 
-    Restricts the period to be at least ``data_span / (10 * min_periods)``
+    Restricts the period to be at least ``min_period_fraction * data_span``
     and at most ``max_factor * data_span``.
+
+    The default minimum-period fraction of 0.05 (5 % of the data span) is
+    physically motivated by the typical observational requirements for cool
+    evolved stars — the primary target class for pgmuvi — whose periods are
+    generally tens of days or longer.  For a 500-day dataset this implies a
+    lower bound of ~25 days; for a 1000-day dataset ~50 days.  Adjust
+    ``min_period_fraction`` for other target classes or shorter baselines.
 
     Parameters
     ----------
     data_span : float
-        Total duration of the observations (max time - min time).
-    min_periods : int, optional
-        Minimum number of periods that must fit within the data span,
-        by default 2.
+        Total duration of the observations (max time - min time), in whatever
+        units the input time axis uses (days, normalised, etc.).
+    min_period_fraction : float, optional
+        Minimum period as a fraction of ``data_span``, by default 0.05.
     max_factor : float, optional
-        Maximum period as a multiple of the data span, by default 1.0.
+        Maximum period as a multiple of ``data_span``, by default 1.0.
 
     Returns
     -------
@@ -38,8 +45,11 @@ def period_constraint(data_span, min_periods=2, max_factor=1.0):
     >>> c.lower_bound < c.upper_bound
     True
     """
-    lower = data_span / (10.0 * min_periods)
+    lower = data_span * min_period_fraction
     upper = data_span * max_factor
+    # Safety: ensure a valid (non-empty) interval even for very short baselines
+    if lower >= upper:
+        lower = upper * 0.01
     return Interval(lower_bound=lower, upper_bound=upper)
 
 
