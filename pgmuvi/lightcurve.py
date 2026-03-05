@@ -1110,20 +1110,24 @@ class Lightcurve(gpytorch.Module):
             )
             return
 
-        # Check if the model's kernel has ard_num_dims set correctly
+        # Check if the model's kernel has ard_num_dims set correctly.
+        # Separable models using ProductKernel + active_dims do not set
+        # ard_num_dims (it stays None) — they are valid 2D models.
+        # Only raise if ard_num_dims is explicitly set to a non-2 value.
         if hasattr(self.model, "covar_module"):
             covar = self.model.covar_module
             # For KISS-GP models, check the base_kernel
             if hasattr(covar, "base_kernel"):
                 covar = covar.base_kernel
 
-            if hasattr(covar, "ard_num_dims"):
+            if hasattr(covar, "ard_num_dims") and covar.ard_num_dims is not None:
                 if covar.ard_num_dims != 2:
                     raise ValueError(
                         f"Model's ard_num_dims is {covar.ard_num_dims}, "
                         f"but data has {self.ndim} dimensions. "
                         "Use a 2D model (e.g., '2D', '2DLinear', '2DSKI', "
-                        "'2DLinearSKI')."
+                        "'2DLinearSKI', '2DSeparable', '2DAchromatic', "
+                        "'2DWavelengthDependent')."
                     )
 
         # Check transform compatibility

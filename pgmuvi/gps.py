@@ -10,6 +10,7 @@ from gpytorch.kernels import (
     PeriodicKernel,
     ProductKernel,
     RBFKernel,
+    RQKernel,
     ScaleKernel,
 )
 from gpytorch.distributions import MultivariateNormal as MVN
@@ -553,6 +554,110 @@ def _make_qp_kernel(period):
     return ScaleKernel(ProductKernel(periodic_k, rbf_k))
 
 
+def _build_time_kernel(time_kernel_type, period, num_mixtures=4):
+    """Build a time kernel from a string name or a Kernel instance.
+
+    Parameters
+    ----------
+    time_kernel_type : str or gpytorch.kernels.Kernel
+        Kernel type or a pre-built Kernel instance.  Supported string values:
+
+        - ``'quasi_periodic'``: ``ScaleKernel(PeriodicKernel * RBFKernel)``
+        - ``'matern'`` (default): ``ScaleKernel(MaternKernel(nu=1.5))``
+        - ``'rbf'``: ``ScaleKernel(RBFKernel())``
+        - ``'spectral_mixture'`` / ``'sm'``:
+          ``SpectralMixtureKernel(num_mixtures, ard_num_dims=1)``
+
+        If a :class:`gpytorch.kernels.Kernel` instance is passed directly, it
+        is used as-is (a warning is emitted to remind the user to check that
+        the kernel is appropriate for the time dimension).
+    period : float
+        Initial period for the quasi-periodic option. Ignored for other types.
+    num_mixtures : int, optional
+        Number of mixture components for ``'spectral_mixture'``.  Default 4.
+
+    Returns
+    -------
+    gpytorch.kernels.Kernel
+    """
+    if isinstance(time_kernel_type, gpt.kernels.Kernel):
+        import warnings
+        warnings.warn(
+            "A Kernel instance was supplied for time_kernel_type. "
+            "Ensure this kernel is appropriate for the time (first) dimension "
+            "before fitting.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return time_kernel_type
+    if time_kernel_type == "quasi_periodic":
+        return _make_qp_kernel(period)
+    if time_kernel_type == "matern":
+        return ScaleKernel(MaternKernel(nu=1.5))
+    if time_kernel_type == "rbf":
+        return ScaleKernel(RBFKernel())
+    if time_kernel_type in ("spectral_mixture", "sm"):
+        # SMK incorporates its own output scale; no wrapping ScaleKernel needed.
+        return SMK(num_mixtures=num_mixtures, ard_num_dims=1)
+    raise ValueError(
+        f"Unknown time_kernel_type '{time_kernel_type}'. "
+        "Choose from 'quasi_periodic', 'matern', 'rbf', "
+        "'spectral_mixture'/'sm', or supply a gpytorch.kernels.Kernel instance."
+    )
+
+
+def _build_wavelength_kernel(wavelength_kernel_type, wavelength_lengthscale):
+    """Build a wavelength kernel from a string name or a Kernel instance.
+
+    Parameters
+    ----------
+    wavelength_kernel_type : str or gpytorch.kernels.Kernel
+        Kernel type or a pre-built Kernel instance.  Supported string values:
+
+        - ``'rbf'`` (default): ``ScaleKernel(RBFKernel())``
+        - ``'matern'``: ``ScaleKernel(MaternKernel(nu=1.5))``
+        - ``'rational_quadratic'`` / ``'rq'``:
+          ``ScaleKernel(RQKernel())``
+
+        If a :class:`gpytorch.kernels.Kernel` instance is passed, it is used
+        as-is (a warning is emitted to remind the user to check suitability).
+    wavelength_lengthscale : float
+        Initial lengthscale applied to ``base_kernel.lengthscale`` for
+        string-constructed kernels.
+
+    Returns
+    -------
+    gpytorch.kernels.Kernel
+    """
+    if isinstance(wavelength_kernel_type, gpt.kernels.Kernel):
+        import warnings
+        warnings.warn(
+            "A Kernel instance was supplied for wavelength_kernel_type. "
+            "Ensure this kernel is appropriate for the wavelength (second) "
+            "dimension before fitting.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return wavelength_kernel_type
+    if wavelength_kernel_type == "rbf":
+        k = ScaleKernel(RBFKernel())
+        k.base_kernel.lengthscale = wavelength_lengthscale
+        return k
+    if wavelength_kernel_type == "matern":
+        k = ScaleKernel(MaternKernel(nu=1.5))
+        k.base_kernel.lengthscale = wavelength_lengthscale
+        return k
+    if wavelength_kernel_type in ("rational_quadratic", "rq"):
+        k = ScaleKernel(RQKernel())
+        k.base_kernel.lengthscale = wavelength_lengthscale
+        return k
+    raise ValueError(
+        f"Unknown wavelength_kernel_type '{wavelength_kernel_type}'. "
+        "Choose from 'rbf', 'matern', 'rational_quadratic'/'rq', "
+        "or supply a gpytorch.kernels.Kernel instance."
+    )
+
+
 class QuasiPeriodicGPModel(ExactGP):
     """1D GP model using a quasi-periodic kernel.
 
@@ -819,13 +924,14 @@ class SeparableGPModel(ExactGP):
         return MVN(mean_x, covar_x)
 
 
-class AchromaticGPModel(ExactGP):
+class AchromaticGPModel(SeparableGPModel):
     """2D GP model for achromatic (wavelength-independent) variability.
 
-    Uses a separable kernel where the wavelength component is a
-    :class:`~gpytorch.kernels.ConstantKernel`, enforcing perfect correlation
-    across wavelengths so that all bands share the same temporal variability
-    pattern (e.g. eclipses, transits, geometric occultations).
+    Subclass of :class:`SeparableGPModel` that uses a
+    :class:`~gpytorch.kernels.ConstantKernel` for the wavelength dimension,
+    enforcing perfect correlation across wavelengths so that all bands share
+    the same temporal variability pattern (e.g. eclipses, transits, geometric
+    occultations).
 
     Parameters
     ----------
@@ -835,12 +941,23 @@ class AchromaticGPModel(ExactGP):
         Observed values (1D tensor).
     likelihood : gpytorch.likelihoods.Likelihood
         Likelihood function for the model.
-    time_kernel_type : str, optional
-        Type of time kernel: ``'quasi_periodic'``, ``'matern'`` (default),
-        or ``'rbf'``.
+    time_kernel_type : str or gpytorch.kernels.Kernel, optional
+        Type of time kernel.  Accepted string values:
+
+        - ``'matern'`` (default): ``ScaleKernel(MaternKernel(nu=1.5))``
+        - ``'quasi_periodic'``: ``ScaleKernel(PeriodicKernel * RBFKernel)``
+        - ``'rbf'``: ``ScaleKernel(RBFKernel())``
+        - ``'spectral_mixture'`` / ``'sm'``:
+          ``SpectralMixtureKernel(num_mixtures, ard_num_dims=1)``
+
+        Alternatively, supply any :class:`gpytorch.kernels.Kernel` instance
+        directly.
     period : float, optional
         Initial period for the quasi-periodic option. Defaults to half the
         time span.
+    num_mixtures : int, optional
+        Number of mixture components when ``time_kernel_type='spectral_mixture'``.
+        Default 4.
 
     Notes
     -----
@@ -851,10 +968,10 @@ class AchromaticGPModel(ExactGP):
     --------
     >>> import torch, gpytorch
     >>> from pgmuvi.gps import AchromaticGPModel
-    >>> t = torch.linspace(0, 10, 50)
+    >>> t_data = torch.linspace(0, 10, 50)
     >>> wl = torch.ones(50) * 550.0
-    >>> x = torch.stack([t, wl], dim=1)
-    >>> y = torch.sin(2 * torch.pi * t / 3)
+    >>> x = torch.stack([t_data, wl], dim=1)
+    >>> y = torch.sin(2 * torch.pi * t_data / 3)
     >>> lik = gpytorch.likelihoods.GaussianLikelihood()
     >>> model = AchromaticGPModel(
     ...     x, y, lik, time_kernel_type='quasi_periodic', period=3.0
@@ -868,49 +985,31 @@ class AchromaticGPModel(ExactGP):
         likelihood,
         time_kernel_type="matern",
         period=None,
+        num_mixtures=4,
     ):
-        super().__init__(train_x, train_y, likelihood)
-        self.mean_module = ConstantMean()
-
         if period is None:
             span = float(train_x[:, 0].max() - train_x[:, 0].min())
             period = span / 2.0
 
-        if time_kernel_type == "quasi_periodic":
-            time_kernel = _make_qp_kernel(period)
-        elif time_kernel_type == "matern":
-            time_kernel = ScaleKernel(MaternKernel(nu=1.5))
-        elif time_kernel_type == "rbf":
-            time_kernel = ScaleKernel(RBFKernel())
-        else:
-            raise ValueError(
-                f"Unknown time_kernel_type '{time_kernel_type}'. "
-                "Choose from 'quasi_periodic', 'matern', 'rbf'."
-            )
-
-        time_kernel.register_buffer(
-            "active_dims", t.tensor([0], dtype=t.long)
-        )
+        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures)
         wl_kernel = ConstantKernel()
-        wl_kernel.register_buffer(
-            "active_dims", t.tensor([1], dtype=t.long)
+
+        super().__init__(
+            train_x,
+            train_y,
+            likelihood,
+            time_kernel=time_kernel,
+            wavelength_kernel=wl_kernel,
         )
 
-        self.covar_module = time_kernel * wl_kernel
-        self.sci_kernel = self.covar_module
 
-    def forward(self, x):
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
-        return MVN(mean_x, covar_x)
-
-
-class WavelengthDependentGPModel(ExactGP):
+class WavelengthDependentGPModel(SeparableGPModel):
     """2D GP model with smooth wavelength-dependent variability.
 
-    Uses a separable kernel with an RBF wavelength component, capturing
-    smooth correlations across wavelengths (e.g. temperature-driven flux
-    changes that are stronger at certain wavelengths).
+    Subclass of :class:`SeparableGPModel` that uses a smooth kernel for the
+    wavelength dimension, capturing correlated flux changes across nearby
+    wavelengths (e.g. temperature-driven variability, spot models with
+    wavelength-dependent contrast).
 
     Parameters
     ----------
@@ -920,15 +1019,34 @@ class WavelengthDependentGPModel(ExactGP):
         Observed values (1D tensor).
     likelihood : gpytorch.likelihoods.Likelihood
         Likelihood function for the model.
-    time_kernel_type : str, optional
-        Type of time kernel: ``'quasi_periodic'``, ``'matern'`` (default),
-        or ``'rbf'``.
+    time_kernel_type : str or gpytorch.kernels.Kernel, optional
+        Type of time kernel.  Accepted string values:
+
+        - ``'matern'`` (default): ``ScaleKernel(MaternKernel(nu=1.5))``
+        - ``'quasi_periodic'``: ``ScaleKernel(PeriodicKernel * RBFKernel)``
+        - ``'rbf'``: ``ScaleKernel(RBFKernel())``
+        - ``'spectral_mixture'`` / ``'sm'``:
+          ``SpectralMixtureKernel(num_mixtures, ard_num_dims=1)``
+
+        Alternatively, supply any :class:`gpytorch.kernels.Kernel` instance.
+    wavelength_kernel_type : str or gpytorch.kernels.Kernel, optional
+        Type of wavelength kernel.  Accepted string values:
+
+        - ``'rbf'`` (default): ``ScaleKernel(RBFKernel())``
+        - ``'matern'``: ``ScaleKernel(MaternKernel(nu=1.5))``
+        - ``'rational_quadratic'`` / ``'rq'``: ``ScaleKernel(RQKernel())``
+
+        Alternatively, supply any :class:`gpytorch.kernels.Kernel` instance
+        directly (a warning will be emitted to prompt a suitability check).
     period : float, optional
         Initial period for the quasi-periodic option. Defaults to half the
         time span.
     wavelength_lengthscale : float, optional
         Initial wavelength correlation length. Defaults to half the wavelength
-        span.
+        span (minimum 1.0).
+    num_mixtures : int, optional
+        Number of mixture components when ``time_kernel_type='spectral_mixture'``.
+        Default 4.
 
     Notes
     -----
@@ -939,10 +1057,10 @@ class WavelengthDependentGPModel(ExactGP):
     --------
     >>> import torch, gpytorch
     >>> from pgmuvi.gps import WavelengthDependentGPModel
-    >>> t = torch.linspace(0, 10, 50)
+    >>> t_data = torch.linspace(0, 10, 50)
     >>> wl = torch.linspace(400, 900, 50)
-    >>> x = torch.stack([t, wl], dim=1)
-    >>> y = torch.sin(2 * torch.pi * t / 3) * (wl / wl.mean())
+    >>> x = torch.stack([t_data, wl], dim=1)
+    >>> y = torch.sin(2 * torch.pi * t_data / 3) * (wl / wl.mean())
     >>> lik = gpytorch.likelihoods.GaussianLikelihood()
     >>> model = WavelengthDependentGPModel(x, y, lik)
     """
@@ -953,12 +1071,11 @@ class WavelengthDependentGPModel(ExactGP):
         train_y,
         likelihood,
         time_kernel_type="matern",
+        wavelength_kernel_type="rbf",
         period=None,
         wavelength_lengthscale=None,
+        num_mixtures=4,
     ):
-        super().__init__(train_x, train_y, likelihood)
-        self.mean_module = ConstantMean()
-
         if period is None:
             span = float(train_x[:, 0].max() - train_x[:, 0].min())
             period = span / 2.0
@@ -966,31 +1083,16 @@ class WavelengthDependentGPModel(ExactGP):
             wl_span = float(train_x[:, 1].max() - train_x[:, 1].min())
             wavelength_lengthscale = max(wl_span / 2.0, 1.0)
 
-        if time_kernel_type == "quasi_periodic":
-            time_kernel = _make_qp_kernel(period)
-        elif time_kernel_type == "matern":
-            time_kernel = ScaleKernel(MaternKernel(nu=1.5))
-        elif time_kernel_type == "rbf":
-            time_kernel = ScaleKernel(RBFKernel())
-        else:
-            raise ValueError(
-                f"Unknown time_kernel_type '{time_kernel_type}'. "
-                "Choose from 'quasi_periodic', 'matern', 'rbf'."
-            )
-
-        time_kernel.register_buffer(
-            "active_dims", t.tensor([0], dtype=t.long)
-        )
-        wl_kernel = ScaleKernel(RBFKernel())
-        wl_kernel.base_kernel.lengthscale = wavelength_lengthscale
-        wl_kernel.register_buffer(
-            "active_dims", t.tensor([1], dtype=t.long)
+        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures)
+        wl_kernel = _build_wavelength_kernel(
+            wavelength_kernel_type, wavelength_lengthscale
         )
 
-        self.covar_module = time_kernel * wl_kernel
-        self.sci_kernel = self.covar_module
+        super().__init__(
+            train_x,
+            train_y,
+            likelihood,
+            time_kernel=time_kernel,
+            wavelength_kernel=wl_kernel,
+        )
 
-    def forward(self, x):
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
-        return MVN(mean_x, covar_x)

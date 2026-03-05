@@ -218,6 +218,45 @@ class TestAchromaticGPModel(unittest.TestCase):
         with self.assertRaises(ValueError):
             AchromaticGPModel(self.x, self.y, lik, time_kernel_type="invalid")
 
+    def test_spectral_mixture_time_kernel(self):
+        """AchromaticGPModel accepts spectral_mixture as time kernel."""
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        model = AchromaticGPModel(
+            self.x, self.y, lik,
+            time_kernel_type="spectral_mixture", num_mixtures=2
+        )
+        model.eval()
+        with torch.no_grad():
+            pred = model(self.x)
+        self.assertEqual(pred.mean.shape, self.y.shape)
+        # First sub-kernel should be a SpectralMixtureKernel
+        time_k = model.covar_module.kernels[0]
+        self.assertIsInstance(time_k, gpytorch.kernels.SpectralMixtureKernel)
+
+    def test_user_supplied_time_kernel(self):
+        """AchromaticGPModel accepts a Kernel instance for time_kernel_type."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        user_k = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(nu=0.5))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            model = AchromaticGPModel(self.x, self.y, lik, time_kernel_type=user_k)
+        # A warning should have been emitted
+        self.assertTrue(any("Kernel instance" in str(w.message) for w in caught))
+        model.eval()
+        with torch.no_grad():
+            pred = model(self.x)
+        self.assertEqual(pred.mean.shape, self.y.shape)
+
+    def test_is_subclass_of_separable(self):
+        """AchromaticGPModel is a subclass of SeparableGPModel."""
+        self.assertIsInstance(
+            AchromaticGPModel(
+                self.x, self.y, gpytorch.likelihoods.GaussianLikelihood()
+            ),
+            SeparableGPModel,
+        )
+
     def test_wavelength_kernel_is_constant(self):
         """Achromatic model uses a ConstantKernel for wavelength."""
         lik = gpytorch.likelihoods.GaussianLikelihood()
@@ -246,6 +285,76 @@ class TestWavelengthDependentGPModel(unittest.TestCase):
         lik = gpytorch.likelihoods.GaussianLikelihood()
         with self.assertRaises(ValueError):
             WavelengthDependentGPModel(self.x, self.y, lik, time_kernel_type="invalid")
+
+    def test_invalid_wl_kernel_raises(self):
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with self.assertRaises(ValueError):
+            WavelengthDependentGPModel(
+                self.x, self.y, lik, wavelength_kernel_type="invalid"
+            )
+
+    def test_matern_wavelength_kernel(self):
+        """WavelengthDependentGPModel accepts 'matern' as wavelength kernel."""
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        model = WavelengthDependentGPModel(
+            self.x, self.y, lik, wavelength_kernel_type="matern"
+        )
+        model.eval()
+        with torch.no_grad():
+            pred = model(self.x)
+        self.assertEqual(pred.mean.shape, self.y.shape)
+        wl_k = model.covar_module.kernels[1]
+        self.assertIsInstance(wl_k, gpytorch.kernels.ScaleKernel)
+        self.assertIsInstance(wl_k.base_kernel, gpytorch.kernels.MaternKernel)
+
+    def test_rq_wavelength_kernel(self):
+        """WavelengthDependentGPModel accepts 'rational_quadratic' wavelength kernel."""
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        model = WavelengthDependentGPModel(
+            self.x, self.y, lik, wavelength_kernel_type="rational_quadratic"
+        )
+        model.eval()
+        with torch.no_grad():
+            pred = model(self.x)
+        self.assertEqual(pred.mean.shape, self.y.shape)
+
+    def test_sm_time_kernel(self):
+        """WavelengthDependentGPModel accepts 'spectral_mixture' as time kernel."""
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        model = WavelengthDependentGPModel(
+            self.x, self.y, lik, time_kernel_type="spectral_mixture", num_mixtures=2
+        )
+        model.eval()
+        with torch.no_grad():
+            pred = model(self.x)
+        self.assertEqual(pred.mean.shape, self.y.shape)
+        time_k = model.covar_module.kernels[0]
+        self.assertIsInstance(time_k, gpytorch.kernels.SpectralMixtureKernel)
+
+    def test_user_supplied_wavelength_kernel(self):
+        """WavelengthDependentGPModel accepts a Kernel instance for wavelength."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        user_wl_k = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            model = WavelengthDependentGPModel(
+                self.x, self.y, lik, wavelength_kernel_type=user_wl_k
+            )
+        self.assertTrue(any("Kernel instance" in str(w.message) for w in caught))
+        model.eval()
+        with torch.no_grad():
+            pred = model(self.x)
+        self.assertEqual(pred.mean.shape, self.y.shape)
+
+    def test_is_subclass_of_separable(self):
+        """WavelengthDependentGPModel is a subclass of SeparableGPModel."""
+        self.assertIsInstance(
+            WavelengthDependentGPModel(
+                self.x, self.y, gpytorch.likelihoods.GaussianLikelihood()
+            ),
+            SeparableGPModel,
+        )
 
 
 class TestLinearMeanQuasiPeriodicGPModel(unittest.TestCase):
