@@ -1041,7 +1041,7 @@ class CustomQuadConstantMean(Mean):
         super().__init__()
         self.register_parameter(
             name="weights",
-            parameter=t.nn.Parameter(t.tensor([0.0, 0.0])),
+            parameter=t.nn.Parameter(t.tensor([0.0, 0.0]).unsqueeze(-1)),
         )
         self.register_parameter(
             name="bias",
@@ -1049,7 +1049,7 @@ class CustomQuadConstantMean(Mean):
         )
 
     def forward(self, x):
-        return self.bias + t.dot(self.weights, x[:, 1])
+        return self.bias + t.dot(self.weights, x[:, 1].unsqueeze(0))
 
 
 class WavelengthDependentGPModel(SeparableGPModel):
