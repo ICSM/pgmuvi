@@ -1215,9 +1215,10 @@ class Lightcurve(gpytorch.Module):
             # - Time frequencies >= 1/time_span (prevent periods longer than data)
             # - Wavelength frequencies >= ~0 (allow achromatic variability)
             overall_min_frequency = min(min_time_frequency, min_wavelength_frequency)
-            x_sorted = torch.sort(self._xdata_transformed[:, 0])[0]  # sort by time
-            max_freq = 0.5 / torch.min(torch.diff(x_sorted).abs()
-                                       )  # Nyquist frequency based on time sampling
+            diffs = (self._xdata_transformed[0].unsqueeze(-1) -
+                     self._xdata_transformed[0].unsqueeze(-1).T)
+            min_diff = diffs[diffs>0].abs().min()
+            max_freq = 1/(2*min_diff)  # Nyquist frequency based on time sampling
             # mixture_means_constraint = GreaterThan(overall_min_frequency)
             mixture_means_constraint = Interval(overall_min_frequency, max_freq)
         else:
