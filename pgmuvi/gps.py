@@ -1007,7 +1007,7 @@ class AchromaticGPModel(SeparableGPModel):
         )
 
 class CustomLinearConstantMean(Mean):
-    """ Custom mean function that is linear in wavelength and constant in time. 
+    """ Custom mean function that is linear in wavelength and constant in time.
 
     This is useful for modelling stars whose mean flux changes with wavelength but not
     time, as most stars do (because they are approximately blackbodies with a fixed

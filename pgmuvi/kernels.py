@@ -41,13 +41,21 @@ def make_quasi_periodic_kernel(
     Parameters
     ----------
     period : float, optional
-        Initial period, by default 1.0.
+        Initial period, in the same units as the input time axis.
+        By default 1.0.
     lengthscale : float, optional
-        Initial periodic lengthscale, by default 0.5.
+        Periodic lengthscale of the :class:`~gpytorch.kernels.PeriodicKernel`
+        (same units as ``period``).  Small values produce sharp, narrow peaks
+        within each cycle; large values produce broad, smooth sinusoidal
+        variations.  By default 0.5.
     decay : float, optional
-        Initial RBF decay timescale, by default 10.0.
+        Lengthscale of the :class:`~gpytorch.kernels.RBFKernel` envelope
+        (same units as the time axis).  Controls how quickly the periodic
+        pattern decorrelates over time: roughly the timescale over which the
+        amplitude or phase of the oscillation can change.  By default 10.0.
     outputscale : float, optional
-        Initial output scale, by default 1.0.
+        Overall amplitude scaling (approximately the standard deviation of the
+        GP output).  By default 1.0.
 
     Returns
     -------
@@ -72,9 +80,13 @@ def make_matern_kernel(nu=1.5, lengthscale=1.0, outputscale=1.0):
     nu : float, optional
         Smoothness parameter (0.5, 1.5, or 2.5), by default 1.5.
     lengthscale : float, optional
-        Initial lengthscale, by default 1.0.
+        Correlation length in the same units as the time axis.  Observations
+        separated by much less than ``lengthscale`` are strongly correlated;
+        observations separated by much more than ``lengthscale`` are
+        essentially uncorrelated.  By default 1.0.
     outputscale : float, optional
-        Initial output scale, by default 1.0.
+        Overall amplitude scaling (approximately the standard deviation of the
+        GP output).  By default 1.0.
 
     Returns
     -------
@@ -94,9 +106,13 @@ def make_rbf_kernel(lengthscale=1.0, outputscale=1.0):
     Parameters
     ----------
     lengthscale : float, optional
-        Initial lengthscale, by default 1.0.
+        Correlation length in the same units as the time axis.  Observations
+        separated by much less than ``lengthscale`` are strongly correlated;
+        observations separated by much more than ``lengthscale`` are
+        essentially uncorrelated.  By default 1.0.
     outputscale : float, optional
-        Initial output scale, by default 1.0.
+        Overall amplitude scaling (approximately the standard deviation of the
+        GP output).  By default 1.0.
 
     Returns
     -------
