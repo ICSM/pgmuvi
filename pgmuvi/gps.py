@@ -1,6 +1,6 @@
 import torch as t
 import gpytorch as gpt
-from gpytorch.means import ConstantMean, LinearMean
+from gpytorch.means import Mean, ConstantMean, LinearMean
 from gpytorch.kernels import (
     SpectralMixtureKernel as SMK,
     GridInterpolationKernel as GIK,
@@ -896,9 +896,11 @@ class SeparableGPModel(ExactGP):
         likelihood,
         time_kernel=None,
         wavelength_kernel=None,
+        mean_module=None,
+        **kwargs
     ):
         super().__init__(train_x, train_y, likelihood)
-        self.mean_module = ConstantMean()
+        self.mean_module = ConstantMean() if mean_module is None else mean_module
 
         if time_kernel is None:
             time_kernel = ScaleKernel(MaternKernel(nu=1.5))
@@ -986,6 +988,8 @@ class AchromaticGPModel(SeparableGPModel):
         time_kernel_type="matern",
         period=None,
         num_mixtures=4,
+        mean_module=None,
+        **kwargs
     ):
         if period is None:
             span = float(train_x[:, 0].max() - train_x[:, 0].min())
@@ -1075,6 +1079,8 @@ class WavelengthDependentGPModel(SeparableGPModel):
         period=None,
         wavelength_lengthscale=None,
         num_mixtures=4,
+        mean_module=None,
+        **kwargs
     ):
         if period is None:
             span = float(train_x[:, 0].max() - train_x[:, 0].min())
@@ -1082,6 +1088,18 @@ class WavelengthDependentGPModel(SeparableGPModel):
         if wavelength_lengthscale is None:
             wl_span = float(train_x[:, 1].max() - train_x[:, 1].min())
             wavelength_lengthscale = max(wl_span / 2.0, 1.0)
+
+        if mean_module is None or mean_module in ('linear', 'linear_mean'):
+            mean_module = LinearMean(input_size=2)
+        elif mean_module in ('constant', 'constant_mean'):
+            mean_module = ConstantMean()
+        elif isinstance(mean_module, Mean):
+            mean_module = mean_module
+        else:
+            raise ValueError(
+                "mean_module must be a gpytorch.means.Mean instance or None."
+            )
+
 
         time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures)
         wl_kernel = _build_wavelength_kernel(
@@ -1094,5 +1112,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
             likelihood,
             time_kernel=time_kernel,
             wavelength_kernel=wl_kernel,
+            mean_module=mean_module,
+            **kwargs
         )
 
