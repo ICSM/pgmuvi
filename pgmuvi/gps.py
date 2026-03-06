@@ -1018,11 +1018,11 @@ class CustomLinearConstantMean(Mean):
         super().__init__()
         self.register_parameter(
             name="wavelength_slope",
-            parameter=torch.nn.Parameter(torch.tensor(0.0)),
+            parameter=t.nn.Parameter(t.tensor(0.0)),
         )
         self.register_parameter(
             name="bias",
-            parameter=torch.nn.Parameter(torch.tensor(0.0)),
+            parameter=t.nn.Parameter(t.tensor(0.0)),
         )
 
     def forward(self, x):
