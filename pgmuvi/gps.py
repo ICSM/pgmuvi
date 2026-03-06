@@ -1026,8 +1026,7 @@ class CustomLinearConstantMean(Mean):
         )
 
     def forward(self, x):
-        res = self.bias + self.wavelength_slope * x[:, 1]  # x[:, 1] is wavelength
-        return res
+        return self.bias + self.wavelength_slope * x[:, 1]
 
 
 class WavelengthDependentGPModel(SeparableGPModel):
