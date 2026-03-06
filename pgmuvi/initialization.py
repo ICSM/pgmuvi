@@ -7,6 +7,12 @@ hyperparameters from data using periodogram analysis and data statistics.
 import numpy as np
 import torch
 
+# Fraction of the relevant span (data span or period) used as the default
+# PeriodicKernel lengthscale.  10% keeps the shape parameter resolved by
+# typical observing cadences without being so large that the prior becomes
+# uninformative.
+_DEFAULT_LENGTHSCALE_FRACTION = 0.1
+
 
 def initialize_quasi_periodic_from_data(train_x, train_y, yerr=None):
     """Initialize quasi-periodic kernel parameters from data via Lomb-Scargle.
@@ -80,7 +86,11 @@ def initialize_quasi_periodic_from_data(train_x, train_y, yerr=None):
     peak_idx = np.argmax(power)
     period = float(1.0 / frequency[peak_idx])
 
-    lengthscale = 0.5
+    # Initialise the PeriodicKernel lengthscale as a fraction of the data
+    # span rather than a fixed value in data units.  Using 10% of the span
+    # means the kernel shape is resolved by the observations while remaining
+    # well below the total baseline.
+    lengthscale = span * _DEFAULT_LENGTHSCALE_FRACTION
     decay = period * 5.0
     outputscale = float(np.std(y_np)) if np.std(y_np) > 0 else 1.0
 
@@ -248,7 +258,9 @@ def initialize_from_physics(period, lengthscale=None, decay=None, outputscale=1.
     period : float
         Known or expected period of the source (same units as input time).
     lengthscale : float, optional
-        Periodic lengthscale. Defaults to ``0.5`` (moderate periodicity).
+        Periodic lengthscale (PeriodicKernel). Defaults to ``0.1 * period``
+        (10% of the period), which gives a moderately smooth periodic shape
+        that is resolved by typical observing cadences.
     decay : float, optional
         Long-term decay timescale. Defaults to ``5 * period`` (slow decay).
     outputscale : float, optional
@@ -268,7 +280,7 @@ def initialize_from_physics(period, lengthscale=None, decay=None, outputscale=1.
     10.0
     """
     if lengthscale is None:
-        lengthscale = 0.5
+        lengthscale = period * _DEFAULT_LENGTHSCALE_FRACTION
     if decay is None:
         decay = period * 5.0
 

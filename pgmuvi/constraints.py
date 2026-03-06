@@ -53,38 +53,66 @@ def period_constraint(data_span, min_period_fraction=0.05, max_factor=1.0):
     return Interval(lower_bound=lower, upper_bound=upper)
 
 
-def lengthscale_constraint(typical_spacing, data_span):
-    """Constraint on a temporal lengthscale.
+def lengthscale_constraint(span, min_fraction=0.01, max_fraction=2.0):
+    """Constraint on a kernel lengthscale, expressed as fractions of a span.
 
-    Restricts the lengthscale to be between the typical sampling cadence
-    and the full data span.
+    Works for both temporal and wavelength lengthscales — pass the relevant
+    axis range (e.g. ``data_span`` for time, ``wl_span`` for wavelength) and
+    the bounds are computed as fractions of that span.
 
     Parameters
     ----------
-    typical_spacing : float
-        Median sampling interval (time between consecutive observations).
-    data_span : float
-        Total duration of the observations.
+    span : float
+        Total range of the axis being constrained (e.g. max_time - min_time,
+        or max_wavelength - min_wavelength).
+    min_fraction : float, optional
+        Minimum lengthscale as a fraction of ``span``, by default 0.01.
+        Must be less than ``max_fraction``.
+    max_fraction : float, optional
+        Maximum lengthscale as a multiple of ``span``, by default 2.0.
 
     Returns
     -------
     gpytorch.constraints.Interval
         Constraint suitable for registering on a lengthscale parameter.
 
+    Raises
+    ------
+    ValueError
+        If ``min_fraction >= max_fraction``, or if ``span <= 0``.
+
     Examples
     --------
+    Temporal lengthscale with a 100-day dataset:
+
     >>> from pgmuvi.constraints import lengthscale_constraint
-    >>> c = lengthscale_constraint(typical_spacing=1.0, data_span=100.0)
+    >>> c = lengthscale_constraint(span=100.0)
+    >>> c.lower_bound < c.upper_bound
+    True
+
+    Wavelength lengthscale with a 500 nm range:
+
+    >>> c = lengthscale_constraint(span=500.0, min_fraction=0.01, max_fraction=10.0)
     >>> c.lower_bound < c.upper_bound
     True
     """
-    lower = max(typical_spacing, 1e-4)
-    upper = data_span * 2.0
+    if span <= 0:
+        raise ValueError(f"span must be positive, got {span}")
+    if min_fraction >= max_fraction:
+        raise ValueError(
+            f"min_fraction ({min_fraction}) must be less than "
+            f"max_fraction ({max_fraction})"
+        )
+    lower = max(span * min_fraction, 1e-4)
+    upper = span * max_fraction
     return Interval(lower_bound=lower, upper_bound=upper)
 
 
 def wavelength_constraint(wl_span, min_fraction=0.01):
     """Constraint on a wavelength kernel lengthscale.
+
+    Alias for :func:`lengthscale_constraint` with ``max_fraction=10.0``,
+    kept for backward compatibility.
 
     Parameters
     ----------
@@ -97,7 +125,7 @@ def wavelength_constraint(wl_span, min_fraction=0.01):
     Returns
     -------
     gpytorch.constraints.Interval
-        Constraint suitable for a wavelength RBF lengthscale parameter.
+        Constraint suitable for a wavelength kernel lengthscale parameter.
 
     Examples
     --------
@@ -105,10 +133,12 @@ def wavelength_constraint(wl_span, min_fraction=0.01):
     >>> c = wavelength_constraint(wl_span=500.0)
     >>> c.lower_bound < c.upper_bound
     True
+
+    See Also
+    --------
+    lengthscale_constraint : General-purpose lengthscale constraint.
     """
-    lower = max(wl_span * min_fraction, 1e-3)
-    upper = wl_span * 10.0
-    return Interval(lower_bound=lower, upper_bound=upper)
+    return lengthscale_constraint(wl_span, min_fraction=min_fraction, max_fraction=10.0)
 
 
 def positive_constraint():
