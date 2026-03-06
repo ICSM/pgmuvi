@@ -149,9 +149,9 @@ class TestInitializeFromPhysics(unittest.TestCase):
         self.assertAlmostEqual(params["decay"], 50.0, places=5)
 
     def test_default_lengthscale(self):
-        """Default lengthscale is 0.5."""
+        """Default lengthscale is 10% of the period."""
         params = initialize_from_physics(period=10.0)
-        self.assertAlmostEqual(params["lengthscale"], 0.5, places=5)
+        self.assertAlmostEqual(params["lengthscale"], 1.0, places=5)  # 0.1 * 10.0
 
     def test_custom_lengthscale(self):
         """Custom lengthscale is returned unchanged."""
