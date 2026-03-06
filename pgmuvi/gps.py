@@ -1029,6 +1029,29 @@ class CustomLinearConstantMean(Mean):
         return self.bias + self.wavelength_slope * x[:, 1]
 
 
+class CustomQuadConstantMean(Mean):
+    """ Custom mean function that is linear in wavelength and constant in time.
+
+    This is useful for modelling stars whose mean flux changes with wavelength but not
+    time, as most stars do (because they are approximately blackbodies with a fixed
+    temperature).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.register_parameter(
+            name="weights",
+            parameter=t.nn.Parameter(t.tensor([0.0, 0.0])),
+        )
+        self.register_parameter(
+            name="bias",
+            parameter=t.nn.Parameter(t.tensor(0.0)),
+        )
+
+    def forward(self, x):
+        return self.bias + torch.dot(self.weights, x[:, 1])
+
+
 class WavelengthDependentGPModel(SeparableGPModel):
     """2D GP model with smooth wavelength-dependent variability.
 
@@ -1111,7 +1134,9 @@ class WavelengthDependentGPModel(SeparableGPModel):
             wl_span = float(train_x[:, 1].max() - train_x[:, 1].min())
             wavelength_lengthscale = max(wl_span / 2.0, 1.0)
 
-        if mean_module is None or mean_module in ('linear', 'linear_mean'):
+        if mean_module is None or mean_module in ('quad', 'quadratic', 'quad_constant'):
+            mean_module = CustomQuadConstantMean()
+        elif mean_module in ('linear', 'linear_mean'):
             mean_module = CustomLinearConstantMean()
             # mean_module = LinearMean(input_size=2)
         elif mean_module in ('constant', 'constant_mean'):
