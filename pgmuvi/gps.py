@@ -1049,7 +1049,7 @@ class CustomQuadConstantMean(Mean):
         )
 
     def forward(self, x):
-        return self.bias + torch.dot(self.weights, x[:, 1])
+        return self.bias + t.dot(self.weights, x[:, 1])
 
 
 class WavelengthDependentGPModel(SeparableGPModel):
