@@ -912,7 +912,7 @@ class SeparableGPModel(ExactGP):
             "active_dims", t.tensor([1], dtype=t.long)
         )
         wavelength_kernel.register_buffer(
-            "active_dims", t.tensor([2], dtype=t.long)
+            "active_dims", t.tensor([0], dtype=t.long)
         )
 
         # ProductKernel with active_dims gives the separable 2D covariance
