@@ -1006,6 +1006,29 @@ class AchromaticGPModel(SeparableGPModel):
             wavelength_kernel=wl_kernel,
         )
 
+class CustomLinearConstantMean(Mean):
+    """ Custom mean function that is linear in wavelength and constant in time. 
+
+    This is useful for modelling stars whose mean flux changes with wavelength but not
+    time, as most stars do (because they are approximately blackbodies with a fixed
+    temperature).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.register_parameter(
+            name="wavelength_slope",
+            parameter=torch.nn.Parameter(torch.tensor(0.0)),
+        )
+        self.register_parameter(
+            name="bias",
+            parameter=torch.nn.Parameter(torch.tensor(0.0)),
+        )
+
+    def forward(self, x):
+        res = self.bias + self.wavelength_slope * x[:, 1]  # x[:, 1] is wavelength
+        return res
+
 
 class WavelengthDependentGPModel(SeparableGPModel):
     """2D GP model with smooth wavelength-dependent variability.
@@ -1090,7 +1113,8 @@ class WavelengthDependentGPModel(SeparableGPModel):
             wavelength_lengthscale = max(wl_span / 2.0, 1.0)
 
         if mean_module is None or mean_module in ('linear', 'linear_mean'):
-            mean_module = LinearMean(input_size=2)
+            mean_module = CustomLinearConstantMean()
+            # mean_module = LinearMean(input_size=2)
         elif mean_module in ('constant', 'constant_mean'):
             mean_module = ConstantMean()
         elif isinstance(mean_module, Mean):
