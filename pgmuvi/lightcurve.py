@@ -1,4 +1,5 @@
 import contextlib
+from typing import ClassVar
 import numpy as np
 import torch
 import gpytorch
@@ -250,7 +251,163 @@ def minmax(data, dim=0):
     return (data - m) / r, m, r
 
 
-class Lightcurve(gpytorch.Module):
+class InputHelpers:
+    """Mixin class providing helper methods for reading data from various input formats.
+
+    This class provides classmethods for instantiating a :class:`Lightcurve`
+    from different input formats, with flexible column name detection.
+    :class:`Lightcurve` inherits from this class so all methods are available
+    directly on :class:`Lightcurve`.
+
+    Attributes
+    ----------
+    _X_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting the independent variable
+        (x) column, checked case-insensitively in order.
+    _Y_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting the dependent variable
+        (y) column, checked case-insensitively in order.
+    _YERR_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting the uncertainty column,
+        checked case-insensitively in order.
+    """
+
+    _X_COLUMN_NAMES: ClassVar[list[str]] = [
+        "x", "time", "t", "jd", "mjd", "date", "hjd", "bjd", "epoch"
+    ]
+    _Y_COLUMN_NAMES: ClassVar[list[str]] = [
+        "y", "magnitude", "mag", "flux", "value", "data"
+    ]
+    _YERR_COLUMN_NAMES: ClassVar[list[str]] = [
+        "yerr",
+        "uncertainty",
+        "error",
+        "err",
+        "unc",
+        "sigma",
+        "e_magnitude",
+        "e_mag",
+        "e_flux",
+    ]
+
+    @classmethod
+    def _find_column(cls, columns, candidates):
+        """Find the first matching column name from a list of candidates.
+
+        Matching is case-insensitive.
+
+        Parameters
+        ----------
+        columns : list of str
+            The available column names.
+        candidates : list of str
+            Candidate column names to search for, in priority order.
+
+        Returns
+        -------
+        str or None
+            The matched column name (preserving the original capitalisation
+            from *columns*), or ``None`` if no candidate was found.
+        """
+        columns_lower = {c.lower(): c for c in columns}
+        for candidate in candidates:
+            if candidate.lower() in columns_lower:
+                return columns_lower[candidate.lower()]
+        return None
+
+    @classmethod
+    def from_csv(cls, filepath, xcol=None, ycol=None, yerrcol=None, **kwargs):
+        """Instantiate a Lightcurve from a CSV file.
+
+        The file must have a header line whose entries are used to identify
+        the relevant data columns.  Column names are matched
+        case-insensitively.  If ``xcol``, ``ycol`` or ``yerrcol`` are not
+        provided, auto-detection is attempted using the lists of common column
+        name variants stored as class attributes
+        :attr:`_X_COLUMN_NAMES`, :attr:`_Y_COLUMN_NAMES` and
+        :attr:`_YERR_COLUMN_NAMES`.
+
+        Parameters
+        ----------
+        filepath : str or pathlib.Path
+            Path to the CSV file.
+        xcol : str, optional
+            Name of the column containing the independent variable (x) data.
+            If not provided, auto-detection is attempted using
+            :attr:`_X_COLUMN_NAMES`.
+        ycol : str, optional
+            Name of the column containing the dependent variable (y) data.
+            If not provided, auto-detection is attempted using
+            :attr:`_Y_COLUMN_NAMES`.
+        yerrcol : str, optional
+            Name of the column containing the uncertainties on the dependent
+            variable.  If not provided, auto-detection is attempted using
+            :attr:`_YERR_COLUMN_NAMES`.  If no matching column is found,
+            ``yerr`` is set to ``None``.
+        **kwargs
+            Additional keyword arguments passed to the Lightcurve constructor.
+
+        Returns
+        -------
+        Lightcurve
+
+        Raises
+        ------
+        ValueError
+            If a required column cannot be auto-detected and was not specified
+            explicitly, or if an explicitly specified column name is not
+            present in the file.
+        """
+        from pathlib import Path
+
+        filepath = Path(filepath)
+        data = np.genfromtxt(
+            filepath, delimiter=",", names=True, dtype=float, encoding=None
+        )
+        columns = list(data.dtype.names)
+
+        # Find x column
+        if xcol is None:
+            xcol = cls._find_column(columns, cls._X_COLUMN_NAMES)
+            if xcol is None:
+                raise ValueError(
+                    f"Could not auto-detect x column. Available columns: {columns}. "
+                    "Please specify xcol explicitly."
+                )
+        elif xcol not in columns:
+            raise ValueError(
+                f"Column '{xcol}' not found in CSV. Available columns: {columns}"
+            )
+
+        # Find y column
+        if ycol is None:
+            ycol = cls._find_column(columns, cls._Y_COLUMN_NAMES)
+            if ycol is None:
+                raise ValueError(
+                    f"Could not auto-detect y column. Available columns: {columns}. "
+                    "Please specify ycol explicitly."
+                )
+        elif ycol not in columns:
+            raise ValueError(
+                f"Column '{ycol}' not found in CSV. Available columns: {columns}"
+            )
+
+        # Find yerr column (optional)
+        if yerrcol is None:
+            yerrcol = cls._find_column(columns, cls._YERR_COLUMN_NAMES)
+        elif yerrcol not in columns:
+            raise ValueError(
+                f"Column '{yerrcol}' not found in CSV. Available columns: {columns}"
+            )
+
+        x = torch.as_tensor(data[xcol], dtype=torch.float32)
+        y = torch.as_tensor(data[ycol], dtype=torch.float32)
+        yerr = torch.as_tensor(data[yerrcol], dtype=torch.float32) if yerrcol else None
+
+        return cls(x, y, yerr, **kwargs)
+
+
+class Lightcurve(InputHelpers, gpytorch.Module):
     """A class for storing, manipulating and fitting light curves
 
     This class is designed to be a convenient way to store and manipulate
