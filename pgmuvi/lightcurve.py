@@ -278,7 +278,7 @@ class Lightcurve(gpytorch.Module):
     yerr : Tensor of floats, optional
         The uncertainties on the dependent variable data, by default None
     xtransform : str, optional
-        The transform to apply to the x data, by default 'minmax'
+        The transform to apply to the x data, by default None
     ytransform : str, optional
         The transform to apply to the y data, by default None
 
@@ -296,7 +296,7 @@ class Lightcurve(gpytorch.Module):
         xdata,
         ydata,
         yerr=None,
-        xtransform="minmax",
+        xtransform=None,
         ytransform=None,
         name=None,
         **kwargs,
@@ -312,7 +312,7 @@ class Lightcurve(gpytorch.Module):
         yerr : torch.Tensor, optional
             The uncertainties on the dependent variable data, by default None
         xtransform : str or Transformer, optional
-            The transform to apply to the x data, by default 'minmax'
+            The transform to apply to the x data, by default None
         ytransform : str or Transformer, optional
             The transform to apply to the y data, by default None
         """
