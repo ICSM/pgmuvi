@@ -1677,11 +1677,19 @@ class Lightcurve(gpytorch.Module):
         """
         from pgmuvi.preprocess.quality import compute_sampling_metrics
 
-        t = self._xdata_raw.numpy()
+        t = self._xdata_raw.detach().cpu().numpy()
         if t.ndim > 1:
             t = t[:, 0]
-        y = self._ydata_raw.numpy() if hasattr(self, "_ydata_raw") else None
-        yerr = self._yerr_raw.numpy() if hasattr(self, "_yerr_raw") else None
+        y = (
+            self._ydata_raw.detach().cpu().numpy()
+            if hasattr(self, "_ydata_raw")
+            else None
+        )
+        yerr = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw")
+            else None
+        )
         return compute_sampling_metrics(t, y, yerr)
 
     def assess_sampling_quality(self, verbose: bool = True, **kwargs) -> tuple:
@@ -1719,11 +1727,19 @@ class Lightcurve(gpytorch.Module):
         """
         from pgmuvi.preprocess.quality import assess_sampling_quality
 
-        t = self._xdata_raw.numpy()
+        t = self._xdata_raw.detach().cpu().numpy()
         if t.ndim > 1:
             t = t[:, 0]
-        y = self._ydata_raw.numpy() if hasattr(self, "_ydata_raw") else None
-        yerr = self._yerr_raw.numpy() if hasattr(self, "_yerr_raw") else None
+        y = (
+            self._ydata_raw.detach().cpu().numpy()
+            if hasattr(self, "_ydata_raw")
+            else None
+        )
+        yerr = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw")
+            else None
+        )
         passes, diagnostics = assess_sampling_quality(
             t, y, yerr, verbose=verbose, **kwargs
         )
@@ -1734,7 +1750,7 @@ class Lightcurve(gpytorch.Module):
         Compute sampling metrics independently for each wavelength band.
 
         Only applicable for 2D (multiband) lightcurves.
-        
+
         Returns
         -------
         dict
@@ -1749,7 +1765,7 @@ class Lightcurve(gpytorch.Module):
                     'median_nyquist_period': float
                 }
             }
-            
+
         Raises
         ------
         ValueError
@@ -1763,9 +1779,13 @@ class Lightcurve(gpytorch.Module):
                 "Use compute_sampling_metrics() for 1D data."
             )
 
-        xdata = self._xdata_raw.numpy()
-        ydata = self._ydata_raw.numpy()
-        yerr = self._yerr_raw.numpy() if hasattr(self, "_yerr_raw") else None
+        xdata = self._xdata_raw.detach().cpu().numpy()
+        ydata = self._ydata_raw.detach().cpu().numpy()
+        yerr = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw")
+            else None
+        )
 
         wavelengths = np.unique(xdata[:, 1])
         results = {}
@@ -1817,7 +1837,7 @@ class Lightcurve(gpytorch.Module):
             Print assessment for each band
         **kwargs : dict
             Quality gate thresholds
-            
+
         Returns
         -------
         dict
@@ -1846,9 +1866,13 @@ class Lightcurve(gpytorch.Module):
                 "Use assess_sampling_quality() for 1D data."
             )
 
-        xdata = self._xdata_raw.numpy()
-        ydata = self._ydata_raw.numpy()
-        yerr = self._yerr_raw.numpy() if hasattr(self, "_yerr_raw") else None
+        xdata = self._xdata_raw.detach().cpu().numpy()
+        ydata = self._ydata_raw.detach().cpu().numpy()
+        yerr = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw")
+            else None
+        )
 
         wavelengths = np.unique(xdata[:, 1])
         results = {}
@@ -1879,30 +1903,31 @@ class Lightcurve(gpytorch.Module):
             "n_passing": len(passing_bands),
             "passing_wavelengths": passing_bands,
             "failing_wavelengths": failing_bands,
-          }
+        }
 
         return results
-      
-      def filter_well_sampled_bands(self, **kwargs):
+
+    def filter_well_sampled_bands(self, **kwargs):
         """
         Create new Lightcurve with only well-sampled bands retained.
 
         Only applicable for 2D (multiband) lightcurves.
-        
+
         Parameters
         ----------
         **kwargs : dict
-          Quality gate thresholds
-        
+            Quality gate thresholds
+
         Returns
         -------
         Lightcurve
-           New instance containing only wavelengths that pass sampling checks
-           
+            New instance containing only wavelengths that pass sampling checks
+
         Raises
         ------
         ValueError
-                    If lightcurve is not 2D (multiband) or no bands pass sampling checks.
+            If lightcurve is not 2D (multiband) or no bands pass sampling
+            checks.
         """
         if self.ndim <= 1:
             raise ValueError(
@@ -1919,14 +1944,17 @@ class Lightcurve(gpytorch.Module):
 
         keep_wl = results["summary"]["passing_wavelengths"]
         xdata = self._xdata_raw
-        keep_mask = torch.isin(xdata[:, 1], torch.tensor(keep_wl, dtype=xdata.dtype))
+        keep_mask = torch.isin(
+            xdata[:, 1],
+            torch.tensor(keep_wl, dtype=xdata.dtype, device=xdata.device),
+        )
 
         return Lightcurve(
             xdata[keep_mask].clone(),
             self._ydata_raw[keep_mask].clone(),
             self._yerr_raw[keep_mask].clone() if hasattr(self, "_yerr_raw") else None,
         )
-      
+
     def _get_variability_arrays(self):
         """Return (y, yerr) as float64 NumPy arrays, safe for CPU and GPU tensors."""
         y = self._ydata_raw.detach().cpu().numpy()
@@ -2332,11 +2360,19 @@ class Lightcurve(gpytorch.Module):
             from pgmuvi.preprocess.quality import assess_sampling_quality
 
             sk = sampling_kwargs or {}
-            t = self._xdata_raw.numpy()
+            t = self._xdata_raw.detach().cpu().numpy()
             if t.ndim > 1:
                 t = t[:, 0]
-            y = self._ydata_raw.numpy() if hasattr(self, "_ydata_raw") else None
-            yerr = self._yerr_raw.numpy() if hasattr(self, "_yerr_raw") else None
+            y = (
+                self._ydata_raw.detach().cpu().numpy()
+                if hasattr(self, "_ydata_raw")
+                else None
+            )
+            yerr = (
+                self._yerr_raw.detach().cpu().numpy()
+                if hasattr(self, "_yerr_raw")
+                else None
+            )
             passes, diag = assess_sampling_quality(t, y, yerr, verbose=False, **sk)
             if not passes:
                 warnings_str = "\n".join(f"  • {w}" for w in diag["warnings"])

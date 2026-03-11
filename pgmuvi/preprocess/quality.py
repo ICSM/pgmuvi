@@ -113,6 +113,9 @@ def compute_sampling_metrics(
     t_sorted = np.sort(t[np.isfinite(t)])
     n = len(t_sorted)
 
+    if n < 2:
+        return {"n_points": n, "error": "Too few finite points (N < 2)"}
+
     # Basic temporal metrics
     baseline = float(t_sorted[-1] - t_sorted[0])
     if baseline == 0:
@@ -161,6 +164,7 @@ def compute_sampling_metrics(
             metrics["mean_snr"] = float(np.mean(snr))
             metrics["fraction_snr_gt_3"] = float(np.mean(snr > 3))
             metrics["fraction_snr_gt_5"] = float(np.mean(snr > 5))
+            metrics["snr_values"] = snr
 
     return metrics
 
@@ -260,24 +264,46 @@ def assess_sampling_quality(
         )
 
     # Gate 3: Minimum baseline coverage
-    baseline_factor = metrics["baseline"] / metrics["median_cadence"]
-    gates["min_baseline"] = baseline_factor >= min_baseline_factor
-    if not gates["min_baseline"]:
+    median_cadence = metrics["median_cadence"]
+    if median_cadence <= 0:
+        # Non-positive median cadence indicates duplicate or invalid timestamps.
+        baseline_factor = 0.0
+        gates["min_baseline"] = False
         warnings.append(
-            f"Insufficient baseline: {baseline_factor:.1f} median cadences "
-            f"< {min_baseline_factor} required"
+            "Non-positive median cadence; baseline coverage cannot be reliably "
+            "assessed and the baseline gate has been failed."
         )
+    else:
+        baseline_factor = metrics["baseline"] / median_cadence
+        gates["min_baseline"] = baseline_factor >= min_baseline_factor
+        if not gates["min_baseline"]:
+            warnings.append(
+                f"Insufficient baseline: {baseline_factor:.1f} median cadences "
+                f"< {min_baseline_factor} required"
+            )
 
     # Gate 4: SNR check (if data provided)
     if "median_snr" in metrics:
+        snr_values = metrics.get("snr_values")
+        if snr_values is not None:
+            snr_arr = np.asarray(snr_values)
+            finite_mask = np.isfinite(snr_arr)
+            fraction_snr_gt_min = (
+                float(np.mean(snr_arr[finite_mask] >= min_snr))
+                if np.any(finite_mask)
+                else 0.0
+            )
+        else:
+            fraction_snr_gt_min = float(metrics.get("fraction_snr_gt_3", 0.0))
+
         gates["min_snr"] = (
             metrics["median_snr"] >= min_snr
-            and metrics["fraction_snr_gt_3"] >= min_fraction_good_snr
+            and fraction_snr_gt_min >= min_fraction_good_snr
         )
         if not gates["min_snr"]:
             warnings.append(
                 f"Poor SNR: median={metrics['median_snr']:.1f} < {min_snr}, "
-                f"fraction>3sigma={100 * metrics['fraction_snr_gt_3']:.0f}%"
+                f"fraction>={min_snr:.1f}={100 * fraction_snr_gt_min:.0f}%"
                 f" < {100 * min_fraction_good_snr:.0f}%"
             )
     else:
