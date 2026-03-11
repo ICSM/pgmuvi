@@ -467,5 +467,164 @@ class TestSpectralMixtureGPModel(unittest.TestCase):
     pass
 
 
+class TestPowerLawMean(unittest.TestCase):
+    """Tests for the PowerLawMean mean function."""
+
+    def setUp(self):
+        from pgmuvi.gps import PowerLawMean
+        self.PowerLawMean = PowerLawMean
+        # 2D input: (time, wavelength), wavelength in second column
+        self.x = torch.tensor(
+            [[0.0, 0.5], [1.0, 1.0], [2.0, 2.0]], dtype=torch.float32
+        )
+
+    def test_instantiation(self):
+        """PowerLawMean can be instantiated without arguments."""
+        mean = self.PowerLawMean()
+        self.assertIsNotNone(mean)
+
+    def test_forward_shape(self):
+        """PowerLawMean forward returns a 1-D tensor of correct length."""
+        mean = self.PowerLawMean()
+        out = mean(self.x)
+        self.assertEqual(out.shape, (3,))
+
+    def test_parameters_registered(self):
+        """PowerLawMean registers offset, weight, and exponent parameters."""
+        mean = self.PowerLawMean()
+        param_names = [n for n, _ in mean.named_parameters()]
+        self.assertIn("offset", param_names)
+        self.assertIn("weight", param_names)
+        self.assertIn("exponent", param_names)
+
+    def test_default_exponent(self):
+        """Default exponent is -2.0 (steep optical-to-IR decline)."""
+        mean = self.PowerLawMean()
+        self.assertAlmostEqual(mean.exponent.item(), -2.0, places=5)
+
+    def test_power_law_values(self):
+        """Forward output matches expected power-law calculation."""
+        mean = self.PowerLawMean()
+        # Set known parameters: offset=0, weight=1, exponent=-2
+        with torch.no_grad():
+            mean.offset.fill_(0.0)
+            mean.weight.fill_(1.0)
+            mean.exponent.fill_(-2.0)
+        out = mean(self.x)
+        wavelengths = self.x[:, 1]
+        expected = wavelengths.pow(-2.0)
+        self.assertTrue(torch.allclose(out, expected, atol=1e-5))
+
+
+class TestDustMean(unittest.TestCase):
+    """Tests for the DustMean mean function."""
+
+    def setUp(self):
+        from pgmuvi.gps import DustMean
+        self.DustMean = DustMean
+        self.x = torch.tensor(
+            [[0.0, 0.5], [1.0, 1.0], [2.0, 2.0]], dtype=torch.float32
+        )
+
+    def test_instantiation(self):
+        """DustMean can be instantiated without arguments."""
+        mean = self.DustMean()
+        self.assertIsNotNone(mean)
+
+    def test_forward_shape(self):
+        """DustMean forward returns a 1-D tensor of correct length."""
+        mean = self.DustMean()
+        out = mean(self.x)
+        self.assertEqual(out.shape, (3,))
+
+    def test_parameters_registered(self):
+        """DustMean registers the required parameters."""
+        mean = self.DustMean()
+        param_names = [n for n, _ in mean.named_parameters()]
+        self.assertIn("offset", param_names)
+        self.assertIn("log_amplitude", param_names)
+        self.assertIn("log_tau", param_names)
+        self.assertIn("log_alpha", param_names)
+
+    def test_extinction_increases_at_short_wavelength(self):
+        """Extinction is greater at shorter wavelengths (dust behaviour)."""
+        mean = self.DustMean()
+        # Set tau > 0, alpha > 0; offset = 0
+        with torch.no_grad():
+            mean.offset.fill_(0.0)
+            mean.log_amplitude.fill_(0.0)   # amplitude = 1
+            mean.log_tau.fill_(0.0)         # tau = 1
+            mean.log_alpha.fill_(0.0)       # alpha = 1
+        x_optical = torch.tensor([[0.0, 0.5]], dtype=torch.float32)
+        x_ir = torch.tensor([[0.0, 2.0]], dtype=torch.float32)
+        out_optical = mean(x_optical)
+        out_ir = mean(x_ir)
+        # Optical (shorter wavelength) should have lower flux
+        self.assertLess(out_optical.item(), out_ir.item())
+
+    def test_zero_tau_gives_constant_mean(self):
+        """With tau -> 0, DustMean approaches amplitude + offset."""
+        mean = self.DustMean()
+        with torch.no_grad():
+            mean.offset.fill_(0.5)
+            mean.log_amplitude.fill_(0.0)   # amplitude = 1
+            mean.log_tau.fill_(-30.0)       # tau ≈ 0
+            mean.log_alpha.fill_(0.0)
+        out = mean(self.x)
+        # Should be approximately offset + amplitude = 1.5 for all points
+        self.assertTrue(torch.allclose(out, torch.full((3,), 1.5), atol=1e-3))
+
+
+class TestNewGPModels(unittest.TestCase):
+    """Smoke tests for the new 2D GP model classes."""
+
+    def setUp(self):
+        from pgmuvi.gps import (
+            TwoDSpectralMixturePowerLawMeanGPModel,
+            TwoDSpectralMixturePowerLawMeanKISSGPModel,
+            TwoDSpectralMixtureDustMeanGPModel,
+            TwoDSpectralMixtureDustMeanKISSGPModel,
+        )
+        import gpytorch
+        self.models = {
+            "2DPowerLaw": TwoDSpectralMixturePowerLawMeanGPModel,
+            "2DPowerLawSKI": TwoDSpectralMixturePowerLawMeanKISSGPModel,
+            "2DDust": TwoDSpectralMixtureDustMeanGPModel,
+            "2DDustSKI": TwoDSpectralMixtureDustMeanKISSGPModel,
+        }
+        # 2D training data: columns are (time, wavelength)
+        self.train_x = torch.tensor(
+            [[0.0, 0.5], [1.0, 1.0], [2.0, 2.0], [3.0, 0.5]], dtype=torch.float32
+        )
+        self.train_y = torch.tensor([1.0, 0.8, 0.6, 1.1], dtype=torch.float32)
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+
+    def test_instantiation(self):
+        """All new 2D GP model classes can be instantiated."""
+        for name, ModelClass in self.models.items():
+            with self.subTest(model=name):
+                model = ModelClass(self.train_x, self.train_y, self.likelihood)
+                self.assertIsNotNone(model)
+
+    def test_forward_returns_mvn(self):
+        """Forward pass returns a MultivariateNormal distribution."""
+        from gpytorch.distributions import MultivariateNormal
+        for name, ModelClass in self.models.items():
+            with self.subTest(model=name):
+                model = ModelClass(self.train_x, self.train_y, self.likelihood)
+                model.eval()
+                with torch.no_grad():
+                    out = model(self.train_x)
+                self.assertIsInstance(out, MultivariateNormal)
+
+    def test_set_model_shortcut(self):
+        """Lightcurve.set_model() accepts the new model shortcut strings."""
+        for shortcut in ["2DPowerLaw", "2DPowerLawSKI", "2DDust", "2DDustSKI"]:
+            with self.subTest(shortcut=shortcut):
+                lc = Lightcurve(self.train_x, self.train_y)
+                lc.set_model(model=shortcut, num_mixtures=2)
+                self.assertIsNotNone(lc.model)
+
+
 if  __name__ == '__main__':
     unittest.main()
