@@ -1,3 +1,5 @@
+import math
+
 import torch as t
 import gpytorch as gpt
 from gpytorch.means import ConstantMean, LinearMean
@@ -7,6 +9,11 @@ from gpytorch.distributions import MultivariateNormal as MVN
 from gpytorch.models import ExactGP, ApproximateGP
 from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.variational import VariationalStrategy
+
+# Module-level constant: log(1.7) used as default initial value for
+# DustMean.log_alpha, corresponding to a typical interstellar dust-extinction
+# power-law index of alpha ≈ 1.7.
+_LOG_1_7 = math.log(1.7)
 
 
 class PowerLawMean(gpt.means.Mean):
@@ -113,9 +120,12 @@ class DustMean(gpt.means.Mean):
     -----
     The wavelength axis is expected to be the second column of the input
     tensor ``x``.  It should be strictly positive (as is the case for
-    physical wavelengths).  Very small wavelength values may cause numerical
-    overflow in ``λ^(-alpha)``; applying a suitable wavelength transform
-    (e.g. ``MinMax``) before fitting is recommended.
+    physical wavelengths in microns).  Wavelength values below ``1e-6``
+    (microns) are clamped to ``1e-6`` to avoid numerical overflow in
+    ``λ^(-alpha)``; in practice any physically meaningful wavelength
+    (optical ~0.4 μm or longer) is well above this threshold.  Applying a
+    wavelength transform (e.g. ``MinMax``) before fitting is still
+    recommended to keep wavelength values in a numerically convenient range.
     """
 
     def __init__(self, batch_shape=None):
@@ -134,11 +144,14 @@ class DustMean(gpt.means.Mean):
         # Default alpha ≈ 1.7, consistent with a typical dust-extinction law
         self.register_parameter(
             "log_alpha",
-            t.nn.Parameter(t.full((*batch_shape, 1), t.tensor(1.7).log().item())),
+            t.nn.Parameter(t.full((*batch_shape, 1), _LOG_1_7)),
         )
 
     def forward(self, x):
-        wavelength = x[..., 1].clamp(min=1e-6)  # guard against λ ≤ 0
+        # Clamp wavelength to avoid overflow in λ^(-alpha): any physical
+        # wavelength in microns is far above 1e-6, so this guard is only
+        # triggered for pathological inputs.
+        wavelength = x[..., 1].clamp(min=1e-6)
         amplitude = self.log_amplitude.squeeze(-1).exp()
         tau = self.log_tau.squeeze(-1).exp()
         alpha = self.log_alpha.squeeze(-1).exp()
