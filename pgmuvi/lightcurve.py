@@ -81,12 +81,13 @@ def _convert_time_to_days(xdata, time_units):
 
     Parameters
     ----------
-    xdata : torch.Tensor
+    xdata : torch.Tensor, numpy.ndarray, or array-like
         The independent variable data.  For 1-D light curves this is a
-        1-D (or single-column) tensor of time values.  For 2-D (multi-band)
-        light curves this is a 2-D tensor of shape ``(N, 2)`` where column 0
+        1-D (or single-column) array of time values.  For 2-D (multi-band)
+        light curves this is a 2-D array of shape ``(N, 2)`` where column 0
         is time and column 1 is wavelength/band; only the time column is
-        converted.
+        converted.  Non-tensor inputs are coerced to a ``torch.float32``
+        tensor automatically.
     time_units : str, astropy.units.UnitBase, or None
         Units of the time values.  Any string accepted by
         ``astropy.units.Unit`` (e.g. ``'s'``, ``'hr'``, ``'yr'``,
@@ -121,6 +122,11 @@ def _convert_time_to_days(xdata, time_units):
         raise ValueError(
             f"Cannot convert time_units '{time_units}' to days: {e}"
         ) from e
+
+    # Coerce to tensor so .dim() / .shape are always available, regardless of
+    # whether the caller passed a list, NumPy array, or torch.Tensor.
+    if not isinstance(xdata, torch.Tensor):
+        xdata = torch.as_tensor(xdata, dtype=torch.float32)
 
     if xdata.dim() <= 1 or xdata.shape[1] == 1:
         # 1-D light curve: all values are time
