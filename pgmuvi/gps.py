@@ -9,6 +9,143 @@ from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.variational import VariationalStrategy
 
 
+class PowerLawMean(gpt.means.Mean):
+    """Mean function with power-law wavelength dependence for 2D GP models.
+
+    Computes the mean flux as a power law in the second input dimension
+    (wavelength):
+
+        m(t, λ) = offset + weight * λ^exponent
+
+    This is more realistic than a linear mean function for AGB stars and
+    other variable stars where the variability amplitude and mean flux can
+    vary steeply with wavelength. A negative ``exponent`` gives higher flux
+    at shorter (optical) wavelengths; a positive ``exponent`` gives higher
+    flux at longer (infrared) wavelengths.
+
+    Parameters
+    ----------
+    batch_shape : torch.Size, optional
+        Batch shape for the mean function parameters.
+
+    Attributes
+    ----------
+    offset : torch.nn.Parameter
+        Constant offset term.
+    weight : torch.nn.Parameter
+        Amplitude scaling factor (unconstrained; sign determines whether
+        flux increases or decreases with wavelength).
+    exponent : torch.nn.Parameter
+        Power-law exponent for the wavelength dependence. Defaults to
+        ``-2.0``, which gives a steep decline from optical to infrared
+        (i.e., high optical amplitude).
+
+    Notes
+    -----
+    The ``exponent`` parameter is unconstrained and can be learned to any
+    real value during optimisation. Initialising it to a physically
+    motivated value (e.g. ``-1.7`` for a typical dust-extinction law, or
+    ``2.0`` for a Rayleigh-Jeans tail) can help convergence.
+    """
+
+    def __init__(self, batch_shape=None):
+        super().__init__()
+        if batch_shape is None:
+            batch_shape = t.Size()
+        self.register_parameter(
+            "offset", t.nn.Parameter(t.zeros(*batch_shape, 1))
+        )
+        self.register_parameter(
+            "weight", t.nn.Parameter(t.ones(*batch_shape, 1))
+        )
+        # Default exponent of -2 gives a steep optical-to-IR decline
+        self.register_parameter(
+            "exponent", t.nn.Parameter(t.full((*batch_shape, 1), -2.0))
+        )
+
+    def forward(self, x):
+        wavelength = x[..., 1]  # second column is wavelength
+        return (
+            self.offset.squeeze(-1)
+            + self.weight.squeeze(-1) * wavelength.pow(self.exponent.squeeze(-1))
+        )
+
+
+class DustMean(gpt.means.Mean):
+    """Mean function with dust-extinction wavelength dependence for 2D GP
+    models.
+
+    Computes the mean flux following a dust-attenuation law:
+
+        m(t, λ) = amplitude * exp(-tau * λ^(-alpha)) + offset
+
+    where ``tau`` is the dust optical depth (a positive constant controlling
+    the overall obscuration), and ``alpha`` is the power-law index of the
+    wavelength-dependent extinction (``alpha > 0`` gives stronger extinction
+    at shorter wavelengths, as observed for interstellar dust).
+
+    This form is physically motivated for dust-obscured AGB stars, where
+    optical fluxes can be two or three orders of magnitude fainter than
+    infrared fluxes due to circumstellar dust shells.
+
+    Parameters
+    ----------
+    batch_shape : torch.Size, optional
+        Batch shape for the mean function parameters.
+
+    Attributes
+    ----------
+    offset : torch.nn.Parameter
+        Constant offset (background) term.
+    log_amplitude : torch.nn.Parameter
+        Log of the amplitude; the amplitude itself is ``exp(log_amplitude)``,
+        ensuring it is always positive.
+    log_tau : torch.nn.Parameter
+        Log of the dust optical depth ``tau``; the optical depth itself is
+        ``exp(log_tau)``, ensuring it is always positive.
+    log_alpha : torch.nn.Parameter
+        Log of the extinction power-law index ``alpha``; the index itself is
+        ``exp(log_alpha)``, ensuring it is always positive.  Defaults to
+        ``log(1.7)`` ≈ 0.53, corresponding to a typical interstellar
+        dust-extinction law.
+
+    Notes
+    -----
+    The wavelength axis is expected to be the second column of the input
+    tensor ``x``.  It should be strictly positive (as is the case for
+    physical wavelengths).  Very small wavelength values may cause numerical
+    overflow in ``λ^(-alpha)``; applying a suitable wavelength transform
+    (e.g. ``MinMax``) before fitting is recommended.
+    """
+
+    def __init__(self, batch_shape=None):
+        super().__init__()
+        if batch_shape is None:
+            batch_shape = t.Size()
+        self.register_parameter(
+            "offset", t.nn.Parameter(t.zeros(*batch_shape, 1))
+        )
+        self.register_parameter(
+            "log_amplitude", t.nn.Parameter(t.zeros(*batch_shape, 1))
+        )
+        self.register_parameter(
+            "log_tau", t.nn.Parameter(t.zeros(*batch_shape, 1))
+        )
+        # Default alpha ≈ 1.7, consistent with a typical dust-extinction law
+        self.register_parameter(
+            "log_alpha",
+            t.nn.Parameter(t.full((*batch_shape, 1), t.tensor(1.7).log().item())),
+        )
+
+    def forward(self, x):
+        wavelength = x[..., 1].clamp(min=1e-6)  # guard against λ ≤ 0
+        amplitude = self.log_amplitude.squeeze(-1).exp()
+        tau = self.log_tau.squeeze(-1).exp()
+        alpha = self.log_alpha.squeeze(-1).exp()
+        extinction = tau * wavelength.pow(-alpha)
+        return self.offset.squeeze(-1) + amplitude * (-extinction).exp()
+
+
 # FIRST WE HAVE SOME Naive GPs
 class SpectralMixtureGPModel(ExactGP):
     """A one-dimensional GP model using a spectral mixture kernel
@@ -444,6 +581,235 @@ class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
         # Now we alias the covariance kernel so that we can exploit the
         # same object properties in different classes with different kernel
         # structure. Will turn this into an @property at some point.
+        self.sci_kernel = self.covar_module
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return MVN(mean_x, covar_x)
+
+
+class TwoDSpectralMixturePowerLawMeanGPModel(ExactGP):
+    """A two-dimensional GP model with a power-law wavelength mean function.
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model.
+    The mean function follows a power law in the wavelength dimension:
+
+        m(t, λ) = offset + weight * λ^exponent
+
+    This is more physically realistic than a linear mean for AGB stars and
+    other variable stars where the variability amplitude (case a) varies
+    steeply with wavelength.  It supports datasets with two independent
+    variables (e.g. time and wavelength).
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps and
+        wavelengths), shape (N, 2).
+    train_y : Tensor
+        The data for the dependent variable (typically flux).
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model.
+    num_mixtures : int
+        Number of components in the Mixture Model.
+
+    Examples
+    --------
+
+
+    Notes
+    -----
+    See :class:`PowerLawMean` for details of the mean-function
+    parameterisation.
+
+    """
+
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
+        super().__init__(train_x, train_y, likelihood)
+        self.mean_module = PowerLawMean()
+        self.covar_module = SMK(ard_num_dims=2, num_mixtures=num_mixtures)
+
+        self.sci_kernel = self.covar_module
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return MVN(mean_x, covar_x)
+
+
+class TwoDSpectralMixturePowerLawMeanKISSGPModel(ExactGP):
+    """A two-dimensional KISS-GP model with a power-law wavelength mean
+    function.
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model.
+    The mean function follows a power law in the wavelength dimension:
+
+        m(t, λ) = offset + weight * λ^exponent
+
+    This is more physically realistic than a linear mean for AGB stars and
+    other variable stars where the variability amplitude (case a) varies
+    steeply with wavelength.  It supports datasets with two independent
+    variables (e.g. time and wavelength) and uses the Kernel Interpolation
+    for Scalable Structured Gaussian Processes (KISS-GP) approximation to
+    scale to larger datasets.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps and
+        wavelengths), shape (N, 2).
+    train_y : Tensor
+        The data for the dependent variable (typically flux).
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model.
+    num_mixtures : int
+        Number of components in the Mixture Model.
+    grid_size : list of int, optional
+        The number of grid points per dimension for the KISS-GP
+        approximation.  Defaults to ``[5000, 20]``.
+
+    Examples
+    --------
+
+
+    Notes
+    -----
+    See :class:`PowerLawMean` for details of the mean-function
+    parameterisation.
+
+    """
+
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=None):
+        if grid_size is None:
+            grid_size = [5000, 20]
+        super().__init__(train_x, train_y, likelihood)
+        self.mean_module = PowerLawMean()
+        self.covar_module = GIK(
+            SMK(ard_num_dims=2, num_mixtures=num_mixtures),
+            num_dims=2,
+            grid_size=grid_size,
+        )
+
+        self.sci_kernel = self.covar_module
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return MVN(mean_x, covar_x)
+
+
+class TwoDSpectralMixtureDustMeanGPModel(ExactGP):
+    """A two-dimensional GP model with a dust-extinction wavelength mean
+    function.
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model.
+    The mean function follows a dust-attenuation law in the wavelength
+    dimension:
+
+        m(t, λ) = amplitude * exp(-tau * λ^(-alpha)) + offset
+
+    where ``tau > 0`` is the dust optical depth and ``alpha > 0`` is the
+    power-law index of the wavelength-dependent extinction.  This is
+    physically motivated for dust-obscured AGB stars where optical (short
+    wavelength) fluxes can be two to three orders of magnitude fainter than
+    infrared fluxes (case b).  It supports datasets with two independent
+    variables (e.g. time and wavelength).
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps and
+        wavelengths), shape (N, 2).
+    train_y : Tensor
+        The data for the dependent variable (typically flux).
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model.
+    num_mixtures : int
+        Number of components in the Mixture Model.
+
+    Examples
+    --------
+
+
+    Notes
+    -----
+    See :class:`DustMean` for details of the mean-function parameterisation.
+
+    """
+
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
+        super().__init__(train_x, train_y, likelihood)
+        self.mean_module = DustMean()
+        self.covar_module = SMK(ard_num_dims=2, num_mixtures=num_mixtures)
+
+        self.sci_kernel = self.covar_module
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return MVN(mean_x, covar_x)
+
+
+class TwoDSpectralMixtureDustMeanKISSGPModel(ExactGP):
+    """A two-dimensional KISS-GP model with a dust-extinction wavelength mean
+    function.
+
+    A Gaussian Process which uses a Spectral Mixture Kernel to model the Power
+    Spectral Density of the covariance matrix as a Gaussian Mixture Model.
+    The mean function follows a dust-attenuation law in the wavelength
+    dimension:
+
+        m(t, λ) = amplitude * exp(-tau * λ^(-alpha)) + offset
+
+    where ``tau > 0`` is the dust optical depth and ``alpha > 0`` is the
+    power-law index of the wavelength-dependent extinction.  This is
+    physically motivated for dust-obscured AGB stars where optical (short
+    wavelength) fluxes can be two to three orders of magnitude fainter than
+    infrared fluxes (case b).  It supports datasets with two independent
+    variables (e.g. time and wavelength) and uses the Kernel Interpolation
+    for Scalable Structured Gaussian Processes (KISS-GP) approximation to
+    scale to larger datasets.
+
+    Parameters
+    ----------
+    train_x : Tensor
+        The data for the independent variable (typically timestamps and
+        wavelengths), shape (N, 2).
+    train_y : Tensor
+        The data for the dependent variable (typically flux).
+    likelihood : a Likelihood object or subclass
+        The likelihood that will be used to evaluate the model.
+    num_mixtures : int
+        Number of components in the Mixture Model.
+    grid_size : list of int, optional
+        The number of grid points per dimension for the KISS-GP
+        approximation.  Defaults to ``[5000, 20]``.
+
+    Examples
+    --------
+
+
+    Notes
+    -----
+    See :class:`DustMean` for details of the mean-function parameterisation.
+
+    """
+
+    def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=None):
+        if grid_size is None:
+            grid_size = [5000, 20]
+        super().__init__(train_x, train_y, likelihood)
+        self.mean_module = DustMean()
+        self.covar_module = GIK(
+            SMK(ard_num_dims=2, num_mixtures=num_mixtures),
+            num_dims=2,
+            grid_size=grid_size,
+        )
+
         self.sci_kernel = self.covar_module
 
     def forward(self, x):

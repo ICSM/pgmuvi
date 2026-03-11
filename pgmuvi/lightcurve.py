@@ -11,6 +11,10 @@ from .gps import (
     SpectralMixtureKISSGPModel,
     TwoDSpectralMixtureGPModel,
     TwoDSpectralMixtureKISSGPModel,
+    TwoDSpectralMixturePowerLawMeanGPModel,
+    TwoDSpectralMixturePowerLawMeanKISSGPModel,
+    TwoDSpectralMixtureDustMeanGPModel,
+    TwoDSpectralMixtureDustMeanKISSGPModel,
 )
 import matplotlib.pyplot as plt
 from .trainers import train
@@ -622,6 +626,10 @@ class Lightcurve(gpytorch.Module):
                 '2DSKI': TwoDSpectralMixtureKISSGPModel
                 '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
                 '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+                '2DPowerLaw': TwoDSpectralMixturePowerLawMeanGPModel
+                '2DPowerLawSKI': TwoDSpectralMixturePowerLawMeanKISSGPModel
+                '2DDust': TwoDSpectralMixtureDustMeanGPModel
+                '2DDustSKI': TwoDSpectralMixtureDustMeanKISSGPModel
             If an instance of a GP class, that object will be used.
             _description_, by default None
         likelihood : string, None or instance of
@@ -644,6 +652,8 @@ class Lightcurve(gpytorch.Module):
             "1D": SpectralMixtureGPModel,
             "1DLinear": SpectralMixtureLinearMeanGPModel,
             "2DLinear": TwoDSpectralMixtureLinearMeanGPModel,
+            "2DPowerLaw": TwoDSpectralMixturePowerLawMeanGPModel,
+            "2DDust": TwoDSpectralMixtureDustMeanGPModel,
         }
 
         model_dic_2 = {
@@ -651,6 +661,8 @@ class Lightcurve(gpytorch.Module):
             "2DSKI": TwoDSpectralMixtureKISSGPModel,
             "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
             "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel,
+            "2DPowerLawSKI": TwoDSpectralMixturePowerLawMeanKISSGPModel,
+            "2DDustSKI": TwoDSpectralMixtureDustMeanKISSGPModel,
         }
 
         if not hasattr(self, "likelihood"):
@@ -1085,7 +1097,8 @@ class Lightcurve(gpytorch.Module):
                         f"Model's ard_num_dims is {covar.ard_num_dims}, "
                         f"but data has {self.ndim} dimensions. "
                         "Use a 2D model (e.g., '2D', '2DLinear', '2DSKI', "
-                        "'2DLinearSKI')."
+                        "'2DLinearSKI', '2DPowerLaw', '2DPowerLawSKI', "
+                        "'2DDust', '2DDustSKI')."
                     )
 
         # Check transform compatibility
@@ -1631,6 +1644,10 @@ class Lightcurve(gpytorch.Module):
                 '2DSKI': TwoDSpectralMixtureKISSGPModel
                 '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
                 '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+                '2DPowerLaw': TwoDSpectralMixturePowerLawMeanGPModel
+                '2DPowerLawSKI': TwoDSpectralMixturePowerLawMeanKISSGPModel
+                '2DDust': TwoDSpectralMixtureDustMeanGPModel
+                '2DDustSKI': TwoDSpectralMixtureDustMeanKISSGPModel
             If an instance of a GP class, that object will be used.
         likelihood : string, None or instance of
                         gpytorch.likelihoods.likelihood.Likelihood or Constraint,
