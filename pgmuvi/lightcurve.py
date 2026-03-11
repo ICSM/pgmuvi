@@ -11,6 +11,17 @@ from .gps import (
     SpectralMixtureKISSGPModel,
     TwoDSpectralMixtureGPModel,
     TwoDSpectralMixtureKISSGPModel,
+    QuasiPeriodicGPModel,
+    MaternGPModel,
+    PeriodicPlusStochasticGPModel,
+    SeparableGPModel,
+    AchromaticGPModel,
+    WavelengthDependentGPModel,
+    LinearMeanQuasiPeriodicGPModel,
+    TwoDSpectralMixturePowerLawMeanGPModel,
+    TwoDSpectralMixturePowerLawMeanKISSGPModel,
+    TwoDSpectralMixtureDustMeanGPModel,
+    TwoDSpectralMixtureDustMeanKISSGPModel,
 )
 import matplotlib.pyplot as plt
 from .trainers import train
@@ -614,6 +625,8 @@ class Lightcurve(gpytorch.Module):
             The model to use for the GP, by default None. If None, an
             error will be raised. If a string, it must be one of the
             following:
+
+            Spectral mixture models (default):
                 '1D': SpectralMixtureGPModel
                 '2D': TwoDSpectralMixtureGPModel
                 '1DLinear': SpectralMixtureLinearMeanGPModel
@@ -622,6 +635,23 @@ class Lightcurve(gpytorch.Module):
                 '2DSKI': TwoDSpectralMixtureKISSGPModel
                 '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
                 '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+                '2DPowerLaw': TwoDSpectralMixturePowerLawMeanGPModel
+                '2DPowerLawSKI': TwoDSpectralMixturePowerLawMeanKISSGPModel
+                '2DDust': TwoDSpectralMixtureDustMeanGPModel
+                '2DDustSKI': TwoDSpectralMixtureDustMeanKISSGPModel
+
+            Alternative 1D models:
+                '1DQuasiPeriodic': QuasiPeriodicGPModel
+                '1DMatern': MaternGPModel
+                '1DPeriodicStochastic': PeriodicPlusStochasticGPModel
+                '1DLinearQuasiPeriodic': LinearMeanQuasiPeriodicGPModel
+
+            Separable 2D models:
+                '2DSeparable': SeparableGPModel
+                '2DAchromatic': AchromaticGPModel
+                '2DWavelengthDependent': WavelengthDependentGPModel
+
+               
             If an instance of a GP class, that object will be used.
             _description_, by default None
         likelihood : string, None or instance of
@@ -644,6 +674,8 @@ class Lightcurve(gpytorch.Module):
             "1D": SpectralMixtureGPModel,
             "1DLinear": SpectralMixtureLinearMeanGPModel,
             "2DLinear": TwoDSpectralMixtureLinearMeanGPModel,
+            "2DPowerLaw": TwoDSpectralMixturePowerLawMeanGPModel,
+            "2DDust": TwoDSpectralMixtureDustMeanGPModel,
         }
 
         model_dic_2 = {
@@ -651,6 +683,19 @@ class Lightcurve(gpytorch.Module):
             "2DSKI": TwoDSpectralMixtureKISSGPModel,
             "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
             "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel,
+            "2DPowerLawSKI": TwoDSpectralMixturePowerLawMeanKISSGPModel,
+            "2DDustSKI": TwoDSpectralMixtureDustMeanKISSGPModel,
+        }
+
+        # Alternative kernel models — do not require num_mixtures
+        model_dic_alt = {
+            "1DQuasiPeriodic": QuasiPeriodicGPModel,
+            "1DMatern": MaternGPModel,
+            "1DPeriodicStochastic": PeriodicPlusStochasticGPModel,
+            "1DLinearQuasiPeriodic": LinearMeanQuasiPeriodicGPModel,
+            "2DSeparable": SeparableGPModel,
+            "2DAchromatic": AchromaticGPModel,
+            "2DWavelengthDependent": WavelengthDependentGPModel,
         }
 
         if not hasattr(self, "likelihood"):
@@ -681,7 +726,13 @@ class Lightcurve(gpytorch.Module):
                 num_mixtures=num_mixtures,
                 **kwargs,
             )
-            # Add missing arguments to the model call
+        elif model in model_dic_alt:
+            self.model = model_dic_alt[model](
+                self._xdata_transformed,
+                self._ydata_transformed,
+                self.likelihood,
+                **kwargs,
+            )
         else:
             raise ValueError("Insert a valid model")
 
@@ -1072,20 +1123,25 @@ class Lightcurve(gpytorch.Module):
             )
             return
 
-        # Check if the model's kernel has ard_num_dims set correctly
+        # Check if the model's kernel has ard_num_dims set correctly.
+        # Separable models using ProductKernel + active_dims do not set
+        # ard_num_dims (it stays None) — they are valid 2D models.
+        # Only raise if ard_num_dims is explicitly set to a non-2 value.
         if hasattr(self.model, "covar_module"):
             covar = self.model.covar_module
             # For KISS-GP models, check the base_kernel
             if hasattr(covar, "base_kernel"):
                 covar = covar.base_kernel
 
-            if hasattr(covar, "ard_num_dims"):
+            if hasattr(covar, "ard_num_dims") and covar.ard_num_dims is not None:
                 if covar.ard_num_dims != 2:
                     raise ValueError(
                         f"Model's ard_num_dims is {covar.ard_num_dims}, "
                         f"but data has {self.ndim} dimensions. "
                         "Use a 2D model (e.g., '2D', '2DLinear', '2DSKI', "
-                        "'2DLinearSKI')."
+                        "'2DLinearSKI', '2DSeparable', '2DAchromatic', "
+                        "'2DWavelengthDependent', '2DPowerLaw', '2DPowerLawSKI', "
+                        "'2DDust', '2DDustSKI')."
                     )
 
         # Check transform compatibility
@@ -1173,7 +1229,12 @@ class Lightcurve(gpytorch.Module):
             # - Time frequencies >= 1/time_span (prevent periods longer than data)
             # - Wavelength frequencies >= ~0 (allow achromatic variability)
             overall_min_frequency = min(min_time_frequency, min_wavelength_frequency)
-            mixture_means_constraint = GreaterThan(overall_min_frequency)
+            diffs = (self._xdata_transformed[:, 0].unsqueeze(-1) -
+                     self._xdata_transformed[:, 0].unsqueeze(-1).T)
+            min_diff = diffs[diffs>0].flatten().abs().min()
+            max_freq = 1/(2*min_diff)  # Nyquist frequency based on time sampling
+            # mixture_means_constraint = GreaterThan(overall_min_frequency)
+            mixture_means_constraint = Interval(overall_min_frequency, max_freq)
         else:
             mixture_means_constraint = GreaterThan(1 / self._xdata_transformed.max())
         self._model_pars["mixture_means"]["module"].register_constraint(
@@ -1673,11 +1734,11 @@ class Lightcurve(gpytorch.Module):
         Compute sampling metrics independently for each wavelength band.
 
         Only applicable for 2D (multiband) lightcurves.
-
+        
         Returns
         -------
         dict
-            {
+        {
                 wavelength1: metrics_dict,
                 wavelength2: metrics_dict,
                 ...
@@ -1688,7 +1749,7 @@ class Lightcurve(gpytorch.Module):
                     'median_nyquist_period': float
                 }
             }
-
+            
         Raises
         ------
         ValueError
@@ -1756,7 +1817,7 @@ class Lightcurve(gpytorch.Module):
             Print assessment for each band
         **kwargs : dict
             Quality gate thresholds
-
+            
         Returns
         -------
         dict
@@ -1769,7 +1830,7 @@ class Lightcurve(gpytorch.Module):
                     'n_passing': int,
                     'passing_wavelengths': list[float],
                     'failing_wavelengths': list[float]
-                }
+                    }
             }
 
         Raises
@@ -1818,30 +1879,30 @@ class Lightcurve(gpytorch.Module):
             "n_passing": len(passing_bands),
             "passing_wavelengths": passing_bands,
             "failing_wavelengths": failing_bands,
-        }
+          }
 
         return results
-
-    def filter_well_sampled_bands(self, **kwargs):
+      
+      def filter_well_sampled_bands(self, **kwargs):
         """
         Create new Lightcurve with only well-sampled bands retained.
 
         Only applicable for 2D (multiband) lightcurves.
-
+        
         Parameters
         ----------
         **kwargs : dict
-            Quality gate thresholds
-
+          Quality gate thresholds
+        
         Returns
         -------
         Lightcurve
-            New instance containing only wavelengths that pass sampling checks
-
+           New instance containing only wavelengths that pass sampling checks
+           
         Raises
         ------
         ValueError
-            If lightcurve is not 2D (multiband) or no bands pass sampling checks.
+                    If lightcurve is not 2D (multiband) or no bands pass sampling checks.
         """
         if self.ndim <= 1:
             raise ValueError(
@@ -1865,6 +1926,274 @@ class Lightcurve(gpytorch.Module):
             self._ydata_raw[keep_mask].clone(),
             self._yerr_raw[keep_mask].clone() if hasattr(self, "_yerr_raw") else None,
         )
+      
+    def _get_variability_arrays(self):
+        """Return (y, yerr) as float64 NumPy arrays, safe for CPU and GPU tensors."""
+        y = self._ydata_raw.detach().cpu().numpy()
+        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+            yerr = self._yerr_raw.detach().cpu().numpy()
+        else:
+            yerr = np.ones_like(y)
+        return y, yerr
+
+    def check_variability(self, **kwargs) -> dict:
+        """
+        Check if lightcurve shows significant variability.
+
+        Only applicable for 1-D lightcurves. For multiband data use
+        :meth:`check_variability_per_band`.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Arguments passed to is_variable():
+            - alpha: float (default 0.01)
+            - fvar_min: float (default 0.05)
+            - stetson_k_min: float (default 0.95)
+            - verbose: bool (default False)
+        
+        Returns
+        -------
+          Variability diagnostics from is_variable()        
+          If the lightcurve is multiband (ndim > 1). Use
+          check_variability_per_band() instead.
+
+        Examples
+        --------
+        >>> lc = Lightcurve(t, y, yerr)
+        >>> diag = lc.check_variability(verbose=True)
+        >>> print(f"Variable: {diag['decision']}")
+        """
+        if self.ndim > 1:
+            raise ValueError(
+                "check_variability() is for 1-D lightcurves. "
+                "For multiband data use check_variability_per_band()."
+            )
+        from pgmuvi.preprocess.variability import is_variable
+
+        y, yerr = self._get_variability_arrays()
+        _is_var, diagnostics = is_variable(y, yerr, **kwargs)
+        return diagnostics
+
+    def check_variability_per_band(self, **kwargs) -> dict:
+        """
+        Check variability independently for each wavelength band.
+
+        Only applicable for multiband (2D) lightcurves where
+        ``xdata[:, 1]`` encodes the band/wavelength.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Arguments passed to is_variable()                   
+                    'n_variable': int,
+                    'variable_wavelengths': list[float]
+        
+        Returns
+        -------
+            If the lightcurve is not 2-D multiband data (ndim != 2 columns
+            with time in column 0 and wavelength in column 1).
+
+        Examples
+        --------
+        >>> lc2d = Lightcurve(xdata_2d, y, yerr)
+        >>> results = lc2d.check_variability_per_band(verbose=True)
+        >>> n_var = results['summary']['n_variable']
+        >>> n_bands = results['summary']['n_bands']
+        >>> print(f"{n_var}/{n_bands} bands variable")
+        """
+        if self._xdata_raw.dim() != 2 or self._xdata_raw.shape[1] < 2:
+            raise ValueError(
+                "check_variability_per_band() requires 2-D multiband data "
+                "with shape (N, 2) where column 0 is time and column 1 is "
+                "the band/wavelength. Got shape "
+                f"{tuple(self._xdata_raw.shape)}."
+            )
+        from pgmuvi.preprocess.variability import is_variable
+
+        # Convert to NumPy once; safe for both CPU and CUDA tensors
+        xdata_band = self._xdata_raw[:, 1].detach().cpu().numpy()
+        ydata = self._ydata_raw.detach().cpu().numpy()
+        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+            yerr_data = self._yerr_raw.detach().cpu().numpy()
+        else:
+            yerr_data = None
+
+        wavelengths = np.unique(xdata_band)
+        results = {}
+        variable_bands = []
+
+        for wl in wavelengths:
+            mask = xdata_band == wl
+            y = ydata[mask]
+            yerr = yerr_data[mask] if yerr_data is not None else np.ones_like(y)
+
+            is_var, diag = is_variable(y, yerr, **kwargs)
+            results[float(wl)] = diag
+
+            if is_var:
+                variable_bands.append(float(wl))
+
+        results["summary"] = {
+            "n_bands": len(wavelengths),
+            "n_variable": len(variable_bands),
+            "variable_wavelengths": variable_bands,
+        }
+        return results
+        
+
+    
+    def filter_variable_bands(self, **kwargs):
+        """
+        Create new Lightcurve with only variable bands retained.
+
+        Only applicable for multiband (2D) lightcurves where
+        ``xdata[:, 1]`` encodes the band/wavelength.
+
+        
+         Parameters
+         ----------
+            Arguments passed to is_variable()
+
+        Returns
+        -------
+        lightcurve : Lightcurve
+            New instance containing only wavelengths that pass variability tests
+        None
+            If no bands pass variability tests
+
+        Examples
+        --------
+        >>> lc2d = Lightcurve(xdata_2d, y, yerr)
+        >>> lc_var = lc2d.filter_variable_bands()
+        >>> # Check how many bands were retained via the per-band summary
+        >>> results = lc2d.check_variability_per_band()
+        >>> print(f"Retained {results['summary']['n_variable']} variable bands")
+        """
+        results = self.check_variability_per_band(**kwargs)
+
+        if results["summary"]["n_variable"] == 0:
+            raise ValueError(
+                "No bands passed variability tests. "
+                "Consider relaxing criteria (alpha, fvar_min, stetson_k_min)"
+            )
+
+        keep_wl = results["summary"]["variable_wavelengths"]
+        wl_array = self._xdata_raw[:, 1].detach().cpu().numpy()
+        keep_mask = np.isin(wl_array, keep_wl)
+        keep_tensor = torch.as_tensor(
+            keep_mask,
+            dtype=torch.bool,
+            device=self._xdata_raw.device,
+        )
+
+        new_x = self._xdata_raw[keep_tensor].clone()
+        new_y = self._ydata_raw[keep_tensor].clone()
+
+        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+            new_yerr = self._yerr_raw[keep_tensor].clone()
+        else:
+            new_yerr = None
+
+        return Lightcurve(new_x, new_y, yerr=new_yerr)
+
+    def auto_select_model(self, verbose=True):
+        """Automatically select the best model type based on data characteristics.
+
+        Analyses the data to recommend an appropriate GP model. For 1D data,
+        the Lomb-Scargle periodogram is computed and the peak power used to
+        decide between a quasi-periodic, periodic+stochastic, or Matérn model.
+        For 2D multiwavelength data, per-band periodograms are compared to
+        determine whether the variability is achromatic or wavelength-dependent.
+
+        Parameters
+        ----------
+        verbose : bool, optional
+            If True, print a summary of the recommendation, by default True.
+
+        Returns
+        -------
+        model_str : str
+            Recommended model string suitable for passing directly to
+            ``fit()`` or ``set_model()``.
+        diagnostics : dict
+            Dictionary containing:
+            - ``'model'`` — same as ``model_str``.
+            - ``'reason'`` — human-readable explanation.
+            - Additional data-dependent keys (e.g. ``'max_ls_power'``).
+
+        Examples
+        --------
+        >>> from pgmuvi.lightcurve import Lightcurve
+        >>> import torch
+        >>> import numpy as np
+        >>> t = torch.linspace(0, 20, 100)
+        >>> y = torch.sin(2 * np.pi * t / 5)
+        >>> lc = Lightcurve(t, y)
+        >>> model_str, diag = lc.auto_select_model()
+        """
+        from .initialization import initialize_separable_from_data
+
+        diagnostics = {}
+
+        if self.ndim == 1:
+            # 1D data — use Lomb-Scargle to assess periodicity strength
+            _freq, power = self.fit_LS(freq_only=True)
+            max_power = float(power.max()) if len(power) > 0 else 0.0
+            diagnostics["max_ls_power"] = max_power
+
+            if max_power > 0.5:
+                model_str = "1DQuasiPeriodic"
+                diagnostics["reason"] = (
+                    f"Strong periodic signal detected (LS power={max_power:.2f}); "
+                    "quasi-periodic kernel recommended."
+                )
+            elif max_power > 0.2:
+                model_str = "1DPeriodicStochastic"
+                diagnostics["reason"] = (
+                    f"Moderate periodicity with stochastic component "
+                    f"(LS power={max_power:.2f}); "
+                    "periodic+stochastic kernel recommended."
+                )
+            else:
+                model_str = "1DMatern"
+                diagnostics["reason"] = (
+                    f"No strong periodicity detected (LS power={max_power:.2f}); "
+                    "Matérn kernel recommended for stochastic variability."
+                )
+        else:
+            # 2D data — check whether periods are consistent across wavelengths
+            init_params = initialize_separable_from_data(
+                self._xdata_raw,
+                self._ydata_raw,
+            )
+            diagnostics["init_params"] = init_params
+
+            if init_params.get("is_achromatic", True):
+                model_str = "2DAchromatic"
+                diagnostics["reason"] = (
+                    "Periods consistent across wavelengths (achromatic variability); "
+                    "achromatic separable kernel recommended."
+                )
+            else:
+                model_str = "2DWavelengthDependent"
+                diagnostics["reason"] = (
+                    "Periods vary with wavelength (chromatic variability); "
+                    "wavelength-dependent separable kernel recommended."
+                )
+
+        diagnostics["model"] = model_str
+
+        if verbose:
+            sep = "=" * 70
+            print(sep)
+            print("AUTO MODEL SELECTION")
+            print(sep)
+            print(f"Recommended model: {model_str}")
+            print(f"Reason: {diagnostics['reason']}")
+            print(sep)
+
+        return model_str, diagnostics
 
     def fit(
         self,
@@ -1883,6 +2212,8 @@ class Lightcurve(gpytorch.Module):
         stopavg=30,
         check_sampling: bool = True,
         sampling_kwargs: dict | None = None,
+        check_variability: bool = False,
+        variability_kwargs: dict | None = None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -1893,6 +2224,8 @@ class Lightcurve(gpytorch.Module):
             The model to use for the GP, by default None. If None, an
             error will be raised. If a string, it must be one of the
             following:
+
+            Spectral mixture models:
                 '1D': SpectralMixtureGPModel
                 '2D': TwoDSpectralMixtureGPModel
                 '1DLinear': SpectralMixtureLinearMeanGPModel
@@ -1901,6 +2234,23 @@ class Lightcurve(gpytorch.Module):
                 '2DSKI': TwoDSpectralMixtureKISSGPModel
                 '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
                 '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+                '2DPowerLaw': TwoDSpectralMixturePowerLawMeanGPModel
+                '2DPowerLawSKI': TwoDSpectralMixturePowerLawMeanKISSGPModel
+                '2DDust': TwoDSpectralMixtureDustMeanGPModel
+                '2DDustSKI': TwoDSpectralMixtureDustMeanKISSGPModel
+
+            Alternative 1D models:
+                '1DQuasiPeriodic': QuasiPeriodicGPModel
+                '1DMatern': MaternGPModel
+                '1DPeriodicStochastic': PeriodicPlusStochasticGPModel
+                '1DLinearQuasiPeriodic': LinearMeanQuasiPeriodicGPModel
+
+            Separable 2D models:
+                '2DSeparable': SeparableGPModel
+                '2DAchromatic': AchromaticGPModel
+                '2DWavelengthDependent': WavelengthDependentGPModel
+
+                
             If an instance of a GP class, that object will be used.
         likelihood : string, None or instance of
                         gpytorch.likelihoods.likelihood.Likelihood or Constraint,
@@ -1956,6 +2306,13 @@ class Lightcurve(gpytorch.Module):
             Keyword arguments for sampling quality gates (min_points,
             max_gap_fraction, min_baseline_factor, min_snr,
             min_fraction_good_snr). See assess_sampling_quality().
+        check_variability : bool, default=False
+            If True, verify lightcurve shows significant variability before
+            fitting. Raises ValueError if not variable. Set to False to force
+            fitting.
+        variability_kwargs : dict, optional
+            Keyword arguments for variability tests (alpha, fvar_min,
+            stetson_k_min). Only used when check_variability=True.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -1988,6 +2345,35 @@ class Lightcurve(gpytorch.Module):
                     f"Recommendation: {diag['recommendation']}\n"
                     "GP fitting not recommended for poorly sampled data.\n"
                     "To force fitting anyway, use: fit(check_sampling=False)"
+                )
+        if check_variability:
+            from pgmuvi.preprocess.variability import is_variable
+
+            if self.ndim > 1:
+                raise ValueError(
+                    "fit(check_variability=True) is not supported for multiband "
+                    "(ndim > 1) lightcurves, because pooling bands may produce "
+                    "misleading variability results. Use "
+                    "check_variability_per_band() or filter_variable_bands() to "
+                    "assess each band independently before fitting."
+                )
+
+            vkwargs = variability_kwargs or {}
+            y, yerr = self._get_variability_arrays()
+            is_var, diag = is_variable(y, yerr, **vkwargs)
+
+            if not is_var:
+                raise ValueError(
+                    f"Lightcurve shows NO significant variability:\n"
+                    f"  p-value: {diag['p_value']:.4f} "
+                    f"[{'PASS' if diag['tests_passed']['chi2_test'] else 'FAIL'}]\n"
+                    f"  F_var: {diag['fvar']:.4f} "
+                    f"[{'PASS' if diag['tests_passed']['fvar_test'] else 'FAIL'}]\n"
+                    f"  Stetson K: {diag['stetson_k']:.3f} "
+                    f"[{'PASS' if diag['tests_passed']['stetson_test'] else 'FAIL'}]\n"
+                    f"Decision: {diag['decision']}\n\n"
+                    "GP fitting not recommended for non-variable sources.\n"
+                    "To force fitting anyway, use: fit(check_variability=False)"
                 )
 
         if not hasattr(self, "likelihood"):
@@ -3196,8 +3582,6 @@ class Lightcurve(gpytorch.Module):
         output = self.model(self.expanded_test_x)
         with torch.no_grad():
             f, ax = plt.subplots(1, 1, figsize=(8, 6))
-            # Plot training data as black stars
-            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
             for i in range(min(n_samples_to_plot, self.num_samples)):
                 # Plot predictive samples as colored lines
                 ax.plot(
@@ -3206,6 +3590,9 @@ class Lightcurve(gpytorch.Module):
                     "b",
                     alpha=0.2,
                 )
+
+            # Plot training data as black stars (on top of model predictions)
+            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
 
             ax.legend(["Observed Data", "Sample means"])
             if ylim is not None:
@@ -3233,9 +3620,6 @@ class Lightcurve(gpytorch.Module):
         # Get upper and lower confidence bounds
         lower, upper = observed_pred.confidence_region()
 
-        # Plot training data as black stars
-        ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
-
         # Plot predictive GP mean as blue line
         ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), "b")
 
@@ -3246,6 +3630,9 @@ class Lightcurve(gpytorch.Module):
             upper.cpu().numpy(),
             alpha=0.5,
         )
+
+        # Plot training data as black stars (on top of model predictions)
+        ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
         if ylim is not None:
             ax.set_ylim(ylim)
         ax.legend(["Observed Data", "Mean", "Confidence"])
@@ -3268,11 +3655,6 @@ class Lightcurve(gpytorch.Module):
         for val in unique_values_axis2:
             fig = plt.figure()
             ax = fig.add_subplot(111)
-            ax.plot(
-                self.xdata[self.xdata[:, 1] == val, 0],
-                self.ydata[self.xdata[:, 1] == val],
-                "k*",
-            )
 
             vals = torch.ones_like(x_fine_transformed) * val
             x_fine_tmp = torch.cat((x_fine_transformed[:, None], vals[:, None]), dim=1)
@@ -3286,6 +3668,13 @@ class Lightcurve(gpytorch.Module):
                 lower.cpu().numpy(),
                 upper.cpu().numpy(),
                 alpha=0.5,
+            )
+
+            # Plot training data as black stars (on top of model predictions)
+            ax.plot(
+                self.xdata[self.xdata[:, 1] == val, 0],
+                self.ydata[self.xdata[:, 1] == val],
+                "k*",
             )
             ax.legend(["Observed Data", "Mean", "Confidence"])
 

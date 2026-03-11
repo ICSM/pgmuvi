@@ -47,7 +47,7 @@ Homepage = "https://github.com/icsm/pgmuvi"
 "Bug Tracker" = "https://github.com/icsm/pgmuvi/issues"
 
 [tool.setuptools]
-packages = ["pgmuvi"]
+packages = ["pgmuvi", "pgmuvi.preprocess"]
 include-package-data = false
 
 [tool.setuptools_scm]

@@ -310,3 +310,35 @@ class Test2DValidation(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Test2DValidationSeparableModels(unittest.TestCase):
+    """Test that _validate_2d_setup does not raise for separable models."""
+
+    def setUp(self):
+        n_samples = 30
+        time = torch.linspace(0, 10, n_samples, dtype=torch.float32)
+        wavelength = torch.linspace(400.0, 900.0, n_samples, dtype=torch.float32)
+        self.xdata_2d = torch.stack([time, wavelength], dim=1)
+        self.ydata_2d = torch.sin(2 * np.pi * time / 2.5).float()
+
+    def _make_lc(self, model_str):
+        lc = Lightcurve(self.xdata_2d, self.ydata_2d)
+        lc.set_model(model_str)
+        return lc
+
+    def test_separable_model_passes_validation(self):
+        """2DSeparable should not raise in _validate_2d_setup."""
+        lc = self._make_lc("2DSeparable")
+        lc._validate_2d_setup()  # should not raise
+
+    def test_achromatic_model_passes_validation(self):
+        """2DAchromatic should not raise in _validate_2d_setup."""
+        lc = self._make_lc("2DAchromatic")
+        lc._validate_2d_setup()  # should not raise
+
+    def test_wavelength_dependent_model_passes_validation(self):
+        """2DWavelengthDependent should not raise in _validate_2d_setup."""
+        lc = self._make_lc("2DWavelengthDependent")
+        lc._validate_2d_setup()  # should not raise
+
