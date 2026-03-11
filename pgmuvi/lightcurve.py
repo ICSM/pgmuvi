@@ -1803,8 +1803,10 @@ class Lightcurve(gpytorch.Module):
         Examples
         --------
         >>> lc2d = Lightcurve(xdata_2d, y, yerr)
-        >>> lc_var = lc2d.filter_variable_bands(verbose=True)
-        >>> print(f"Retained {lc_var.ndim} variable bands")
+        >>> lc_var = lc2d.filter_variable_bands()
+        >>> # Check how many bands were retained via the per-band summary
+        >>> results = lc2d.check_variability_per_band()
+        >>> print(f"Retained {results['summary']['n_variable']} variable bands")
         """
         results = self.check_variability_per_band(**kwargs)
 
@@ -2050,6 +2052,15 @@ class Lightcurve(gpytorch.Module):
         """
         if check_variability:
             from pgmuvi.preprocess.variability import is_variable
+
+            if self.ndim > 1:
+                raise ValueError(
+                    "fit(check_variability=True) is not supported for multiband "
+                    "(ndim > 1) lightcurves, because pooling bands may produce "
+                    "misleading variability results. Use "
+                    "check_variability_per_band() or filter_variable_bands() to "
+                    "assess each band independently before fitting."
+                )
 
             vkwargs = variability_kwargs or {}
             y, yerr = self._get_variability_arrays()

@@ -49,6 +49,38 @@ def _to_numpy(arr) -> np.ndarray:
     return result
 
 
+def _validate_inputs(y: np.ndarray, yerr: np.ndarray) -> None:
+    """Validate that y and yerr are matching 1-D finite arrays with positive yerr.
+
+    Parameters
+    ----------
+    y : np.ndarray
+        Already-converted 1-D float64 array.
+    yerr : np.ndarray
+        Already-converted 1-D float64 array.
+
+    Raises
+    ------
+    ValueError
+        If shapes mismatch, fewer than 2 points, non-finite values, or
+        non-positive yerr.
+    """
+    if y.shape != yerr.shape:
+        raise ValueError(
+            f"y and yerr must have the same shape; got {y.shape} and {yerr.shape}."
+        )
+    if len(y) < 2:
+        raise ValueError(
+            f"At least 2 data points are required; got {len(y)}."
+        )
+    if not np.all(np.isfinite(y)):
+        raise ValueError("y contains non-finite values (NaN or Inf).")
+    if not np.all(np.isfinite(yerr)):
+        raise ValueError("yerr contains non-finite values (NaN or Inf).")
+    if not np.all(yerr > 0):
+        raise ValueError("All yerr values must be strictly positive.")
+
+
 def weighted_chi2_test(
     y, yerr
 ) -> tuple[float, int, float, float]:
@@ -89,21 +121,7 @@ def weighted_chi2_test(
     """
     y = _to_numpy(y)
     yerr = _to_numpy(yerr)
-
-    if y.shape != yerr.shape:
-        raise ValueError(
-            f"y and yerr must have the same shape; got {y.shape} and {yerr.shape}."
-        )
-    if len(y) < 2:
-        raise ValueError(
-            f"At least 2 data points are required; got {len(y)}."
-        )
-    if not np.all(np.isfinite(y)):
-        raise ValueError("y contains non-finite values (NaN or Inf).")
-    if not np.all(np.isfinite(yerr)):
-        raise ValueError("yerr contains non-finite values (NaN or Inf).")
-    if not np.all(yerr > 0):
-        raise ValueError("All yerr values must be strictly positive.")
+    _validate_inputs(y, yerr)
 
     weights = 1.0 / yerr**2
     ybar_w = np.sum(weights * y) / np.sum(weights)
@@ -150,20 +168,12 @@ def compute_fvar(y, yerr) -> float:
     Raises
     ------
     ValueError
-        If inputs are not 1-D, have mismatched shapes, or have fewer than 2
-        points.
+        If inputs are not 1-D, have mismatched shapes, have fewer than 2
+        points, contain non-finite values, or have non-positive yerr.
     """
     y = _to_numpy(y)
     yerr = _to_numpy(yerr)
-
-    if y.shape != yerr.shape:
-        raise ValueError(
-            f"y and yerr must have the same shape; got {y.shape} and {yerr.shape}."
-        )
-    if len(y) < 2:
-        raise ValueError(
-            f"At least 2 data points are required; got {len(y)}."
-        )
+    _validate_inputs(y, yerr)
 
     s2 = np.var(y, ddof=1)
     mean_err2 = np.mean(yerr**2)
@@ -210,20 +220,12 @@ def compute_stetson_k(y, yerr) -> float:
     Raises
     ------
     ValueError
-        If inputs are not 1-D, have mismatched shapes, or have fewer than 2
-        points.
+        If inputs are not 1-D, have mismatched shapes, have fewer than 2
+        points, contain non-finite values, or have non-positive yerr.
     """
     y = _to_numpy(y)
     yerr = _to_numpy(yerr)
-
-    if y.shape != yerr.shape:
-        raise ValueError(
-            f"y and yerr must have the same shape; got {y.shape} and {yerr.shape}."
-        )
-    if len(y) < 2:
-        raise ValueError(
-            f"At least 2 data points are required; got {len(y)}."
-        )
+    _validate_inputs(y, yerr)
 
     n = len(y)
     ybar = np.mean(y)

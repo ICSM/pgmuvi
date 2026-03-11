@@ -194,11 +194,12 @@ class TestIsVariable(unittest.TestCase):
         yerr = np.full(50, 0.1)
 
         captured = io.StringIO()
+        original_stdout = sys.stdout
         sys.stdout = captured
         try:
             is_variable(y, yerr, verbose=True)
         finally:
-            sys.stdout = sys.__stdout__
+            sys.stdout = original_stdout
 
         output = captured.getvalue()
         self.assertIn("Variability assessment", output)
