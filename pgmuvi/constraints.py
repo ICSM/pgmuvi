@@ -179,11 +179,74 @@ def outputscale_constraint(data_std, min_factor=0.001, max_factor=100.0):
     return Interval(lower_bound=lower, upper_bound=upper)
 
 
+CONSTRAINT_SETS = {
+    "LPV": {
+        "period": {
+            "lower": (20.0, True),
+            "upper": (None, False),
+        },
+    },
+}
+"""Pre-defined constraint sets for common source types.
+
+Each key is a source-type label (e.g. ``"LPV"``).  The value is a
+``dict`` keyed by parameter name.  For the ``"period"`` parameter the
+entry is another ``dict`` with ``"lower"`` and ``"upper"`` keys, each
+holding a ``(value, active)`` tuple where *value* is the bound in days
+(or ``None`` when the limit is not applicable) and *active* is a
+``bool`` that flags whether the limit should be enforced.
+
+Currently defined sets
+----------------------
+LPV
+    Long-Period Variable stars.  Only a lower period limit of **20 days**
+    is enforced (``lower=(20.0, True)``).  The upper limit is inactive
+    (``upper=(None, False)``).
+"""
+
+
+def get_constraint_set(name):
+    """Return the constraint-set dict for *name*.
+
+    Parameters
+    ----------
+    name : str
+        Name of the constraint set (e.g. ``"LPV"``).
+
+    Returns
+    -------
+    dict
+        Mapping of parameter names to their bound specifications.
+
+    Raises
+    ------
+    ValueError
+        If *name* is not a recognised constraint set.
+
+    Examples
+    --------
+    >>> from pgmuvi.constraints import get_constraint_set
+    >>> cs = get_constraint_set("LPV")
+    >>> cs["period"]["lower"]
+    (20.0, True)
+    >>> cs["period"]["upper"]
+    (None, False)
+    """
+    if name not in CONSTRAINT_SETS:
+        raise ValueError(
+            f"Unknown constraint_set {name!r}. "
+            f"Available sets: {sorted(CONSTRAINT_SETS.keys())}"
+        )
+    return CONSTRAINT_SETS[name]
+
+
 __all__ = [
+    "CONSTRAINT_SETS",
     "GreaterThan",
     "Interval",
     "LessThan",
     "Positive",
+    "get_constraint_set",
     "lengthscale_constraint",
     "outputscale_constraint",
     "period_constraint",
