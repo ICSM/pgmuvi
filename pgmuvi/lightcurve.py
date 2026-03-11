@@ -1832,7 +1832,7 @@ class Lightcurve(gpytorch.Module):
             new_yerr = None
 
         return Lightcurve(new_x, new_y, yerr=new_yerr)
-      
+
     def auto_select_model(self, verbose=True):
         """Automatically select the best model type based on data characteristics.
 
