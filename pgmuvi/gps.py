@@ -554,7 +554,7 @@ def _make_qp_kernel(period):
     return ScaleKernel(ProductKernel(periodic_k, rbf_k))
 
 
-def _build_time_kernel(time_kernel_type, period, num_mixtures=4):
+def _build_time_kernel(time_kernel_type, period, num_mixtures=4, **kwargs):
     """Build a time kernel from a string name or a Kernel instance.
 
     Parameters
