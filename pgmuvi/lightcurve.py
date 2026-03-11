@@ -652,7 +652,7 @@ class Lightcurve(gpytorch.Module):
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
 
-               
+
             If an instance of a GP class, that object will be used.
             _description_, by default None
         likelihood : string, None or instance of
@@ -1180,8 +1180,11 @@ class Lightcurve(gpytorch.Module):
 
             ``"LPV"``
                 Long-Period Variable stars.  Enforces a lower period limit of
-                20 days (i.e. an upper frequency limit) so that the fit is
-                not pulled toward unphysically short periods.
+                20 in the same time units as the input ``xdata`` (typically
+                interpreted as 20 days for LPV light curves) so that the fit is
+                not pulled toward unphysically short periods.  If ``xdata``
+                is provided in different time units, this numerical limit
+                applies in those units.
 
             Pass ``None`` (the default) to use only the data-driven defaults.
         **kwargs : dict, optional
@@ -2078,7 +2081,7 @@ class Lightcurve(gpytorch.Module):
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
 
-                
+
             If an instance of a GP class, that object will be used.
         likelihood : string, None or instance of
                         gpytorch.likelihoods.likelihood.Likelihood or Constraint,

@@ -6,6 +6,8 @@ properties of the observed data, such as sampling cadence and
 observation span.
 """
 
+import copy
+
 import gpytorch  # noqa: F401
 from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive
 
@@ -179,6 +181,23 @@ def outputscale_constraint(data_std, min_factor=0.001, max_factor=100.0):
     return Interval(lower_bound=lower, upper_bound=upper)
 
 
+# Pre-defined constraint sets for common source types.
+#
+# Each key is a source-type label (e.g. ``"LPV"``).  The value is a
+# ``dict`` keyed by parameter name.  For the ``"period"`` parameter the
+# entry is another ``dict`` with ``"lower"`` and ``"upper"`` keys, each
+# holding a ``(value, active)`` tuple where *value* is the bound in the
+# same units as the raw time axis / ``Lightcurve.xdata`` (typically days,
+# or ``None`` when the limit is not applicable) and *active* is a
+# ``bool`` that flags whether the limit should be enforced.
+#
+# Currently defined sets
+# ----------------------
+# LPV
+#     Long-Period Variable stars.  Only a lower period limit of **20**
+#     (in the same units as the time axis, typically days) is enforced
+#     (``lower=(20.0, True)``).  The upper limit is inactive
+#     (``upper=(None, False)``).
 CONSTRAINT_SETS = {
     "LPV": {
         "period": {
@@ -187,22 +206,6 @@ CONSTRAINT_SETS = {
         },
     },
 }
-"""Pre-defined constraint sets for common source types.
-
-Each key is a source-type label (e.g. ``"LPV"``).  The value is a
-``dict`` keyed by parameter name.  For the ``"period"`` parameter the
-entry is another ``dict`` with ``"lower"`` and ``"upper"`` keys, each
-holding a ``(value, active)`` tuple where *value* is the bound in days
-(or ``None`` when the limit is not applicable) and *active* is a
-``bool`` that flags whether the limit should be enforced.
-
-Currently defined sets
-----------------------
-LPV
-    Long-Period Variable stars.  Only a lower period limit of **20 days**
-    is enforced (``lower=(20.0, True)``).  The upper limit is inactive
-    (``upper=(None, False)``).
-"""
 
 
 def get_constraint_set(name):
@@ -237,7 +240,7 @@ def get_constraint_set(name):
             f"Unknown constraint_set {name!r}. "
             f"Available sets: {sorted(CONSTRAINT_SETS.keys())}"
         )
-    return CONSTRAINT_SETS[name]
+    return copy.deepcopy(CONSTRAINT_SETS[name])
 
 
 __all__ = [
