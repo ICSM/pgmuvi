@@ -737,6 +737,7 @@ class Lightcurve(gpytorch.Module):
                 self._xdata_transformed,
                 self._ydata_transformed,
                 self.likelihood,
+                num_mixtures=num_mixtures,
                 **kwargs,
             )
         else:

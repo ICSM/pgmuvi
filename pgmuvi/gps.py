@@ -1076,7 +1076,7 @@ class QuasiPeriodicGPModel(ExactGP):
     >>> model = QuasiPeriodicGPModel(t, y, lik, period=5.0)
     """
 
-    def __init__(self, train_x, train_y, likelihood, period=None):
+    def __init__(self, train_x, train_y, likelihood, period=None, **kwargs):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
 
@@ -1128,7 +1128,9 @@ class MaternGPModel(ExactGP):
     >>> model = MaternGPModel(t, y, lik, nu=0.5)
     """
 
-    def __init__(self, train_x, train_y, likelihood, nu=1.5, lengthscale=None):
+    def __init__(
+        self, train_x, train_y, likelihood, nu=1.5, lengthscale=None, **kwargs
+    ):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
 
@@ -1178,7 +1180,7 @@ class PeriodicPlusStochasticGPModel(ExactGP):
     >>> model = PeriodicPlusStochasticGPModel(t, y, lik, period=5.0)
     """
 
-    def __init__(self, train_x, train_y, likelihood, period=None):
+    def __init__(self, train_x, train_y, likelihood, period=None, **kwargs):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
 
@@ -1217,7 +1219,7 @@ class LinearMeanQuasiPeriodicGPModel(ExactGP):
         Initial period guess. Defaults to half the data span.
     """
 
-    def __init__(self, train_x, train_y, likelihood, period=None):
+    def __init__(self, train_x, train_y, likelihood, period=None, **kwargs):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean(input_size=1)
 
