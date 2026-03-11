@@ -18,6 +18,10 @@ from .gps import (
     AchromaticGPModel,
     WavelengthDependentGPModel,
     LinearMeanQuasiPeriodicGPModel,
+    TwoDSpectralMixturePowerLawMeanGPModel,
+    TwoDSpectralMixturePowerLawMeanKISSGPModel,
+    TwoDSpectralMixtureDustMeanGPModel,
+    TwoDSpectralMixtureDustMeanKISSGPModel,
 )
 import matplotlib.pyplot as plt
 from .trainers import train
@@ -631,6 +635,10 @@ class Lightcurve(gpytorch.Module):
                 '2DSKI': TwoDSpectralMixtureKISSGPModel
                 '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
                 '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+                '2DPowerLaw': TwoDSpectralMixturePowerLawMeanGPModel
+                '2DPowerLawSKI': TwoDSpectralMixturePowerLawMeanKISSGPModel
+                '2DDust': TwoDSpectralMixtureDustMeanGPModel
+                '2DDustSKI': TwoDSpectralMixtureDustMeanKISSGPModel
 
             Alternative 1D models:
                 '1DQuasiPeriodic': QuasiPeriodicGPModel
@@ -643,6 +651,7 @@ class Lightcurve(gpytorch.Module):
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
 
+               
             If an instance of a GP class, that object will be used.
             _description_, by default None
         likelihood : string, None or instance of
@@ -665,6 +674,8 @@ class Lightcurve(gpytorch.Module):
             "1D": SpectralMixtureGPModel,
             "1DLinear": SpectralMixtureLinearMeanGPModel,
             "2DLinear": TwoDSpectralMixtureLinearMeanGPModel,
+            "2DPowerLaw": TwoDSpectralMixturePowerLawMeanGPModel,
+            "2DDust": TwoDSpectralMixtureDustMeanGPModel,
         }
 
         model_dic_2 = {
@@ -672,6 +683,8 @@ class Lightcurve(gpytorch.Module):
             "2DSKI": TwoDSpectralMixtureKISSGPModel,
             "1DLinearSKI": SpectralMixtureLinearMeanKISSGPModel,
             "2DLinearSKI": TwoDSpectralMixtureLinearMeanKISSGPModel,
+            "2DPowerLawSKI": TwoDSpectralMixturePowerLawMeanKISSGPModel,
+            "2DDustSKI": TwoDSpectralMixtureDustMeanKISSGPModel,
         }
 
         # Alternative kernel models — do not require num_mixtures
@@ -1127,7 +1140,8 @@ class Lightcurve(gpytorch.Module):
                         f"but data has {self.ndim} dimensions. "
                         "Use a 2D model (e.g., '2D', '2DLinear', '2DSKI', "
                         "'2DLinearSKI', '2DSeparable', '2DAchromatic', "
-                        "'2DWavelengthDependent')."
+                        "'2DWavelengthDependent', '2DPowerLaw', '2DPowerLawSKI', "
+                        "'2DDust', '2DDustSKI')."
                     )
 
         # Check transform compatibility
@@ -1970,6 +1984,10 @@ class Lightcurve(gpytorch.Module):
                 '2DSKI': TwoDSpectralMixtureKISSGPModel
                 '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
                 '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
+                '2DPowerLaw': TwoDSpectralMixturePowerLawMeanGPModel
+                '2DPowerLawSKI': TwoDSpectralMixturePowerLawMeanKISSGPModel
+                '2DDust': TwoDSpectralMixtureDustMeanGPModel
+                '2DDustSKI': TwoDSpectralMixtureDustMeanKISSGPModel
 
             Alternative 1D models:
                 '1DQuasiPeriodic': QuasiPeriodicGPModel
@@ -1982,6 +2000,7 @@ class Lightcurve(gpytorch.Module):
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
 
+                
             If an instance of a GP class, that object will be used.
         likelihood : string, None or instance of
                         gpytorch.likelihoods.likelihood.Likelihood or Constraint,
@@ -3286,8 +3305,6 @@ class Lightcurve(gpytorch.Module):
         output = self.model(self.expanded_test_x)
         with torch.no_grad():
             f, ax = plt.subplots(1, 1, figsize=(8, 6))
-            # Plot training data as black stars
-            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
             for i in range(min(n_samples_to_plot, self.num_samples)):
                 # Plot predictive samples as colored lines
                 ax.plot(
@@ -3296,6 +3313,9 @@ class Lightcurve(gpytorch.Module):
                     "b",
                     alpha=0.2,
                 )
+
+            # Plot training data as black stars (on top of model predictions)
+            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
 
             ax.legend(["Observed Data", "Sample means"])
             if ylim is not None:
@@ -3323,9 +3343,6 @@ class Lightcurve(gpytorch.Module):
         # Get upper and lower confidence bounds
         lower, upper = observed_pred.confidence_region()
 
-        # Plot training data as black stars
-        ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
-
         # Plot predictive GP mean as blue line
         ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), "b")
 
@@ -3336,6 +3353,9 @@ class Lightcurve(gpytorch.Module):
             upper.cpu().numpy(),
             alpha=0.5,
         )
+
+        # Plot training data as black stars (on top of model predictions)
+        ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
         if ylim is not None:
             ax.set_ylim(ylim)
         ax.legend(["Observed Data", "Mean", "Confidence"])
@@ -3358,11 +3378,6 @@ class Lightcurve(gpytorch.Module):
         for val in unique_values_axis2:
             fig = plt.figure()
             ax = fig.add_subplot(111)
-            ax.plot(
-                self.xdata[self.xdata[:, 1] == val, 0],
-                self.ydata[self.xdata[:, 1] == val],
-                "k*",
-            )
 
             vals = torch.ones_like(x_fine_transformed) * val
             x_fine_tmp = torch.cat((x_fine_transformed[:, None], vals[:, None]), dim=1)
@@ -3376,6 +3391,13 @@ class Lightcurve(gpytorch.Module):
                 lower.cpu().numpy(),
                 upper.cpu().numpy(),
                 alpha=0.5,
+            )
+
+            # Plot training data as black stars (on top of model predictions)
+            ax.plot(
+                self.xdata[self.xdata[:, 1] == val, 0],
+                self.ydata[self.xdata[:, 1] == val],
+                "k*",
             )
             ax.legend(["Observed Data", "Mean", "Confidence"])
 
