@@ -82,6 +82,12 @@ class TestLightCurve(unittest.TestCase):
     def test_xdata_getter(self):
         self.assertTrue(torch.equal(self.lightcurve.xdata, self.test_xdata))
 
+    def test_default_no_transform(self):
+        lc = Lightcurve(self.test_xdata, self.test_ydata)
+        self.assertIsNone(lc.xtransform)
+        self.assertIsNone(lc.ytransform)
+        self.assertTrue(torch.equal(lc._xdata_transformed, self.test_xdata))
+
     def test_xdata_setter_no_transform(self):
         self.lightcurve.xtransform = None
         self.lightcurve.xdata = self.test_xdata
@@ -89,12 +95,13 @@ class TestLightCurve(unittest.TestCase):
         self.assertTrue(torch.equal(self.lightcurve._xdata_transformed, self.test_xdata))
 
     def test_xdata_setter_with_transform(self):
-        xtransformer = self.lightcurve.xtransform
+        lc_with_transform = Lightcurve(self.test_xdata, self.test_ydata, xtransform="minmax")
+        xtransformer = lc_with_transform.xtransform
         self.test_xdata_transformed = xtransformer.transform(self.test_xdata)
 
-        self.lightcurve.xdata = self.test_xdata
-        self.assertTrue(torch.equal(self.lightcurve._xdata_raw, self.test_xdata))
-        self.assertTrue(torch.equal(self.lightcurve._xdata_transformed, self.test_xdata_transformed))
+        lc_with_transform.xdata = self.test_xdata
+        self.assertTrue(torch.equal(lc_with_transform._xdata_raw, self.test_xdata))
+        self.assertTrue(torch.equal(lc_with_transform._xdata_transformed, self.test_xdata_transformed))
 
     def test_ydata_getter(self):
         self.assertTrue(torch.equal(self.lightcurve.ydata, self.test_ydata))
@@ -467,18 +474,6 @@ class TestSpectralMixtureGPModel(unittest.TestCase):
     pass
 
 
-<<<<<<< copilot/add-variability-detection-module
-# Import variability tests so they are discovered when this file is run
-from test_variability import (  # noqa: E402, F401
-    TestComputeFvar,
-    TestComputeStetsonK,
-    TestIsVariable,
-    TestLightcurveVariability,
-    TestWeightedChi2,
-)
-
-if __name__ == '__main__':
-=======
 class TestPowerLawMean(unittest.TestCase):
     """Tests for the PowerLawMean mean function."""
 
@@ -638,6 +633,5 @@ class TestNewGPModels(unittest.TestCase):
                 self.assertIsNotNone(lc.model)
 
 
-if  __name__ == '__main__':
->>>>>>> main
+if __name__ == '__main__':
     unittest.main()
