@@ -22,6 +22,8 @@ from .gps import (
     TwoDSpectralMixturePowerLawMeanKISSGPModel,
     TwoDSpectralMixtureDustMeanGPModel,
     TwoDSpectralMixtureDustMeanKISSGPModel,
+    DustMeanGPModel,
+    PowerLawMeanGPModel,
 )
 import matplotlib.pyplot as plt
 from .trainers import train
@@ -650,6 +652,8 @@ class Lightcurve(gpytorch.Module):
                 '2DSeparable': SeparableGPModel
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
+                '2DDustMean': DustMeanGPModel
+                '2DPowerLawMean': PowerLawMeanGPModel
 
                
             If an instance of a GP class, that object will be used.
@@ -696,6 +700,8 @@ class Lightcurve(gpytorch.Module):
             "2DSeparable": SeparableGPModel,
             "2DAchromatic": AchromaticGPModel,
             "2DWavelengthDependent": WavelengthDependentGPModel,
+            "2DDustMean": DustMeanGPModel,
+            "2DPowerLawMean": PowerLawMeanGPModel,
         }
 
         if not hasattr(self, "likelihood"):
@@ -1141,7 +1147,7 @@ class Lightcurve(gpytorch.Module):
                         "Use a 2D model (e.g., '2D', '2DLinear', '2DSKI', "
                         "'2DLinearSKI', '2DSeparable', '2DAchromatic', "
                         "'2DWavelengthDependent', '2DPowerLaw', '2DPowerLawSKI', "
-                        "'2DDust', '2DDustSKI')."
+                        "'2DDust', '2DDustSKI', '2DDustMean', '2DPowerLawMean')."
                     )
 
         # Check transform compatibility
@@ -1807,6 +1813,8 @@ class Lightcurve(gpytorch.Module):
                 '2DSeparable': SeparableGPModel
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
+                '2DDustMean': DustMeanGPModel
+                '2DPowerLawMean': PowerLawMeanGPModel
 
                 
             If an instance of a GP class, that object will be used.

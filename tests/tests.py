@@ -626,5 +626,81 @@ class TestNewGPModels(unittest.TestCase):
                 self.assertIsNotNone(lc.model)
 
 
+class TestSimpleKernelMeanGPModels(unittest.TestCase):
+    """Smoke tests for DustMeanGPModel and PowerLawMeanGPModel."""
+
+    def setUp(self):
+        from pgmuvi.gps import DustMeanGPModel, PowerLawMeanGPModel
+        import gpytorch
+        self.models = {
+            "DustMean": DustMeanGPModel,
+            "PowerLawMean": PowerLawMeanGPModel,
+        }
+        # 2D training data: columns are (time, wavelength)
+        self.train_x = torch.tensor(
+            [[0.0, 0.5], [1.0, 1.0], [2.0, 2.0], [3.0, 0.5]], dtype=torch.float32
+        )
+        self.train_y = torch.tensor([1.0, 0.8, 0.6, 1.1], dtype=torch.float32)
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+
+    def test_instantiation(self):
+        """DustMeanGPModel and PowerLawMeanGPModel can be instantiated."""
+        for name, ModelClass in self.models.items():
+            with self.subTest(model=name):
+                model = ModelClass(self.train_x, self.train_y, self.likelihood)
+                self.assertIsNotNone(model)
+
+    def test_forward_returns_mvn(self):
+        """Forward pass returns a MultivariateNormal distribution."""
+        from gpytorch.distributions import MultivariateNormal
+        for name, ModelClass in self.models.items():
+            with self.subTest(model=name):
+                model = ModelClass(self.train_x, self.train_y, self.likelihood)
+                model.eval()
+                with torch.no_grad():
+                    out = model(self.train_x)
+                self.assertIsInstance(out, MultivariateNormal)
+
+    def test_correct_mean_module(self):
+        """DustMeanGPModel uses DustMean; PowerLawMeanGPModel uses PowerLawMean."""
+        from pgmuvi.gps import DustMean, PowerLawMean, DustMeanGPModel, PowerLawMeanGPModel
+        dust_model = DustMeanGPModel(self.train_x, self.train_y, self.likelihood)
+        pl_model = PowerLawMeanGPModel(self.train_x, self.train_y, self.likelihood)
+        self.assertIsInstance(dust_model.mean_module, DustMean)
+        self.assertIsInstance(pl_model.mean_module, PowerLawMean)
+
+    def test_set_model_shortcut(self):
+        """Lightcurve.set_model() accepts '2DDustMean' and '2DPowerLawMean'."""
+        for shortcut in ["2DDustMean", "2DPowerLawMean"]:
+            with self.subTest(shortcut=shortcut):
+                lc = Lightcurve(self.train_x, self.train_y)
+                lc.set_model(model=shortcut)
+                self.assertIsNotNone(lc.model)
+
+    def test_wavelength_dependent_mean_module_strings(self):
+        """WavelengthDependentGPModel accepts 'dust' and 'power_law' mean_module strings."""
+        from pgmuvi.gps import WavelengthDependentGPModel, DustMean, PowerLawMean
+        for mean_str, ExpectedCls in [("dust", DustMean), ("power_law", PowerLawMean)]:
+            with self.subTest(mean_module=mean_str):
+                model = WavelengthDependentGPModel(
+                    self.train_x, self.train_y, self.likelihood, mean_module=mean_str
+                )
+                self.assertIsInstance(model.mean_module, ExpectedCls)
+
+    def test_kernel_types_can_be_changed(self):
+        """DustMeanGPModel and PowerLawMeanGPModel accept time/wavelength kernel types."""
+        from pgmuvi.gps import DustMeanGPModel, PowerLawMeanGPModel
+        for ModelClass in (DustMeanGPModel, PowerLawMeanGPModel):
+            with self.subTest(model=ModelClass.__name__):
+                model = ModelClass(
+                    self.train_x,
+                    self.train_y,
+                    self.likelihood,
+                    time_kernel_type="rbf",
+                    wavelength_kernel_type="matern",
+                )
+                self.assertIsNotNone(model)
+
+
 if  __name__ == '__main__':
     unittest.main()
