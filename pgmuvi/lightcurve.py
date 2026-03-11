@@ -1,4 +1,5 @@
 import contextlib
+from pathlib import Path
 from typing import ClassVar
 import numpy as np
 import torch
@@ -262,14 +263,20 @@ class InputHelpers:
     Attributes
     ----------
     _X_COLUMN_NAMES : list of str
-        Candidate column names used for auto-detecting the independent variable
-        (x) column, checked case-insensitively in order.
+        Candidate column names used for auto-detecting the time (independent
+        variable) column, checked case-insensitively in order.
     _Y_COLUMN_NAMES : list of str
         Candidate column names used for auto-detecting the dependent variable
         (y) column, checked case-insensitively in order.
     _YERR_COLUMN_NAMES : list of str
         Candidate column names used for auto-detecting the uncertainty column,
         checked case-insensitively in order.
+    _WAVELENGTH_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting the wavelength or band
+        column, checked case-insensitively in order.  When such a column is
+        found and contains more than one unique value, the data are loaded as
+        a 2-D lightcurve whose ``xdata`` has shape ``(N, 2)`` with the time
+        values in column 0 and the wavelength/band values in column 1.
     """
 
     _X_COLUMN_NAMES: ClassVar[list[str]] = [
@@ -289,9 +296,22 @@ class InputHelpers:
         "e_mag",
         "e_flux",
     ]
+    _WAVELENGTH_COLUMN_NAMES: ClassVar[list[str]] = [
+        "wavelength",
+        "wave",
+        "wl",
+        "lambda",
+        "band",
+        "filter",
+        "freq",
+        "frequency",
+        "channel",
+    ]
 
     @classmethod
-    def _find_column(cls, columns, candidates):
+    def _find_column(
+        cls, columns: list[str], candidates: list[str]
+    ) -> str | None:
         """Find the first matching column name from a list of candidates.
 
         Matching is case-insensitive.
@@ -316,40 +336,81 @@ class InputHelpers:
         return None
 
     @classmethod
-    def from_csv(cls, filepath, xcol=None, ycol=None, yerrcol=None, **kwargs):
+    def from_csv(
+        cls,
+        filepath: str | Path,
+        xcol: str | list[str] | None = None,
+        ycol: str | None = None,
+        yerrcol: str | None = None,
+        wavelcol: str | None = None,
+        **kwargs,
+    ) -> "Lightcurve":
         """Instantiate a Lightcurve from a CSV file.
 
         The file must have a header line whose entries are used to identify
         the relevant data columns.  Column names are matched
-        case-insensitively.  If ``xcol``, ``ycol`` or ``yerrcol`` are not
-        provided, auto-detection is attempted using the lists of common column
-        name variants stored as class attributes
-        :attr:`_X_COLUMN_NAMES`, :attr:`_Y_COLUMN_NAMES` and
-        :attr:`_YERR_COLUMN_NAMES`.
+        case-insensitively.
+
+        **1-D lightcurves** (single time series)
+            When only a time column and a flux/magnitude column are present,
+            or when all observations share the same wavelength/band, the
+            resulting ``xdata`` is a 1-D tensor of shape ``(N,)``.
+
+        **2-D (multiband) lightcurves**
+            When the CSV contains a wavelength or band column with more than
+            one unique value, the resulting ``xdata`` has shape ``(N, 2)``
+            where column 0 holds the time values and column 1 holds the
+            wavelength/band values.  The ``ydata`` (and optional ``yerr``)
+            remain 1-D tensors of shape ``(N,)``.
+
+            The wavelength/band column is selected in one of three ways:
+
+            1. *Explicit ``xcol`` list*: pass ``xcol`` as a list of two
+               column names, e.g. ``xcol=["time", "band"]``.  The first
+               element is the time column and the second is the
+               wavelength/band column.  All subsequent x-axis columns are
+               stacked in the order given.
+            2. *Explicit ``wavelcol``*: pass the column name as a separate
+               ``wavelcol`` keyword argument.
+            3. *Auto-detection*: if neither an iterable ``xcol`` nor a
+               ``wavelcol`` is supplied, the method searches for a column
+               whose name matches one of the entries in
+               :attr:`_WAVELENGTH_COLUMN_NAMES`.  If such a column is found
+               *and* it contains more than one unique value, a 2-D lightcurve
+               is returned automatically.
 
         Parameters
         ----------
         filepath : str or pathlib.Path
             Path to the CSV file.
-        xcol : str, optional
-            Name of the column containing the independent variable (x) data.
-            If not provided, auto-detection is attempted using
-            :attr:`_X_COLUMN_NAMES`.
-        ycol : str, optional
+        xcol : str or list of str or None, optional
+            Name of the column containing the time (independent variable)
+            data, or a list of column names to stack as the x-axis (first
+            element is time, subsequent elements are additional dimensions
+            such as wavelength).  If not provided, auto-detection is
+            attempted using :attr:`_X_COLUMN_NAMES` for the time column.
+        ycol : str or None, optional
             Name of the column containing the dependent variable (y) data.
             If not provided, auto-detection is attempted using
             :attr:`_Y_COLUMN_NAMES`.
-        yerrcol : str, optional
+        yerrcol : str or None, optional
             Name of the column containing the uncertainties on the dependent
             variable.  If not provided, auto-detection is attempted using
             :attr:`_YERR_COLUMN_NAMES`.  If no matching column is found,
             ``yerr`` is set to ``None``.
+        wavelcol : str or None, optional
+            Name of the column containing wavelength or band values.  When
+            provided, the time and wavelength columns are stacked to form a
+            2-D ``xdata``.  Ignored when ``xcol`` is a list.
         **kwargs
             Additional keyword arguments passed to the Lightcurve constructor.
 
         Returns
         -------
         Lightcurve
+            A 1-D lightcurve when a single time column is used (or when the
+            wavelength/band column has only one unique value), or a 2-D
+            lightcurve when multiple wavelengths/bands are present.
 
         Raises
         ------
@@ -358,33 +419,74 @@ class InputHelpers:
             explicitly, or if an explicitly specified column name is not
             present in the file.
         """
-        from pathlib import Path
-
         filepath = Path(filepath)
         data = np.genfromtxt(
             filepath, delimiter=",", names=True, dtype=float, encoding=None
         )
         columns = list(data.dtype.names)
 
-        # Find x column
-        if xcol is None:
-            xcol = cls._find_column(columns, cls._X_COLUMN_NAMES)
+        # ------------------------------------------------------------------
+        # Resolve the x (time + optional band) columns
+        # ------------------------------------------------------------------
+        if isinstance(xcol, list):
+            # Explicit multi-column x specification
+            for col in xcol:
+                if col not in columns:
+                    raise ValueError(
+                        f"Column '{col}' not found in CSV. "
+                        f"Available columns: {columns}"
+                    )
+            x_tensors = [
+                torch.as_tensor(data[col], dtype=torch.float32) for col in xcol
+            ]
+            x = torch.stack(x_tensors, dim=1) if len(x_tensors) > 1 else x_tensors[0]
+        else:
+            # Single time column (str or auto-detected)
             if xcol is None:
+                xcol = cls._find_column(columns, cls._X_COLUMN_NAMES)
+                if xcol is None:
+                    raise ValueError(
+                        f"Could not auto-detect x column. "
+                        f"Available columns: {columns}. "
+                        "Please specify xcol explicitly."
+                    )
+            elif xcol not in columns:
                 raise ValueError(
-                    f"Could not auto-detect x column. Available columns: {columns}. "
-                    "Please specify xcol explicitly."
+                    f"Column '{xcol}' not found in CSV. "
+                    f"Available columns: {columns}"
                 )
-        elif xcol not in columns:
-            raise ValueError(
-                f"Column '{xcol}' not found in CSV. Available columns: {columns}"
-            )
 
-        # Find y column
+            time_tensor = torch.as_tensor(data[xcol], dtype=torch.float32)
+
+            # Resolve wavelength/band column (explicit or auto-detected)
+            if wavelcol is None:
+                wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
+            elif wavelcol not in columns:
+                raise ValueError(
+                    f"Column '{wavelcol}' not found in CSV. "
+                    f"Available columns: {columns}"
+                )
+
+            if wavelcol is not None:
+                wave_tensor = torch.as_tensor(data[wavelcol], dtype=torch.float32)
+                if wave_tensor.unique().numel() > 1:
+                    # Multiple wavelengths/bands → 2-D lightcurve
+                    x = torch.stack([time_tensor, wave_tensor], dim=1)
+                else:
+                    # Single wavelength → treat as 1-D
+                    x = time_tensor
+            else:
+                x = time_tensor
+
+        # ------------------------------------------------------------------
+        # Resolve the y and yerr columns
+        # ------------------------------------------------------------------
         if ycol is None:
             ycol = cls._find_column(columns, cls._Y_COLUMN_NAMES)
             if ycol is None:
                 raise ValueError(
-                    f"Could not auto-detect y column. Available columns: {columns}. "
+                    f"Could not auto-detect y column. "
+                    f"Available columns: {columns}. "
                     "Please specify ycol explicitly."
                 )
         elif ycol not in columns:
@@ -392,7 +494,6 @@ class InputHelpers:
                 f"Column '{ycol}' not found in CSV. Available columns: {columns}"
             )
 
-        # Find yerr column (optional)
         if yerrcol is None:
             yerrcol = cls._find_column(columns, cls._YERR_COLUMN_NAMES)
         elif yerrcol not in columns:
@@ -400,7 +501,6 @@ class InputHelpers:
                 f"Column '{yerrcol}' not found in CSV. Available columns: {columns}"
             )
 
-        x = torch.as_tensor(data[xcol], dtype=torch.float32)
         y = torch.as_tensor(data[ycol], dtype=torch.float32)
         yerr = torch.as_tensor(data[yerrcol], dtype=torch.float32) if yerrcol else None
 

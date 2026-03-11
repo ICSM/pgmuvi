@@ -609,6 +609,104 @@ class TestFromCSV(unittest.TestCase):
         self.assertIn("jd", Lightcurve._X_COLUMN_NAMES)
         self.assertIn("magnitude", Lightcurve._Y_COLUMN_NAMES)
         self.assertIn("err", Lightcurve._YERR_COLUMN_NAMES)
+        self.assertIn("wavelength", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+        self.assertIn("band", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+        self.assertIn("filter", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+        self.assertIn("wave", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+
+    # ------------------------------------------------------------------
+    # 2D / multiband lightcurve tests
+    # ------------------------------------------------------------------
+
+    def test_autodetect_multiband_2d(self):
+        """A wavelength column with multiple values triggers a 2D lightcurve."""
+        path = self._write_csv(
+            "multiband.csv",
+            "time,flux,wavelength\n"
+            "1.0,1.5,0.5\n2.0,1.6,0.5\n3.0,1.4,0.5\n"
+            "1.0,2.5,1.5\n2.0,2.6,1.5\n3.0,2.4,1.5\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        self.assertIsInstance(lc, Lightcurve)
+        # xdata should be 2D: (N, 2) with time in col 0, wavelength in col 1
+        self.assertEqual(lc._xdata_raw.dim(), 2)
+        self.assertEqual(lc._xdata_raw.shape[1], 2)
+        self.assertEqual(len(lc.ydata), 6)
+
+    def test_autodetect_single_wavelength_is_1d(self):
+        """A wavelength column with only one unique value → 1D lightcurve."""
+        path = self._write_csv(
+            "single_band.csv",
+            "time,flux,wavelength\n1.0,1.5,0.5\n2.0,1.6,0.5\n3.0,1.4,0.5\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        self.assertIsInstance(lc, Lightcurve)
+        # Only one wavelength → treat as 1D
+        self.assertEqual(lc._xdata_raw.dim(), 1)
+
+    def test_explicit_wavelcol(self):
+        """Explicit wavelcol parameter creates a 2D lightcurve."""
+        path = self._write_csv(
+            "explicit_band.csv",
+            "time,flux,band\n1.0,1.5,1.0\n2.0,1.6,1.0\n3.0,1.4,2.0\n",
+        )
+        lc = Lightcurve.from_csv(path, xcol="time", ycol="flux", wavelcol="band")
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(lc._xdata_raw.dim(), 2)
+        self.assertEqual(lc._xdata_raw.shape[1], 2)
+
+    def test_explicit_wavelcol_missing_raises(self):
+        """Explicitly specified wavelcol that does not exist should raise ValueError."""
+        path = self._write_csv(
+            "missing_wavelcol.csv",
+            "time,flux\n0.0,1.0\n1.0,2.0\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path, wavelcol="nonexistent")
+
+    def test_xcol_as_list_creates_2d(self):
+        """xcol as a list of column names stacks columns into 2D xdata."""
+        path = self._write_csv(
+            "xcol_list.csv",
+            "time,band,flux\n1.0,0.5,1.5\n2.0,0.5,1.6\n3.0,1.5,1.4\n",
+        )
+        lc = Lightcurve.from_csv(path, xcol=["time", "band"], ycol="flux")
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(lc._xdata_raw.dim(), 2)
+        self.assertEqual(lc._xdata_raw.shape[1], 2)
+
+    def test_xcol_as_single_element_list_is_1d(self):
+        """xcol as a single-element list returns a 1D lightcurve."""
+        path = self._write_csv(
+            "xcol_single_list.csv",
+            "time,flux\n1.0,1.5\n2.0,1.6\n3.0,1.4\n",
+        )
+        lc = Lightcurve.from_csv(path, xcol=["time"], ycol="flux")
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(lc._xdata_raw.dim(), 1)
+
+    def test_xcol_list_with_missing_col_raises(self):
+        """A column listed in xcol that is absent raises ValueError."""
+        path = self._write_csv(
+            "bad_list.csv",
+            "time,flux\n1.0,1.5\n2.0,1.6\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path, xcol=["time", "nonexistent"], ycol="flux")
+
+    def test_2d_data_values_preserved(self):
+        """Check that 2D xdata contains correct time and wavelength values."""
+        path = self._write_csv(
+            "2d_values.csv",
+            "time,wavelength,flux\n"
+            "1.0,0.5,10.0\n2.0,0.5,20.0\n"
+            "1.0,1.5,30.0\n2.0,1.5,40.0\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        expected_time = torch.as_tensor([1.0, 2.0, 1.0, 2.0], dtype=torch.float32)
+        expected_wave = torch.as_tensor([0.5, 0.5, 1.5, 1.5], dtype=torch.float32)
+        self.assertTrue(torch.allclose(lc._xdata_raw[:, 0], expected_time))
+        self.assertTrue(torch.allclose(lc._xdata_raw[:, 1], expected_wave))
 
     # ------------------------------------------------------------------
     # Sample data file
