@@ -76,6 +76,62 @@ def dict_walk_generator(indict, pre=None):
         yield [*pre, indict]
 
 
+def _convert_time_to_days(xdata, time_units):
+    """Convert the time axis of xdata to days.
+
+    Parameters
+    ----------
+    xdata : torch.Tensor
+        The independent variable data.  For 1-D light curves this is a
+        1-D (or single-column) tensor of time values.  For 2-D (multi-band)
+        light curves this is a 2-D tensor of shape ``(N, 2)`` where column 0
+        is time and column 1 is wavelength/band; only the time column is
+        converted.
+    time_units : str, astropy.units.UnitBase, or None
+        Units of the time values.  Any string accepted by
+        ``astropy.units.Unit`` (e.g. ``'s'``, ``'hr'``, ``'yr'``,
+        ``'days'``) and any ``astropy.units`` unit object are supported.
+        If *None* the data are assumed to already be in days and are
+        returned unchanged.
+
+    Returns
+    -------
+    torch.Tensor
+        ``xdata`` with the time axis expressed in days.
+
+    Raises
+    ------
+    ValueError
+        If *time_units* cannot be converted to days (e.g. it is a unit of
+        length rather than time).
+    """
+    if time_units is None:
+        return xdata
+
+    import astropy.units as u
+
+    if isinstance(time_units, str):
+        unit = u.Unit(time_units)
+    else:
+        unit = time_units
+
+    try:
+        conversion_factor = float(unit.to(u.day))
+    except u.UnitConversionError as e:
+        raise ValueError(
+            f"Cannot convert time_units '{time_units}' to days: {e}"
+        ) from e
+
+    if xdata.dim() <= 1 or xdata.shape[1] == 1:
+        # 1-D light curve: all values are time
+        return xdata * conversion_factor
+    else:
+        # 2-D light curve: column 0 is time, column 1 is wavelength
+        xdata = xdata.clone()
+        xdata[:, 0] = xdata[:, 0] * conversion_factor
+        return xdata
+
+
 class Transformer(torch.nn.Module):
     def __init__(self):
         """Baseclass for data transformers
@@ -281,6 +337,10 @@ class Lightcurve(gpytorch.Module):
         The transform to apply to the x data, by default 'minmax'
     ytransform : str, optional
         The transform to apply to the y data, by default None
+    time_units : str, astropy.units.UnitBase, or None, optional
+        Units of the time axis.  Time values are converted to days
+        internally.  If *None* (default) the data are assumed to already
+        be in days.
 
 
     Examples
@@ -299,14 +359,16 @@ class Lightcurve(gpytorch.Module):
         xtransform="minmax",
         ytransform=None,
         name=None,
+        time_units=None,
         **kwargs,
     ):
-        """_summary_
+        """Initialize a Lightcurve.
 
         Parameters
         ----------
         xdata : torch.Tensor
-            The independent variable data
+            The independent variable data (time, or time + wavelength for 2-D
+            light curves).
         ydata : torch.Tensor
             The dependent variable data
         yerr : torch.Tensor, optional
@@ -315,6 +377,15 @@ class Lightcurve(gpytorch.Module):
             The transform to apply to the x data, by default 'minmax'
         ytransform : str or Transformer, optional
             The transform to apply to the y data, by default None
+        name : str, optional
+            A name for this light curve, by default 'Lightcurve'
+        time_units : str, astropy.units.UnitBase, or None, optional
+            Units of the time axis in *xdata*.  The time values will be
+            converted to days internally.  Accepts any string recognised by
+            ``astropy.units`` (e.g. ``'s'``, ``'hr'``, ``'yr'``, ``'days'``)
+            or an ``astropy.units`` unit object.  If *None* (default) the
+            data are assumed to already be in days and no conversion is
+            performed.
         """
         super().__init__()
 
@@ -334,7 +405,7 @@ class Lightcurve(gpytorch.Module):
         else:
             self.ytransform = transform_dic[ytransform]()
 
-        self.xdata = xdata
+        self.xdata = _convert_time_to_days(xdata, time_units)
         self.ydata = ydata
         if yerr is not None:
             self.yerr = yerr
@@ -371,7 +442,10 @@ class Lightcurve(gpytorch.Module):
         yerrcol: str
             Name of column in table that contains the yerr data
         kwargs:
-            Arguments to be passed to the Lightcurve call
+            Arguments to be passed to the Lightcurve constructor, including
+            ``time_units`` (str or ``astropy.units`` unit, default *None*).
+            If ``time_units`` is provided, the time axis read from *xcol* will
+            be converted to days before being stored.
 
         Returns
         ----------
