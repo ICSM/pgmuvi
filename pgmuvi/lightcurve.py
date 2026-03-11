@@ -1181,7 +1181,7 @@ class Lightcurve(gpytorch.Module):
             ``"LPV"``
                 Long-Period Variable stars.  Enforces a lower period limit of
                 20 days (i.e. an upper frequency limit) so that the fit is
-                not pulled toward un-physically short periods.
+                not pulled toward unphysically short periods.
 
             Pass ``None`` (the default) to use only the data-driven defaults.
         **kwargs : dict, optional
