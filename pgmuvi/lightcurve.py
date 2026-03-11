@@ -1659,6 +1659,196 @@ class Lightcurve(gpytorch.Module):
                 ),
             )
 
+    def _get_variability_arrays(self):
+        """Return (y, yerr) as float64 NumPy arrays, safe for CPU and GPU tensors."""
+        y = self._ydata_raw.detach().cpu().numpy()
+        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+            yerr = self._yerr_raw.detach().cpu().numpy()
+        else:
+            yerr = np.ones_like(y)
+        return y, yerr
+
+    def check_variability(self, **kwargs) -> dict:
+        """
+        Check if lightcurve shows significant variability.
+
+        Only applicable for 1-D lightcurves. For multiband data use
+        :meth:`check_variability_per_band`.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Arguments passed to is_variable():
+            - alpha: float (default 0.01)
+            - fvar_min: float (default 0.05)
+            - stetson_k_min: float (default 0.95)
+            - verbose: bool (default False)
+
+        Returns
+        -------
+        dict
+            Variability diagnostics from is_variable()
+
+        Raises
+        ------
+        ValueError
+            If the lightcurve is multiband (ndim > 1). Use
+            check_variability_per_band() instead.
+
+        Examples
+        --------
+        >>> lc = Lightcurve(t, y, yerr)
+        >>> diag = lc.check_variability(verbose=True)
+        >>> print(f"Variable: {diag['decision']}")
+        """
+        if self.ndim > 1:
+            raise ValueError(
+                "check_variability() is for 1-D lightcurves. "
+                "For multiband data use check_variability_per_band()."
+            )
+        from pgmuvi.preprocess.variability import is_variable
+
+        y, yerr = self._get_variability_arrays()
+        _is_var, diagnostics = is_variable(y, yerr, **kwargs)
+        return diagnostics
+
+    def check_variability_per_band(self, **kwargs) -> dict:
+        """
+        Check variability independently for each wavelength band.
+
+        Only applicable for multiband (2D) lightcurves where
+        ``xdata[:, 1]`` encodes the band/wavelength.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Arguments passed to is_variable()
+
+        Returns
+        -------
+        dict
+            {
+                wavelength1: diagnostics_dict,
+                wavelength2: diagnostics_dict,
+                ...
+                'summary': {
+                    'n_bands': int,
+                    'n_variable': int,
+                    'variable_wavelengths': list[float]
+                }
+            }
+
+        Raises
+        ------
+        ValueError
+            If the lightcurve is not 2-D multiband data (ndim != 2 columns
+            with time in column 0 and wavelength in column 1).
+
+        Examples
+        --------
+        >>> lc2d = Lightcurve(xdata_2d, y, yerr)
+        >>> results = lc2d.check_variability_per_band(verbose=True)
+        >>> n_var = results['summary']['n_variable']
+        >>> n_bands = results['summary']['n_bands']
+        >>> print(f"{n_var}/{n_bands} bands variable")
+        """
+        if self._xdata_raw.dim() != 2 or self._xdata_raw.shape[1] < 2:
+            raise ValueError(
+                "check_variability_per_band() requires 2-D multiband data "
+                "with shape (N, 2) where column 0 is time and column 1 is "
+                "the band/wavelength. Got shape "
+                f"{tuple(self._xdata_raw.shape)}."
+            )
+        from pgmuvi.preprocess.variability import is_variable
+
+        # Convert to NumPy once; safe for both CPU and CUDA tensors
+        xdata_band = self._xdata_raw[:, 1].detach().cpu().numpy()
+        ydata = self._ydata_raw.detach().cpu().numpy()
+        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+            yerr_data = self._yerr_raw.detach().cpu().numpy()
+        else:
+            yerr_data = None
+
+        wavelengths = np.unique(xdata_band)
+        results = {}
+        variable_bands = []
+
+        for wl in wavelengths:
+            mask = xdata_band == wl
+            y = ydata[mask]
+            yerr = yerr_data[mask] if yerr_data is not None else np.ones_like(y)
+
+            is_var, diag = is_variable(y, yerr, **kwargs)
+            results[float(wl)] = diag
+
+            if is_var:
+                variable_bands.append(float(wl))
+
+        results["summary"] = {
+            "n_bands": len(wavelengths),
+            "n_variable": len(variable_bands),
+            "variable_wavelengths": variable_bands,
+        }
+
+        return results
+
+    def filter_variable_bands(self, **kwargs):
+        """
+        Create new Lightcurve with only variable bands retained.
+
+        Only applicable for multiband (2D) lightcurves where
+        ``xdata[:, 1]`` encodes the band/wavelength.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Arguments passed to is_variable()
+
+        Returns
+        -------
+        Lightcurve
+            New instance containing only wavelengths that pass variability tests
+
+        Raises
+        ------
+        ValueError
+            If no bands pass variability tests
+
+        Examples
+        --------
+        >>> lc2d = Lightcurve(xdata_2d, y, yerr)
+        >>> lc_var = lc2d.filter_variable_bands()
+        >>> # Check how many bands were retained via the per-band summary
+        >>> results = lc2d.check_variability_per_band()
+        >>> print(f"Retained {results['summary']['n_variable']} variable bands")
+        """
+        results = self.check_variability_per_band(**kwargs)
+
+        if results["summary"]["n_variable"] == 0:
+            raise ValueError(
+                "No bands passed variability tests. "
+                "Consider relaxing criteria (alpha, fvar_min, stetson_k_min)"
+            )
+
+        keep_wl = results["summary"]["variable_wavelengths"]
+        wl_array = self._xdata_raw[:, 1].detach().cpu().numpy()
+        keep_mask = np.isin(wl_array, keep_wl)
+        keep_tensor = torch.as_tensor(
+            keep_mask,
+            dtype=torch.bool,
+            device=self._xdata_raw.device,
+        )
+
+        new_x = self._xdata_raw[keep_tensor].clone()
+        new_y = self._ydata_raw[keep_tensor].clone()
+
+        if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+            new_yerr = self._yerr_raw[keep_tensor].clone()
+        else:
+            new_yerr = None
+
+        return Lightcurve(new_x, new_y, yerr=new_yerr)
+
     def auto_select_model(self, verbose=True):
         """Automatically select the best model type based on data characteristics.
 
@@ -1772,6 +1962,8 @@ class Lightcurve(gpytorch.Module):
         stop=1e-5,
         lr=0.1,
         stopavg=30,
+        check_variability: bool = False,
+        variability_kwargs: dict | None = None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -1856,6 +2048,13 @@ class Lightcurve(gpytorch.Module):
         stopavg : int, optional
             The number of iterations to use for the stopping criterion, by
             default 30.
+        check_variability : bool, default=False
+            If True, verify lightcurve shows significant variability before
+            fitting. Raises ValueError if not variable. Set to False to force
+            fitting.
+        variability_kwargs : dict, optional
+            Keyword arguments for variability tests (alpha, fvar_min,
+            stetson_k_min). Only used when check_variability=True.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -1870,6 +2069,36 @@ class Lightcurve(gpytorch.Module):
         ValueError
             _description_
         """
+        if check_variability:
+            from pgmuvi.preprocess.variability import is_variable
+
+            if self.ndim > 1:
+                raise ValueError(
+                    "fit(check_variability=True) is not supported for multiband "
+                    "(ndim > 1) lightcurves, because pooling bands may produce "
+                    "misleading variability results. Use "
+                    "check_variability_per_band() or filter_variable_bands() to "
+                    "assess each band independently before fitting."
+                )
+
+            vkwargs = variability_kwargs or {}
+            y, yerr = self._get_variability_arrays()
+            is_var, diag = is_variable(y, yerr, **vkwargs)
+
+            if not is_var:
+                raise ValueError(
+                    f"Lightcurve shows NO significant variability:\n"
+                    f"  p-value: {diag['p_value']:.4f} "
+                    f"[{'PASS' if diag['tests_passed']['chi2_test'] else 'FAIL'}]\n"
+                    f"  F_var: {diag['fvar']:.4f} "
+                    f"[{'PASS' if diag['tests_passed']['fvar_test'] else 'FAIL'}]\n"
+                    f"  Stetson K: {diag['stetson_k']:.3f} "
+                    f"[{'PASS' if diag['tests_passed']['stetson_test'] else 'FAIL'}]\n"
+                    f"Decision: {diag['decision']}\n\n"
+                    "GP fitting not recommended for non-variable sources.\n"
+                    "To force fitting anyway, use: fit(check_variability=False)"
+                )
+
         if not hasattr(self, "likelihood"):
             self.set_likelihood(likelihood, **kwargs)
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:

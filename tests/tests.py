@@ -467,6 +467,18 @@ class TestSpectralMixtureGPModel(unittest.TestCase):
     pass
 
 
+<<<<<<< copilot/add-variability-detection-module
+# Import variability tests so they are discovered when this file is run
+from test_variability import (  # noqa: E402, F401
+    TestComputeFvar,
+    TestComputeStetsonK,
+    TestIsVariable,
+    TestLightcurveVariability,
+    TestWeightedChi2,
+)
+
+if __name__ == '__main__':
+=======
 class TestPowerLawMean(unittest.TestCase):
     """Tests for the PowerLawMean mean function."""
 
@@ -627,4 +639,5 @@ class TestNewGPModels(unittest.TestCase):
 
 
 if  __name__ == '__main__':
+>>>>>>> main
     unittest.main()
