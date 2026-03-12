@@ -371,6 +371,12 @@ class InputHelpers:
         "e_magnitude",
         "e_mag",
         "e_flux",
+        "flux_error",
+        "mag_error",
+        "magnitude_error",
+        "value_error",
+        "data_error",
+        "y_error",
     ]
     _WAVELENGTH_COLUMN_NAMES: ClassVar[list[str]] = [
         "wavelength",
