@@ -1076,7 +1076,7 @@ class QuasiPeriodicGPModel(ExactGP):
     >>> model = QuasiPeriodicGPModel(t, y, lik, period=5.0)
     """
 
-    def __init__(self, train_x, train_y, likelihood, period=None):
+    def __init__(self, train_x, train_y, likelihood, period=None, **kwargs):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
 
@@ -1128,7 +1128,9 @@ class MaternGPModel(ExactGP):
     >>> model = MaternGPModel(t, y, lik, nu=0.5)
     """
 
-    def __init__(self, train_x, train_y, likelihood, nu=1.5, lengthscale=None):
+    def __init__(
+        self, train_x, train_y, likelihood, nu=1.5, lengthscale=None, **kwargs
+    ):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
 
@@ -1178,7 +1180,7 @@ class PeriodicPlusStochasticGPModel(ExactGP):
     >>> model = PeriodicPlusStochasticGPModel(t, y, lik, period=5.0)
     """
 
-    def __init__(self, train_x, train_y, likelihood, period=None):
+    def __init__(self, train_x, train_y, likelihood, period=None, **kwargs):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
 
@@ -1217,7 +1219,7 @@ class LinearMeanQuasiPeriodicGPModel(ExactGP):
         Initial period guess. Defaults to half the data span.
     """
 
-    def __init__(self, train_x, train_y, likelihood, period=None):
+    def __init__(self, train_x, train_y, likelihood, period=None, **kwargs):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = LinearMean(input_size=1)
 
@@ -1480,11 +1482,29 @@ class WavelengthDependentGPModel(SeparableGPModel):
     num_mixtures : int, optional
         Number of mixture components when ``time_kernel_type='spectral_mixture'``.
         Default 4.
+    mean_module : str or gpytorch.means.Mean, optional
+        Mean function for the GP.  Accepted string values:
+
+        - ``None`` / ``'quad'`` / ``'quadratic'``: :class:`CustomQuadConstantMean`
+          (default — quadratic in wavelength, constant in time).
+        - ``'linear'`` / ``'linear_mean'``: :class:`CustomLinearConstantMean`.
+        - ``'constant'`` / ``'constant_mean'``: :class:`~gpytorch.means.ConstantMean`.
+        - ``'dust'`` / ``'dust_mean'``: :class:`DustMean` — physically motivated
+          dust-attenuation law.
+        - ``'power_law'`` / ``'power_law_mean'``: :class:`PowerLawMean` — power-law
+          wavelength dependence.
+
+        Alternatively, supply any :class:`gpytorch.means.Mean` instance directly.
 
     Notes
     -----
     Best suited for temperature-driven variability and spot models where the
     variability amplitude changes smoothly with wavelength.
+
+    To model dust-obscured sources (e.g. AGB stars) combine ``mean_module='dust'``
+    with this model's separable Matérn/RBF kernel structure — this is equivalent
+    to :class:`DustMeanGPModel`.  For a simple power-law wavelength dependence use
+    ``mean_module='power_law'`` (equivalent to :class:`PowerLawMeanGPModel`).
 
     Examples
     --------
@@ -1525,11 +1545,21 @@ class WavelengthDependentGPModel(SeparableGPModel):
             # mean_module = LinearMean(input_size=2)
         elif mean_module in ('constant', 'constant_mean'):
             mean_module = ConstantMean()
+        elif mean_module in ('dust', 'dust_mean'):
+            mean_module = DustMean()
+        elif mean_module in ('power_law', 'power_law_mean'):
+            mean_module = PowerLawMean()
         elif isinstance(mean_module, Mean):
             mean_module = mean_module
         else:
+            accepted = (
+                "'quad'/'quadratic'/'quad_constant', 'linear'/'linear_mean', "
+                "'constant'/'constant_mean', 'dust'/'dust_mean', "
+                "'power_law'/'power_law_mean', or a gpytorch.means.Mean instance"
+            )
             raise ValueError(
-                "mean_module must be a gpytorch.means.Mean instance or None."
+                f"Unsupported mean_module value {mean_module!r}. "
+                f"Expected one of: {accepted}."
             )
 
 
@@ -1546,5 +1576,144 @@ class WavelengthDependentGPModel(SeparableGPModel):
             wavelength_kernel=wl_kernel,
             mean_module=mean_module,
             **kwargs
+        )
+
+
+class DustMeanGPModel(WavelengthDependentGPModel):
+    """2D GP model combining a dust-extinction mean with separable simple kernels.
+
+    A convenience subclass of :class:`WavelengthDependentGPModel` that
+    replaces the default quadratic mean function with :class:`DustMean`:
+
+    .. code-block:: text
+
+        mean: m(t, λ) = amplitude * exp(-tau * λ^(-alpha)) + offset
+        cov:  k(t,λ,t',λ') = k_time(t,t') * k_wavelength(λ,λ')
+
+    This provides a physically-motivated model for dust-obscured AGB stars
+    built entirely from standard Matérn/RBF kernels rather than the more
+    complex :class:`~gpytorch.kernels.SpectralMixtureKernel`.
+
+    Parameters
+    ----------
+    train_x : torch.Tensor
+        Input of shape ``(n, 2)`` — column 0 is time, column 1 is wavelength.
+    train_y : torch.Tensor
+        Observed values (1D tensor).
+    likelihood : gpytorch.likelihoods.Likelihood
+        Likelihood function for the model.
+    time_kernel_type : str or gpytorch.kernels.Kernel, optional
+        Type of time kernel (see :class:`WavelengthDependentGPModel`).
+        Defaults to ``'matern'``.
+    wavelength_kernel_type : str or gpytorch.kernels.Kernel, optional
+        Type of wavelength kernel (see :class:`WavelengthDependentGPModel`).
+        Defaults to ``'rbf'``.
+    period : float, optional
+        Initial period for the quasi-periodic time kernel option.
+    wavelength_lengthscale : float, optional
+        Initial wavelength correlation length.
+    num_mixtures : int, optional
+        Number of mixture components when ``time_kernel_type='spectral_mixture'``.
+        Default 4.
+    **kwargs
+        Additional keyword arguments forwarded to :class:`WavelengthDependentGPModel`.
+
+    Notes
+    -----
+    See :class:`DustMean` for the parameterisation of the mean function.
+    For a spectral-mixture covariance variant see
+    :class:`TwoDSpectralMixtureDustMeanGPModel`.
+
+    Examples
+    --------
+    >>> import torch, gpytorch
+    >>> from pgmuvi.gps import DustMeanGPModel
+    >>> t_data = torch.linspace(0, 10, 50)
+    >>> wl = torch.linspace(0.4, 2.5, 50)   # microns (optical to IR)
+    >>> x = torch.stack([t_data, wl], dim=1)
+    >>> y = torch.exp(-1.0 * wl ** -1.7) + 0.05 * torch.randn(50)
+    >>> lik = gpytorch.likelihoods.GaussianLikelihood()
+    >>> model = DustMeanGPModel(x, y, lik)
+    """
+
+    def __init__(self, train_x, train_y, likelihood, **kwargs):
+        kwargs.setdefault("time_kernel_type", "matern")
+        kwargs.setdefault("wavelength_kernel_type", "rbf")
+        super().__init__(
+            train_x,
+            train_y,
+            likelihood,
+            mean_module="dust",
+            **kwargs,
+        )
+
+
+class PowerLawMeanGPModel(WavelengthDependentGPModel):
+    """2D GP model combining a power-law wavelength mean with separable simple kernels.
+
+    A convenience subclass of :class:`WavelengthDependentGPModel` that
+    replaces the default quadratic mean function with :class:`PowerLawMean`:
+
+    .. code-block:: text
+
+        mean: m(t, λ) = offset + weight * λ^exponent
+        cov:  k(t,λ,t',λ') = k_time(t,t') * k_wavelength(λ,λ')
+
+    This provides a physically-motivated model for variable stars with
+    steep wavelength-dependent mean flux, built entirely from standard
+    Matérn/RBF kernels rather than the more complex
+    :class:`~gpytorch.kernels.SpectralMixtureKernel`.
+
+    Parameters
+    ----------
+    train_x : torch.Tensor
+        Input of shape ``(n, 2)`` — column 0 is time, column 1 is wavelength.
+    train_y : torch.Tensor
+        Observed values (1D tensor).
+    likelihood : gpytorch.likelihoods.Likelihood
+        Likelihood function for the model.
+    time_kernel_type : str or gpytorch.kernels.Kernel, optional
+        Type of time kernel (see :class:`WavelengthDependentGPModel`).
+        Defaults to ``'matern'``.
+    wavelength_kernel_type : str or gpytorch.kernels.Kernel, optional
+        Type of wavelength kernel (see :class:`WavelengthDependentGPModel`).
+        Defaults to ``'rbf'``.
+    period : float, optional
+        Initial period for the quasi-periodic time kernel option.
+    wavelength_lengthscale : float, optional
+        Initial wavelength correlation length.
+    num_mixtures : int, optional
+        Number of mixture components when ``time_kernel_type='spectral_mixture'``.
+        Default 4.
+    **kwargs
+        Additional keyword arguments forwarded to :class:`WavelengthDependentGPModel`.
+
+    Notes
+    -----
+    See :class:`PowerLawMean` for the parameterisation of the mean function.
+    For a spectral-mixture covariance variant see
+    :class:`TwoDSpectralMixturePowerLawMeanGPModel`.
+
+    Examples
+    --------
+    >>> import torch, gpytorch
+    >>> from pgmuvi.gps import PowerLawMeanGPModel
+    >>> t_data = torch.linspace(0, 10, 50)
+    >>> wl = torch.linspace(0.4, 2.5, 50)   # microns
+    >>> x = torch.stack([t_data, wl], dim=1)
+    >>> y = wl ** -1.7 + 0.05 * torch.randn(50)
+    >>> lik = gpytorch.likelihoods.GaussianLikelihood()
+    >>> model = PowerLawMeanGPModel(x, y, lik)
+    """
+
+    def __init__(self, train_x, train_y, likelihood, **kwargs):
+        kwargs.setdefault("time_kernel_type", "matern")
+        kwargs.setdefault("wavelength_kernel_type", "rbf")
+        super().__init__(
+            train_x,
+            train_y,
+            likelihood,
+            mean_module="power_law",
+            **kwargs,
         )
 
