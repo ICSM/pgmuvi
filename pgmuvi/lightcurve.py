@@ -458,6 +458,10 @@ class InputHelpers:
             raise ValueError(
                 "No valid data rows remain after dropping NaN-containing rows."
             )
+        elif y.numel() < 10 and n_dropped > 0:
+            warnings.warn(
+                f"Fewer than 10 elements remain after dropping {n_dropped} rows, take care interpreting results!"
+            )
         return x, y, yerr
 
     @classmethod
