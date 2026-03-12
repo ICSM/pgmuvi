@@ -1,4 +1,6 @@
 import contextlib
+from pathlib import Path
+from typing import ClassVar
 import numpy as np
 import torch
 import gpytorch
@@ -26,6 +28,7 @@ from .gps import (
 import matplotlib.pyplot as plt
 from .trainers import train
 from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive  # noqa: F401
+from .constraints import get_constraint_set
 from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior  # noqa: F401
 import pyro
 from pyro.infer.mcmc import NUTS, MCMC, HMC
@@ -74,6 +77,68 @@ def dict_walk_generator(indict, pre=None):
                 yield [*pre, key, value]
     else:
         yield [*pre, indict]
+
+
+def _convert_time_to_days(xdata, time_units):
+    """Convert the time axis of xdata to days.
+
+    Parameters
+    ----------
+    xdata : torch.Tensor, numpy.ndarray, or array-like
+        The independent variable data.  For 1-D light curves this is a
+        1-D (or single-column) array of time values.  For 2-D (multi-band)
+        light curves this is a 2-D array of shape ``(N, 2)`` where column 0
+        is time and column 1 is wavelength/band; only the time column is
+        converted.  Non-tensor inputs are coerced to a ``torch.float32``
+        tensor automatically.
+    time_units : str, astropy.units.UnitBase, or None
+        Units of the time values.  Any string accepted by
+        ``astropy.units.Unit`` (e.g. ``'s'``, ``'hr'``, ``'yr'``,
+        ``'days'``) and any ``astropy.units`` unit object are supported.
+        If *None* the data are assumed to already be in days and are
+        returned unchanged.
+
+    Returns
+    -------
+    torch.Tensor
+        ``xdata`` with the time axis expressed in days.
+
+    Raises
+    ------
+    ValueError
+        If *time_units* cannot be converted to days (e.g. it is a unit of
+        length rather than time).
+    """
+    if time_units is None:
+        return xdata
+
+    import astropy.units as u
+
+    if isinstance(time_units, str):
+        unit = u.Unit(time_units)
+    else:
+        unit = time_units
+
+    try:
+        conversion_factor = float(unit.to(u.day))
+    except u.UnitConversionError as e:
+        raise ValueError(
+            f"Cannot convert time_units '{time_units}' to days: {e}"
+        ) from e
+
+    # Coerce to tensor so .dim() / .shape are always available, regardless of
+    # whether the caller passed a list, NumPy array, or torch.Tensor.
+    if not isinstance(xdata, torch.Tensor):
+        xdata = torch.as_tensor(xdata, dtype=torch.float32)
+
+    if xdata.dim() <= 1 or xdata.shape[1] == 1:
+        # 1-D light curve: all values are time
+        return xdata * conversion_factor
+    else:
+        # 2-D light curve: column 0 is time, column 1 is wavelength
+        xdata = xdata.clone()
+        xdata[:, 0] = xdata[:, 0] * conversion_factor
+        return xdata
 
 
 class Transformer(torch.nn.Module):
@@ -261,7 +326,262 @@ def minmax(data, dim=0):
     return (data - m) / r, m, r
 
 
-class Lightcurve(gpytorch.Module):
+class InputHelpers:
+    """Mixin class providing helper methods for reading data from various input formats.
+
+    This class provides classmethods for instantiating a :class:`Lightcurve`
+    from different input formats, with flexible column name detection.
+    :class:`Lightcurve` inherits from this class so all methods are available
+    directly on :class:`Lightcurve`.
+
+    Attributes
+    ----------
+    _X_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting the time (independent
+        variable) column, checked case-insensitively in order.
+    _Y_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting the dependent variable
+        (y) column, checked case-insensitively in order.
+    _YERR_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting the uncertainty column,
+        checked case-insensitively in order.
+    _WAVELENGTH_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting the wavelength or band
+        column, checked case-insensitively in order.  When such a column is
+        found and contains more than one unique value, the data are loaded as
+        a 2-D lightcurve whose ``xdata`` has shape ``(N, 2)`` with the time
+        values in column 0 and the wavelength/band values in column 1.
+    """
+
+    _X_COLUMN_NAMES: ClassVar[list[str]] = [
+        "x", "time", "t", "jd", "mjd", "date", "hjd", "bjd", "epoch"
+    ]
+    _Y_COLUMN_NAMES: ClassVar[list[str]] = [
+        "y", "magnitude", "mag", "flux", "value", "data"
+    ]
+    _YERR_COLUMN_NAMES: ClassVar[list[str]] = [
+        "yerr",
+        "uncertainty",
+        "error",
+        "err",
+        "unc",
+        "sigma",
+        "e_magnitude",
+        "e_mag",
+        "e_flux",
+    ]
+    _WAVELENGTH_COLUMN_NAMES: ClassVar[list[str]] = [
+        "wavelength",
+        "wave",
+        "wl",
+        "lambda",
+        "band",
+        "filter",
+        "freq",
+        "frequency",
+        "channel",
+    ]
+
+    @classmethod
+    def _find_column(
+        cls, columns: list[str], candidates: list[str]
+    ) -> str | None:
+        """Find the first matching column name from a list of candidates.
+
+        Matching is case-insensitive.
+
+        Parameters
+        ----------
+        columns : list of str
+            The available column names.
+        candidates : list of str
+            Candidate column names to search for, in priority order.
+
+        Returns
+        -------
+        str or None
+            The matched column name (preserving the original capitalisation
+            from *columns*), or ``None`` if no candidate was found.
+        """
+        columns_lower = {c.lower(): c for c in columns}
+        for candidate in candidates:
+            if candidate.lower() in columns_lower:
+                return columns_lower[candidate.lower()]
+        return None
+
+    @classmethod
+    def from_csv(
+        cls,
+        filepath: str | Path,
+        xcol: str | list[str] | None = None,
+        ycol: str | None = None,
+        yerrcol: str | None = None,
+        wavelcol: str | None = None,
+        **kwargs,
+    ) -> "Lightcurve":
+        """Instantiate a Lightcurve from a CSV file.
+
+        The file must have a header line whose entries are used to identify
+        the relevant data columns.  Column names are matched
+        case-insensitively.
+
+        **1-D lightcurves** (single time series)
+            When only a time column and a flux/magnitude column are present,
+            or when all observations share the same wavelength/band, the
+            resulting ``xdata`` is a 1-D tensor of shape ``(N,)``.
+
+        **2-D (multiband) lightcurves**
+            When the CSV contains a wavelength or band column with more than
+            one unique value, the resulting ``xdata`` has shape ``(N, 2)``
+            where column 0 holds the time values and column 1 holds the
+            wavelength/band values.  The ``ydata`` (and optional ``yerr``)
+            remain 1-D tensors of shape ``(N,)``.
+
+            The wavelength/band column is selected in one of three ways:
+
+            1. *Explicit ``xcol`` list*: pass ``xcol`` as a list of two
+               column names, e.g. ``xcol=["time", "band"]``.  The first
+               element is the time column and the second is the
+               wavelength/band column.  All subsequent x-axis columns are
+               stacked in the order given.
+            2. *Explicit ``wavelcol``*: pass the column name as a separate
+               ``wavelcol`` keyword argument.
+            3. *Auto-detection*: if neither an iterable ``xcol`` nor a
+               ``wavelcol`` is supplied, the method searches for a column
+               whose name matches one of the entries in
+               :attr:`_WAVELENGTH_COLUMN_NAMES`.  If such a column is found
+               *and* it contains more than one unique value, a 2-D lightcurve
+               is returned automatically.
+
+        Parameters
+        ----------
+        filepath : str or pathlib.Path
+            Path to the CSV file.
+        xcol : str or list of str or None, optional
+            Name of the column containing the time (independent variable)
+            data, or a list of column names to stack as the x-axis (first
+            element is time, subsequent elements are additional dimensions
+            such as wavelength).  If not provided, auto-detection is
+            attempted using :attr:`_X_COLUMN_NAMES` for the time column.
+        ycol : str or None, optional
+            Name of the column containing the dependent variable (y) data.
+            If not provided, auto-detection is attempted using
+            :attr:`_Y_COLUMN_NAMES`.
+        yerrcol : str or None, optional
+            Name of the column containing the uncertainties on the dependent
+            variable.  If not provided, auto-detection is attempted using
+            :attr:`_YERR_COLUMN_NAMES`.  If no matching column is found,
+            ``yerr`` is set to ``None``.
+        wavelcol : str or None, optional
+            Name of the column containing wavelength or band values.  When
+            provided, the time and wavelength columns are stacked to form a
+            2-D ``xdata``.  Ignored when ``xcol`` is a list.
+        **kwargs
+            Additional keyword arguments passed to the Lightcurve constructor.
+
+        Returns
+        -------
+        Lightcurve
+            A 1-D lightcurve when a single time column is used (or when the
+            wavelength/band column has only one unique value), or a 2-D
+            lightcurve when multiple wavelengths/bands are present.
+
+        Raises
+        ------
+        ValueError
+            If a required column cannot be auto-detected and was not specified
+            explicitly, or if an explicitly specified column name is not
+            present in the file.
+        """
+        filepath = Path(filepath)
+        data = np.genfromtxt(
+            filepath, delimiter=",", names=True, dtype=float, encoding=None
+        )
+        columns = list(data.dtype.names)
+
+        # ------------------------------------------------------------------
+        # Resolve the x (time + optional band) columns
+        # ------------------------------------------------------------------
+        if isinstance(xcol, list):
+            # Explicit multi-column x specification
+            for col in xcol:
+                if col not in columns:
+                    raise ValueError(
+                        f"Column '{col}' not found in CSV. "
+                        f"Available columns: {columns}"
+                    )
+            x_tensors = [
+                torch.as_tensor(data[col], dtype=torch.float32) for col in xcol
+            ]
+            x = torch.stack(x_tensors, dim=1) if len(x_tensors) > 1 else x_tensors[0]
+        else:
+            # Single time column (str or auto-detected)
+            if xcol is None:
+                xcol = cls._find_column(columns, cls._X_COLUMN_NAMES)
+                if xcol is None:
+                    raise ValueError(
+                        f"Could not auto-detect x column. "
+                        f"Available columns: {columns}. "
+                        "Please specify xcol explicitly."
+                    )
+            elif xcol not in columns:
+                raise ValueError(
+                    f"Column '{xcol}' not found in CSV. "
+                    f"Available columns: {columns}"
+                )
+
+            time_tensor = torch.as_tensor(data[xcol], dtype=torch.float32)
+
+            # Resolve wavelength/band column (explicit or auto-detected)
+            if wavelcol is None:
+                wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
+            elif wavelcol not in columns:
+                raise ValueError(
+                    f"Column '{wavelcol}' not found in CSV. "
+                    f"Available columns: {columns}"
+                )
+
+            if wavelcol is not None:
+                wave_tensor = torch.as_tensor(data[wavelcol], dtype=torch.float32)
+                if wave_tensor.unique().numel() > 1:
+                    # Multiple wavelengths/bands → 2-D lightcurve
+                    x = torch.stack([time_tensor, wave_tensor], dim=1)
+                else:
+                    # Single wavelength → treat as 1-D
+                    x = time_tensor
+            else:
+                x = time_tensor
+
+        # ------------------------------------------------------------------
+        # Resolve the y and yerr columns
+        # ------------------------------------------------------------------
+        if ycol is None:
+            ycol = cls._find_column(columns, cls._Y_COLUMN_NAMES)
+            if ycol is None:
+                raise ValueError(
+                    f"Could not auto-detect y column. "
+                    f"Available columns: {columns}. "
+                    "Please specify ycol explicitly."
+                )
+        elif ycol not in columns:
+            raise ValueError(
+                f"Column '{ycol}' not found in CSV. Available columns: {columns}"
+            )
+
+        if yerrcol is None:
+            yerrcol = cls._find_column(columns, cls._YERR_COLUMN_NAMES)
+        elif yerrcol not in columns:
+            raise ValueError(
+                f"Column '{yerrcol}' not found in CSV. Available columns: {columns}"
+            )
+
+        y = torch.as_tensor(data[ycol], dtype=torch.float32)
+        yerr = torch.as_tensor(data[yerrcol], dtype=torch.float32) if yerrcol else None
+
+        return cls(x, y, yerr, **kwargs)
+
+
+class Lightcurve(InputHelpers, gpytorch.Module):
     """A class for storing, manipulating and fitting light curves
 
     This class is designed to be a convenient way to store and manipulate
@@ -278,9 +598,13 @@ class Lightcurve(gpytorch.Module):
     yerr : Tensor of floats, optional
         The uncertainties on the dependent variable data, by default None
     xtransform : str, optional
-        The transform to apply to the x data, by default 'minmax'
+        The transform to apply to the x data, by default None
     ytransform : str, optional
         The transform to apply to the y data, by default None
+    time_units : str, astropy.units.UnitBase, or None, optional
+        Units of the time axis.  Time values are converted to days
+        internally.  If *None* (default) the data are assumed to already
+        be in days.
 
 
     Examples
@@ -296,25 +620,36 @@ class Lightcurve(gpytorch.Module):
         xdata,
         ydata,
         yerr=None,
-        xtransform="minmax",
+        xtransform=None,
         ytransform=None,
         name=None,
+        time_units=None,
         **kwargs,
     ):
-        """_summary_
+        """Initialize a Lightcurve.
 
         Parameters
         ----------
         xdata : torch.Tensor
-            The independent variable data
+            The independent variable data (time, or time + wavelength for 2-D
+            light curves).
         ydata : torch.Tensor
             The dependent variable data
         yerr : torch.Tensor, optional
             The uncertainties on the dependent variable data, by default None
         xtransform : str or Transformer, optional
-            The transform to apply to the x data, by default 'minmax'
+            The transform to apply to the x data, by default None
         ytransform : str or Transformer, optional
             The transform to apply to the y data, by default None
+        name : str, optional
+            A name for this light curve, by default 'Lightcurve'
+        time_units : str, astropy.units.UnitBase, or None, optional
+            Units of the time axis in *xdata*.  The time values will be
+            converted to days internally.  Accepts any string recognised by
+            ``astropy.units`` (e.g. ``'s'``, ``'hr'``, ``'yr'``, ``'days'``)
+            or an ``astropy.units`` unit object.  If *None* (default) the
+            data are assumed to already be in days and no conversion is
+            performed.
         """
         super().__init__()
 
@@ -334,7 +669,7 @@ class Lightcurve(gpytorch.Module):
         else:
             self.ytransform = transform_dic[ytransform]()
 
-        self.xdata = xdata
+        self.xdata = _convert_time_to_days(xdata, time_units)
         self.ydata = ydata
         if yerr is not None:
             self.yerr = yerr
@@ -371,7 +706,10 @@ class Lightcurve(gpytorch.Module):
         yerrcol: str
             Name of column in table that contains the yerr data
         kwargs:
-            Arguments to be passed to the Lightcurve call
+            Arguments to be passed to the Lightcurve constructor, including
+            ``time_units`` (str or ``astropy.units`` unit, default *None*).
+            If ``time_units`` is provided, the time axis read from *xcol* will
+            be converted to days before being stored.
 
         Returns
         ----------
@@ -651,7 +989,7 @@ class Lightcurve(gpytorch.Module):
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
 
-               
+
             If an instance of a GP class, that object will be used.
             _description_, by default None
         likelihood : string, None or instance of
@@ -1149,7 +1487,7 @@ class Lightcurve(gpytorch.Module):
             if not hasattr(self.xtransform, "transform"):
                 raise ValueError("xtransform must have a 'transform' method")
 
-    def set_default_constraints(self, **kwargs):
+    def set_default_constraints(self, constraint_set=None, **kwargs):
         """Set the default constraints for the model and likelihood parameters
 
         The default constraints are as follows:
@@ -1170,6 +1508,22 @@ class Lightcurve(gpytorch.Module):
 
         Parameters
         ----------
+        constraint_set : str or None, optional
+            Name of a pre-defined source-type constraint set to apply on top
+            of the default constraints.  When provided, the constraints
+            defined for the named set (see
+            :data:`pgmuvi.constraints.CONSTRAINT_SETS`) are merged into the
+            default mixture-means constraint.  Currently supported values:
+
+            ``"LPV"``
+                Long-Period Variable stars.  Enforces a lower period limit of
+                20 in the same time units as the input ``xdata`` (typically
+                interpreted as 20 days for LPV light curves) so that the fit is
+                not pulled toward unphysically short periods.  If ``xdata``
+                is provided in different time units, this numerical limit
+                applies in those units.
+
+            Pass ``None`` (the default) to use only the data-driven defaults.
         **kwargs : dict, optional
             Any keyword arguments to be passed to the Constraint constructors.
         """
@@ -1237,6 +1591,70 @@ class Lightcurve(gpytorch.Module):
             mixture_means_constraint = Interval(overall_min_frequency, max_freq)
         else:
             mixture_means_constraint = GreaterThan(1 / self._xdata_transformed.max())
+
+        # Apply any constraint_set period bounds to the mixture_means constraint
+        if constraint_set is not None:
+            cs = get_constraint_set(constraint_set)
+            if "period" in cs:
+                period_bounds = cs["period"]
+                lower_val, lower_active = period_bounds["lower"]
+                upper_val, upper_active = period_bounds["upper"]
+
+                # Compute the scale factor to convert a period in original
+                # (untransformed) units to a frequency in transformed space.
+                # For any linear rescaling transform:
+                #   freq_transformed = freq_original * (x_orig_span / x_trans_span)
+                if self.ndim > 1:
+                    x_orig_span = float(
+                        self._xdata_raw[:, 0].max() - self._xdata_raw[:, 0].min()
+                    )
+                    x_trans_span = float(
+                        self._xdata_transformed[:, 0].max()
+                        - self._xdata_transformed[:, 0].min()
+                    )
+                else:
+                    x_orig_span = float(
+                        self._xdata_raw.max() - self._xdata_raw.min()
+                    )
+                    x_trans_span = float(
+                        self._xdata_transformed.max()
+                        - self._xdata_transformed.min()
+                    )
+                freq_scale = x_orig_span / x_trans_span if x_trans_span > 0 else 1.0
+
+                # Period lower limit → frequency upper limit
+                if lower_active and lower_val is not None:
+                    max_freq_from_period = freq_scale / lower_val
+                    cur_lower = float(mixture_means_constraint.lower_bound)
+                    if max_freq_from_period > cur_lower:
+                        if isinstance(mixture_means_constraint, GreaterThan):
+                            mixture_means_constraint = Interval(
+                                cur_lower, max_freq_from_period
+                            )
+                        else:
+                            # Already an Interval: tighten the upper bound
+                            cur_upper = float(mixture_means_constraint.upper_bound)
+                            mixture_means_constraint = Interval(
+                                cur_lower,
+                                min(cur_upper, max_freq_from_period),
+                            )
+
+                # Period upper limit → frequency lower limit
+                if upper_active and upper_val is not None:
+                    min_freq_from_period = freq_scale / upper_val
+                    cur_lower = float(mixture_means_constraint.lower_bound)
+                    cur_upper = (
+                        float(mixture_means_constraint.upper_bound)
+                        if isinstance(mixture_means_constraint, Interval)
+                        else float("inf")
+                    )
+                    new_lower = max(cur_lower, min_freq_from_period)
+                    if new_lower < cur_upper:
+                        if isinstance(mixture_means_constraint, GreaterThan):
+                            mixture_means_constraint = GreaterThan(new_lower)
+                        else:
+                            mixture_means_constraint = Interval(new_lower, cur_upper)
+
         self._model_pars["mixture_means"]["module"].register_constraint(
             "raw_mixture_means", mixture_means_constraint
         )
@@ -2278,7 +2696,7 @@ class Lightcurve(gpytorch.Module):
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
 
-                
+
             If an instance of a GP class, that object will be used.
         likelihood : string, None or instance of
                         gpytorch.likelihoods.likelihood.Likelihood or Constraint,

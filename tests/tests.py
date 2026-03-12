@@ -1,6 +1,8 @@
+import os
+import tempfile
 import unittest
 
-from pgmuvi.lightcurve import Lightcurve, Transformer, MinMax, ZScore, RobustZScore
+from pgmuvi.lightcurve import InputHelpers, Lightcurve, Transformer, MinMax, ZScore, RobustZScore
 from pgmuvi.trainers import train
 from pgmuvi.gps import SpectralMixtureGPModel
 import numpy as np
@@ -82,6 +84,12 @@ class TestLightCurve(unittest.TestCase):
     def test_xdata_getter(self):
         self.assertTrue(torch.equal(self.lightcurve.xdata, self.test_xdata))
 
+    def test_default_no_transform(self):
+        lc = Lightcurve(self.test_xdata, self.test_ydata)
+        self.assertIsNone(lc.xtransform)
+        self.assertIsNone(lc.ytransform)
+        self.assertTrue(torch.equal(lc._xdata_transformed, self.test_xdata))
+
     def test_xdata_setter_no_transform(self):
         self.lightcurve.xtransform = None
         self.lightcurve.xdata = self.test_xdata
@@ -89,12 +97,13 @@ class TestLightCurve(unittest.TestCase):
         self.assertTrue(torch.equal(self.lightcurve._xdata_transformed, self.test_xdata))
 
     def test_xdata_setter_with_transform(self):
-        xtransformer = self.lightcurve.xtransform
+        lc_with_transform = Lightcurve(self.test_xdata, self.test_ydata, xtransform="minmax")
+        xtransformer = lc_with_transform.xtransform
         self.test_xdata_transformed = xtransformer.transform(self.test_xdata)
 
-        self.lightcurve.xdata = self.test_xdata
-        self.assertTrue(torch.equal(self.lightcurve._xdata_raw, self.test_xdata))
-        self.assertTrue(torch.equal(self.lightcurve._xdata_transformed, self.test_xdata_transformed))
+        lc_with_transform.xdata = self.test_xdata
+        self.assertTrue(torch.equal(lc_with_transform._xdata_raw, self.test_xdata))
+        self.assertTrue(torch.equal(lc_with_transform._xdata_transformed, self.test_xdata_transformed))
 
     def test_ydata_getter(self):
         self.assertTrue(torch.equal(self.lightcurve.ydata, self.test_ydata))
@@ -457,6 +466,272 @@ class TestMultibandFAP(unittest.TestCase):
 
 
 
+class TestFromCSV(unittest.TestCase):
+    """Tests for the InputHelpers.from_csv classmethod."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def _write_csv(self, filename, content):
+        path = os.path.join(self.tmpdir, filename)
+        with open(path, "w") as f:
+            f.write(content)
+        return path
+
+    # ------------------------------------------------------------------
+    # Auto-detection tests
+    # ------------------------------------------------------------------
+
+    def test_autodetect_standard_names(self):
+        """Auto-detection with canonical lowercase column names."""
+        path = self._write_csv(
+            "standard.csv",
+            "x,y,yerr\n1.0,2.0,0.1\n2.0,3.0,0.2\n3.0,4.0,0.3\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(len(lc.xdata), 3)
+
+    def test_autodetect_jd_magnitude(self):
+        """Auto-detection with JD / Magnitude column names (sample data style)."""
+        path = self._write_csv(
+            "jd_mag.csv",
+            "JD,Magnitude\n2450000.0,1.5\n2450001.0,1.6\n2450002.0,1.4\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(len(lc.xdata), 3)
+        # yerr should be None when no uncertainty column is present
+        self.assertFalse(hasattr(lc, "_yerr_raw"))
+
+    def test_autodetect_case_insensitive(self):
+        """Column name matching must be case-insensitive."""
+        path = self._write_csv(
+            "mixed_case.csv",
+            "Time,Flux,Error\n0.0,1.0,0.05\n1.0,2.0,0.05\n2.0,1.5,0.05\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(len(lc.xdata), 3)
+        self.assertTrue(hasattr(lc, "_yerr_raw"))
+
+    def test_autodetect_no_yerr_column(self):
+        """When no uncertainty column exists, yerr should not be set."""
+        path = self._write_csv(
+            "no_yerr.csv",
+            "time,flux\n0.0,1.0\n1.0,2.0\n2.0,1.5\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertFalse(hasattr(lc, "_yerr_raw"))
+
+    # ------------------------------------------------------------------
+    # Explicit column name tests
+    # ------------------------------------------------------------------
+
+    def test_explicit_column_names(self):
+        """Explicit xcol/ycol/yerrcol should override auto-detection."""
+        path = self._write_csv(
+            "explicit.csv",
+            "date,signal,noise\n1.0,10.0,0.5\n2.0,11.0,0.5\n3.0,9.0,0.5\n",
+        )
+        lc = Lightcurve.from_csv(path, xcol="date", ycol="signal", yerrcol="noise")
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(len(lc.xdata), 3)
+        self.assertTrue(hasattr(lc, "_yerr_raw"))
+
+    def test_explicit_xcol_missing_raises(self):
+        """Explicitly specified xcol that does not exist should raise ValueError."""
+        path = self._write_csv(
+            "missing_x.csv",
+            "time,flux\n0.0,1.0\n1.0,2.0\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path, xcol="nonexistent")
+
+    def test_explicit_ycol_missing_raises(self):
+        """Explicitly specified ycol that does not exist should raise ValueError."""
+        path = self._write_csv(
+            "missing_y.csv",
+            "time,flux\n0.0,1.0\n1.0,2.0\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path, ycol="nonexistent")
+
+    def test_explicit_yerrcol_missing_raises(self):
+        """Explicitly specified yerrcol that does not exist should raise ValueError."""
+        path = self._write_csv(
+            "missing_yerr.csv",
+            "time,flux\n0.0,1.0\n1.0,2.0\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path, yerrcol="nonexistent")
+
+    def test_autodetect_x_fails_raises(self):
+        """When x column cannot be auto-detected, a ValueError should be raised."""
+        path = self._write_csv(
+            "ambiguous.csv",
+            "alpha,beta\n0.0,1.0\n1.0,2.0\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path)
+
+    def test_autodetect_y_fails_raises(self):
+        """When y column cannot be auto-detected, a ValueError should be raised."""
+        path = self._write_csv(
+            "no_y.csv",
+            "time,alpha\n0.0,1.0\n1.0,2.0\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path)
+
+    # ------------------------------------------------------------------
+    # Data integrity tests
+    # ------------------------------------------------------------------
+
+    def test_data_values_preserved(self):
+        """Values read from the CSV must match those in the Lightcurve."""
+        path = self._write_csv(
+            "values.csv",
+            "x,y,yerr\n1.0,10.0,0.1\n2.0,20.0,0.2\n3.0,30.0,0.3\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        expected_x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        expected_y = torch.as_tensor([10.0, 20.0, 30.0], dtype=torch.float32)
+        expected_yerr = torch.as_tensor([0.1, 0.2, 0.3], dtype=torch.float32)
+        self.assertTrue(torch.allclose(lc._xdata_raw, expected_x))
+        self.assertTrue(torch.allclose(lc._ydata_raw, expected_y))
+        self.assertTrue(torch.allclose(lc._yerr_raw, expected_yerr))
+
+    # ------------------------------------------------------------------
+    # InputHelpers class attribute tests
+    # ------------------------------------------------------------------
+
+    def test_inputhelpers_is_base_of_lightcurve(self):
+        """Lightcurve should be a subclass of InputHelpers."""
+        self.assertTrue(issubclass(Lightcurve, InputHelpers))
+
+    def test_column_name_lists_accessible(self):
+        """Column name candidate lists should be accessible from Lightcurve."""
+        self.assertIn("jd", Lightcurve._X_COLUMN_NAMES)
+        self.assertIn("magnitude", Lightcurve._Y_COLUMN_NAMES)
+        self.assertIn("err", Lightcurve._YERR_COLUMN_NAMES)
+        self.assertIn("wavelength", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+        self.assertIn("band", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+        self.assertIn("filter", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+        self.assertIn("wave", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+
+    # ------------------------------------------------------------------
+    # 2D / multiband lightcurve tests
+    # ------------------------------------------------------------------
+
+    def test_autodetect_multiband_2d(self):
+        """A wavelength column with multiple values triggers a 2D lightcurve."""
+        path = self._write_csv(
+            "multiband.csv",
+            "time,flux,wavelength\n"
+            "1.0,1.5,0.5\n2.0,1.6,0.5\n3.0,1.4,0.5\n"
+            "1.0,2.5,1.5\n2.0,2.6,1.5\n3.0,2.4,1.5\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        self.assertIsInstance(lc, Lightcurve)
+        # xdata should be 2D: (N, 2) with time in col 0, wavelength in col 1
+        self.assertEqual(lc._xdata_raw.dim(), 2)
+        self.assertEqual(lc._xdata_raw.shape[1], 2)
+        self.assertEqual(len(lc.ydata), 6)
+
+    def test_autodetect_single_wavelength_is_1d(self):
+        """A wavelength column with only one unique value → 1D lightcurve."""
+        path = self._write_csv(
+            "single_band.csv",
+            "time,flux,wavelength\n1.0,1.5,0.5\n2.0,1.6,0.5\n3.0,1.4,0.5\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        self.assertIsInstance(lc, Lightcurve)
+        # Only one wavelength → treat as 1D
+        self.assertEqual(lc._xdata_raw.dim(), 1)
+
+    def test_explicit_wavelcol(self):
+        """Explicit wavelcol parameter creates a 2D lightcurve."""
+        path = self._write_csv(
+            "explicit_band.csv",
+            "time,flux,band\n1.0,1.5,1.0\n2.0,1.6,1.0\n3.0,1.4,2.0\n",
+        )
+        lc = Lightcurve.from_csv(path, xcol="time", ycol="flux", wavelcol="band")
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(lc._xdata_raw.dim(), 2)
+        self.assertEqual(lc._xdata_raw.shape[1], 2)
+
+    def test_explicit_wavelcol_missing_raises(self):
+        """Explicitly specified wavelcol that does not exist should raise ValueError."""
+        path = self._write_csv(
+            "missing_wavelcol.csv",
+            "time,flux\n0.0,1.0\n1.0,2.0\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path, wavelcol="nonexistent")
+
+    def test_xcol_as_list_creates_2d(self):
+        """xcol as a list of column names stacks columns into 2D xdata."""
+        path = self._write_csv(
+            "xcol_list.csv",
+            "time,band,flux\n1.0,0.5,1.5\n2.0,0.5,1.6\n3.0,1.5,1.4\n",
+        )
+        lc = Lightcurve.from_csv(path, xcol=["time", "band"], ycol="flux")
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(lc._xdata_raw.dim(), 2)
+        self.assertEqual(lc._xdata_raw.shape[1], 2)
+
+    def test_xcol_as_single_element_list_is_1d(self):
+        """xcol as a single-element list returns a 1D lightcurve."""
+        path = self._write_csv(
+            "xcol_single_list.csv",
+            "time,flux\n1.0,1.5\n2.0,1.6\n3.0,1.4\n",
+        )
+        lc = Lightcurve.from_csv(path, xcol=["time"], ycol="flux")
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertEqual(lc._xdata_raw.dim(), 1)
+
+    def test_xcol_list_with_missing_col_raises(self):
+        """A column listed in xcol that is absent raises ValueError."""
+        path = self._write_csv(
+            "bad_list.csv",
+            "time,flux\n1.0,1.5\n2.0,1.6\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path, xcol=["time", "nonexistent"], ycol="flux")
+
+    def test_2d_data_values_preserved(self):
+        """Check that 2D xdata contains correct time and wavelength values."""
+        path = self._write_csv(
+            "2d_values.csv",
+            "time,wavelength,flux\n"
+            "1.0,0.5,10.0\n2.0,0.5,20.0\n"
+            "1.0,1.5,30.0\n2.0,1.5,40.0\n",
+        )
+        lc = Lightcurve.from_csv(path)
+        expected_time = torch.as_tensor([1.0, 2.0, 1.0, 2.0], dtype=torch.float32)
+        expected_wave = torch.as_tensor([0.5, 0.5, 1.5, 1.5], dtype=torch.float32)
+        self.assertTrue(torch.allclose(lc._xdata_raw[:, 0], expected_time))
+        self.assertTrue(torch.allclose(lc._xdata_raw[:, 1], expected_wave))
+
+    # ------------------------------------------------------------------
+    # Sample data file
+    # ------------------------------------------------------------------
+
+    def test_sample_csv(self):
+        """from_csv should work with the bundled AlfOriAAVSO_Vband.csv."""
+        sample = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "pgmuvi",
+            "AlfOriAAVSO_Vband.csv",
+        )
+        lc = Lightcurve.from_csv(sample)
+        self.assertIsInstance(lc, Lightcurve)
+        self.assertGreater(len(lc.xdata), 0)
+
+
 class TestTrain(unittest.TestCase):
     def test_train(self):
         pass
@@ -467,6 +742,7 @@ class TestSpectralMixtureGPModel(unittest.TestCase):
     pass
 
 
+<<<<<<< copilot/add-sampling-quality-assessment
 class TestRobustScale(unittest.TestCase):
     """Tests for robust_scale function."""
 
@@ -717,6 +993,8 @@ from test_variability import (  # noqa: E402, F401
 )
 
 
+=======
+>>>>>>> main
 class TestPowerLawMean(unittest.TestCase):
     """Tests for the PowerLawMean mean function."""
 
@@ -876,6 +1154,10 @@ class TestNewGPModels(unittest.TestCase):
                 self.assertIsNotNone(lc.model)
 
 
+<<<<<<< copilot/add-sampling-quality-assessment
 if  __name__ == '__main__':
 
+=======
+if __name__ == '__main__':
+>>>>>>> main
     unittest.main()
