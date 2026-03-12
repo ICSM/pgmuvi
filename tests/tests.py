@@ -1251,5 +1251,123 @@ class TestSimpleKernelMeanGPModels(unittest.TestCase):
         self.assertEqual(time_kernel.num_mixtures, 2)
 
 
+class TestYscaleAndYlim(unittest.TestCase):
+    """Unit tests for Lightcurve._yscale_and_ylim static helper."""
+
+    def _call(self, y_vals, yscale="auto", ylim=None):
+        return Lightcurve._yscale_and_ylim(np.array(y_vals), yscale, ylim)
+
+    # --- scale selection ---
+
+    def test_auto_all_positive_large_range_selects_log(self):
+        # max/min = 1000 > 100
+        scale, _ = self._call([1.0, 10.0, 1000.0])
+        self.assertEqual(scale, "log")
+
+    def test_auto_all_positive_small_range_selects_linear(self):
+        # max/min = 10 < 100
+        scale, _ = self._call([1.0, 5.0, 10.0])
+        self.assertEqual(scale, "linear")
+
+    def test_auto_mixed_signs_selects_linear(self):
+        scale, _ = self._call([-1.0, 1.0, 100.0])
+        self.assertEqual(scale, "linear")
+
+    def test_auto_zero_in_data_selects_linear(self):
+        scale, _ = self._call([0.0, 1.0, 1000.0])
+        self.assertEqual(scale, "linear")
+
+    def test_explicit_log_respected(self):
+        scale, _ = self._call([1.0, 2.0], yscale="log")
+        self.assertEqual(scale, "log")
+
+    def test_explicit_linear_respected(self):
+        scale, _ = self._call([1.0, 1000.0], yscale="linear")
+        self.assertEqual(scale, "linear")
+
+    # --- limit computation (auto ylim) ---
+
+    def test_linear_auto_lim_adds_padding(self):
+        # data [0, 10]: range=10, padding=1 → [-1, 11]
+        _, lim = self._call([0.0, 10.0], yscale="linear")
+        self.assertIsNotNone(lim)
+        self.assertAlmostEqual(lim[0], -1.0)
+        self.assertAlmostEqual(lim[1], 11.0)
+
+    def test_identical_values_nonzero_uses_magnitude_padding(self):
+        # all values are 5: padding = 0.1 * 5 = 0.5
+        _, lim = self._call([5.0, 5.0, 5.0], yscale="linear")
+        self.assertIsNotNone(lim)
+        self.assertAlmostEqual(lim[0], 4.5)
+        self.assertAlmostEqual(lim[1], 5.5)
+
+    def test_identical_values_zero_fallback_padding(self):
+        # all values are 0: base=1, padding=0.1
+        _, lim = self._call([0.0, 0.0, 0.0], yscale="linear")
+        self.assertIsNotNone(lim)
+        self.assertAlmostEqual(lim[0], -0.1)
+        self.assertAlmostEqual(lim[1], 0.1)
+
+    def test_log_auto_lim_is_positive(self):
+        scale, lim = self._call([1.0, 10.0, 1000.0])
+        self.assertEqual(scale, "log")
+        self.assertIsNotNone(lim)
+        self.assertGreater(lim[0], 0.0)
+        self.assertGreater(lim[1], lim[0])
+
+    def test_log_forced_nonpositive_data_returns_none_lim(self):
+        # Forced log but data has zero: cannot compute valid limits
+        scale, lim = self._call([0.0, 1.0, 1000.0], yscale="log")
+        self.assertEqual(scale, "log")
+        self.assertIsNone(lim)
+
+    def test_log_forced_negative_data_returns_none_lim(self):
+        scale, lim = self._call([-5.0, 1.0, 1000.0], yscale="log")
+        self.assertEqual(scale, "log")
+        self.assertIsNone(lim)
+
+    # --- explicit ylim ---
+
+    def test_explicit_ylim_linear_used_as_is(self):
+        _, lim = self._call([1.0, 5.0], yscale="linear", ylim=[0.0, 10.0])
+        self.assertEqual(lim, [0.0, 10.0])
+
+    def test_explicit_ylim_log_positive_lower_used_as_is(self):
+        _, lim = self._call([1.0, 1000.0], yscale="log", ylim=[0.5, 2000.0])
+        self.assertEqual(lim, [0.5, 2000.0])
+
+    def test_explicit_ylim_log_nonpositive_lower_returns_none(self):
+        # Lower bound of 0 is invalid on a log axis
+        _, lim = self._call([1.0, 1000.0], yscale="log", ylim=[0.0, 2000.0])
+        self.assertIsNone(lim)
+
+    def test_explicit_ylim_log_negative_lower_returns_none(self):
+        _, lim = self._call([1.0, 1000.0], yscale="log", ylim=[-1.0, 2000.0])
+        self.assertIsNone(lim)
+
+    def test_explicit_ylim_auto_log_nonpositive_lower_returns_none(self):
+        # auto selects log (large range, all positive), but caller passes
+        # ylim with a non-positive lower bound
+        _, lim = self._call([1.0, 1000.0], yscale="auto", ylim=[-1.0, 2000.0])
+        self.assertIsNone(lim)
+
+
+class TestPlotYscaleValidation(unittest.TestCase):
+    """Test that plot() raises ValueError for invalid yscale values."""
+
+    def setUp(self):
+        xdata = torch.as_tensor([1.0, 2.0, 3.0, 4.0])
+        ydata = torch.as_tensor([1.0, 2.0, 1.0, 2.0])
+        self.lc = Lightcurve(xdata, ydata)
+
+    def test_invalid_yscale_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            self.lc.plot(yscale="symlog")
+
+    def test_invalid_yscale_message_is_informative(self):
+        with self.assertRaisesRegex(ValueError, "yscale must be one of"):
+            self.lc.plot(yscale="bad_value")
+
+
 if __name__ == '__main__':
     unittest.main()
