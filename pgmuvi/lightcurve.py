@@ -580,7 +580,7 @@ class InputHelpers:
         y = torch.as_tensor(data[ycol], dtype=torch.float32)
         yerr = torch.as_tensor(data[yerrcol], dtype=torch.float32) if yerrcol else None
 
-        return cls(x, y, yerr, **kwargs)
+        return cls(x, y, yerr=yerr, **kwargs)
 
 
 class Lightcurve(InputHelpers, gpytorch.Module):
