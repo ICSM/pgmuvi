@@ -409,6 +409,52 @@ class InputHelpers:
                 return columns_lower[candidate.lower()]
         return None
 
+    @staticmethod
+    def _drop_nan_rows(x, y, yerr):
+        """Drop rows that contain NaN in any of the data arrays.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Independent variable tensor of shape ``(N,)`` or ``(N, D)``.
+        y : torch.Tensor
+            Dependent variable tensor of shape ``(N,)``.
+        yerr : torch.Tensor or None
+            Uncertainty tensor of shape ``(N,)``, or ``None``.
+
+        Returns
+        -------
+        x : torch.Tensor
+            Filtered independent variable tensor.
+        y : torch.Tensor
+            Filtered dependent variable tensor.
+        yerr : torch.Tensor or None
+            Filtered uncertainty tensor, or ``None`` if it was ``None`` on
+            input.
+
+        Notes
+        -----
+        A ``UserWarning`` is emitted when one or more rows are dropped.
+        """
+        valid_mask = ~torch.isnan(y)
+        if x.dim() > 1:
+            valid_mask &= ~torch.isnan(x).any(dim=1)
+        else:
+            valid_mask &= ~torch.isnan(x)
+        if yerr is not None:
+            valid_mask &= ~torch.isnan(yerr)
+        n_dropped = int((~valid_mask).sum().item())
+        if n_dropped > 0:
+            warnings.warn(
+                f"Dropped {n_dropped} row(s) containing NaN values.",
+                stacklevel=3,
+            )
+            x = x[valid_mask]
+            y = y[valid_mask]
+            if yerr is not None:
+                yerr = yerr[valid_mask]
+        return x, y, yerr
+
     @classmethod
     def from_csv(
         cls,
@@ -578,6 +624,8 @@ class InputHelpers:
         y = torch.as_tensor(data[ycol], dtype=torch.float32)
         yerr = torch.as_tensor(data[yerrcol], dtype=torch.float32) if yerrcol else None
 
+        x, y, yerr = cls._drop_nan_rows(x, y, yerr)
+
         return cls(x, y, yerr, **kwargs)
 
 
@@ -744,6 +792,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         else:
             mesg = f"Column '{xcol}' must have shape (1, nsamples) or (1, 2, nsamples)"
             raise ValueError(mesg)
+
+        x, y, yerr = cls._drop_nan_rows(x, y, yerr)
 
         return cls(x, y, yerr, **kwargs)
 

@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+import warnings
 
 from pgmuvi.lightcurve import InputHelpers, Lightcurve, Transformer, MinMax, ZScore, RobustZScore
 from pgmuvi.trainers import train
@@ -730,6 +731,63 @@ class TestFromCSV(unittest.TestCase):
         lc = Lightcurve.from_csv(sample)
         self.assertIsInstance(lc, Lightcurve)
         self.assertGreater(len(lc.xdata), 0)
+
+    # ------------------------------------------------------------------
+    # NaN dropping tests
+    # ------------------------------------------------------------------
+
+    def test_nan_in_y_dropped(self):
+        """Rows with NaN in y should be dropped with a warning."""
+        path = self._write_csv(
+            "nan_y.csv",
+            "x,y,yerr\n1.0,2.0,0.1\n2.0,nan,0.2\n3.0,4.0,0.3\n",
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_csv(path)
+        self.assertEqual(len(lc.xdata), 2)
+
+    def test_nan_in_x_dropped(self):
+        """Rows with NaN in x should be dropped with a warning."""
+        path = self._write_csv(
+            "nan_x.csv",
+            "x,y,yerr\n1.0,2.0,0.1\nnan,3.0,0.2\n3.0,4.0,0.3\n",
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_csv(path)
+        self.assertEqual(len(lc.xdata), 2)
+
+    def test_nan_in_yerr_dropped(self):
+        """Rows with NaN in yerr should be dropped with a warning."""
+        path = self._write_csv(
+            "nan_yerr.csv",
+            "x,y,yerr\n1.0,2.0,nan\n2.0,3.0,0.2\n3.0,4.0,0.3\n",
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_csv(path)
+        self.assertEqual(len(lc.xdata), 2)
+
+    def test_no_nan_no_warning(self):
+        """When there are no NaN values, no warning should be raised."""
+        path = self._write_csv(
+            "no_nan.csv",
+            "x,y,yerr\n1.0,2.0,0.1\n2.0,3.0,0.2\n3.0,4.0,0.3\n",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            lc = Lightcurve.from_csv(path)
+        self.assertEqual(len(lc.xdata), 3)
+
+    def test_nan_in_2d_x_dropped(self):
+        """Rows with NaN in either column of a 2D x should be dropped."""
+        path = self._write_csv(
+            "nan_2d_x.csv",
+            "time,wavelength,flux\n"
+            "1.0,0.5,10.0\nnan,1.5,20.0\n3.0,0.5,30.0\n3.0,1.5,40.0\n",
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_csv(path)
+        # One row dropped → 3 rows remain
+        self.assertEqual(len(lc.ydata), 3)
 
 
 class TestTrain(unittest.TestCase):
