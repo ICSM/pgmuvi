@@ -3916,14 +3916,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             psd_tot = psd_tot.exp().cpu().detach().numpy()
         return psd_tot
 
-    def plot(self, ylim=None, show=True, mcmc_samples=False, **kwargs):
+    def plot(self, ylim=None, yscale="auto", show=True, mcmc_samples=False, **kwargs):
         """Plot the model and data
 
         Parameters
         ----------
         ylim : list, optional
             The y-limits of the plot, by default None. If None, the y-limits
-            will be set automatically.
+            will be set automatically. For 2-D (multiwavelength) data the
+            limits are determined independently for each wavelength.
+        yscale : str, optional
+            The y-axis scale to use. Can be ``'auto'`` (default), ``'linear'``
+            or ``'log'``. When ``'auto'``, log scale is chosen for a given
+            wavelength if all its flux values are positive and the ratio of
+            maximum to minimum flux exceeds 100; otherwise linear scale is
+            used. For 2-D data the scale is decided independently per
+            wavelength. Note that when ``mcmc_samples`` is ``True``, this
+            parameter is currently ignored and the y-axis scale is set by the
+            MCMC plotting routine.
         show : bool, optional
             Whether to show the plot, by default True.
         mcmc_samples : bool, optional
@@ -3937,7 +3947,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fig : matplotlib.pyplot.Figure
             The figure object of the plot.
         """
-        if ylim is None:
+        _VALID_YSCALES = ("auto", "linear", "log")
+        if yscale not in _VALID_YSCALES:
+            raise ValueError(
+                f"yscale must be one of {_VALID_YSCALES!r}, got {yscale!r}"
+            )
+        if ylim is None and self.ndim == 1:
             # ylim = [-3, 3]
             y_min = float(self.ydata.min())
             y_max = float(self.ydata.max())
@@ -3976,9 +3991,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
 
             if self.ndim == 1:
-                fig = self._plot_1d(x_fine_raw, ylim=ylim, show=show, **kwargs)
+                fig = self._plot_1d(
+                    x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
+                )
             elif self.ndim == 2:
-                fig = self._plot_2d(x_fine_raw, ylim=ylim, show=show, **kwargs)
+                fig = self._plot_2d(
+                    x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
+                )
             else:
                 raise NotImplementedError(
                     """
@@ -4064,7 +4083,71 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 plt.show()
         return f
 
-    def _plot_1d(self, x_fine_raw, ylim=None, show=False, save=True, **kwargs):
+    @staticmethod
+    def _yscale_and_ylim(y_vals, yscale, ylim):
+        """Resolve the y-axis scale and limits for a single band.
+
+        Parameters
+        ----------
+        y_vals : array-like
+            Flux values for the band (must support ``min()``/``max()``).
+        yscale : str
+            One of ``'auto'``, ``'linear'``, or ``'log'``.  Values outside
+            this set are passed through to ``ax.set_yscale()`` unchanged;
+            callers should validate beforehand (``plot()`` does this).
+        ylim : list or None
+            Caller-supplied y-axis limits.  ``None`` means auto-compute.
+
+        Returns
+        -------
+        scale : str
+            Either ``'linear'`` or ``'log'``.
+        lim : list or None
+            Two-element list ``[y_lo, y_hi]``, or ``None`` when the limits
+            should be left to matplotlib (e.g. log scale with non-positive
+            data, or an explicit ``ylim`` that is incompatible with log scale).
+        """
+        y_min = float(np.min(y_vals))
+        y_max = float(np.max(y_vals))
+
+        # Resolve scale
+        if yscale == "auto":
+            scale = (
+                "log" if y_min > 0 and y_max / y_min > 100 else "linear"
+            )
+        else:
+            scale = yscale
+
+        # Resolve limits
+        if ylim is None:
+            if scale == "log" and y_min > 0:
+                log_min = np.log10(y_min)
+                log_max = np.log10(y_max)
+                log_range = log_max - log_min
+                padding = 0.1 * abs(log_range) if log_range != 0.0 else 0.1
+                lim = [10 ** (log_min - padding), 10 ** (log_max + padding)]
+            elif scale != "log":
+                y_range = y_max - y_min
+                if y_range != 0.0:
+                    padding = 0.1 * abs(y_range)
+                else:
+                    base = abs(y_max) if y_max != 0.0 else 1.0
+                    padding = 0.1 * base
+                lim = [y_min - padding, y_max + padding]
+            else:
+                # Log scale forced/selected but data contains non-positive
+                # values: let matplotlib choose an appropriate range.
+                lim = None
+        else:
+            # Caller-supplied limits: skip setting them when they are
+            # incompatible with a log axis (non-positive lower bound).
+            lim = None if scale == "log" and ylim[0] <= 0 else ylim
+
+        return scale, lim
+
+    def _plot_1d(
+        self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
+    ):
         # transforming the x_fine_raw data to the space that the GP was
         # trained in (so it can predict)
         if self.xtransform is None:
@@ -4096,8 +4179,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # Plot training data as black stars (on top of model predictions)
         ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
-        if ylim is not None:
-            ax.set_ylim(ylim)
+
+        # Determine y-axis scale and limits using the shared helper
+        current_yscale, current_ylim = self._yscale_and_ylim(
+            self.ydata.cpu().numpy(), yscale, ylim
+        )
+        ax.set_yscale(current_yscale)
+        if current_ylim is not None:
+            ax.set_ylim(current_ylim)
         ax.legend(["Observed Data", "Mean", "Confidence"])
         if save:
             plt.savefig(f"{self.name}_fit.png")
@@ -4105,7 +4194,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             plt.show()
         return f
 
-    def _plot_2d(self, x_fine_raw, ylim=None, show=False, save=True, **kwargs):
+    def _plot_2d(
+        self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
+    ):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
@@ -4134,9 +4225,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
             # Plot training data as black stars (on top of model predictions)
+            y_data_for_val = self.ydata[self.xdata[:, 1] == val]
             ax.plot(
                 self.xdata[self.xdata[:, 1] == val, 0],
-                self.ydata[self.xdata[:, 1] == val],
+                y_data_for_val,
                 "k*",
             )
             ax.legend(["Observed Data", "Mean", "Confidence"])
@@ -4144,8 +4236,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.set_ylabel("y")
             ax.set_xlabel("x")
             ax.set_title(f"y vs x for {val}")
-            if ylim is not None:
-                ax.set_ylim(ylim)
+
+            # Determine y-axis scale and limits for this wavelength
+            # independently, using the shared helper.
+            current_yscale, current_ylim = self._yscale_and_ylim(
+                y_data_for_val.cpu().numpy(), yscale, ylim
+            )
+            ax.set_yscale(current_yscale)
+            if current_ylim is not None:
+                ax.set_ylim(current_ylim)
+
             if save:
                 plt.savefig(f"{self.name}_{val}_fit.png")
 
