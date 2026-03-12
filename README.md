@@ -43,3 +43,87 @@ If you use pgmuvi in your research, please cite the paper (details will be given
 ## Using pgmuvi
 
 You can find full documentation for pgmuvi at [https://pgmuvi.readthedocs.io/](https://pgmuvi.readthedocs.io/). This includes a quickstart guide and a set of tutorials intended to get you up and running.
+
+## Sampling Quality Assessment
+
+Before fitting a GP, you can check whether your lightcurve has adequate temporal sampling:
+
+```python
+# Compute sampling metrics
+metrics = lc.compute_sampling_metrics()
+print(f"Nyquist period: {metrics['nyquist_period']:.2f} days")
+print(f"Detectable range: {metrics['nyquist_period']:.1f}"
+      f" - {metrics['longest_detectable_period']:.1f} days")
+
+# Full quality assessment with detailed report
+passes, diagnostics = lc.assess_sampling_quality(verbose=True)
+if diagnostics['recommendation'] == 'PROCEED':
+    lc.fit(...)
+```
+
+By default, `fit()` automatically checks sampling quality:
+
+```python
+lc.fit(model='1D', ...)  # Raises ValueError if sampling is poor
+lc.fit(model='1D', ..., check_sampling=False)  # Force fitting anyway
+
+
+For multiband data:
+# Check each wavelength band
+results = lc2d.assess_sampling_quality_per_band()
+print(f"{results['summary']['n_passing']}/{results['summary']['n_bands']} bands pass")
+
+# Compute metrics per band
+band_metrics = lc2d.compute_sampling_metrics_per_band()
+
+# Filter to well-sampled bands only
+lc_good = lc2d.filter_well_sampled_bands()
+lc_good.fit(model='2D', ...)
+```
+
+
+## Variability Detection
+
+Before fitting a GP, you can check if your lightcurve shows significant variability
+using the built-in three-tier statistical testing framework
+(weighted chi-square, F_var excess variance, and Stetson K index):
+
+```python
+from pgmuvi.lightcurve import Lightcurve
+
+lc = Lightcurve(t, y, yerr)
+
+# Check variability
+diagnostics = lc.check_variability(verbose=True)
+
+if diagnostics['decision'] == 'VARIABLE':
+    # Proceed with fitting
+    lc.fit(...)
+else:
+    print(f"Not variable: {diagnostics['decision']}")
+```
+
+You can also enable automatic variability checking inside `fit()`:
+
+```python
+# Raises ValueError if lightcurve is not variable
+lc.fit(..., check_variability=True)
+
+# To force fitting of a non-variable source:
+lc.fit(..., check_variability=False)
+```
+
+For multiband data, each band can be checked independently:
+
+```python
+lc2d = Lightcurve(xdata_2d, flux, error)
+
+
+# Check each band
+results = lc2d.check_variability_per_band(verbose=True)
+print(f"{results['summary']['n_variable']} variable bands")
+
+# Create a new Lightcurve with only variable bands retained
+lc_var = lc2d.filter_variable_bands()
+lc_var.fit(...)
+```
