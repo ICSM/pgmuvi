@@ -933,7 +933,7 @@ def _make_qp_kernel(period):
     return ScaleKernel(ProductKernel(periodic_k, rbf_k))
 
 
-def _build_time_kernel(time_kernel_type, period, num_mixtures=4, **kwargs):
+def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=True, **kwargs):
     """Build a time kernel from a string name or a Kernel instance.
 
     Parameters
@@ -959,6 +959,7 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, **kwargs):
     -------
     gpytorch.kernels.Kernel
     """
+    red_noise_kernel = ScaleKernel(RBFKernel(ard_num_dims=1)) if add_red_noise else None
     if isinstance(time_kernel_type, gpt.kernels.Kernel):
         import warnings
         warnings.warn(
@@ -977,7 +978,7 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, **kwargs):
         return ScaleKernel(RBFKernel())
     if time_kernel_type in ("spectral_mixture", "sm"):
         # SMK incorporates its own output scale; no wrapping ScaleKernel needed.
-        return SMK(num_mixtures=num_mixtures, ard_num_dims=1)
+        return SMK(num_mixtures=num_mixtures, ard_num_dims=1) + red_noise_kernel
     raise ValueError(
         f"Unknown time_kernel_type '{time_kernel_type}'. "
         "Choose from 'quasi_periodic', 'matern', 'rbf', "
@@ -985,7 +986,7 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, **kwargs):
     )
 
 
-def _build_wavelength_kernel(wavelength_kernel_type, wavelength_lengthscale):
+def _build_wavelength_kernel(wavelength_kernel_type, wavelength_lengthscale, scaling='constant', **kwargs):
     """Build a wavelength kernel from a string name or a Kernel instance.
 
     Parameters
@@ -1529,6 +1530,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
         wavelength_lengthscale=None,
         num_mixtures=4,
         mean_module=None,
+        add_red_noise=True,
         **kwargs
     ):
         if period is None:
@@ -1565,7 +1567,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
 
         time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures)
         wl_kernel = _build_wavelength_kernel(
-            wavelength_kernel_type, wavelength_lengthscale
+            wavelength_kernel_type, wavelength_lengthscale, add_red_noise=add_red_noise
         )
 
         super().__init__(
