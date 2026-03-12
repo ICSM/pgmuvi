@@ -3931,7 +3931,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             wavelength if all its flux values are positive and the ratio of
             maximum to minimum flux exceeds 100; otherwise linear scale is
             used. For 2-D data the scale is decided independently per
-            wavelength.
+            wavelength. Note that when ``mcmc_samples`` is ``True``, this
+            parameter is currently ignored and the y-axis scale is set by the
+            MCMC plotting routine.
         show : bool, optional
             Whether to show the plot, by default True.
         mcmc_samples : bool, optional
