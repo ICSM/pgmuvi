@@ -435,6 +435,7 @@ class InputHelpers:
         Notes
         -----
         A ``UserWarning`` is emitted when one or more rows are dropped.
+        A ``ValueError`` is raised when no valid rows remain after filtering.
         """
         valid_mask = ~torch.isnan(y)
         if x.dim() > 1:
@@ -453,6 +454,10 @@ class InputHelpers:
             y = y[valid_mask]
             if yerr is not None:
                 yerr = yerr[valid_mask]
+        if y.numel() == 0:
+            raise ValueError(
+                "No valid data rows remain after dropping NaN-containing rows."
+            )
         return x, y, yerr
 
     @classmethod
@@ -546,22 +551,11 @@ class InputHelpers:
         columns = list(data.dtype.names)
 
         # ------------------------------------------------------------------
-        # Resolve the x (time + optional band) columns
+        # Resolve all column names (no tensor building yet)
         # ------------------------------------------------------------------
-        if isinstance(xcol, list):
-            # Explicit multi-column x specification
-            for col in xcol:
-                if col not in columns:
-                    raise ValueError(
-                        f"Column '{col}' not found in CSV. "
-                        f"Available columns: {columns}"
-                    )
-            x_tensors = [
-                torch.as_tensor(data[col], dtype=torch.float32) for col in xcol
-            ]
-            x = torch.stack(x_tensors, dim=1) if len(x_tensors) > 1 else x_tensors[0]
-        else:
-            # Single time column (str or auto-detected)
+
+        # Resolve x / time column
+        if not isinstance(xcol, list):
             if xcol is None:
                 xcol = cls._find_column(columns, cls._X_COLUMN_NAMES)
                 if xcol is None:
@@ -576,31 +570,7 @@ class InputHelpers:
                     f"Available columns: {columns}"
                 )
 
-            time_tensor = torch.as_tensor(data[xcol], dtype=torch.float32)
-
-            # Resolve wavelength/band column (explicit or auto-detected)
-            if wavelcol is None:
-                wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
-            elif wavelcol not in columns:
-                raise ValueError(
-                    f"Column '{wavelcol}' not found in CSV. "
-                    f"Available columns: {columns}"
-                )
-
-            if wavelcol is not None:
-                wave_tensor = torch.as_tensor(data[wavelcol], dtype=torch.float32)
-                if wave_tensor.unique().numel() > 1:
-                    # Multiple wavelengths/bands → 2-D lightcurve
-                    x = torch.stack([time_tensor, wave_tensor], dim=1)
-                else:
-                    # Single wavelength → treat as 1-D
-                    x = time_tensor
-            else:
-                x = time_tensor
-
-        # ------------------------------------------------------------------
-        # Resolve the y and yerr columns
-        # ------------------------------------------------------------------
+        # Resolve y column
         if ycol is None:
             ycol = cls._find_column(columns, cls._Y_COLUMN_NAMES)
             if ycol is None:
@@ -614,6 +584,7 @@ class InputHelpers:
                 f"Column '{ycol}' not found in CSV. Available columns: {columns}"
             )
 
+        # Resolve yerr column
         if yerrcol is None:
             yerrcol = cls._find_column(columns, cls._YERR_COLUMN_NAMES)
         elif yerrcol not in columns:
@@ -621,10 +592,75 @@ class InputHelpers:
                 f"Column '{yerrcol}' not found in CSV. Available columns: {columns}"
             )
 
-        y = torch.as_tensor(data[ycol], dtype=torch.float32)
-        yerr = torch.as_tensor(data[yerrcol], dtype=torch.float32) if yerrcol else None
+        # ------------------------------------------------------------------
+        # Resolve the x (time + optional band) columns
+        # ------------------------------------------------------------------
+        if isinstance(xcol, list):
+            # Explicit multi-column x specification
+            for col in xcol:
+                if col not in columns:
+                    raise ValueError(
+                        f"Column '{col}' not found in CSV. "
+                        f"Available columns: {columns}"
+                    )
+            # Build NaN mask across all columns before stacking
+            xcol_names = xcol
+        else:
+            # Resolve wavelength/band column (explicit or auto-detected)
+            if wavelcol is None:
+                wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
+            elif wavelcol not in columns:
+                raise ValueError(
+                    f"Column '{wavelcol}' not found in CSV. "
+                    f"Available columns: {columns}"
+                )
+            xcol_names = [xcol] + ([wavelcol] if wavelcol is not None else [])
 
-        x, y, yerr = cls._drop_nan_rows(x, y, yerr)
+        # ------------------------------------------------------------------
+        # Build NaN mask from ALL relevant columns before creating tensors
+        # ------------------------------------------------------------------
+        relevant_cols = xcol_names + [ycol] + ([yerrcol] if yerrcol else [])
+        valid_mask = np.ones(len(data), dtype=bool)
+        for col in relevant_cols:
+            valid_mask &= ~np.isnan(data[col])
+
+        n_dropped = int((~valid_mask).sum())
+        if n_dropped > 0:
+            warnings.warn(
+                f"Dropped {n_dropped} row(s) containing NaN values.",
+                stacklevel=2,
+            )
+        if valid_mask.sum() == 0:
+            raise ValueError(
+                "No valid data rows remain after dropping NaN-containing rows."
+            )
+
+        # Apply mask to get clean data
+        clean = data[valid_mask]
+
+        # ------------------------------------------------------------------
+        # Build tensors from clean data
+        # ------------------------------------------------------------------
+        if isinstance(xcol, list):
+            x_tensors = [
+                torch.as_tensor(clean[col], dtype=torch.float32) for col in xcol
+            ]
+            x = torch.stack(x_tensors, dim=1) if len(x_tensors) > 1 else x_tensors[0]
+        else:
+            time_tensor = torch.as_tensor(clean[xcol], dtype=torch.float32)
+            if wavelcol is not None:
+                wave_tensor = torch.as_tensor(clean[wavelcol], dtype=torch.float32)
+                if wave_tensor.unique().numel() > 1:
+                    # Multiple wavelengths/bands → 2-D lightcurve
+                    x = torch.stack([time_tensor, wave_tensor], dim=1)
+                else:
+                    # Single wavelength → treat as 1-D
+                    x = time_tensor
+            else:
+                x = time_tensor
+
+        y = torch.as_tensor(clean[ycol], dtype=torch.float32)
+        yerr = torch.as_tensor(clean[yerrcol], dtype=torch.float32) if yerrcol else None
 
         return cls(x, y, yerr, **kwargs)
 
@@ -792,6 +828,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         else:
             mesg = f"Column '{xcol}' must have shape (1, nsamples) or (1, 2, nsamples)"
             raise ValueError(mesg)
+
+        # Ensure x is shaped (N, D) rather than (D, N) before NaN filtering,
+        # since some table column shapes can squeeze to (D, N).
+        if x.dim() == 2 and y.dim() >= 1:
+            nsamples = y.shape[0]
+            if x.shape[0] != nsamples and x.shape[1] == nsamples:
+                x = x.transpose(0, 1)
+        if yerr is not None and yerr.dim() == 2:
+            nsamples = y.shape[0]
+            if yerr.shape[0] != nsamples and yerr.shape[1] == nsamples:
+                yerr = yerr.transpose(0, 1)
 
         x, y, yerr = cls._drop_nan_rows(x, y, yerr)
 

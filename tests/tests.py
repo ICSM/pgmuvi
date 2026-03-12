@@ -789,6 +789,103 @@ class TestFromCSV(unittest.TestCase):
         # One row dropped → 3 rows remain
         self.assertEqual(len(lc.ydata), 3)
 
+    def test_nan_in_wave_changes_dimensionality(self):
+        """NaN in wavelength column: after dropping, only one wavelength remains → 1D."""
+        path = self._write_csv(
+            "nan_wave_single.csv",
+            "time,wavelength,flux\n"
+            "1.0,0.5,10.0\n2.0,nan,20.0\n3.0,0.5,30.0\n",
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_csv(path)
+        # After dropping the NaN row, only wavelength 0.5 remains → 1D
+        self.assertEqual(lc._xdata_raw.dim(), 1)
+        self.assertEqual(len(lc.xdata), 2)
+
+    def test_all_nan_raises(self):
+        """When all rows contain NaN, a ValueError should be raised."""
+        path = self._write_csv(
+            "all_nan.csv",
+            "x,y,yerr\nnan,nan,nan\nnan,nan,nan\n",
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_csv(path)
+
+
+class TestFromTable(unittest.TestCase):
+    """Tests for the Lightcurve.from_table classmethod NaN dropping behaviour."""
+
+    def _make_table(self, x_vals, y_vals, yerr_vals=None):
+        """Create an astropy Table with x, y, and optional yerr columns."""
+        from astropy.table import Table
+
+        cols = {"x": x_vals, "y": y_vals}
+        if yerr_vals is not None:
+            cols["yerr"] = yerr_vals
+        return Table(cols)
+
+    def test_nan_in_y_dropped(self):
+        """Rows with NaN in y should be dropped with a warning."""
+        tab = self._make_table(
+            [1.0, 2.0, 3.0],
+            [10.0, float("nan"), 30.0],
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
+        self.assertEqual(len(lc.xdata), 2)
+
+    def test_nan_in_x_dropped(self):
+        """Rows with NaN in x should be dropped with a warning."""
+        tab = self._make_table(
+            [1.0, float("nan"), 3.0],
+            [10.0, 20.0, 30.0],
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
+        self.assertEqual(len(lc.xdata), 2)
+
+    def test_nan_in_yerr_dropped(self):
+        """Rows with NaN in yerr should be dropped with a warning."""
+        tab = self._make_table(
+            [1.0, 2.0, 3.0],
+            [10.0, 20.0, 30.0],
+            yerr_vals=[0.1, float("nan"), 0.3],
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_table(tab, xcol="x", ycol="y", yerrcol="yerr")
+        self.assertEqual(len(lc.xdata), 2)
+
+    def test_no_nan_no_warning(self):
+        """When there are no NaN values, no warning should be raised."""
+        tab = self._make_table([1.0, 2.0, 3.0], [10.0, 20.0, 30.0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
+        self.assertEqual(len(lc.xdata), 3)
+
+    def test_all_nan_raises(self):
+        """When all rows contain NaN, a ValueError should be raised."""
+        tab = self._make_table(
+            [float("nan"), float("nan")],
+            [float("nan"), float("nan")],
+        )
+        with self.assertRaises(ValueError):
+            Lightcurve.from_table(tab, xcol="x", ycol="y")
+
+    def test_valid_rows_preserved(self):
+        """Values in non-NaN rows should be preserved correctly."""
+        tab = self._make_table(
+            [1.0, 2.0, 3.0],
+            [10.0, float("nan"), 30.0],
+            yerr_vals=[0.1, 0.2, 0.3],
+        )
+        with self.assertWarns(UserWarning):
+            lc = Lightcurve.from_table(tab, xcol="x", ycol="y", yerrcol="yerr")
+        expected_x = torch.as_tensor([1.0, 3.0], dtype=torch.float32)
+        expected_y = torch.as_tensor([10.0, 30.0], dtype=torch.float32)
+        self.assertTrue(torch.allclose(lc._xdata_raw, expected_x))
+        self.assertTrue(torch.allclose(lc._ydata_raw, expected_y))
+
 
 class TestTrain(unittest.TestCase):
     def test_train(self):
