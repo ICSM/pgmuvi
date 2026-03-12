@@ -2077,6 +2077,302 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 ),
             )
 
+    def compute_sampling_metrics(self) -> dict:
+        """
+        Compute temporal sampling quality metrics.
+
+        Returns
+        -------
+        dict
+            Comprehensive sampling metrics (see
+            preprocess.quality.compute_sampling_metrics)
+
+        Examples
+        --------
+        >>> lc = Lightcurve(t, y, yerr)
+        >>> metrics = lc.compute_sampling_metrics()
+        >>> print(f"Nyquist period: {metrics['nyquist_period']:.2f}")
+        """
+        from pgmuvi.preprocess.quality import compute_sampling_metrics
+
+        t = self._xdata_raw.detach().cpu().numpy()
+        if t.ndim > 1:
+            t = t[:, 0]
+        y = (
+            self._ydata_raw.detach().cpu().numpy()
+            if hasattr(self, "_ydata_raw")
+            else None
+        )
+        yerr = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw")
+            else None
+        )
+        return compute_sampling_metrics(t, y, yerr)
+
+    def assess_sampling_quality(self, verbose: bool = True, **kwargs) -> tuple:
+        """
+        Assess whether lightcurve sampling is adequate for GP fitting.
+
+        Parameters
+        ----------
+        verbose : bool, default=True
+            Print detailed assessment report
+        **kwargs : dict
+            Quality gate thresholds (see
+            preprocess.quality.assess_sampling_quality):
+
+            - min_points: int (default 6)
+            - max_gap_fraction: float (default 0.3)
+            - min_baseline_factor: float (default 3.0)
+            - min_snr: float (default 3.0)
+            - min_fraction_good_snr: float (default 0.5)
+
+        Returns
+        -------
+        passes : bool
+            True if all quality gates pass
+        diagnostics : dict
+            Diagnostic information including gates, metrics, warnings,
+            and recommendation
+
+        Examples
+        --------
+        >>> lc = Lightcurve(t, y, yerr)
+        >>> passes, diag = lc.assess_sampling_quality(verbose=True)
+        >>> if diag['recommendation'] == 'PROCEED':
+        ...     lc.fit(...)
+        """
+        from pgmuvi.preprocess.quality import assess_sampling_quality
+
+        t = self._xdata_raw.detach().cpu().numpy()
+        if t.ndim > 1:
+            t = t[:, 0]
+        y = (
+            self._ydata_raw.detach().cpu().numpy()
+            if hasattr(self, "_ydata_raw")
+            else None
+        )
+        yerr = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw")
+            else None
+        )
+        passes, diagnostics = assess_sampling_quality(
+            t, y, yerr, verbose=verbose, **kwargs
+        )
+        return passes, diagnostics
+
+    def compute_sampling_metrics_per_band(self) -> dict:
+        """
+        Compute sampling metrics independently for each wavelength band.
+
+        Only applicable for 2D (multiband) lightcurves.
+
+        Returns
+        -------
+        dict
+        {
+                wavelength1: metrics_dict,
+                wavelength2: metrics_dict,
+                ...
+                'summary': {
+                    'n_bands': int,
+                    'min_points_across_bands': int,
+                    'max_gap_fraction_worst_band': float,
+                    'median_nyquist_period': float
+                }
+            }
+
+        Raises
+        ------
+        ValueError
+            If lightcurve is not 2D (multiband).
+        """
+        from pgmuvi.preprocess.quality import compute_sampling_metrics
+
+        if self.ndim <= 1:
+            raise ValueError(
+                "compute_sampling_metrics_per_band() requires 2D (multiband) data. "
+                "Use compute_sampling_metrics() for 1D data."
+            )
+
+        xdata = self._xdata_raw.detach().cpu().numpy()
+        ydata = self._ydata_raw.detach().cpu().numpy()
+        yerr = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw")
+            else None
+        )
+
+        wavelengths = np.unique(xdata[:, 1])
+        results = {}
+
+        min_points_list = []
+        max_gaps_list = []
+        nyquist_list = []
+
+        for wl in wavelengths:
+            mask = xdata[:, 1] == wl
+            t = xdata[mask, 0]
+            y = ydata[mask]
+            ye = yerr[mask] if yerr is not None else None
+
+            metrics = compute_sampling_metrics(t, y, ye)
+            results[float(wl)] = metrics
+
+            if "n_points" in metrics:
+                min_points_list.append(metrics["n_points"])
+            if "max_gap_fraction" in metrics:
+                max_gaps_list.append(metrics["max_gap_fraction"])
+            if "nyquist_period" in metrics:
+                nyquist_list.append(metrics["nyquist_period"])
+
+        results["summary"] = {
+            "n_bands": len(wavelengths),
+            "min_points_across_bands": min(min_points_list) if min_points_list else 0,
+            "max_gap_fraction_worst_band": (
+                max(max_gaps_list) if max_gaps_list else np.inf
+            ),
+            "median_nyquist_period": (
+                float(np.median(nyquist_list)) if nyquist_list else np.inf
+            ),
+        }
+
+        return results
+
+    def assess_sampling_quality_per_band(
+        self, verbose: bool = True, **kwargs
+    ) -> dict:
+        """
+        Assess sampling quality independently for each wavelength band.
+
+        Only applicable for 2D (multiband) lightcurves.
+
+        Parameters
+        ----------
+        verbose : bool, default=True
+            Print assessment for each band
+        **kwargs : dict
+            Quality gate thresholds
+
+        Returns
+        -------
+        dict
+            {
+                wavelength1: diagnostics_dict,
+                wavelength2: diagnostics_dict,
+                ...
+                'summary': {
+                    'n_bands': int,
+                    'n_passing': int,
+                    'passing_wavelengths': list[float],
+                    'failing_wavelengths': list[float]
+                    }
+            }
+
+        Raises
+        ------
+        ValueError
+            If lightcurve is not 2D (multiband).
+        """
+        from pgmuvi.preprocess.quality import assess_sampling_quality
+
+        if self.ndim <= 1:
+            raise ValueError(
+                "assess_sampling_quality_per_band() requires 2D (multiband) data. "
+                "Use assess_sampling_quality() for 1D data."
+            )
+
+        xdata = self._xdata_raw.detach().cpu().numpy()
+        ydata = self._ydata_raw.detach().cpu().numpy()
+        yerr = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw")
+            else None
+        )
+
+        wavelengths = np.unique(xdata[:, 1])
+        results = {}
+        passing_bands = []
+        failing_bands = []
+
+        for wl in wavelengths:
+            mask = xdata[:, 1] == wl
+            t = xdata[mask, 0]
+            y = ydata[mask]
+            ye = yerr[mask] if yerr is not None else None
+
+            if verbose:
+                print(f"\n{'=' * 70}")
+                print(f"BAND: \u03bb = {wl}")
+                print(f"{'=' * 70}")
+
+            passes, diag = assess_sampling_quality(t, y, ye, verbose=verbose, **kwargs)
+            results[float(wl)] = diag
+
+            if passes:
+                passing_bands.append(float(wl))
+            else:
+                failing_bands.append(float(wl))
+
+        results["summary"] = {
+            "n_bands": len(wavelengths),
+            "n_passing": len(passing_bands),
+            "passing_wavelengths": passing_bands,
+            "failing_wavelengths": failing_bands,
+        }
+
+        return results
+
+    def filter_well_sampled_bands(self, **kwargs):
+        """
+        Create new Lightcurve with only well-sampled bands retained.
+
+        Only applicable for 2D (multiband) lightcurves.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Quality gate thresholds
+
+        Returns
+        -------
+        Lightcurve
+            New instance containing only wavelengths that pass sampling checks
+
+        Raises
+        ------
+        ValueError
+            If lightcurve is not 2D (multiband) or no bands pass sampling
+            checks.
+        """
+        if self.ndim <= 1:
+            raise ValueError(
+                "filter_well_sampled_bands() requires 2D (multiband) data."
+            )
+
+        results = self.assess_sampling_quality_per_band(verbose=False, **kwargs)
+
+        if results["summary"]["n_passing"] == 0:
+            raise ValueError(
+                "No bands passed sampling quality checks. "
+                "Consider relaxing criteria or acquiring more data."
+            )
+
+        keep_wl = results["summary"]["passing_wavelengths"]
+        xdata = self._xdata_raw
+        keep_mask = torch.isin(
+            xdata[:, 1],
+            torch.tensor(keep_wl, dtype=xdata.dtype, device=xdata.device),
+        )
+
+        return Lightcurve(
+            xdata[keep_mask].clone(),
+            self._ydata_raw[keep_mask].clone(),
+            self._yerr_raw[keep_mask].clone() if hasattr(self, "_yerr_raw") else None,
+        )
+
     def _get_variability_arrays(self):
         """Return (y, yerr) as float64 NumPy arrays, safe for CPU and GPU tensors."""
         y = self._ydata_raw.detach().cpu().numpy()
@@ -2101,17 +2397,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             - fvar_min: float (default 0.05)
             - stetson_k_min: float (default 0.95)
             - verbose: bool (default False)
-
+        
         Returns
         -------
-        dict
-            Variability diagnostics from is_variable()
-
-        Raises
-        ------
-        ValueError
-            If the lightcurve is multiband (ndim > 1). Use
-            check_variability_per_band() instead.
+          Variability diagnostics from is_variable()        
+          If the lightcurve is multiband (ndim > 1). Use
+          check_variability_per_band() instead.
 
         Examples
         --------
@@ -2140,25 +2431,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Parameters
         ----------
         **kwargs : dict
-            Arguments passed to is_variable()
-
-        Returns
-        -------
-        dict
-            {
-                wavelength1: diagnostics_dict,
-                wavelength2: diagnostics_dict,
-                ...
-                'summary': {
-                    'n_bands': int,
+            Arguments passed to is_variable()                   
                     'n_variable': int,
                     'variable_wavelengths': list[float]
-                }
-            }
-
-        Raises
-        ------
-        ValueError
+        
+        Returns
+        -------
             If the lightcurve is not 2-D multiband data (ndim != 2 columns
             with time in column 0 and wavelength in column 1).
 
@@ -2207,9 +2485,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "n_variable": len(variable_bands),
             "variable_wavelengths": variable_bands,
         }
-
         return results
+        
 
+    
     def filter_variable_bands(self, **kwargs):
         """
         Create new Lightcurve with only variable bands retained.
@@ -2217,19 +2496,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Only applicable for multiband (2D) lightcurves where
         ``xdata[:, 1]`` encodes the band/wavelength.
 
-        Parameters
-        ----------
-        **kwargs : dict
+        
+         Parameters
+         ----------
             Arguments passed to is_variable()
 
         Returns
         -------
-        Lightcurve
+        lightcurve : Lightcurve
             New instance containing only wavelengths that pass variability tests
-
-        Raises
-        ------
-        ValueError
+        None
             If no bands pass variability tests
 
         Examples
@@ -2380,6 +2656,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         stop=1e-5,
         lr=0.1,
         stopavg=30,
+        check_sampling: bool = True,
+        sampling_kwargs: dict | None = None,
         check_variability: bool = False,
         variability_kwargs: dict | None = None,
         **kwargs,
@@ -2466,6 +2744,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         stopavg : int, optional
             The number of iterations to use for the stopping criterion, by
             default 30.
+        check_sampling : bool, default=True
+            If True, verify lightcurve has adequate temporal sampling before
+            fitting. Raises ValueError if sampling is poor. Set to False to
+            force fitting.
+        sampling_kwargs : dict, optional
+            Keyword arguments for sampling quality gates (min_points,
+            max_gap_fraction, min_baseline_factor, min_snr,
+            min_fraction_good_snr). See assess_sampling_quality().
         check_variability : bool, default=False
             If True, verify lightcurve shows significant variability before
             fitting. Raises ValueError if not variable. Set to False to force
@@ -2485,8 +2771,35 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Raises
         ------
         ValueError
-            _description_
+            If check_sampling is True and the lightcurve has poor temporal
+            sampling, or if no model is provided.
         """
+        if check_sampling:
+            from pgmuvi.preprocess.quality import assess_sampling_quality
+
+            sk = sampling_kwargs or {}
+            t = self._xdata_raw.detach().cpu().numpy()
+            if t.ndim > 1:
+                t = t[:, 0]
+            y = (
+                self._ydata_raw.detach().cpu().numpy()
+                if hasattr(self, "_ydata_raw")
+                else None
+            )
+            yerr = (
+                self._yerr_raw.detach().cpu().numpy()
+                if hasattr(self, "_yerr_raw")
+                else None
+            )
+            passes, diag = assess_sampling_quality(t, y, yerr, verbose=False, **sk)
+            if not passes:
+                warnings_str = "\n".join(f"  • {w}" for w in diag["warnings"])
+                raise ValueError(
+                    f"Lightcurve has poor temporal sampling:\n{warnings_str}\n\n"
+                    f"Recommendation: {diag['recommendation']}\n"
+                    "GP fitting not recommended for poorly sampled data.\n"
+                    "To force fitting anyway, use: fit(check_sampling=False)"
+                )
         if check_variability:
             from pgmuvi.preprocess.variability import is_variable
 
