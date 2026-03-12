@@ -3916,14 +3916,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             psd_tot = psd_tot.exp().cpu().detach().numpy()
         return psd_tot
 
-    def plot(self, ylim=None, show=True, mcmc_samples=False, **kwargs):
+    def plot(self, ylim=None, yscale="auto", show=True, mcmc_samples=False, **kwargs):
         """Plot the model and data
 
         Parameters
         ----------
         ylim : list, optional
             The y-limits of the plot, by default None. If None, the y-limits
-            will be set automatically.
+            will be set automatically. For 2-D (multiwavelength) data the
+            limits are determined independently for each wavelength.
+        yscale : str, optional
+            The y-axis scale to use. Can be ``'auto'`` (default), ``'linear'``
+            or ``'log'``. When ``'auto'``, log scale is chosen for a given
+            wavelength if all its flux values are positive and the ratio of
+            maximum to minimum flux exceeds 100; otherwise linear scale is
+            used. For 2-D data the scale is decided independently per
+            wavelength.
         show : bool, optional
             Whether to show the plot, by default True.
         mcmc_samples : bool, optional
@@ -3937,7 +3945,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fig : matplotlib.pyplot.Figure
             The figure object of the plot.
         """
-        if ylim is None:
+        if ylim is None and self.ndim == 1:
             # ylim = [-3, 3]
             y_min = float(self.ydata.min())
             y_max = float(self.ydata.max())
@@ -3976,9 +3984,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
 
             if self.ndim == 1:
-                fig = self._plot_1d(x_fine_raw, ylim=ylim, show=show, **kwargs)
+                fig = self._plot_1d(
+                    x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
+                )
             elif self.ndim == 2:
-                fig = self._plot_2d(x_fine_raw, ylim=ylim, show=show, **kwargs)
+                fig = self._plot_2d(
+                    x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
+                )
             else:
                 raise NotImplementedError(
                     """
@@ -4064,7 +4076,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 plt.show()
         return f
 
-    def _plot_1d(self, x_fine_raw, ylim=None, show=False, save=True, **kwargs):
+    def _plot_1d(
+        self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
+    ):
         # transforming the x_fine_raw data to the space that the GP was
         # trained in (so it can predict)
         if self.xtransform is None:
@@ -4096,8 +4110,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # Plot training data as black stars (on top of model predictions)
         ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
+
+        # Determine y scale
+        y_min_val = float(self.ydata.min())
+        y_max_val = float(self.ydata.max())
+        if yscale == "auto":
+            if y_min_val > 0 and y_max_val / y_min_val > 100:
+                current_yscale = "log"
+            else:
+                current_yscale = "linear"
+        else:
+            current_yscale = yscale
+        ax.set_yscale(current_yscale)
+
         if ylim is not None:
-            ax.set_ylim(ylim)
+            # Only set the limit when it is valid for the chosen scale.
+            # For log scale a non-positive lower bound (e.g. auto-computed in
+            # linear space) would break the axis, so skip in that case and let
+            # matplotlib choose an appropriate range.
+            if current_yscale != "log" or ylim[0] > 0:
+                ax.set_ylim(ylim)
         ax.legend(["Observed Data", "Mean", "Confidence"])
         if save:
             plt.savefig(f"{self.name}_fit.png")
@@ -4105,7 +4137,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             plt.show()
         return f
 
-    def _plot_2d(self, x_fine_raw, ylim=None, show=False, save=True, **kwargs):
+    def _plot_2d(
+        self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
+    ):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
         elif isinstance(self.xtransform, Transformer):
@@ -4134,9 +4168,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
             # Plot training data as black stars (on top of model predictions)
+            y_data_for_val = self.ydata[self.xdata[:, 1] == val]
             ax.plot(
                 self.xdata[self.xdata[:, 1] == val, 0],
-                self.ydata[self.xdata[:, 1] == val],
+                y_data_for_val,
                 "k*",
             )
             ax.legend(["Observed Data", "Mean", "Confidence"])
@@ -4144,8 +4179,47 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.set_ylabel("y")
             ax.set_xlabel("x")
             ax.set_title(f"y vs x for {val}")
-            if ylim is not None:
-                ax.set_ylim(ylim)
+
+            # Determine y scale for this wavelength independently
+            y_min_val = float(y_data_for_val.min())
+            y_max_val = float(y_data_for_val.max())
+            if yscale == "auto":
+                if y_min_val > 0 and y_max_val / y_min_val > 100:
+                    current_yscale = "log"
+                else:
+                    current_yscale = "linear"
+            else:
+                current_yscale = yscale
+            ax.set_yscale(current_yscale)
+
+            # Compute y limits for this wavelength independently
+            if ylim is None:
+                if current_yscale == "log" and y_min_val > 0:
+                    log_min = np.log10(y_min_val)
+                    log_max = np.log10(y_max_val)
+                    log_range = log_max - log_min
+                    padding = 0.1 * abs(log_range) if log_range != 0.0 else 0.1
+                    current_ylim = [
+                        10 ** (log_min - padding),
+                        10 ** (log_max + padding),
+                    ]
+                elif current_yscale != "log":
+                    y_range = y_max_val - y_min_val
+                    if y_range != 0.0:
+                        padding = 0.1 * abs(y_range)
+                    else:
+                        base = abs(y_max_val) if y_max_val != 0.0 else 1.0
+                        padding = 0.1 * base
+                    current_ylim = [y_min_val - padding, y_max_val + padding]
+                else:
+                    # Log scale forced but data has non-positive values:
+                    # let matplotlib choose an appropriate range.
+                    current_ylim = None
+            else:
+                current_ylim = ylim
+            if current_ylim is not None:
+                ax.set_ylim(current_ylim)
+
             if save:
                 plt.savefig(f"{self.name}_{val}_fit.png")
 
