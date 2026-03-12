@@ -1552,8 +1552,14 @@ class WavelengthDependentGPModel(SeparableGPModel):
         elif isinstance(mean_module, Mean):
             mean_module = mean_module
         else:
+            accepted = (
+                "'quad'/'quadratic'/'quad_constant', 'linear'/'linear_mean', "
+                "'constant'/'constant_mean', 'dust'/'dust_mean', "
+                "'power_law'/'power_law_mean', or a gpytorch.means.Mean instance"
+            )
             raise ValueError(
-                "mean_module must be a gpytorch.means.Mean instance or None."
+                f"Unsupported mean_module value {mean_module!r}. "
+                f"Expected one of: {accepted}."
             )
 
 

@@ -701,6 +701,30 @@ class TestSimpleKernelMeanGPModels(unittest.TestCase):
                 )
                 self.assertIsNotNone(model)
 
+    def test_num_mixtures_forwarded_to_alt_model(self):
+        """set_model() forwards num_mixtures to model_dic_alt models.
+
+        Regression test: previously num_mixtures was silently dropped for
+        WavelengthDependentGPModel (and other alt-path models). Now it must
+        reach the SpectralMixtureKernel when time_kernel_type='sm'.
+        """
+        from gpytorch.kernels import SpectralMixtureKernel
+        lc = Lightcurve(self.train_x, self.train_y)
+        lc.set_model(
+            model="2DWavelengthDependent",
+            time_kernel_type="sm",
+            num_mixtures=2,
+        )
+        # The time kernel is the first kernel in the product (AdditiveKernel
+        # wraps two ScaleKernels; for separable models the covar_module is a
+        # ProductKernel whose first child is the time kernel).
+        time_kernel = lc.model.covar_module.kernels[0]
+        # Unwrap ScaleKernel if present
+        if hasattr(time_kernel, "base_kernel"):
+            time_kernel = time_kernel.base_kernel
+        self.assertIsInstance(time_kernel, SpectralMixtureKernel)
+        self.assertEqual(time_kernel.num_mixtures, 2)
+
 
 if  __name__ == '__main__':
     unittest.main()

@@ -27,11 +27,10 @@ Usage::
 import numpy as np
 import torch
 import matplotlib
+matplotlib.use("Agg")  # non-interactive backend so the script runs headless
 import matplotlib.pyplot as plt
 
 from pgmuvi.lightcurve import Lightcurve
-
-matplotlib.use("Agg")  # non-interactive backend so the script runs headless
 
 # ---------------------------------------------------------------------------
 # Reproducibility
