@@ -26,6 +26,7 @@ from .gps import (
 import matplotlib.pyplot as plt
 from .trainers import train
 from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive  # noqa: F401
+from .constraints import get_constraint_set
 from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior  # noqa: F401
 import pyro
 from pyro.infer.mcmc import NUTS, MCMC, HMC
@@ -731,7 +732,7 @@ class Lightcurve(gpytorch.Module):
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
 
-               
+
             If an instance of a GP class, that object will be used.
             _description_, by default None
         likelihood : string, None or instance of
@@ -1229,7 +1230,7 @@ class Lightcurve(gpytorch.Module):
             if not hasattr(self.xtransform, "transform"):
                 raise ValueError("xtransform must have a 'transform' method")
 
-    def set_default_constraints(self, **kwargs):
+    def set_default_constraints(self, constraint_set=None, **kwargs):
         """Set the default constraints for the model and likelihood parameters
 
         The default constraints are as follows:
@@ -1250,6 +1251,22 @@ class Lightcurve(gpytorch.Module):
 
         Parameters
         ----------
+        constraint_set : str or None, optional
+            Name of a pre-defined source-type constraint set to apply on top
+            of the default constraints.  When provided, the constraints
+            defined for the named set (see
+            :data:`pgmuvi.constraints.CONSTRAINT_SETS`) are merged into the
+            default mixture-means constraint.  Currently supported values:
+
+            ``"LPV"``
+                Long-Period Variable stars.  Enforces a lower period limit of
+                20 in the same time units as the input ``xdata`` (typically
+                interpreted as 20 days for LPV light curves) so that the fit is
+                not pulled toward unphysically short periods.  If ``xdata``
+                is provided in different time units, this numerical limit
+                applies in those units.
+
+            Pass ``None`` (the default) to use only the data-driven defaults.
         **kwargs : dict, optional
             Any keyword arguments to be passed to the Constraint constructors.
         """
@@ -1317,6 +1334,70 @@ class Lightcurve(gpytorch.Module):
             mixture_means_constraint = Interval(overall_min_frequency, max_freq)
         else:
             mixture_means_constraint = GreaterThan(1 / self._xdata_transformed.max())
+
+        # Apply any constraint_set period bounds to the mixture_means constraint
+        if constraint_set is not None:
+            cs = get_constraint_set(constraint_set)
+            if "period" in cs:
+                period_bounds = cs["period"]
+                lower_val, lower_active = period_bounds["lower"]
+                upper_val, upper_active = period_bounds["upper"]
+
+                # Compute the scale factor to convert a period in original
+                # (untransformed) units to a frequency in transformed space.
+                # For any linear rescaling transform:
+                #   freq_transformed = freq_original * (x_orig_span / x_trans_span)
+                if self.ndim > 1:
+                    x_orig_span = float(
+                        self._xdata_raw[:, 0].max() - self._xdata_raw[:, 0].min()
+                    )
+                    x_trans_span = float(
+                        self._xdata_transformed[:, 0].max()
+                        - self._xdata_transformed[:, 0].min()
+                    )
+                else:
+                    x_orig_span = float(
+                        self._xdata_raw.max() - self._xdata_raw.min()
+                    )
+                    x_trans_span = float(
+                        self._xdata_transformed.max()
+                        - self._xdata_transformed.min()
+                    )
+                freq_scale = x_orig_span / x_trans_span if x_trans_span > 0 else 1.0
+
+                # Period lower limit → frequency upper limit
+                if lower_active and lower_val is not None:
+                    max_freq_from_period = freq_scale / lower_val
+                    cur_lower = float(mixture_means_constraint.lower_bound)
+                    if max_freq_from_period > cur_lower:
+                        if isinstance(mixture_means_constraint, GreaterThan):
+                            mixture_means_constraint = Interval(
+                                cur_lower, max_freq_from_period
+                            )
+                        else:
+                            # Already an Interval: tighten the upper bound
+                            cur_upper = float(mixture_means_constraint.upper_bound)
+                            mixture_means_constraint = Interval(
+                                cur_lower,
+                                min(cur_upper, max_freq_from_period),
+                            )
+
+                # Period upper limit → frequency lower limit
+                if upper_active and upper_val is not None:
+                    min_freq_from_period = freq_scale / upper_val
+                    cur_lower = float(mixture_means_constraint.lower_bound)
+                    cur_upper = (
+                        float(mixture_means_constraint.upper_bound)
+                        if isinstance(mixture_means_constraint, Interval)
+                        else float("inf")
+                    )
+                    new_lower = max(cur_lower, min_freq_from_period)
+                    if new_lower < cur_upper:
+                        if isinstance(mixture_means_constraint, GreaterThan):
+                            mixture_means_constraint = GreaterThan(new_lower)
+                        else:
+                            mixture_means_constraint = Interval(new_lower, cur_upper)
+
         self._model_pars["mixture_means"]["module"].register_constraint(
             "raw_mixture_means", mixture_means_constraint
         )
@@ -2080,7 +2161,7 @@ class Lightcurve(gpytorch.Module):
                 '2DAchromatic': AchromaticGPModel
                 '2DWavelengthDependent': WavelengthDependentGPModel
 
-                
+
             If an instance of a GP class, that object will be used.
         likelihood : string, None or instance of
                         gpytorch.likelihoods.likelihood.Likelihood or Constraint,
