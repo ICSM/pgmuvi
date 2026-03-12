@@ -4274,7 +4274,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lower, upper = observed_pred.confidence_region()
 
         # Plot predictive GP mean as blue line
-        ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), "b")
+        ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), "b", label='Mean')
 
         # Shade between the lower and upper confidence bounds
         ax.fill_between(
@@ -4282,10 +4282,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             lower.cpu().numpy(),
             upper.cpu().numpy(),
             alpha=0.5,
+            label='Confidence'
         )
 
         # Plot training data as black stars (on top of model predictions)
-        ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
+        if self.yerr is not None:
+            ax.errorbar(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), yerr=self.yerr.cpu().numpy(), fmt="k*", label='Observed')
+        else:
+            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*", label='Observed')
 
         # Determine y-axis scale and limits using the shared helper
         current_yscale, current_ylim = self._yscale_and_ylim(
@@ -4294,7 +4298,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ax.set_yscale(current_yscale)
         if current_ylim is not None:
             ax.set_ylim(current_ylim)
-        ax.legend(["Observed Data", "Mean", "Confidence"])
+        ax.legend()
         if save:
             plt.savefig(f"{self.name}_fit.png")
         if show:
