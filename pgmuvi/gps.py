@@ -1020,15 +1020,15 @@ def _build_wavelength_kernel(wavelength_kernel_type, wavelength_lengthscale, sca
         )
         return wavelength_kernel_type
     elif wavelength_kernel_type == "rbf":
-        k = ScaleKernel(RBFKernel())
+        k = RBFKernel()
         k.lengthscale = wavelength_lengthscale
         # return k
     elif wavelength_kernel_type == "matern":
-        k = ScaleKernel(MaternKernel(nu=1.5))
+        k = MaternKernel(nu=1.5)
         k.lengthscale = wavelength_lengthscale
         # return k
     elif wavelength_kernel_type in ("rational_quadratic", "rq"):
-        k = ScaleKernel(RQKernel())
+        k = RQKernel()
         k.lengthscale = wavelength_lengthscale
         # return k
     else:
@@ -1046,6 +1046,7 @@ def _build_wavelength_kernel(wavelength_kernel_type, wavelength_lengthscale, sca
             f"Unknown scaling type '{scaling}'. "
             "Available options are 'constant' or 'linear'"
         )
+    return k
 
 
 class QuasiPeriodicGPModel(ExactGP):
