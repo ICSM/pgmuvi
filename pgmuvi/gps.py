@@ -8,6 +8,7 @@ from gpytorch.kernels import (
     GridInterpolationKernel as GIK,
     AdditiveKernel,
     ConstantKernel,
+    LinearKernel,
     MaternKernel,
     PeriodicKernel,
     ProductKernel,
