@@ -960,7 +960,7 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=T
     -------
     gpytorch.kernels.Kernel
     """
-    red_noise_kernel = ScaleKernel(RBFKernel(ard_num_dims=1)) if add_red_noise else None
+    # red_noise_kernel = ScaleKernel(RBFKernel(ard_num_dims=1)) if add_red_noise else None
     if isinstance(time_kernel_type, gpt.kernels.Kernel):
         import warnings
         warnings.warn(
@@ -979,7 +979,9 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=T
         return ScaleKernel(RBFKernel())
     if time_kernel_type in ("spectral_mixture", "sm"):
         # SMK incorporates its own output scale; no wrapping ScaleKernel needed.
-        return SMK(num_mixtures=num_mixtures, ard_num_dims=1) + red_noise_kernel
+        if add_red_noise:
+            return SMK(num_mixtures=num_mixtures, ard_num_dims=1) + ScaleKernel(RBFKernel(ard_num_dims=1))
+        return SMK(num_mixtures=num_mixtures, ard_num_dims=1)
     raise ValueError(
         f"Unknown time_kernel_type '{time_kernel_type}'. "
         "Choose from 'quasi_periodic', 'matern', 'rbf', "
