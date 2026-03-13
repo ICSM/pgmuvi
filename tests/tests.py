@@ -1524,5 +1524,29 @@ class TestPlotYscaleValidation(unittest.TestCase):
             self.lc.plot(yscale="bad_value")
 
 
+class TestPlotWithoutFit(unittest.TestCase):
+    """Test that plot() works without a prior GP fit."""
+
+    def setUp(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        self.plt = plt
+        xdata = torch.as_tensor([1.0, 2.0, 3.0, 4.0])
+        ydata = torch.as_tensor([1.0, 2.0, 1.0, 2.0])
+        self.lc = Lightcurve(xdata, ydata)
+
+    def tearDown(self):
+        self.plt.close("all")
+
+    def test_plot_returns_figure_without_fit(self):
+        fig = self.lc.plot(show=False)
+        self.assertIsNotNone(fig)
+
+    def test_plot_mcmc_samples_raises_without_mcmc(self):
+        with self.assertRaises(RuntimeError):
+            self.lc.plot(mcmc_samples=True)
+
+
 if __name__ == '__main__':
     unittest.main()
