@@ -1044,7 +1044,7 @@ def _build_wavelength_kernel(wavelength_kernel_type, wavelength_lengthscale, sca
     else:
         raise ValueError(
             f"Unknown scaling type '{scaling}'. "
-            "Available options are 'constant' or 'linear'
+            "Available options are 'constant' or 'linear'"
         )
 
 
