@@ -201,7 +201,7 @@ def outputscale_constraint(data_std, min_factor=0.001, max_factor=100.0):
 CONSTRAINT_SETS = {
     "LPV": {
         "period": {
-            "lower": (20.0, True),
+            "lower": (100.0, True),
             "upper": (None, False),
         },
     },
