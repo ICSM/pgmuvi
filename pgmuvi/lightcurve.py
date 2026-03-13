@@ -4078,7 +4078,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else:
                 raise RuntimeError("You must first run the MCMC sampler")
         elif not self.__FITTED_MAP:
-            raise RuntimeError("You must first fit the GP")
+            return self._plot_data_only(ylim=ylim, yscale=yscale, show=show)
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Get into evaluation (predictive posterior) mode
             # self.model.eval()
@@ -4251,6 +4251,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             lim = None if scale == "log" and ylim[0] <= 0 else ylim
 
         return scale, lim
+
+    def _plot_data_only(self, ylim=None, yscale="auto", show=False):
+        """Plot only the data, without any GP predictions.
+
+        Used when the GP has not yet been fitted.
+        """
+        f, ax = plt.subplots(1, 1, figsize=(8, 6))
+        x_plot = self.xdata.cpu().numpy()
+        if self.ndim == 2:
+            x_plot = self.xdata[:, 0].cpu().numpy()
+        y_plot = self.ydata.cpu().numpy()
+        if hasattr(self, "yerr") and self.yerr is not None:
+            ax.errorbar(
+                x_plot, y_plot, yerr=self.yerr.cpu().numpy(), fmt="k*", label="Observed"
+            )
+        else:
+            ax.plot(x_plot, y_plot, "k*", label="Observed")
+        current_yscale, current_ylim = self._yscale_and_ylim(y_plot, yscale, ylim)
+        ax.set_yscale(current_yscale)
+        if current_ylim is not None:
+            ax.set_ylim(current_ylim)
+        ax.legend()
+        if show:
+            plt.show()
+        return f
 
     def _plot_1d(
         self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
