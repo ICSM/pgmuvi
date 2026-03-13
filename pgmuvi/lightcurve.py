@@ -1002,7 +1002,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         elif isinstance(self.xtransform, Transformer):
             return self.xtransform.transform(values)
 
-    def set_likelihood(self, likelihood=None, **kwargs):
+    def set_likelihood(self, likelihood=None, variance=False, **kwargs):
         """Set the likelihood function for the model
 
         Parameters
@@ -1022,16 +1022,33 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             in which case the class will be instantiated with the kwargs
             provided under the assumption that it is a Likelihood object, and
             it will also be passed the uncertainties on the y data, if available.
+        variance : bool, optional
+            If False (default), the uncertainties stored in the lightcurve are
+            treated as errors (standard deviations) and are squared before
+            being passed to the likelihood as noise variances.  Set to True if
+            the stored uncertainties already represent variances and should be
+            passed through unchanged.
         """
 
         self.__SET_LIKELIHOOD_CALLED = True
-        if hasattr(self, "_yerr_transformed") and likelihood is None:
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
+        # Prepare the noise tensor: gpytorch likelihoods expect variances.
+        # By default (variance=False) we square the stored errors; if the
+        # caller has already supplied variances, we use them as-is.
+        _has_noise = hasattr(self, "_yerr_transformed")
+        if _has_noise:
+            noise = (
                 self._yerr_transformed
+                if variance
+                else self._yerr_transformed**2
             )
-        elif hasattr(self, "_yerr_transformed") and likelihood == "learn":
+
+        if _has_noise and likelihood is None:
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
-                self._yerr_transformed,
+                noise
+            )
+        elif _has_noise and likelihood == "learn":
+            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
+                noise,
                 learn_additional_noise=True,
             )
         elif likelihood == "learn":
@@ -1051,8 +1068,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         elif isinstance(likelihood, gpytorch.likelihoods.likelihood.Likelihood):
             self.likelihood = likelihood
         elif isclass(likelihood):
-            if hasattr(self, "_yerr_transformed"):
-                self.likelihood = likelihood(self._yerr_transformed, **kwargs)
+            if _has_noise:
+                self.likelihood = likelihood(noise, **kwargs)
             else:
                 self.likelihood = likelihood(**kwargs)
         else:
@@ -1063,7 +1080,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                               Please provide a suitable likelihood input."""
             )
 
-    def set_model(self, model=None, likelihood=None, num_mixtures=None, **kwargs):
+    def set_model(
+        self, model=None, likelihood=None, num_mixtures=None, variance=False, **kwargs
+    ):
         """Set the model for the lightcurve
 
         Parameters
@@ -1114,6 +1133,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             default None. If None, a default value will be used. This value
             is passed to the constructor for the model if a string is passed
             as the model argument.
+        variance : bool, optional
+            Passed to `set_likelihood()`.  If False (default), stored
+            uncertainties are treated as errors and squared before being used
+            as noise variances.  Set to True if the stored uncertainties
+            already represent variances.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor.
         """
@@ -1150,13 +1174,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         }
 
         if not hasattr(self, "likelihood"):
-            self.set_likelihood(likelihood, **kwargs)
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
             # if no likelihood is passed, we only want to set the likelihood
             # if it hasn't already been set
-            self.set_likelihood(likelihood, **kwargs)
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
         elif likelihood is not None:
-            self.set_likelihood(likelihood, **kwargs)
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
 
         if "GP" in [t.__name__ for t in type(model).__mro__]:
             # check if it is or inherets from a GPyTorch model
@@ -2770,6 +2794,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         stop=1e-5,
         lr=0.1,
         stopavg=30,
+        variance=False,
         check_sampling: bool = True,
         sampling_kwargs: dict | None = None,
         check_variability: bool = False,
@@ -2875,6 +2900,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         variability_kwargs : dict, optional
             Keyword arguments for variability tests (alpha, fvar_min,
             stetson_k_min). Only used when check_variability=True.
+        variance : bool, optional
+            If False (default), stored uncertainties are treated as errors
+            (standard deviations) and are squared before being used as noise
+            variances in the likelihood.  Set to True if the stored
+            uncertainties already represent variances.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -2947,13 +2977,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
         if not hasattr(self, "likelihood"):
-            self.set_likelihood(likelihood, **kwargs)
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
             # if no likelihood is passed, we only want to set the likelihood
             # if it hasn't already been set
-            self.set_likelihood(likelihood, **kwargs)
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
         elif likelihood is not None:
-            self.set_likelihood(likelihood, **kwargs)
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
         # if likelihood is None and not hasattr(self, 'likelihood'):
         #     raise ValueError("""You must provide a likelihood function""")
         # elif likelihood is not None:
@@ -2962,7 +2992,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if model is None and not hasattr(self, "model"):
             raise ValueError("""You must provide a model""")
         elif model is not None:
-            self.set_model(model, self.likelihood, num_mixtures=num_mixtures, **kwargs)
+            self.set_model(
+                model,
+                self.likelihood,
+                num_mixtures=num_mixtures,
+                variance=variance,
+                **kwargs,
+            )
 
         # Validate 2D setup if we have 2D data
         if self.ndim > 1:
