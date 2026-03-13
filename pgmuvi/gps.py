@@ -1019,23 +1019,33 @@ def _build_wavelength_kernel(wavelength_kernel_type, wavelength_lengthscale, sca
             stacklevel=3,
         )
         return wavelength_kernel_type
-    if wavelength_kernel_type == "rbf":
+    elif wavelength_kernel_type == "rbf":
         k = ScaleKernel(RBFKernel())
-        k.base_kernel.lengthscale = wavelength_lengthscale
-        return k
-    if wavelength_kernel_type == "matern":
+        k.lengthscale = wavelength_lengthscale
+        # return k
+    elif wavelength_kernel_type == "matern":
         k = ScaleKernel(MaternKernel(nu=1.5))
-        k.base_kernel.lengthscale = wavelength_lengthscale
-        return k
-    if wavelength_kernel_type in ("rational_quadratic", "rq"):
+        k.lengthscale = wavelength_lengthscale
+        # return k
+    elif wavelength_kernel_type in ("rational_quadratic", "rq"):
         k = ScaleKernel(RQKernel())
-        k.base_kernel.lengthscale = wavelength_lengthscale
-        return k
-    raise ValueError(
-        f"Unknown wavelength_kernel_type '{wavelength_kernel_type}'. "
-        "Choose from 'rbf', 'matern', 'rational_quadratic'/'rq', "
-        "or supply a gpytorch.kernels.Kernel instance."
-    )
+        k.lengthscale = wavelength_lengthscale
+        # return k
+    else:
+        raise ValueError(
+            f"Unknown wavelength_kernel_type '{wavelength_kernel_type}'. "
+            "Choose from 'rbf', 'matern', 'rational_quadratic'/'rq', "
+            "or supply a gpytorch.kernels.Kernel instance."
+        )
+    if scaling == 'constant':
+        k = ScaleKernel(k)
+    elif scaling == 'linear':
+        k = LinearKernel() * k
+    else:
+        raise ValueError(
+            f"Unknown scaling type '{scaling}'. "
+            "Available options are 'constant' or 'linear'
+        )
 
 
 class QuasiPeriodicGPModel(ExactGP):
@@ -1531,6 +1541,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
         num_mixtures=4,
         mean_module=None,
         add_red_noise=True,
+        wavelength_scaling='constant',
         **kwargs
     ):
         if period is None:
@@ -1565,9 +1576,9 @@ class WavelengthDependentGPModel(SeparableGPModel):
             )
 
 
-        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures)
+        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures, add_red_noise=add_red_noise)
         wl_kernel = _build_wavelength_kernel(
-            wavelength_kernel_type, wavelength_lengthscale, add_red_noise=add_red_noise
+            wavelength_kernel_type, wavelength_lengthscale, scaling=wavelength_scaling
         )
 
         super().__init__(
