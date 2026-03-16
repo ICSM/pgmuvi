@@ -1010,24 +1010,53 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         likelihood : string, None or instance of
                      gpytorch.likelihoods.likelihood.Likelihood or Constraint,
                      optional
-            The likelihood function to use for the GP, by default None. If
-            None, a Gaussian likelihood will be used. If a string, it must be
-            'learn', in which case a Gaussian likelihood with learnable noise
-            will be used. If an instance of a Likelihood object, that object
-            will be used. If a Constraint object, a GaussianLikelihood will be
-            used, with the constraint being passed to the likelihood as the
-            noise_constraint argument. If a Constraint object is passed, the
-            noise_constraint argument will override any other arguments passed
-            to the likelihood function. You can also provide a class as input,
-            in which case the class will be instantiated with the kwargs
-            provided under the assumption that it is a Likelihood object, and
-            it will also be passed the uncertainties on the y data, if available.
+            The likelihood function to use for the GP, by default None.
+
+            If ``likelihood`` is ``None`` and per-point uncertainties on the
+            data are available (i.e. ``yerr`` has been set), a
+            :class:`gpytorch.likelihoods.FixedNoiseGaussianLikelihood` is
+            constructed and given a tensor of noise *variances* derived from
+            those uncertainties. If ``likelihood`` is ``None`` and no
+            uncertainties are available, a standard
+            :class:`gpytorch.likelihoods.GaussianLikelihood` is used.
+
+            If a string, it must be ``'learn'``. When ``'learn'`` is used and
+            uncertainties are available, a
+            :class:`gpytorch.likelihoods.FixedNoiseGaussianLikelihood` is
+            created with the same noise variance tensor and with
+            ``learn_additional_noise=True``. If ``'learn'`` is used and no
+            uncertainties are available, a
+            :class:`gpytorch.likelihoods.GaussianLikelihood` is created with
+            ``learn_additional_noise=True``.
+
+            If an instance of a :class:`~gpytorch.likelihoods.likelihood.Likelihood`
+            object is passed, that object is used directly. If a Constraint
+            object is passed, a :class:`gpytorch.likelihoods.GaussianLikelihood`
+            is constructed with the constraint passed as the
+            ``noise_constraint`` argument; this overrides any other keyword
+            arguments to the likelihood.
+
+            You can also provide a likelihood *class* (rather than an
+            instance), in which case the class will be instantiated with the
+            provided ``kwargs`` under the assumption that it is a
+            :class:`~gpytorch.likelihoods.likelihood.Likelihood` subclass. If
+            per-point uncertainties are available, a first positional argument
+            will also be passed containing the noise tensor. This tensor is in
+            units of variance by default (see the ``variance`` parameter
+            below).
         variance : bool, optional
-            If False (default), the uncertainties stored in the lightcurve are
-            treated as errors (standard deviations) and are squared before
-            being passed to the likelihood as noise variances.  Set to True if
-            the stored uncertainties already represent variances and should be
-            passed through unchanged.
+            Controls how stored per-point uncertainties are interpreted when
+            constructing the noise tensor passed to likelihoods that require
+            per-observation noise (e.g. :class:`gpytorch.likelihoods.
+            FixedNoiseGaussianLikelihood` or user-supplied likelihood classes
+            that accept a noise argument).
+
+            If ``False`` (default), the uncertainties stored in the lightcurve
+            are assumed to be errors (standard deviations). They are squared
+            to produce noise *variances* before being passed to the likelihood.
+
+            If ``True``, the stored uncertainties are assumed to already be
+            variances and are passed through unchanged as the noise tensor.
         """
 
         self.__SET_LIKELIHOOD_CALLED = True
@@ -1039,7 +1068,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             noise = (
                 self._yerr_transformed
                 if variance
-                else self._yerr_transformed**2
+                else self._yerr_transformed ** 2
             )
 
         if _has_noise and likelihood is None:
