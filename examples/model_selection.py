@@ -13,9 +13,7 @@ import numpy as np
 import torch
 
 from pgmuvi.lightcurve import Lightcurve
-
-np.random.seed(123)
-torch.manual_seed(123)
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -24,43 +22,56 @@ torch.manual_seed(123)
 
 def _make_lc(signal_type: str):
     """Create a Lightcurve for a given signal type."""
-    n = 80
-    t = torch.sort(torch.rand(n) * 20.0)[0].float()
-
     if signal_type == "strong_periodic":
-        y = (torch.sin(2 * np.pi * t / 5.0) + 0.05 * torch.randn(n)).float()
+        return make_simple_sinusoid_1d(
+            n_obs=80, period=5.0, amplitude=1.0, noise_level=0.05,
+            t_span=20.0, irregular=True, seed=123,
+        )
     elif signal_type == "moderate_periodic":
-        y = (
-            0.5 * torch.sin(2 * np.pi * t / 5.0) + 0.4 * torch.randn(n)
-        ).float()
+        return make_simple_sinusoid_1d(
+            n_obs=80, period=5.0, amplitude=0.5, noise_level=0.4,
+            t_span=20.0, irregular=True, seed=123,
+        )
     elif signal_type == "noise":
-        y = torch.randn(n).float() * 0.3
+        torch.manual_seed(123)
+        t = torch.sort(torch.rand(80) * 20.0)[0].float()
+        y = torch.randn(80).float() * 0.3
+        return Lightcurve(t, y)
     else:
         raise ValueError(f"Unknown signal_type: {signal_type}")
-
-    return Lightcurve(t, y)
 
 
 def _make_lc_2d(is_achromatic: bool):
     """Create a 2D multiband Lightcurve."""
-    n = 60
-    t = torch.sort(torch.rand(n) * 20.0)[0].float()
-    wl = torch.cat([
-        torch.ones(n // 2, dtype=torch.float32) * 500.0,
-        torch.ones(n - n // 2, dtype=torch.float32) * 700.0,
-    ])
-    x = torch.stack([t, wl], dim=1)
-
     if is_achromatic:
         # Same period in all bands
-        y = torch.sin(2 * np.pi * t / 5.0).float()
+        return make_chromatic_sinusoid_2d(
+            n_per_band=30,
+            period=5.0,
+            wavelengths=[500.0, 700.0],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.0,
+            t_span=20.0,
+            irregular=True,
+            seed=123,
+        )
     else:
-        # Different 'periods' per band
+        # Different periods per band - build manually since this is a
+        # special case not covered by the standard chromatic generator
+        torch.manual_seed(123)
+        np.random.seed(123)
+        n = 60
+        t = torch.sort(torch.rand(n) * 20.0)[0].float()
+        wl = torch.cat([
+            torch.ones(n // 2, dtype=torch.float32) * 500.0,
+            torch.ones(n - n // 2, dtype=torch.float32) * 700.0,
+        ])
+        x = torch.stack([t, wl], dim=1)
         y = torch.zeros(n, dtype=torch.float32)
         y[: n // 2] = torch.sin(2 * np.pi * t[: n // 2] / 4.0).float()
         y[n // 2 :] = torch.sin(2 * np.pi * t[n // 2 :] / 8.0).float()
-
-    return Lightcurve(x, y)
+        return Lightcurve(x, y)
 
 
 # ---------------------------------------------------------------------------

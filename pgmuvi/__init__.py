@@ -18,5 +18,6 @@ __all__ = [
     "gps",
     "initialization",
     "lightcurve",
+    "synthetic",
     "trainers",
 ]

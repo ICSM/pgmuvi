@@ -15,6 +15,7 @@ import numpy as np
 from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.gps import TwoDSpectralMixtureGPModel
 from gpytorch.likelihoods import GaussianLikelihood
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d
 
 
 class Test2DIntegration(unittest.TestCase):
@@ -22,45 +23,23 @@ class Test2DIntegration(unittest.TestCase):
 
     def setUp(self):
         """Generate synthetic 2D multiwavelength data"""
-        # Set random seed for reproducibility
-        torch.manual_seed(42)
-        np.random.seed(42)
-
-        # Parameters for synthetic data
-        n_samples_band1 = 100
-        n_samples_band2 = 80
-
-        # Time arrays for two wavelength bands
-        time_band1 = torch.linspace(0, 20, n_samples_band1, dtype=torch.float32)
-        time_band2 = torch.linspace(0, 20, n_samples_band2, dtype=torch.float32)
-
-        # Wavelength identifiers (normalized)
-        wavelength_band1 = torch.ones(n_samples_band1, dtype=torch.float32) * 0.5  # Band 1
-        wavelength_band2 = torch.ones(n_samples_band2, dtype=torch.float32) * 1.5  # Band 2
-
-        # Combine into 2D arrays
-        time_all = torch.cat([time_band1, time_band2])
-        wavelength_all = torch.cat([wavelength_band1, wavelength_band2])
-
-        # Stack into (n_samples, 2) format
-        self.xdata_2d = torch.stack([time_all, wavelength_all], dim=1)
-
-        # Generate y-data with known periodic signal
-        # Period = 5 time units, with wavelength-dependent amplitude
         self.true_period = 5.0
         self.true_freq = 1.0 / self.true_period
 
-        # Base signal (achromatic)
-        base_signal = torch.sin(2 * np.pi * time_all / self.true_period)
-
-        # Wavelength-dependent amplitude modulation
-        amplitude_factor = 1.0 + 0.3 * wavelength_all
-
-        # Combine signal with noise
-        signal = amplitude_factor * base_signal
-        noise = torch.randn_like(signal) * 0.1
-
-        self.ydata_2d = signal + noise
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=[100, 80],
+            period=self.true_period,
+            wavelengths=[0.5, 1.5],
+            amplitude_law="linear",
+            amplitude_slope=0.3,
+            wl_ref=0.0,
+            noise_level=0.1,
+            t_span=20.0,
+            irregular=False,
+            seed=42,
+        )
+        self.xdata_2d = lc.xdata
+        self.ydata_2d = lc.ydata
 
         # Store true parameters for comparison
         self.true_params = {
@@ -138,10 +117,10 @@ class Test2DIntegration(unittest.TestCase):
             model='2D',
             likelihood=None,
             num_mixtures=3,
-            training_iter=50,
-            miniter=10,
-            lr=0.05,
-            stop=1e-3
+            training_iter=100,
+            miniter=20,
+            lr=0.01,
+            stop=1e-4
         )
 
         # Results dict has 'loss' key
@@ -208,32 +187,21 @@ class Test2DIntegration(unittest.TestCase):
 
     def test_2d_with_different_sampling(self):
         """Test 2D data with different sampling in each wavelength band"""
-        # This is a common real-world scenario
-
-        # Band 1: dense sampling
-        n1 = 150
-        time1 = torch.linspace(0, 20, n1, dtype=torch.float32)
-        wavelength1 = torch.ones(n1, dtype=torch.float32) * 0.5
-
-        # Band 2: sparse sampling
-        n2 = 50
-        time2 = torch.linspace(0, 20, n2, dtype=torch.float32)
-        wavelength2 = torch.ones(n2, dtype=torch.float32) * 1.5
-
-        # Combine
-        xdata = torch.stack([
-            torch.cat([time1, time2]),
-            torch.cat([wavelength1, wavelength2])
-        ], dim=1)
-
-        # Generate y data
-        time_all = xdata[:, 0]
-        wavelength_all = xdata[:, 1]
-        signal = torch.sin(2 * np.pi * time_all / 5.0) * (1 + 0.2 * wavelength_all)
-        ydata = signal + torch.randn_like(signal) * 0.1
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=[150, 50],
+            period=5.0,
+            wavelengths=[0.5, 1.5],
+            amplitude_law="linear",
+            amplitude_slope=0.2,
+            wl_ref=0.0,
+            noise_level=0.1,
+            t_span=20.0,
+            irregular=False,
+            seed=42,
+        )
 
         # Create lightcurve and fit
-        lightcurve = Lightcurve(xdata, ydata)
+        lightcurve = Lightcurve(lc.xdata, lc.ydata)
         results = lightcurve.fit(
             model='2D',
             num_mixtures=2,
@@ -252,21 +220,22 @@ class Test2DWithLinearMean(unittest.TestCase):
 
     def setUp(self):
         """Generate synthetic 2D data with linear trend"""
-        torch.manual_seed(42)
-        np.random.seed(42)
-
-        n_samples = 100
-        time = torch.linspace(0, 20, n_samples, dtype=torch.float32)
-        wavelength = torch.ones(n_samples, dtype=torch.float32) * 1.0
-
-        self.xdata_2d = torch.stack([time, wavelength], dim=1)
-
-        # Signal with linear trend and periodic component
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=100,
+            period=5.0,
+            wavelengths=[1.0],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=20.0,
+            irregular=False,
+            seed=42,
+        )
+        # Add a linear trend on top of the periodic component
+        time = lc.xdata[:, 0]
         linear_trend = 0.05 * time
-        periodic = torch.sin(2 * np.pi * time / 5.0)
-        noise = torch.randn(n_samples) * 0.1
-
-        self.ydata_2d = linear_trend + periodic + noise
+        self.xdata_2d = lc.xdata
+        self.ydata_2d = lc.ydata + linear_trend
 
     def test_2d_linear_mean_model(self):
         """Test 2D model with linear mean"""

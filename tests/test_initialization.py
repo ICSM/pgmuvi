@@ -9,16 +9,19 @@ from pgmuvi.initialization import (
     initialize_separable_from_data,
     initialize_from_physics,
 )
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 
 class TestInitializeQuasiPeriodic(unittest.TestCase):
     """Tests for initialize_quasi_periodic_from_data."""
 
     def setUp(self):
-        np.random.seed(42)
         # Create a strong periodic signal with period=5
-        self.t = torch.linspace(0, 20, 100, dtype=torch.float32)
-        self.y = torch.sin(2 * np.pi * self.t / 5.0).float()
+        lc = make_simple_sinusoid_1d(
+            n_obs=100, period=5.0, noise_level=0.0, irregular=False, seed=42
+        )
+        self.t = lc.xdata
+        self.y = lc.ydata
         self.yerr = 0.05 * torch.ones_like(self.y)
 
     def test_returns_dict_with_keys(self):
@@ -76,22 +79,18 @@ class TestInitializeSeparable(unittest.TestCase):
     """Tests for initialize_separable_from_data."""
 
     def setUp(self):
-        np.random.seed(42)
-        n = 60
-
-        # Create two-band data with the same period
-        t = np.linspace(0, 20, n)
-        bands = np.concatenate([
-            np.ones(n // 2) * 500.0,
-            np.ones(n - n // 2) * 700.0,
-        ])
-        y = np.sin(2 * np.pi * t / 5.0) + 0.05 * np.random.randn(n)
-
-        self.x = torch.stack([
-            torch.as_tensor(t, dtype=torch.float32),
-            torch.as_tensor(bands, dtype=torch.float32),
-        ], dim=1)
-        self.y = torch.as_tensor(y, dtype=torch.float32)
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=30,
+            period=5.0,
+            wavelengths=[500.0, 700.0],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.05,
+            irregular=False,
+            seed=42,
+        )
+        self.x = lc.xdata
+        self.y = lc.ydata
 
     def test_returns_dict_with_keys(self):
         """Function returns dict with required keys."""

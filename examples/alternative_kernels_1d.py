@@ -9,7 +9,6 @@ Usage::
     python examples/alternative_kernels_1d.py
 """
 
-import numpy as np
 import torch
 import gpytorch
 
@@ -19,25 +18,29 @@ from pgmuvi.models import (
     PeriodicPlusStochasticGPModel,
 )
 from pgmuvi.initialization import initialize_quasi_periodic_from_data
+from pgmuvi.synthetic import make_simple_sinusoid_1d
 
 # ---------------------------------------------------------------------------
 # 1. Generate synthetic pulsating-star data
 # ---------------------------------------------------------------------------
-np.random.seed(42)
-torch.manual_seed(42)
-
-n_obs = 80
 true_period = 5.0
-
-t = torch.sort(torch.rand(n_obs) * 20.0)[0].float()
-y_clean = torch.sin(2 * np.pi * t / true_period)
 noise_level = 0.15
-y_noisy = (y_clean + noise_level * torch.randn(n_obs)).float()
-yerr = noise_level * torch.ones(n_obs)
+
+lc = make_simple_sinusoid_1d(
+    n_obs=80,
+    period=true_period,
+    noise_level=noise_level,
+    t_span=20.0,
+    irregular=True,
+    seed=42,
+)
+t = lc.xdata
+y_noisy = lc.ydata
+yerr = noise_level * torch.ones(len(t))
 
 print("=" * 60)
 print("Synthetic pulsating-star data")
-print(f"  n_obs      = {n_obs}")
+print(f"  n_obs      = {len(t)}")
 print(f"  true period = {true_period}")
 print(f"  noise level = {noise_level}")
 print("=" * 60)

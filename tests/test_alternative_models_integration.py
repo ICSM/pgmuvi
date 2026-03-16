@@ -5,27 +5,26 @@ import numpy as np
 import torch
 
 from pgmuvi.lightcurve import Lightcurve
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 
 def _make_lc_1d(period=5.0, n=60, noise=0.05):
     """Create a 1D Lightcurve with a strong periodic signal."""
-    np.random.seed(0)
-    t = torch.linspace(0, 20, n, dtype=torch.float32)
-    y = (torch.sin(2 * np.pi * t / period) + noise * torch.randn(n)).float()
-    return Lightcurve(t, y)
+    return make_simple_sinusoid_1d(n_obs=n, period=period, noise_level=noise, seed=0)
 
 
 def _make_lc_2d(period=5.0, n=60):
     """Create a 2D multiband Lightcurve with consistent periods."""
-    np.random.seed(0)
-    t = torch.linspace(0, 20, n, dtype=torch.float32)
-    wl = torch.cat([
-        torch.ones(n // 2, dtype=torch.float32) * 500.0,
-        torch.ones(n - n // 2, dtype=torch.float32) * 700.0,
-    ])
-    x = torch.stack([t, wl], dim=1)
-    y = torch.sin(2 * np.pi * t / period).float()
-    return Lightcurve(x, y)
+    return make_chromatic_sinusoid_2d(
+        n_per_band=n // 2,
+        period=period,
+        wavelengths=[500.0, 700.0],
+        amplitude_law="linear",
+        amplitude_slope=0.0,
+        noise_level=0.0,
+        irregular=False,
+        seed=0,
+    )
 
 
 class TestSetModelAlternative(unittest.TestCase):

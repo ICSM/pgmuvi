@@ -3,16 +3,16 @@
 This script demonstrates how to use a 2D ``Lightcurve`` object to fit
 multiwavelength photometry of a dust-obscured AGB star.  The model combines:
 
-* **Mean function** – :class:`~pgmuvi.gps.DustMean`:
-  ``m(t, λ) = A · exp(-τ · λ^(-α)) + offset``
+* **Mean function** - DustMean:
+  ``m(t, wl) = A * exp(-tau * wl**(-alpha)) + offset``
   This captures the strong wavelength dependence introduced by circumstellar
   dust, which attenuates optical flux far more than infrared flux.
 
-* **Covariance (time)** – ``SpectralMixtureKernel``:
+* **Covariance (time)** - ``SpectralMixtureKernel``:
   Learns the power-spectral-density of the stochastic variability, allowing
   flexible non-parametric period and amplitude recovery.
 
-* **Covariance (wavelength)** – ``ScaleKernel(RBFKernel())``:
+* **Covariance (wavelength)** - ``ScaleKernel(RBFKernel())``:
   Captures smooth correlation in residual flux across nearby wavelengths.
 
 The complete model is accessed via the ``'2DWavelengthDependent'`` shortcut
@@ -24,19 +24,19 @@ Usage::
     python examples/dust_mean_spectral_mixture_2d.py
 """
 
-import numpy as np
-import torch
+import math
+
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend so the script runs headless
 import matplotlib.pyplot as plt
+import numpy as np
 
 from pgmuvi.lightcurve import Lightcurve
+from pgmuvi.synthetic import make_multi_sinusoid_chromatic_2d
 
 # ---------------------------------------------------------------------------
-# Reproducibility
+# Reproducibility: seed is passed directly to make_multi_sinusoid_chromatic_2d
 # ---------------------------------------------------------------------------
-torch.manual_seed(0)
-np.random.seed(0)
 
 print("=" * 70)
 print("Dust-mean GP with Spectral-Mixture time kernel (2D Lightcurve)")
@@ -47,10 +47,10 @@ print("=" * 70)
 #
 # Physical setup:
 #   - Mira-type pulsator with a ~400-day period
-#   - Observed in three wavelength bands: optical (I, ~0.8 µm),
-#     near-IR (J, ~1.2 µm) and near-IR (K, ~2.2 µm)
+#   - Observed in three wavelength bands: optical (I, ~0.8 um),
+#     near-IR (J, ~1.2 um) and near-IR (K, ~2.2 um)
 #   - Circumstellar dust shell introduces wavelength-dependent attenuation
-#     following  flux ∝ exp(-tau * wavelength^(-alpha))
+#     following  flux ~ exp(-tau * wavelength^(-alpha))
 #
 # The dust-law parameters used to generate the data are:
 #   amplitude = 5.0 (arbitrary flux units)
@@ -68,52 +68,54 @@ TRUE_ALPHA = 1.7             # extinction power-law index
 TRUE_OFFSET = 0.2            # background offset
 NOISE_FRAC = 0.05            # 5 % fractional noise per band
 
-# Three photometric bands: I (0.8 µm), J (1.2 µm), K (2.2 µm)
-BANDS = {"I (0.8 µm)": 0.8, "J (1.2 µm)": 1.2, "K (2.2 µm)": 2.2}
+# Three photometric bands: I (0.8 um), J (1.2 um), K (2.2 um)
+BANDS = {"I (0.8 um)": 0.8, "J (1.2 um)": 1.2, "K (2.2 um)": 2.2}
 N_PER_BAND = 60              # observations per band
 
-t_list, wl_list, y_list = [], [], []
+# Use make_multi_sinusoid_chromatic_2d with dust extinction amplitude law.
+# The two sinusoidal components mimic the fundamental pulsation period and
+# its first harmonic.
+lc = make_multi_sinusoid_chromatic_2d(
+    n_per_band=N_PER_BAND,
+    t_span=3 * TRUE_PERIOD,
+    components=[
+        {"period": TRUE_PERIOD, "amplitude_fraction": 0.4, "phase": 0.0},
+        {"period": TRUE_PERIOD / 2, "amplitude_fraction": 0.1,
+         "phase": math.pi / 2},
+    ],
+    wavelengths=list(BANDS.values()),
+    amplitude_law="extinction",
+    overall_amplitude=TRUE_AMPLITUDE,
+    tau=TRUE_TAU,
+    alpha=TRUE_ALPHA,
+    offset=TRUE_OFFSET,
+    phase_law="none",
+    noise_level=NOISE_FRAC * TRUE_AMPLITUDE * 0.5,
+    irregular=True,
+    seed=0,
+)
+xdata = lc.xdata
+ydata = lc.ydata
+
+# Report band statistics (approximate, since offset now included in y)
 band_masks = {}
-offset = 0
-
+offset_idx = 0
 for band_name, wl_micron in BANDS.items():
-    # Irregular time sampling (realistic ground-based photometry)
-    t_band = np.sort(np.random.uniform(0, 3 * TRUE_PERIOD, N_PER_BAND))
-
-    # Mean flux from dust-attenuation law
     mean_flux = TRUE_AMPLITUDE * np.exp(-TRUE_TAU * wl_micron ** -TRUE_ALPHA)
     mean_flux += TRUE_OFFSET
-
-    # Stochastic pulsation variability (≈ sinusoidal + harmonics + noise)
-    variability = 0.4 * mean_flux * np.sin(2 * np.pi * t_band / TRUE_PERIOD)
-    variability += 0.1 * mean_flux * np.sin(4 * np.pi * t_band / TRUE_PERIOD)
-
-    noise = NOISE_FRAC * mean_flux * np.random.randn(N_PER_BAND)
-    y_band = mean_flux + variability + noise
-
-    band_masks[band_name] = slice(offset, offset + N_PER_BAND)
-    offset += N_PER_BAND
-
-    t_list.append(t_band)
-    wl_list.append(np.full(N_PER_BAND, wl_micron))
-    y_list.append(y_band)
-
     print(
-        f"   {band_name:15s}: mean flux = {mean_flux:.3f},  "
-        f"variability amplitude = {0.4 * mean_flux:.3f}"
+        f"   {band_name:16s}: mean flux ~ {mean_flux:.3f},  "
+        f"variability amplitude ~ {0.4 * mean_flux:.3f}"
     )
+    band_masks[band_name] = slice(offset_idx, offset_idx + N_PER_BAND)
+    offset_idx += N_PER_BAND
 
-# Stack into (N, 2) input tensor: column 0 = time, column 1 = wavelength
-t_np = np.concatenate(t_list)
-wl_np = np.concatenate(wl_list)
-y_np = np.concatenate(y_list)
-
-xdata = torch.tensor(np.column_stack([t_np, wl_np]), dtype=torch.float32)
-ydata = torch.tensor(y_np, dtype=torch.float32)
+t_np = xdata[:, 0].numpy()
+wl_np = xdata[:, 1].numpy()
 
 print(f"\n   Total observations  : {len(ydata)}")
-print(f"   Time span           : {t_np.min():.0f} – {t_np.max():.0f} days")
-print(f"   Wavelength range    : {wl_np.min():.1f} – {wl_np.max():.1f} µm")
+print(f"   Time span           : {t_np.min():.0f} - {t_np.max():.0f} days")
+print(f"   Wavelength range    : {wl_np.min():.1f} - {wl_np.max():.1f} um")
 
 # ---------------------------------------------------------------------------
 # 2. Create a 2D Lightcurve object

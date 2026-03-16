@@ -3,11 +3,10 @@ and for set_default_constraints(constraint_set=...) in Lightcurve.
 """
 
 import unittest
-import torch
-import numpy as np
 
 from pgmuvi.constraints import CONSTRAINT_SETS, get_constraint_set
 from pgmuvi.lightcurve import Lightcurve
+from pgmuvi.synthetic import make_simple_sinusoid_1d
 from gpytorch.constraints import Interval, GreaterThan
 
 
@@ -17,10 +16,9 @@ from gpytorch.constraints import Interval, GreaterThan
 
 def _make_1d_lc(n=80, span_days=500.0, seed=0):
     """Return a simple 1-D Lightcurve spanning *span_days* days."""
-    torch.manual_seed(seed)
-    t = torch.linspace(0.0, span_days, n, dtype=torch.float32)
-    y = torch.sin(2 * np.pi * t / 100.0) + 0.1 * torch.randn(n)
-    return Lightcurve(t, y)
+    return make_simple_sinusoid_1d(
+        n_obs=n, period=100.0, noise_level=0.1, t_span=span_days, seed=seed
+    )
 
 
 # ---------------------------------------------------------------------------

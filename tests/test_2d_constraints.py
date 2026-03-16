@@ -13,6 +13,7 @@ import unittest
 import torch
 import numpy as np
 from pgmuvi.lightcurve import Lightcurve, MinMax, ZScore, RobustZScore
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d
 from gpytorch.constraints import GreaterThan, Interval
 
 
@@ -21,17 +22,19 @@ class Test2DConstraintSetup(unittest.TestCase):
 
     def setUp(self):
         """Set up 2D test data"""
-        # Create synthetic 2D data: time and wavelength
-        n_samples = 50
-        time = torch.linspace(0, 10, n_samples, dtype=torch.float32)
-        wavelength = torch.ones(n_samples, dtype=torch.float32) * 5.0  # Single wavelength
-
-        # Stack into 2D format (n_samples, 2)
-        self.xdata_2d = torch.stack([time, wavelength], dim=1)
-
-        # Generate y-data with some variation
-        self.ydata_2d = torch.sin(2 * np.pi * time / 2.5) + torch.randn(n_samples) * 0.1
-
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=50,
+            period=2.5,
+            wavelengths=[5.0],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            irregular=False,
+            seed=0,
+        )
+        self.xdata_2d = lc.xdata
+        self.ydata_2d = lc.ydata
         self.lightcurve_2d = Lightcurve(self.xdata_2d, self.ydata_2d)
 
     def test_ndim_is_2(self):
@@ -78,13 +81,19 @@ class Test2DHyperparameterTransforms(unittest.TestCase):
 
     def setUp(self):
         """Set up 2D lightcurve"""
-        n_samples = 50
-        time = torch.linspace(0, 10, n_samples, dtype=torch.float32)
-        wavelength = torch.ones(n_samples, dtype=torch.float32) * 5.0
-
-        self.xdata_2d = torch.stack([time, wavelength], dim=1)
-        self.ydata_2d = torch.sin(2 * np.pi * time / 2.5) + torch.randn(n_samples) * 0.1
-
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=50,
+            period=2.5,
+            wavelengths=[5.0],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            irregular=False,
+            seed=0,
+        )
+        self.xdata_2d = lc.xdata
+        self.ydata_2d = lc.ydata
         self.lightcurve_2d = Lightcurve(self.xdata_2d, self.ydata_2d)
 
         # Set up model using Lightcurve method
@@ -137,13 +146,19 @@ class Test2DConstraintTransforms(unittest.TestCase):
 
     def setUp(self):
         """Set up 2D lightcurve"""
-        n_samples = 50
-        time = torch.linspace(0, 10, n_samples, dtype=torch.float32)
-        wavelength = torch.ones(n_samples, dtype=torch.float32) * 5.0
-
-        self.xdata_2d = torch.stack([time, wavelength], dim=1)
-        self.ydata_2d = torch.sin(2 * np.pi * time / 2.5) + torch.randn(n_samples) * 0.1
-
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=50,
+            period=2.5,
+            wavelengths=[5.0],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            irregular=False,
+            seed=0,
+        )
+        self.xdata_2d = lc.xdata
+        self.ydata_2d = lc.ydata
         self.lightcurve_2d = Lightcurve(self.xdata_2d, self.ydata_2d)
 
         # Set up model using Lightcurve method
@@ -238,14 +253,12 @@ class Test2DValidation(unittest.TestCase):
 
     def test_validate_2d_setup_with_correct_data(self):
         """Test that validation passes with correct 2D setup"""
-        n_samples = 50
-        time = torch.linspace(0, 10, n_samples, dtype=torch.float32)
-        wavelength = torch.ones(n_samples, dtype=torch.float32) * 5.0
-
-        xdata_2d = torch.stack([time, wavelength], dim=1)
-        ydata_2d = torch.sin(2 * np.pi * time / 2.5) + torch.randn(n_samples) * 0.1
-
-        lightcurve_2d = Lightcurve(xdata_2d, ydata_2d)
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=50, period=2.5, wavelengths=[5.0],
+            amplitude_law="linear", amplitude_slope=0.0,
+            noise_level=0.1, t_span=10.0, irregular=False, seed=0,
+        )
+        lightcurve_2d = Lightcurve(lc.xdata, lc.ydata)
 
         # Use Lightcurve.set_model
         lightcurve_2d.set_model('2D', likelihood=None, num_mixtures=2)
@@ -270,14 +283,12 @@ class Test2DValidation(unittest.TestCase):
 
     def test_validate_2d_setup_with_1d_model(self):
         """Test that validation fails when using 1D model with 2D data"""
-        n_samples = 50
-        time = torch.linspace(0, 10, n_samples, dtype=torch.float32)
-        wavelength = torch.ones(n_samples, dtype=torch.float32) * 5.0
-
-        xdata_2d = torch.stack([time, wavelength], dim=1)
-        ydata_2d = torch.sin(2 * np.pi * time / 2.5) + torch.randn(n_samples) * 0.1
-
-        lightcurve_2d = Lightcurve(xdata_2d, ydata_2d)
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=50, period=2.5, wavelengths=[5.0],
+            amplitude_law="linear", amplitude_slope=0.0,
+            noise_level=0.1, t_span=10.0, irregular=False, seed=0,
+        )
+        lightcurve_2d = Lightcurve(lc.xdata, lc.ydata)
 
         # Try to use a 1D model (this should fail)
         from pgmuvi.gps import SpectralMixtureGPModel
@@ -316,11 +327,19 @@ class Test2DValidationSeparableModels(unittest.TestCase):
     """Test that _validate_2d_setup does not raise for separable models."""
 
     def setUp(self):
-        n_samples = 30
-        time = torch.linspace(0, 10, n_samples, dtype=torch.float32)
-        wavelength = torch.linspace(400.0, 900.0, n_samples, dtype=torch.float32)
-        self.xdata_2d = torch.stack([time, wavelength], dim=1)
-        self.ydata_2d = torch.sin(2 * np.pi * time / 2.5).float()
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=15,
+            period=2.5,
+            wavelengths=[400.0, 900.0],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.0,
+            t_span=10.0,
+            irregular=False,
+            seed=0,
+        )
+        self.xdata_2d = lc.xdata
+        self.ydata_2d = lc.ydata
 
     def _make_lc(self, model_str):
         lc = Lightcurve(self.xdata_2d, self.ydata_2d)

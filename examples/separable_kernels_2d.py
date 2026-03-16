@@ -1,7 +1,7 @@
 """Example: Separable 2D kernels for multiwavelength light curves.
 
 This script demonstrates how to use ``AchromaticGPModel`` and
-``WavelengthDependentGPModel`` for 2D (time × wavelength) data, and
+``WavelengthDependentGPModel`` for 2D (time x wavelength) data, and
 shows how to use smart initialisation with ``initialize_separable_from_data``.
 
 Usage::
@@ -9,8 +9,6 @@ Usage::
     python examples/separable_kernels_2d.py
 """
 
-import numpy as np
-import torch
 import gpytorch
 
 from pgmuvi.models import (
@@ -19,36 +17,31 @@ from pgmuvi.models import (
     SeparableGPModel,
 )
 from pgmuvi.initialization import initialize_separable_from_data
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d
 
 # ---------------------------------------------------------------------------
 # 1. Generate synthetic multiwavelength data
 # ---------------------------------------------------------------------------
-np.random.seed(0)
-torch.manual_seed(0)
-
-n_per_band = 50
 true_period = 7.0
 wavelengths = [450.0, 600.0, 750.0]  # nm
 
-t_all, wl_all, y_all = [], [], []
-for wl in wavelengths:
-    t_band = np.sort(np.random.uniform(0, 25, n_per_band))
-    # Amplitude depends on wavelength (chromatic component)
-    amplitude = 1.0 + 0.3 * (wl - 600.0) / 150.0
-    y_band = amplitude * np.sin(2 * np.pi * t_band / true_period)
-    y_band += 0.1 * np.random.randn(n_per_band)
-    t_all.append(t_band)
-    wl_all.append(np.full(n_per_band, wl))
-    y_all.append(y_band)
-
-t_np = np.concatenate(t_all)
-wl_np = np.concatenate(wl_all)
-y_np = np.concatenate(y_all)
-
-t = torch.as_tensor(t_np, dtype=torch.float32)
-wl = torch.as_tensor(wl_np, dtype=torch.float32)
-y = torch.as_tensor(y_np, dtype=torch.float32)
-x = torch.stack([t, wl], dim=1)
+lc = make_chromatic_sinusoid_2d(
+    n_per_band=50,
+    period=true_period,
+    amplitude=1.0,
+    wavelengths=wavelengths,
+    amplitude_law="linear",
+    amplitude_slope=0.3 / 150.0,
+    wl_ref=600.0,
+    noise_level=0.1,
+    t_span=25.0,
+    irregular=True,
+    seed=0,
+)
+x = lc.xdata
+y = lc.ydata
+t = x[:, 0]
+wl = x[:, 1]
 
 n_total = len(y)
 print("=" * 60)

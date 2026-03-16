@@ -96,24 +96,29 @@ def run_pgmuvi(LCfile = 'AlfOriAAVSO_Vband.csv', timecolumn = 'JD', \
     """
 
     if synthetic_data:
+        from pgmuvi.synthetic import make_simple_sinusoid_1d
 
-
-        """ Let's generate some synthetic data from a perturbed sine curve 
-            but on the same time sampling as the real data"""
-
-        P = np.random.uniform(30, 300)#137. #Days!
-        print("True period: ",P," days")
-        n_data = 400
+        P = np.random.uniform(30, 300)
+        print("True period: ", P, " days")
+        n_periods = np.random.uniform(3, 100)
         jd_min = 2450000
-        n_periods = np.random.uniform(3,100)
-        jd_max = jd_min + P*(n_periods)
-        print("Simulating for ",n_periods," periods")
-        train_jd = torch.Tensor(np.random.uniform(jd_min, jd_max, size=n_data))
-        train_mag = torch.sin(train_jd*(2*np.pi/P))
-        train_mag = train_mag + 0.1*torch.randn_like(train_mag)
-        train_mag_err = 0.1*train_mag
+        jd_max = jd_min + P * n_periods
+        print("Simulating for ", n_periods, " periods")
 
-        period_guess = P*(np.random.uniform()+0.5)#147 #this number is in the same units as our original input.
+        lc_synth = make_simple_sinusoid_1d(
+            n_obs=400,
+            period=P,
+            amplitude=1.0,
+            noise_level=0.1,
+            t_min=jd_min,
+            t_span=jd_max - jd_min,
+            irregular=True,
+        )
+        train_jd = lc_synth.xdata
+        train_mag = lc_synth.ydata
+        train_mag_err = 0.1 * torch.ones_like(train_mag)
+
+        period_guess = P * (np.random.uniform() + 0.5)
     else:
         #testdata = pd.read_csv("~/projects/betelgeuseScuba2/AlfOriAAVSO_Vband.csv")#[-700:]
         testdata = pd.read_csv(LCfile)
