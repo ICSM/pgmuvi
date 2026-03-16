@@ -1059,7 +1059,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             variances and are passed through unchanged as the noise tensor.
         """
 
-        self.__SET_LIKELIHOOD_CALLED = True
         # Prepare the noise tensor: gpytorch likelihoods expect variances.
         # By default (variance=False) we square the stored errors; if the
         # caller has already supplied variances, we use them as-is.
@@ -1108,6 +1107,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                               Likelihood instance, but got {type(likelihood)}.
                               Please provide a suitable likelihood input."""
             )
+        self.__SET_LIKELIHOOD_CALLED = True
 
     def set_model(
         self, model=None, likelihood=None, num_mixtures=None, variance=False, **kwargs
