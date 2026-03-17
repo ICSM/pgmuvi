@@ -18,7 +18,9 @@ from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d
 
 
-def create_multiband_lightcurve(signal_strength=2.0, noise_level=0.1, n_samples=100):
+def create_multiband_lightcurve(
+    signal_strength=2.0, noise_level=0.1, n_samples=100, seed=None
+):
     """
     Create a synthetic multiband lightcurve with a periodic signal.
 
@@ -30,6 +32,8 @@ def create_multiband_lightcurve(signal_strength=2.0, noise_level=0.1, n_samples=
         Standard deviation of Gaussian noise
     n_samples : int
         Total number of data points (split evenly across two bands)
+    seed : int or None
+        Random seed for reproducibility
 
     Returns
     -------
@@ -49,12 +53,15 @@ def create_multiband_lightcurve(signal_strength=2.0, noise_level=0.1, n_samples=
         noise_level=noise_level,
         t_span=20.0,
         irregular=True,
+        seed=seed,
     )
     return lc, true_freq
 
 
 def main():
     """Main demonstration function."""
+    seed = 42  # change here to alter all generated data
+
     print("=" * 80)
     print("MULTIBAND FALSE-ALARM PROBABILITY (FAP) DEMONSTRATION")
     print("=" * 80)
@@ -66,6 +73,7 @@ def main():
         signal_strength=2.0,
         noise_level=0.1,
         n_samples=100,
+        seed=seed,
     )
 
     # Find significant periods
@@ -83,7 +91,8 @@ def main():
     lc_weak, true_freq = create_multiband_lightcurve(
         signal_strength=0.5,
         noise_level=0.5,
-        n_samples=100
+        n_samples=100,
+        seed=seed,
     )
 
     freq, significant = lc_weak.fit_LS(num_peaks=3, single_threshold=0.05)
@@ -96,7 +105,9 @@ def main():
     # Example 3: Compare FAP methods
     print("\n3. COMPARING FAP METHODS")
     print("-" * 80)
-    lc_test, _ = create_multiband_lightcurve(signal_strength=2.0, noise_level=0.1)
+    lc_test, _ = create_multiband_lightcurve(
+        signal_strength=2.0, noise_level=0.1, seed=seed
+    )
 
     # Get data for direct FAP computation
     t = lc_test.xdata[:, 0].numpy()

@@ -213,6 +213,66 @@ def _linear_phase(
     return phase_ref + phase_slope * (wl - wl_ref)
 
 
+def _apply_noise(
+    y_signal: np.ndarray,
+    noise_level: float,
+    noise_type: str,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Apply noise to *y_signal* and return the noisy array.
+
+    Two noise models are supported:
+
+    * ``"gaussian"`` - constant-sigma Gaussian noise.
+      ``noise ~ N(0, noise_level**2)`` at every data point.
+    * ``"poisson"`` - shot-noise approximation where the noise standard
+      deviation scales as the square root of the local flux, mimicking
+      Poisson statistics.  Brighter data points have higher *absolute*
+      noise but lower *fractional* noise, consistent with the behaviour
+      seen for real astronomical sources.  The signal is shifted so that
+      it is always positive; the noise level at the *mean* flux equals
+      *noise_level*.
+
+    Parameters
+    ----------
+    y_signal:
+        The noiseless signal array (1-D, float64).
+    noise_level:
+        Overall noise scale.  If ``<= 0``, the signal is returned
+        unchanged.
+    noise_type:
+        ``"gaussian"`` or ``"poisson"``.
+    rng:
+        The random-number generator to use.
+
+    Returns
+    -------
+    np.ndarray
+        Signal with noise added (a new array; *y_signal* is not modified).
+
+    Raises
+    ------
+    ValueError
+        If *noise_type* is not ``"gaussian"`` or ``"poisson"``.
+    """
+    if noise_level <= 0:
+        return y_signal.copy()
+    n = len(y_signal)
+    if noise_type == "gaussian":
+        return y_signal + rng.standard_normal(n) * noise_level
+    if noise_type == "poisson":
+        # Shift to strictly positive: floor = 1 % of peak signal (or eps)
+        peak = float(np.abs(y_signal).max())
+        y_floor = peak * 0.01 + 1e-10
+        y_pos = y_signal - float(y_signal.min()) + y_floor
+        y_ref = float(y_pos.mean())
+        noise_std = noise_level * np.sqrt(y_pos / y_ref)
+        return y_signal + rng.standard_normal(n) * noise_std
+    raise ValueError(
+        f"Unknown noise_type '{noise_type}'. Choose 'gaussian' or 'poisson'."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -224,6 +284,7 @@ def make_simple_sinusoid_1d(
     amplitude: float = 1.0,
     phase: float = 0.0,
     noise_level: float = 0.1,
+    noise_type: str = "gaussian",
     t_min: float = 0.0,
     t_span: float = 20.0,
     irregular: bool = False,
@@ -233,7 +294,7 @@ def make_simple_sinusoid_1d(
 
     The observed flux is::
 
-        y(t) = A * sin(2*pi*t/P + phi) + noise,   noise ~ N(0, sigma**2)
+        y(t) = A * sin(2*pi*t/P + phi) + noise
 
     Parameters
     ----------
@@ -246,8 +307,13 @@ def make_simple_sinusoid_1d(
     phase:
         Initial phase in radians.
     noise_level:
-        Standard deviation of additive Gaussian noise.  Set to ``0`` for
-        a noise-free light curve.
+        Overall noise scale.  Interpretation depends on *noise_type*.
+        Set to ``0`` for a noise-free light curve.
+    noise_type:
+        ``"gaussian"`` (default) - constant-sigma Gaussian noise with
+        ``sigma = noise_level``.  ``"poisson"`` - shot-noise approximation
+        where the noise standard deviation scales as the square root of the
+        local flux (brighter = lower fractional noise).
     t_min:
         Start time of the observation window.
     t_span:
@@ -276,8 +342,7 @@ def make_simple_sinusoid_1d(
     rng = _rng(seed)
     t = _make_times(n_obs, t_min, t_span, irregular, rng)
     y = amplitude * np.sin(2 * math.pi * t / period + phase)
-    if noise_level > 0:
-        y = y + rng.standard_normal(n_obs) * noise_level
+    y = _apply_noise(y, noise_level, noise_type, rng)
 
     t_tensor = torch.as_tensor(t, dtype=torch.float32)
     y_tensor = torch.as_tensor(y, dtype=torch.float32)
@@ -288,6 +353,7 @@ def make_multi_sinusoid_1d(
     n_obs: int = 80,
     components: list[dict] | None = None,
     noise_level: float = 0.1,
+    noise_type: str = "gaussian",
     t_min: float = 0.0,
     t_span: float = 20.0,
     irregular: bool = False,
@@ -323,7 +389,11 @@ def make_multi_sinusoid_1d(
             ]
 
     noise_level:
-        Standard deviation of additive Gaussian noise.
+        Overall noise scale.  Interpretation depends on *noise_type*.
+    noise_type:
+        ``"gaussian"`` (default) - constant-sigma Gaussian noise.
+        ``"poisson"`` - shot-noise approximation (brighter = lower
+        fractional noise).
     t_min:
         Start time.
     t_span:
@@ -362,8 +432,7 @@ def make_multi_sinusoid_1d(
             2 * math.pi * t / comp["period"] + comp["phase"]
         )
 
-    if noise_level > 0:
-        y = y + rng.standard_normal(n_obs) * noise_level
+    y = _apply_noise(y, noise_level, noise_type, rng)
 
     t_tensor = torch.as_tensor(t, dtype=torch.float32)
     y_tensor = torch.as_tensor(y, dtype=torch.float32)
@@ -386,6 +455,7 @@ def make_chromatic_sinusoid_2d(
     phase_law: str = "none",
     phase_slope: float = 0.1,
     noise_level: float = 0.1,
+    noise_type: str = "gaussian",
     t_min: float = 0.0,
     t_span: float = 20.0,
     irregular: bool = True,
@@ -450,7 +520,11 @@ def make_chromatic_sinusoid_2d(
     phase_slope:
         Slope of the linear phase law (radians per wavelength unit).
     noise_level:
-        Standard deviation of additive Gaussian noise.
+        Overall noise scale.  Interpretation depends on *noise_type*.
+    noise_type:
+        ``"gaussian"`` (default) - constant-sigma Gaussian noise.
+        ``"poisson"`` - shot-noise approximation (brighter = lower
+        fractional noise), applied independently per band.
     t_min:
         Start time.
     t_span:
@@ -517,8 +591,7 @@ def make_chromatic_sinusoid_2d(
     ):
         t_band = _make_times(n, t_min, t_span, irregular, rng)
         y_band = amp * np.sin(2 * math.pi * t_band / period + ph)
-        if noise_level > 0:
-            y_band = y_band + rng.standard_normal(n) * noise_level
+        y_band = _apply_noise(y_band, noise_level, noise_type, rng)
 
         t_list.append(t_band)
         wl_list.append(np.full(n, wl))
@@ -549,8 +622,9 @@ def make_multi_sinusoid_chromatic_2d(
     phase_law: str = "linear",
     phase_slope: float = 0.1,
     noise_level: float = 0.1,
+    noise_type: str = "gaussian",
     t_min: float = 0.0,
-    t_span: float = 20.0,
+    t_span: float = 1200.0,
     irregular: bool = True,
     seed: int | None = None,
 ) -> Lightcurve:
@@ -583,18 +657,19 @@ def make_multi_sinusoid_chromatic_2d(
         ``"phase"`` *(float)*
             Reference phase in radians.  Defaults to ``0.0``.
 
-        If ``None`` the default two-component model is used::
+        If ``None`` the default two-component model is used, mimicking the
+        fundamental and first harmonic of a Mira-like LPV::
 
             [
-                {"period": 5.0, "amplitude_fraction": 0.4, "phase": 0.0},
-                {"period": 2.5, "amplitude_fraction": 0.1,
+                {"period": 400.0, "amplitude_fraction": 0.4, "phase": 0.0},
+                {"period": 200.0, "amplitude_fraction": 0.1,
                  "phase": math.pi / 2},
             ]
 
         which mimics the fundamental and first harmonic of a pulsating star.
 
     wavelengths:
-        List of wavelength values.  Defaults to ``[0.8, 1.2, 2.2]`` (um).
+        List of wavelength values.  Defaults to ``[0.8, 1.2, 2.2]`` (µm).
     amplitude_law:
         ``"linear"`` or ``"extinction"``.  Defaults to ``"extinction"``.
     amplitude_slope:
@@ -614,11 +689,15 @@ def make_multi_sinusoid_chromatic_2d(
     phase_slope:
         Slope of the linear phase law (radians per wavelength unit).
     noise_level:
-        Standard deviation of additive Gaussian noise.
+        Overall noise scale.  Interpretation depends on *noise_type*.
+    noise_type:
+        ``"gaussian"`` (default) - constant-sigma Gaussian noise.
+        ``"poisson"`` - shot-noise approximation (brighter = lower
+        fractional noise), applied independently per band.
     t_min:
         Start time.
     t_span:
-        Total time span.
+        Total time span.  Defaults to ``1200.0`` (three 400-day periods).
     irregular:
         If ``True`` observation times within each band are randomly sampled.
     seed:
@@ -653,8 +732,8 @@ def make_multi_sinusoid_chromatic_2d(
 
     if components is None:
         components = [
-            {"period": 5.0, "amplitude_fraction": 0.4, "phase": 0.0},
-            {"period": 2.5, "amplitude_fraction": 0.1, "phase": math.pi / 2},
+            {"period": 400.0, "amplitude_fraction": 0.4, "phase": 0.0},
+            {"period": 200.0, "amplitude_fraction": 0.1, "phase": math.pi / 2},
         ]
 
     if wavelengths is None:
@@ -705,8 +784,7 @@ def make_multi_sinusoid_chromatic_2d(
                 2 * math.pi * t_band / comp_period + comp_phase + band_ph
             )
 
-        if noise_level > 0:
-            y_band = y_band + rng.standard_normal(n) * noise_level
+        y_band = _apply_noise(y_band, noise_level, noise_type, rng)
 
         t_list.append(t_band)
         wl_list.append(np.full(n, wl))

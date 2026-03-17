@@ -408,6 +408,76 @@ class TestMakeMultiSinusoidChromatic2D(unittest.TestCase):
                 n_per_band=(40, 10), wavelengths=[0.8, 1.2, 2.2]
             )
 
+    def test_default_components_are_lpv_like(self):
+        """Default components should have LPV-like periods (400 and 200 days)."""
+        lc = make_multi_sinusoid_chromatic_2d(
+            n_per_band=10, noise_level=0.0, seed=0
+        )
+        # With period 400 and t_span 1200, we should see variation
+        self.assertGreater(lc.ydata.abs().max().item(), 0.0)
+
+
+class TestNoiseType(unittest.TestCase):
+    """Tests for the noise_type parameter across all generators."""
+
+    def test_simple_sinusoid_poisson_returns_lightcurve(self):
+        lc = make_simple_sinusoid_1d(noise_type="poisson", noise_level=0.1, seed=0)
+        self.assertIsInstance(lc, Lightcurve)
+
+    def test_multi_sinusoid_poisson_returns_lightcurve(self):
+        lc = make_multi_sinusoid_1d(noise_type="poisson", noise_level=0.1, seed=0)
+        self.assertIsInstance(lc, Lightcurve)
+
+    def test_chromatic_2d_poisson_returns_lightcurve(self):
+        lc = make_chromatic_sinusoid_2d(noise_type="poisson", noise_level=0.1, seed=0)
+        self.assertIsInstance(lc, Lightcurve)
+
+    def test_multi_chromatic_2d_poisson_returns_lightcurve(self):
+        lc = make_multi_sinusoid_chromatic_2d(
+            noise_type="poisson", noise_level=0.1, seed=0
+        )
+        self.assertIsInstance(lc, Lightcurve)
+
+    def test_poisson_reproducible_with_seed(self):
+        """Same seed and noise_type='poisson' gives identical results."""
+        lc1 = make_simple_sinusoid_1d(noise_type="poisson", noise_level=0.1, seed=5)
+        lc2 = make_simple_sinusoid_1d(noise_type="poisson", noise_level=0.1, seed=5)
+        self.assertTrue(torch.allclose(lc1.ydata, lc2.ydata))
+
+    def test_gaussian_and_poisson_same_shape(self):
+        """Both noise types produce the same number of observations."""
+        lc_g = make_simple_sinusoid_1d(noise_type="gaussian", seed=0)
+        lc_p = make_simple_sinusoid_1d(noise_type="poisson", seed=0)
+        self.assertEqual(lc_g.ydata.shape, lc_p.ydata.shape)
+
+    def test_poisson_noise_differs_from_gaussian(self):
+        """Poisson and Gaussian noise should produce different y values."""
+        lc_g = make_simple_sinusoid_1d(
+            noise_type="gaussian", noise_level=0.3, seed=42
+        )
+        lc_p = make_simple_sinusoid_1d(
+            noise_type="poisson", noise_level=0.3, seed=42
+        )
+        self.assertFalse(torch.allclose(lc_g.ydata, lc_p.ydata))
+
+    def test_unknown_noise_type_raises(self):
+        with self.assertRaises(ValueError):
+            make_simple_sinusoid_1d(noise_type="bad_type")
+
+    def test_unknown_noise_type_raises_2d(self):
+        with self.assertRaises(ValueError):
+            make_chromatic_sinusoid_2d(noise_type="bad_type")
+
+    def test_noise_free_poisson(self):
+        """noise_level=0 with poisson type gives the same as noise_level=0 gaussian."""
+        lc_g = make_simple_sinusoid_1d(
+            noise_level=0.0, noise_type="gaussian", seed=0
+        )
+        lc_p = make_simple_sinusoid_1d(
+            noise_level=0.0, noise_type="poisson", seed=0
+        )
+        self.assertTrue(torch.allclose(lc_g.ydata, lc_p.ydata))
+
 
 if __name__ == "__main__":
     unittest.main()

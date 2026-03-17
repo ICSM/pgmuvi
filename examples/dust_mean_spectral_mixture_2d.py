@@ -35,8 +35,9 @@ from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.synthetic import make_multi_sinusoid_chromatic_2d
 
 # ---------------------------------------------------------------------------
-# Reproducibility: seed is passed directly to make_multi_sinusoid_chromatic_2d
+# Reproducibility
 # ---------------------------------------------------------------------------
+seed = 0
 
 print("=" * 70)
 print("Dust-mean GP with Spectral-Mixture time kernel (2D Lightcurve)")
@@ -68,8 +69,8 @@ TRUE_ALPHA = 1.7             # extinction power-law index
 TRUE_OFFSET = 0.2            # background offset
 NOISE_FRAC = 0.05            # 5 % fractional noise per band
 
-# Three photometric bands: I (0.8 um), J (1.2 um), K (2.2 um)
-BANDS = {"I (0.8 um)": 0.8, "J (1.2 um)": 1.2, "K (2.2 um)": 2.2}
+# Three photometric bands: I (0.8 µm), J (1.2 µm), K (2.2 µm)
+BANDS = {"I (0.8 µm)": 0.8, "J (1.2 µm)": 1.2, "K (2.2 µm)": 2.2}
 N_PER_BAND = 60              # observations per band
 
 # Use make_multi_sinusoid_chromatic_2d with dust extinction amplitude law.
@@ -92,7 +93,7 @@ lc = make_multi_sinusoid_chromatic_2d(
     phase_law="none",
     noise_level=NOISE_FRAC * TRUE_AMPLITUDE * 0.5,
     irregular=True,
-    seed=0,
+    seed=seed,
 )
 xdata = lc.xdata
 ydata = lc.ydata
@@ -112,10 +113,11 @@ for band_name, wl_micron in BANDS.items():
 
 t_np = xdata[:, 0].numpy()
 wl_np = xdata[:, 1].numpy()
+y_np = ydata.numpy()
 
 print(f"\n   Total observations  : {len(ydata)}")
 print(f"   Time span           : {t_np.min():.0f} - {t_np.max():.0f} days")
-print(f"   Wavelength range    : {wl_np.min():.1f} - {wl_np.max():.1f} um")
+print(f"   Wavelength range    : {wl_np.min():.1f} - {wl_np.max():.1f} µm")
 
 # ---------------------------------------------------------------------------
 # 2. Create a 2D Lightcurve object

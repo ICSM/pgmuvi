@@ -24,6 +24,7 @@ from pgmuvi.synthetic import make_chromatic_sinusoid_2d
 # ---------------------------------------------------------------------------
 true_period = 7.0
 wavelengths = [450.0, 600.0, 750.0]  # nm
+seed = 0
 
 lc = make_chromatic_sinusoid_2d(
     n_per_band=50,
@@ -36,7 +37,7 @@ lc = make_chromatic_sinusoid_2d(
     noise_level=0.1,
     t_span=25.0,
     irregular=True,
-    seed=0,
+    seed=seed,
 )
 x = lc.xdata
 y = lc.ydata

@@ -25,6 +25,7 @@ from pgmuvi.synthetic import make_simple_sinusoid_1d
 # ---------------------------------------------------------------------------
 true_period = 5.0
 noise_level = 0.15
+seed = 42
 
 lc = make_simple_sinusoid_1d(
     n_obs=80,
@@ -32,7 +33,7 @@ lc = make_simple_sinusoid_1d(
     noise_level=noise_level,
     t_span=20.0,
     irregular=True,
-    seed=42,
+    seed=seed,
 )
 t = lc.xdata
 y_noisy = lc.ydata

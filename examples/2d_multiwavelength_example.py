@@ -29,6 +29,7 @@ print("\n1. Generating synthetic 2D multiwavelength data...")
 true_period = 12.5  # days
 true_freq = 1.0 / true_period
 noise_level = 0.15
+seed = 42
 
 # Blue band (~450 nm, 150 obs); Red band (~650 nm, 100 obs)
 # Linear amplitude law: amplitude_factor = 1 + slope * (wl - wl_ref)
@@ -44,7 +45,7 @@ lc = make_chromatic_sinusoid_2d(
     noise_level=noise_level,
     t_span=100.0,
     irregular=True,
-    seed=42,
+    seed=seed,
 )
 xdata_2d = lc.xdata
 ydata_2d = lc.ydata

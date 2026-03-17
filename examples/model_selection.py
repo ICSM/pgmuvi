@@ -16,6 +16,11 @@ from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 # ---------------------------------------------------------------------------
+# Reproducibility: change this single value to alter all generated data
+# ---------------------------------------------------------------------------
+SEED = 123
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
@@ -25,15 +30,15 @@ def _make_lc(signal_type: str):
     if signal_type == "strong_periodic":
         return make_simple_sinusoid_1d(
             n_obs=80, period=5.0, amplitude=1.0, noise_level=0.05,
-            t_span=20.0, irregular=True, seed=123,
+            t_span=20.0, irregular=True, seed=SEED,
         )
     elif signal_type == "moderate_periodic":
         return make_simple_sinusoid_1d(
             n_obs=80, period=5.0, amplitude=0.5, noise_level=0.4,
-            t_span=20.0, irregular=True, seed=123,
+            t_span=20.0, irregular=True, seed=SEED,
         )
     elif signal_type == "noise":
-        torch.manual_seed(123)
+        torch.manual_seed(SEED)
         t = torch.sort(torch.rand(80) * 20.0)[0].float()
         y = torch.randn(80).float() * 0.3
         return Lightcurve(t, y)
@@ -54,13 +59,13 @@ def _make_lc_2d(is_achromatic: bool):
             noise_level=0.0,
             t_span=20.0,
             irregular=True,
-            seed=123,
+            seed=SEED,
         )
     else:
         # Different periods per band - build manually since this is a
         # special case not covered by the standard chromatic generator
-        torch.manual_seed(123)
-        np.random.seed(123)
+        torch.manual_seed(SEED)
+        np.random.seed(SEED)
         n = 60
         t = torch.sort(torch.rand(n) * 20.0)[0].float()
         wl = torch.cat([
