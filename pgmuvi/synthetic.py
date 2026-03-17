@@ -76,6 +76,71 @@ def _rng(seed: int | None) -> np.random.Generator:
     return np.random.default_rng(seed)
 
 
+def _resolve_n_per_band(
+    n_per_band: int | tuple[int, int] | list[int],
+    n_bands: int,
+    rng: np.random.Generator,
+) -> list[int]:
+    """Resolve the ``n_per_band`` argument to a per-band list of counts.
+
+    Three forms are accepted:
+
+    * **int** - every band gets the same number of observations.
+    * **tuple (min, max)** - each band independently draws a random count
+      from ``randint(min, max)`` (inclusive on both ends), so different
+      bands may have different numbers of observations.
+    * **list[int]** - explicit per-band counts; length must equal *n_bands*.
+
+    Parameters
+    ----------
+    n_per_band:
+        The user-supplied value.
+    n_bands:
+        Number of wavelength bands.
+    rng:
+        The random-number generator to use when *n_per_band* is a tuple.
+
+    Returns
+    -------
+    list[int]
+        A list of length *n_bands* with the resolved observation count for
+        each band.
+
+    Raises
+    ------
+    ValueError
+        If *n_per_band* is a list whose length does not match *n_bands*, or
+        if the tuple range is invalid (min > max or either value < 1).
+    """
+    if isinstance(n_per_band, int):
+        return [n_per_band] * n_bands
+    if isinstance(n_per_band, tuple):
+        if len(n_per_band) != 2:  # type: ignore[arg-type]
+            raise ValueError(
+                "When n_per_band is a tuple it must have exactly two elements "
+                f"(min, max), got {len(n_per_band)}."
+            )
+        lo, hi = int(n_per_band[0]), int(n_per_band[1])
+        if lo < 1:
+            raise ValueError(
+                f"n_per_band minimum ({lo}) must be at least 1."
+            )
+        if hi < lo:
+            raise ValueError(
+                f"n_per_band range ({lo}, {hi}) is invalid: "
+                "max must be >= min."
+            )
+        return [int(rng.integers(lo, hi + 1)) for _ in range(n_bands)]
+    # list
+    result = list(n_per_band)
+    if len(result) != n_bands:
+        raise ValueError(
+            f"Length of n_per_band ({len(result)}) must match "
+            f"length of wavelengths ({n_bands})."
+        )
+    return result
+
+
 def _make_times(
     n: int,
     t_min: float,
@@ -306,7 +371,7 @@ def make_multi_sinusoid_1d(
 
 
 def make_chromatic_sinusoid_2d(
-    n_per_band: int | list[int] = 50,
+    n_per_band: int | tuple[int, int] | list[int] = 50,
     period: float = 5.0,
     amplitude: float = 1.0,
     phase: float = 0.0,
@@ -348,8 +413,15 @@ def make_chromatic_sinusoid_2d(
     Parameters
     ----------
     n_per_band:
-        Number of observations per wavelength band.  Either a single integer
-        (applied to all bands) or a list with one entry per band.
+        Number of observations per wavelength band.  Three forms are accepted:
+
+        * **int** - every band gets the same number of observations.
+        * **tuple (min, max)** - each band independently draws a random
+          count from ``randint(min, max)`` (inclusive), so different bands
+          may have different numbers of observations.  Useful for simulating
+          realistic uneven coverage across wavelengths.
+        * **list[int]** - explicit count per band; length must equal the
+          number of wavelengths.
     period:
         Period of the sinusoid.
     amplitude:
@@ -412,17 +484,8 @@ def make_chromatic_sinusoid_2d(
         wavelengths = [450.0, 600.0, 750.0]
     n_bands = len(wavelengths)
 
-    if isinstance(n_per_band, int):
-        n_per_band_list: list[int] = [n_per_band] * n_bands
-    else:
-        if len(n_per_band) != n_bands:
-            raise ValueError(
-                f"Length of n_per_band ({len(n_per_band)}) must match "
-                f"length of wavelengths ({n_bands})."
-            )
-        n_per_band_list = list(n_per_band)
-
     rng = _rng(seed)
+    n_per_band_list = _resolve_n_per_band(n_per_band, n_bands, rng)
 
     # Compute per-band amplitudes
     wl_arr = np.asarray(wavelengths, dtype=float)
@@ -473,7 +536,7 @@ def make_chromatic_sinusoid_2d(
 
 
 def make_multi_sinusoid_chromatic_2d(
-    n_per_band: int | list[int] = 50,
+    n_per_band: int | tuple[int, int] | list[int] = 50,
     components: list[dict] | None = None,
     wavelengths: list[float] | None = None,
     amplitude_law: str = "extinction",
@@ -501,7 +564,14 @@ def make_multi_sinusoid_chromatic_2d(
     Parameters
     ----------
     n_per_band:
-        Number of observations per wavelength band.
+        Number of observations per wavelength band.  Three forms are accepted:
+
+        * **int** - every band gets the same number of observations.
+        * **tuple (min, max)** - each band independently draws a random
+          count from ``randint(min, max)`` (inclusive), producing realistic
+          uneven coverage across wavelengths.
+        * **list[int]** - explicit count per band; length must equal the
+          number of wavelengths.
     components:
         List of component dictionaries.  Each dictionary may contain:
 
@@ -591,17 +661,8 @@ def make_multi_sinusoid_chromatic_2d(
         wavelengths = [0.8, 1.2, 2.2]
     n_bands = len(wavelengths)
 
-    if isinstance(n_per_band, int):
-        n_per_band_list: list[int] = [n_per_band] * n_bands
-    else:
-        if len(n_per_band) != n_bands:
-            raise ValueError(
-                f"Length of n_per_band ({len(n_per_band)}) must match "
-                f"length of wavelengths ({n_bands})."
-            )
-        n_per_band_list = list(n_per_band)
-
     rng = _rng(seed)
+    n_per_band_list = _resolve_n_per_band(n_per_band, n_bands, rng)
 
     # Compute per-band mean amplitudes (used to scale each component)
     wl_arr = np.asarray(wavelengths, dtype=float)

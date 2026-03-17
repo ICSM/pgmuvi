@@ -13,6 +13,55 @@ from pgmuvi.synthetic import (
     make_multi_sinusoid_chromatic_2d,
     make_simple_sinusoid_1d,
 )
+from pgmuvi.synthetic import _resolve_n_per_band  # internal helper
+
+
+class TestResolveNPerBand(unittest.TestCase):
+    """Unit tests for the _resolve_n_per_band helper."""
+
+    def _rng(self, seed=0):
+        return np.random.default_rng(seed)
+
+    def test_int_broadcast(self):
+        result = _resolve_n_per_band(30, 4, self._rng())
+        self.assertEqual(result, [30, 30, 30, 30])
+
+    def test_list_passthrough(self):
+        result = _resolve_n_per_band([10, 20, 30], 3, self._rng())
+        self.assertEqual(result, [10, 20, 30])
+
+    def test_list_wrong_length_raises(self):
+        with self.assertRaises(ValueError):
+            _resolve_n_per_band([10, 20], 3, self._rng())
+
+    def test_tuple_range_values_in_bounds(self):
+        lo, hi = 5, 15
+        result = _resolve_n_per_band((lo, hi), 5, self._rng())
+        self.assertEqual(len(result), 5)
+        for v in result:
+            self.assertGreaterEqual(v, lo)
+            self.assertLessEqual(v, hi)
+
+    def test_tuple_reproducible(self):
+        r1 = _resolve_n_per_band((10, 40), 4, self._rng(7))
+        r2 = _resolve_n_per_band((10, 40), 4, self._rng(7))
+        self.assertEqual(r1, r2)
+
+    def test_tuple_invalid_range_raises(self):
+        with self.assertRaises(ValueError):
+            _resolve_n_per_band((30, 10), 3, self._rng())
+
+    def test_tuple_zero_min_raises(self):
+        with self.assertRaises(ValueError):
+            _resolve_n_per_band((0, 10), 3, self._rng())
+
+    def test_tuple_negative_min_raises(self):
+        with self.assertRaises(ValueError):
+            _resolve_n_per_band((-5, 10), 3, self._rng())
+
+    def test_tuple_wrong_length_raises(self):
+        with self.assertRaises(ValueError):
+            _resolve_n_per_band((10, 20, 30), 3, self._rng())
 
 
 class TestMakeSimpleSinusoid1D(unittest.TestCase):
@@ -149,6 +198,60 @@ class TestMakeChromaticSinusoid2D(unittest.TestCase):
         )
         self.assertEqual(lc.xdata.shape[0], 60)
 
+    def test_n_per_band_range_tuple(self):
+        """tuple (min, max) gives each band a random count in [min, max]."""
+        lo, hi = 20, 40
+        lc = make_chromatic_sinusoid_2d(
+            n_per_band=(lo, hi),
+            wavelengths=[450.0, 600.0, 750.0],
+            seed=7,
+        )
+        # Total observations must be within possible bounds
+        n_total = lc.xdata.shape[0]
+        self.assertGreaterEqual(n_total, 3 * lo)
+        self.assertLessEqual(n_total, 3 * hi)
+
+    def test_n_per_band_range_tuple_reproducible(self):
+        """Same seed produces identical band counts and data."""
+        lc1 = make_chromatic_sinusoid_2d(
+            n_per_band=(10, 30), wavelengths=[450.0, 600.0, 750.0], seed=5
+        )
+        lc2 = make_chromatic_sinusoid_2d(
+            n_per_band=(10, 30), wavelengths=[450.0, 600.0, 750.0], seed=5
+        )
+        self.assertEqual(lc1.xdata.shape, lc2.xdata.shape)
+        self.assertTrue(torch.allclose(lc1.ydata, lc2.ydata))
+
+    def test_n_per_band_range_tuple_bands_may_differ(self):
+        """With a wide range, different seeds produce different band counts."""
+        lc1 = make_chromatic_sinusoid_2d(
+            n_per_band=(10, 50), wavelengths=[450.0, 600.0, 750.0], seed=1
+        )
+        lc2 = make_chromatic_sinusoid_2d(
+            n_per_band=(10, 50), wavelengths=[450.0, 600.0, 750.0], seed=2
+        )
+        # Both results must be within the valid range
+        for lc in (lc1, lc2):
+            self.assertGreaterEqual(lc.xdata.shape[0], 3 * 10)
+            self.assertLessEqual(lc.xdata.shape[0], 3 * 50)
+        # Different seeds should produce different totals (with high probability
+        # for a range of 40 across 3 bands)
+        self.assertNotEqual(lc1.xdata.shape[0], lc2.xdata.shape[0])
+
+    def test_n_per_band_invalid_tuple_raises(self):
+        """Tuple with min > max should raise ValueError."""
+        with self.assertRaises(ValueError):
+            make_chromatic_sinusoid_2d(
+                n_per_band=(30, 10), wavelengths=[450.0, 600.0, 750.0]
+            )
+
+    def test_n_per_band_tuple_zero_min_raises(self):
+        """Tuple with min < 1 should raise ValueError."""
+        with self.assertRaises(ValueError):
+            make_chromatic_sinusoid_2d(
+                n_per_band=(0, 10), wavelengths=[450.0, 600.0, 750.0]
+            )
+
     def test_mismatched_n_per_band_raises(self):
         with self.assertRaises(ValueError):
             make_chromatic_sinusoid_2d(
@@ -273,6 +376,36 @@ class TestMakeMultiSinusoidChromatic2D(unittest.TestCase):
             make_multi_sinusoid_chromatic_2d(
                 n_per_band=[10, 20],
                 wavelengths=[0.8, 1.2, 2.2],
+            )
+
+    def test_n_per_band_range_tuple(self):
+        """tuple (min, max) gives each band a random count in [min, max]."""
+        lo, hi = 15, 35
+        lc = make_multi_sinusoid_chromatic_2d(
+            n_per_band=(lo, hi),
+            wavelengths=[0.8, 1.2, 2.2],
+            seed=7,
+        )
+        n_total = lc.xdata.shape[0]
+        self.assertGreaterEqual(n_total, 3 * lo)
+        self.assertLessEqual(n_total, 3 * hi)
+
+    def test_n_per_band_range_tuple_reproducible(self):
+        """Same seed gives identical results."""
+        lc1 = make_multi_sinusoid_chromatic_2d(
+            n_per_band=(10, 40), wavelengths=[0.8, 1.2, 2.2], seed=3
+        )
+        lc2 = make_multi_sinusoid_chromatic_2d(
+            n_per_band=(10, 40), wavelengths=[0.8, 1.2, 2.2], seed=3
+        )
+        self.assertEqual(lc1.xdata.shape, lc2.xdata.shape)
+        self.assertTrue(torch.allclose(lc1.ydata, lc2.ydata))
+
+    def test_n_per_band_invalid_tuple_raises(self):
+        """Tuple with min > max should raise ValueError."""
+        with self.assertRaises(ValueError):
+            make_multi_sinusoid_chromatic_2d(
+                n_per_band=(40, 10), wavelengths=[0.8, 1.2, 2.2]
             )
 
 
