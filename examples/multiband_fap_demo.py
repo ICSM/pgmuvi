@@ -13,13 +13,14 @@ Author: pgmuvi contributors
 Date: 2024
 """
 
-import numpy as np
-import torch
 from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d
 
 
-def create_multiband_lightcurve(signal_strength=2.0, noise_level=0.1, n_samples=100):
+def create_multiband_lightcurve(
+    signal_strength=2.0, noise_level=0.1, n_samples=100, seed=None
+):
     """
     Create a synthetic multiband lightcurve with a periodic signal.
 
@@ -30,7 +31,9 @@ def create_multiband_lightcurve(signal_strength=2.0, noise_level=0.1, n_samples=
     noise_level : float
         Standard deviation of Gaussian noise
     n_samples : int
-        Number of data points
+        Total number of data points (split evenly across two bands)
+    seed : int or None
+        Random seed for reproducibility
 
     Returns
     -------
@@ -39,44 +42,29 @@ def create_multiband_lightcurve(signal_strength=2.0, noise_level=0.1, n_samples=
     true_freq : float
         True frequency of the injected signal
     """
-    # Create time array
-    time = np.linspace(0, 20, n_samples)
-
-    # Create two bands (e.g., different wavelengths)
-    bands = np.concatenate([
-        np.ones(n_samples // 2) * 0.5,    # Band 1
-        np.ones(n_samples - n_samples // 2) * 1.5  # Band 2
-    ])
-
-    # Shuffle to mix observations from different bands
-    indices = np.random.permutation(n_samples)
-    time = time[indices]
-    bands = bands[indices]
-
-    # Create periodic signal with some noise
-    true_freq = 0.5  # Hz
-    y = signal_strength * np.sin(2 * np.pi * true_freq * time)
-    y += noise_level * np.random.randn(n_samples)
-
-    # Convert to torch tensors in 2D format
-    # Format: (n_samples, 2) where [:, 0] is time, [:, 1] is band
-    xdata = torch.stack([
-        torch.as_tensor(time, dtype=torch.float32),
-        torch.as_tensor(bands, dtype=torch.float32)
-    ], dim=1)
-    ydata = torch.as_tensor(y, dtype=torch.float32)
-
-    return Lightcurve(xdata, ydata), true_freq
+    true_freq = 0.5  # period = 2 time units
+    lc = make_chromatic_sinusoid_2d(
+        n_per_band=n_samples // 2,
+        period=1.0 / true_freq,
+        amplitude=signal_strength,
+        wavelengths=[0.5, 1.5],
+        amplitude_law="linear",
+        amplitude_slope=0.0,
+        noise_level=noise_level,
+        t_span=20.0,
+        irregular=True,
+        seed=seed,
+    )
+    return lc, true_freq
 
 
 def main():
     """Main demonstration function."""
+    seed = 42  # change here to alter all generated data
+
     print("=" * 80)
     print("MULTIBAND FALSE-ALARM PROBABILITY (FAP) DEMONSTRATION")
     print("=" * 80)
-
-    # Set random seed for reproducibility
-    np.random.seed(42)
 
     # Example 1: Strong signal
     print("\n1. STRONG PERIODIC SIGNAL")
@@ -84,7 +72,8 @@ def main():
     lc_strong, true_freq = create_multiband_lightcurve(
         signal_strength=2.0,
         noise_level=0.1,
-        n_samples=100
+        n_samples=100,
+        seed=seed,
     )
 
     # Find significant periods
@@ -102,7 +91,8 @@ def main():
     lc_weak, true_freq = create_multiband_lightcurve(
         signal_strength=0.5,
         noise_level=0.5,
-        n_samples=100
+        n_samples=100,
+        seed=seed,
     )
 
     freq, significant = lc_weak.fit_LS(num_peaks=3, single_threshold=0.05)
@@ -115,7 +105,9 @@ def main():
     # Example 3: Compare FAP methods
     print("\n3. COMPARING FAP METHODS")
     print("-" * 80)
-    lc_test, _ = create_multiband_lightcurve(signal_strength=2.0, noise_level=0.1)
+    lc_test, _ = create_multiband_lightcurve(
+        signal_strength=2.0, noise_level=0.1, seed=seed
+    )
 
     # Get data for direct FAP computation
     t = lc_test.xdata[:, 0].numpy()

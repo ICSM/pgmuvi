@@ -7,6 +7,7 @@ import gpytorch
 from pgmuvi.lightcurve import InputHelpers, Lightcurve, Transformer, MinMax, ZScore, RobustZScore
 from pgmuvi.trainers import train
 from pgmuvi.gps import SpectralMixtureGPModel
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 import numpy as np
 import torch
 
@@ -169,39 +170,33 @@ class TestFitLS(unittest.TestCase):
 
     def setUp(self):
         """Set up test data for Lomb-Scargle tests"""
-        # Create a synthetic periodic signal with some noise
-        np.random.seed(42)
-        t = np.linspace(0, 10, 100)
-        # Signal with period ~2 (frequency ~0.5)
-        y = 2 * np.sin(2 * np.pi * 0.5 * t) + 0.1 * np.random.randn(100)
-        yerr = 0.1 * np.ones(100)
-
-        self.t = torch.as_tensor(t, dtype=torch.float32)
-        self.y = torch.as_tensor(y, dtype=torch.float32)
-        self.yerr = torch.as_tensor(yerr, dtype=torch.float32)
+        # 1D periodic signal (period ~2, frequency ~0.5)
+        lc_1d = make_simple_sinusoid_1d(
+            n_obs=100, period=2.0, amplitude=2.0, noise_level=0.1,
+            t_span=10.0, irregular=False, seed=42,
+        )
+        self.t = lc_1d.xdata
+        self.y = lc_1d.ydata
+        self.yerr = 0.1 * torch.ones(100, dtype=torch.float32)
 
         # Create lightcurves with and without errors
         self.lc_with_yerr = Lightcurve(self.t, self.y, yerr=self.yerr)
         self.lc_without_yerr = Lightcurve(self.t, self.y)
 
-        # Create 2D multiband lightcurve for testing multiband functionality
-        # Format: (n_samples, 2) where column 0 is time, column 1 is band
-        n_samples = 50
-        time_2d = torch.linspace(0, 10, n_samples, dtype=torch.float32)
-        # Two bands: 0.5 and 1.5
-        bands = torch.cat([
-            torch.ones(n_samples // 2, dtype=torch.float32) * 0.5,
-            torch.ones(n_samples - n_samples // 2, dtype=torch.float32) * 1.5
-        ])
-        # Shuffle to mix bands
-        indices = torch.randperm(n_samples)
-        time_2d = time_2d[indices]
-        bands = bands[indices]
-
-        self.xdata_2d = torch.stack([time_2d, bands], dim=1)
-        # Create periodic signal
-        y_2d = torch.sin(2 * np.pi * 0.5 * time_2d) + 0.1 * torch.randn(n_samples)
-        self.lc_2d = Lightcurve(self.xdata_2d, y_2d)
+        # 2D multiband lightcurve for testing multiband functionality
+        lc_2d = make_chromatic_sinusoid_2d(
+            n_per_band=25,
+            period=2.0,
+            wavelengths=[0.5, 1.5],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            irregular=True,
+            seed=42,
+        )
+        self.xdata_2d = lc_2d.xdata
+        self.lc_2d = Lightcurve(self.xdata_2d, lc_2d.ydata)
 
     def test_basic_functionality_with_yerr(self):
         """Test basic fit_LS functionality with yerr"""
@@ -333,44 +328,30 @@ class TestMultibandFAP(unittest.TestCase):
 
     def setUp(self):
         """Set up test data for multiband FAP tests"""
-        np.random.seed(42)
-
-        # Create multiband lightcurve with strong periodic signal
-        n_samples = 100
-        time = np.linspace(0, 20, n_samples)
-
-        # Two bands
-        bands = np.concatenate([
-            np.ones(n_samples // 2) * 0.5,
-            np.ones(n_samples - n_samples // 2) * 1.5
-        ])
-
-        # Shuffle to mix bands
-        indices = np.random.permutation(n_samples)
-        time = time[indices]
-        bands = bands[indices]
-
-        # Strong periodic signal with frequency ~0.5
-        y_signal = 2 * np.sin(2 * np.pi * 0.5 * time) + 0.1 * np.random.randn(n_samples)
-
-        # Noisy data (no signal)
-        y_noise = 0.5 * np.random.randn(n_samples)
-
-        # Convert to torch tensors and create 2D format
-        self.xdata_signal = torch.stack([
-            torch.as_tensor(time, dtype=torch.float32),
-            torch.as_tensor(bands, dtype=torch.float32)
-        ], dim=1)
-
-        self.xdata_noise = torch.stack([
-            torch.as_tensor(time, dtype=torch.float32),
-            torch.as_tensor(bands, dtype=torch.float32)
-        ], dim=1)
-
-        self.ydata_signal = torch.as_tensor(y_signal, dtype=torch.float32)
-        self.ydata_noise = torch.as_tensor(y_noise, dtype=torch.float32)
-
+        # Strong periodic signal (frequency ~0.5, period ~2)
+        lc_signal = make_chromatic_sinusoid_2d(
+            n_per_band=50,
+            period=2.0,
+            amplitude=2.0,
+            wavelengths=[0.5, 1.5],
+            amplitude_law="linear",
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=20.0,
+            irregular=True,
+            seed=42,
+        )
+        self.xdata_signal = lc_signal.xdata
+        self.ydata_signal = lc_signal.ydata
         self.lc_signal = Lightcurve(self.xdata_signal, self.ydata_signal)
+
+        # Noisy data (no signal) - reuse the same x grid but pure noise
+        rng = np.random.default_rng(42)
+        y_noise = torch.as_tensor(
+            0.5 * rng.standard_normal(len(self.xdata_signal)), dtype=torch.float32
+        )
+        self.xdata_noise = self.xdata_signal
+        self.ydata_noise = y_noise
         self.lc_noise = Lightcurve(self.xdata_noise, self.ydata_noise)
 
     def test_multiband_fap_returns_valid_values(self):

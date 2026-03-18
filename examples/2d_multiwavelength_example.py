@@ -11,14 +11,9 @@ This is particularly useful for modeling variable sources observed in multiple
 wavelength bands with different sampling patterns.
 """
 
-import numpy as np
-import torch
 import matplotlib.pyplot as plt
 from pgmuvi.lightcurve import Lightcurve
-
-# Set random seed for reproducibility
-torch.manual_seed(42)
-np.random.seed(42)
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d
 
 print("=" * 70)
 print("2D Multiwavelength Light Curve Example")
@@ -30,70 +25,45 @@ print("=" * 70)
 
 print("\n1. Generating synthetic 2D multiwavelength data...")
 
-# Parameters for synthetic data
-n_samples_band1 = 150  # Blue band - dense sampling
-n_samples_band2 = 100  # Red band - sparser sampling
-
-# Time arrays for two wavelength bands (in days)
-time_band1 = np.sort(np.random.uniform(0, 100, n_samples_band1))
-time_band2 = np.sort(np.random.uniform(0, 100, n_samples_band2))
-
-# Wavelength identifiers (normalized to [0, 1] range)
-# These represent actual wavelength bands:
-#   0.45 corresponds to blue band (~450nm)
-#   0.65 corresponds to red band (~650nm)
-wavelength_band1 = np.ones(n_samples_band1) * 0.45  # Blue band
-wavelength_band2 = np.ones(n_samples_band2) * 0.65  # Red band
-
-# Combine data from both bands
-time_all = np.concatenate([time_band1, time_band2])
-wavelength_all = np.concatenate([wavelength_band1, wavelength_band2])
-
-# Stack into (n_samples, 2) format for 2D data
-# Column 0: time, Column 1: wavelength
-xdata_2d = torch.tensor(
-    np.column_stack([time_all, wavelength_all]), dtype=torch.float32
-)
-
-print(f"   - Total samples: {len(xdata_2d)}")
-print(f"   - Blue band: {n_samples_band1} observations")
-print(f"   - Red band: {n_samples_band2} observations")
-print(f"   - Time span: {time_all.min():.1f} to {time_all.max():.1f} days")
-
-# ============================================================================
-# Step 2: Generate Signal with Known Properties
-# ============================================================================
-
-print("\n2. Creating variable source signal...")
-
 # Known periodic signal parameters
 true_period = 12.5  # days
 true_freq = 1.0 / true_period
-
-# Base achromatic signal (same in all bands)
-base_signal = np.sin(2 * np.pi * time_all / true_period)
-
-# Wavelength-dependent amplitude modulation
-# Blue band has higher amplitude variation
-amplitude_factor = 1.0 + 0.5 * (wavelength_all - 0.45) / 0.2
-
-# Combine signal with realistic noise
-signal = amplitude_factor * base_signal
 noise_level = 0.15
-noise = np.random.randn(len(signal)) * noise_level
+seed = 42
 
-ydata_2d = torch.tensor(signal + noise, dtype=torch.float32)
+# Blue band (~450 nm, 150 obs); Red band (~650 nm, 100 obs)
+# Linear amplitude law: amplitude_factor = 1 + slope * (wl - wl_ref)
+# The original code used: 1 + 0.5 * (wl - 0.45) / 0.2  =>  slope = 0.5/0.2 = 2.5
+lc = make_chromatic_sinusoid_2d(
+    n_per_band=[150, 100],
+    period=true_period,
+    amplitude=1.0,
+    wavelengths=[0.45, 0.65],
+    amplitude_law="linear",
+    amplitude_slope=2.5,
+    wl_ref=0.45,
+    noise_level=noise_level,
+    t_span=100.0,
+    irregular=True,
+    seed=seed,
+)
+xdata_2d = lc.xdata
+ydata_2d = lc.ydata
 
+print(f"   - Total samples: {len(xdata_2d)}")
+print(f"   - Blue band: 150 observations")
+print(f"   - Red band: 100 observations")
+print(f"   - Time span: {xdata_2d[:, 0].min():.1f} to {xdata_2d[:, 0].max():.1f} days")
 print(f"   - True period: {true_period:.2f} days")
-print(f"   - True frequency: {true_freq:.4f} day⁻¹")
+print(f"   - True frequency: {true_freq:.4f} day^-1")
 print(f"   - Noise level: {noise_level:.2f}")
 print("   - Wavelength-dependent amplitude: Yes")
 
 # ============================================================================
-# Step 3: Create Lightcurve Object
+# Step 2: Create Lightcurve Object
 # ============================================================================
 
-print("\n3. Creating Lightcurve object with 2D data...")
+print("\n2. Creating Lightcurve object with 2D data...")
 
 lightcurve = Lightcurve(xdata_2d, ydata_2d)
 
@@ -102,10 +72,10 @@ print(f"   - Transformed data shape: {lightcurve._xdata_transformed.shape}")
 print(f"   - Transform applied: {type(lightcurve.xtransform).__name__}")
 
 # ============================================================================
-# Step 4: Set Up and Fit 2D Model
+# Step 3: Set Up and Fit 2D Model
 # ============================================================================
 
-print("\n4. Setting up 2D Spectral Mixture GP model...")
+print("\n3. Setting up 2D Spectral Mixture GP model...")
 
 # Fit the model
 # Use '2D' model for multiwavelength data
@@ -125,10 +95,10 @@ print("   - Number of mixture components: 3")
 print("   - Training completed!")
 
 # ============================================================================
-# Step 5: Check Fitted Parameters
+# Step 4: Check Fitted Parameters
 # ============================================================================
 
-print("\n5. Inspecting fitted parameters...")
+print("\n4. Inspecting fitted parameters...")
 
 # Get the fitted mixture means (frequencies)
 mixture_means = lightcurve.model.covar_module.mixture_means.detach()
@@ -142,7 +112,7 @@ time_frequencies = mixture_means[:, 0, 0].numpy()
 print("\n   Fitted frequencies (time dimension):")
 for i, freq in enumerate(time_frequencies):
     period = 1.0 / freq if freq > 0 else float("inf")
-    print(f"      Component {i+1}: f={freq:.4f} day⁻¹, P={period:.2f} days")
+    print(f"      Component {i+1}: f={freq:.4f} day^-1, P={period:.2f} days")
 
 # Check if we recovered the true period
 closest_period = min(
@@ -156,10 +126,10 @@ rel_error = abs(closest_period - true_period) / true_period * 100
 print(f"   Relative error: {rel_error:.1f}%")
 
 # ============================================================================
-# Step 6: Visualize Results
+# Step 5: Visualize Results
 # ============================================================================
 
-print("\n6. Creating visualizations...")
+print("\n5. Creating visualizations...")
 
 # Create figure with subplots
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
@@ -178,6 +148,8 @@ ax.grid(True, alpha=0.3)
 ax = axes[0, 1]
 
 # Separate data by band
+wavelength_all = xdata_2d[:, 1].numpy()
+time_all = xdata_2d[:, 0].numpy()
 blue_mask = wavelength_all < 0.5
 red_mask = wavelength_all >= 0.5
 
