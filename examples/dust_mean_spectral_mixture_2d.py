@@ -48,8 +48,8 @@ print("=" * 70)
 #
 # Physical setup:
 #   - Mira-type pulsator with a ~400-day period
-#   - Observed in three wavelength bands: optical (I, ~0.8 um),
-#     near-IR (J, ~1.2 um) and near-IR (K, ~2.2 um)
+#   - Observed in three wavelength bands: optical (I, ~0.8 µm),
+#     near-IR (J, ~1.2 µm) and near-IR (K, ~2.2 µm)
 #   - Circumstellar dust shell introduces wavelength-dependent attenuation
 #     following  flux ~ exp(-tau * wavelength^(-alpha))
 #
