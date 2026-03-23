@@ -32,6 +32,13 @@ from .trainers import train
 from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive  # noqa: F401
 from .constraints import get_constraint_set
 from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior  # noqa: F401
+from .priors import (
+    LogNormalFrequencyPrior,
+    LogNormalPeriodPrior,
+    NormalFrequencyPrior,
+    NormalPeriodPrior,
+    get_prior_set,
+)
 import pyro
 from pyro.infer.mcmc import NUTS, MCMC, HMC
 from inspect import isclass
@@ -1505,7 +1512,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 print(self._model_pars.keys())
                 print("(Beware, several of these are aliases!)")
 
-    def set_default_priors(self, **kwargs):
+    def set_default_priors(self, prior_set=None, **kwargs):
         """Set the default priors for the model and likelihood parameters
 
         The default priors are as follows:
@@ -1517,10 +1524,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             - The mean of the GP is given a Gaussian prior with a mean of the
             mean of the y-data and a standard deviation of 1/10 of the standard
             deviation of the y-data.
-
+            - For spectral-mixture models the mixture means, scales and weights
+            receive LogNormal(0, 1) priors.
+            - If *prior_set* is provided, :meth:`set_period_prior` is called
+            with that prior set to register a physically motivated prior on
+            the period/frequency parameter of the model.
 
         Parameters
         ----------
+        prior_set : str or None, optional
+            Name of a predefined prior set to apply to the period/frequency
+            parameter (e.g. ``"LPV"``).  If ``None`` (default), no period
+            prior is added.  See :meth:`set_period_prior` and
+            :data:`~pgmuvi.priors.PRIOR_SETS` for available options.
         **kwargs : dict, optional
             Any keyword arguments to be passed to the Prior constructors.
         """
@@ -1553,38 +1569,258 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # that the means are positive, but we don't want to restrict them to
         # be close to zero. In fact, we want to penalise both very high and very low
         # frequencies, so we use a lognormal prior with mu = 0 and sigma = 1
-        mixture_means_prior = gpytorch.priors.LogNormalPrior(
-            0, 1
-        )  # /self._xdata_transformed.max())
-        self._model_pars["mixture_means"]["module"].register_prior(
-            "mixture_means_prior", mixture_means_prior, "mixture_means"
-        )
+        if "mixture_means" in self._model_pars:
+            mixture_means_prior = gpytorch.priors.LogNormalPrior(
+                0, 1
+            )  # /self._xdata_transformed.max())
+            self._model_pars["mixture_means"]["module"].register_prior(
+                "mixture_means_prior", mixture_means_prior, "mixture_means"
+            )
 
         # now we need a prior for the mixture scales
         # we want to penalise very large scales, so we use a half-cauchy prior
         # with a scale of 1/10 of the maximum frequency
         # mixture_scales_prior = gpytorch.priors.HalfCauchyPrior(1/self._xdata_transformed.max())  # noqa: E501
-        mixture_scales_prior = gpytorch.priors.LogNormalPrior(
-            0, 1
-        )  # 1/self._xdata_transformed.max())
-        self._model_pars["mixture_scales"]["module"].register_prior(
-            "mixture_scales_prior", mixture_scales_prior, "mixture_scales"
-        )
+        if "mixture_scales" in self._model_pars:
+            mixture_scales_prior = gpytorch.priors.LogNormalPrior(
+                0, 1
+            )  # 1/self._xdata_transformed.max())
+            self._model_pars["mixture_scales"]["module"].register_prior(
+                "mixture_scales_prior", mixture_scales_prior, "mixture_scales"
+            )
         # we use a LogNormal prior for the mixture weights, because we want to
         # make sure that they are positive (but never zero) and we don't want
         # to restrict them to be close to zero. In fact, we want to penalise
         # both very high and very low weights, so we use a LogNormal prior
         # with a scale of 1/10 of the maximum frequency
-        mixture_weights_prior = gpytorch.priors.LogNormalPrior(
-            0, 1
-        )  # 1/self._xdata_transformed.max())
-        self._model_pars["mixture_weights"]["module"].register_prior(
-            "mixture_weights_prior", mixture_weights_prior, "mixture_weights"
-        )
+        if "mixture_weights" in self._model_pars:
+            mixture_weights_prior = gpytorch.priors.LogNormalPrior(
+                0, 1
+            )  # 1/self._xdata_transformed.max())
+            self._model_pars["mixture_weights"]["module"].register_prior(
+                "mixture_weights_prior", mixture_weights_prior, "mixture_weights"
+            )
+
+        # Apply a period/frequency prior if a prior_set is requested
+        if prior_set is not None:
+            self.set_period_prior(prior_set=prior_set)
 
         # need a more general way to assign default priors to everything, but for now
         # let's see if this works!
         self.__PRIORS_SET = True
+
+    def set_period_prior(
+        self,
+        prior_set=None,
+        prior_type="lognormal",
+        mu=5.0,
+        sigma=1.0,
+        mean=300.0,
+        std=75.0,
+        lower_period=None,
+        upper_period=None,
+    ):
+        """Set a prior on the period or frequency parameter of the model.
+
+        This method detects whether the model represents periodicity as a
+        period (e.g. ``period_length`` in
+        :class:`~pgmuvi.gps.QuasiPeriodicGPModel`) or as a frequency (e.g.
+        ``mixture_means`` in
+        :class:`~pgmuvi.gps.SpectralMixtureGPModel`) and registers an
+        appropriate prior on the relevant parameter.
+
+        For frequency-based models the period-space prior is transformed to
+        frequency space with the correct change-of-variables Jacobian (see
+        :class:`~pgmuvi.priors.LogNormalFrequencyPrior` and
+        :class:`~pgmuvi.priors.NormalFrequencyPrior`).
+
+        Models with no periodicity parameter (e.g.
+        :class:`~pgmuvi.gps.MaternGPModel`) are silently skipped with a
+        warning.
+
+        Parameters
+        ----------
+        prior_set : str or None, optional
+            Name of a predefined prior set (e.g. ``"LPV"``).  When given,
+            the ``prior_type``, ``mu``, ``sigma``, ``mean``, ``std`` and
+            ``lower_period`` / ``upper_period`` defaults are taken from
+            :data:`~pgmuvi.priors.PRIOR_SETS`.  Any explicitly supplied
+            keyword arguments override the prior-set values.
+        prior_type : str, optional
+            Which prior family to use.  Either ``"lognormal"`` (the default,
+            LogNormal in period space with ``mu`` and ``sigma``) or
+            ``"normal"`` (Normal in period space with ``mean`` and ``std``).
+        mu : float, optional
+            Log-mean for the Log-Normal period prior.  Default ``5.0``
+            (median period ≈ 148 days).
+        sigma : float, optional
+            Log-sigma for the Log-Normal period prior.  Default ``1.0``.
+        mean : float, optional
+            Mean for the Normal period prior (days).  Default ``300.0``.
+        std : float, optional
+            Standard deviation for the Normal period prior.  Default ``75.0``.
+        lower_period : float or None, optional
+            Lower bound on period in the *original* (untransformed) data
+            units.  Values outside this bound receive ``-inf`` log-prob.
+            If ``None`` and a *prior_set* is provided, the bound is taken
+            from the prior set.
+        upper_period : float or None, optional
+            Upper bound on period in the *original* data units.
+
+        Raises
+        ------
+        ValueError
+            If *prior_set* is not a recognised name or if *prior_type* is not
+            ``"lognormal"`` or ``"normal"``.
+
+        Notes
+        -----
+        The model must have been set (via :meth:`set_model` or :meth:`fit`)
+        before calling this method.
+
+        For spectral-mixture models the prior is registered on
+        ``mixture_means`` and applies element-wise to all mixture
+        components.
+
+        For quasi-periodic models the prior is registered on each
+        ``period_length`` parameter found in the model (there is typically
+        only one).
+
+        See Also
+        --------
+        pgmuvi.priors.LogNormalPeriodPrior
+        pgmuvi.priors.LogNormalFrequencyPrior
+        pgmuvi.priors.NormalPeriodPrior
+        pgmuvi.priors.NormalFrequencyPrior
+        pgmuvi.priors.PRIOR_SETS
+
+        Examples
+        --------
+        Set the LPV default prior on a spectral-mixture model::
+
+            lc.set_model("1D", num_mixtures=4)
+            lc.set_period_prior(prior_set="LPV")
+
+        Set a Normal period prior explicitly::
+
+            lc.set_model("1DQuasiPeriodic")
+            lc.set_period_prior(prior_type="normal", mean=300.0, std=75.0,
+                                lower_period=100.0)
+        """
+        if not hasattr(self, "_model_pars"):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before "
+                "set_period_prior()."
+            )
+
+        # --- Resolve prior-set defaults ---
+        if prior_set is not None:
+            ps = get_prior_set(prior_set)
+            # Use prior-set values as defaults; explicit kwargs override them
+            if prior_type == "lognormal":
+                mu = ps["lognormal"].get("mu", mu)
+                sigma = ps["lognormal"].get("sigma", sigma)
+            elif prior_type == "normal":
+                mean = ps["normal"].get("mean", mean)
+                std = ps["normal"].get("std", std)
+            pb = ps["period_bounds"]
+            if lower_period is None:
+                lower_val, lower_active = pb["lower"]
+                lower_period = lower_val if lower_active else None
+            if upper_period is None:
+                upper_val, upper_active = pb["upper"]
+                upper_period = upper_val if upper_active else None
+
+        if prior_type not in ("lognormal", "normal"):
+            raise ValueError(
+                f"prior_type must be 'lognormal' or 'normal', got {prior_type!r}"
+            )
+
+        # --- Compute scale factor to convert raw period bounds to model space ---
+        # In model (transformed) space the period is related to the raw period by
+        #   period_model = period_raw * (x_trans_span / x_orig_span)
+        # For linear transforms this equals period_raw when no transform is used.
+        if self.ndim > 1:
+            x_orig_span = float(
+                self._xdata_raw[:, 0].max() - self._xdata_raw[:, 0].min()
+            )
+            x_trans_span = float(
+                self._xdata_transformed[:, 0].max()
+                - self._xdata_transformed[:, 0].min()
+            )
+        else:
+            if hasattr(self, "_xdata_raw"):
+                x_orig_span = float(
+                    self._xdata_raw.max() - self._xdata_raw.min()
+                )
+            else:
+                x_orig_span = float(
+                    self._xdata_transformed.max() - self._xdata_transformed.min()
+                )
+            x_trans_span = float(
+                self._xdata_transformed.max() - self._xdata_transformed.min()
+            )
+        period_scale = (
+            x_trans_span / x_orig_span if x_orig_span > 0 else 1.0
+        )
+
+        # Convert raw period bounds to model-space period bounds
+        lower_model = (
+            float(lower_period) * period_scale if lower_period is not None else None
+        )
+        upper_model = (
+            float(upper_period) * period_scale if upper_period is not None else None
+        )
+
+        # --- Detect model type and register the prior ---
+        # Case 1: frequency-based model (spectral mixture) → mixture_means
+        if "mixture_means" in self._model_pars:
+            if prior_type == "lognormal":
+                prior = LogNormalFrequencyPrior(
+                    mu=mu, sigma=sigma,
+                    lower_period=lower_model,
+                    upper_period=upper_model,
+                )
+            else:
+                prior = NormalFrequencyPrior(
+                    mean=mean, std=std,
+                    lower_period=lower_model,
+                    upper_period=upper_model,
+                )
+            self._model_pars["mixture_means"]["module"].register_prior(
+                "mixture_means_prior", prior, "mixture_means"
+            )
+            return
+
+        # Case 2: period-based model (quasi-periodic) → period_length parameters
+        period_keys = [
+            k for k in self._model_pars
+            if "period_length" in k and "raw_" not in k
+        ]
+        if period_keys:
+            if prior_type == "lognormal":
+                prior = LogNormalPeriodPrior(
+                    mu=mu, sigma=sigma,
+                    lower_bound=lower_model,
+                    upper_bound=upper_model,
+                )
+            else:
+                prior = NormalPeriodPrior(
+                    mean=mean, std=std,
+                    lower_bound=lower_model,
+                    upper_bound=upper_model,
+                )
+            for key in period_keys:
+                module = self._model_pars[key]["module"]
+                module.register_prior("period_length_prior", prior, "period_length")
+            return
+
+        # Case 3: no periodicity parameter
+        warnings.warn(
+            "No period or frequency parameter found in the model. "
+            "set_period_prior() has no effect for this model type.",
+            stacklevel=2,
+        )
 
     def _validate_2d_setup(self):
         """Validate that the 2D setup is correct
