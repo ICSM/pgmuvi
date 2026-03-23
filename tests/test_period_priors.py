@@ -403,8 +403,14 @@ class TestSetPeriodPriorNoPeriodicty(unittest.TestCase):
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             lc.set_period_prior(prior_set="LPV")
-        self.assertTrue(any("no period or frequency" in str(warning.message).lower()
-                            for warning in w))
+        self.assertTrue(
+            any(
+                issubclass(warning.category, UserWarning)
+                and "no period or frequency" in str(warning.message).lower()
+                for warning in w
+            ),
+            "Expected UserWarning about missing period/frequency parameter",
+        )
 
 
 class TestSetPeriodPriorNotInitialized(unittest.TestCase):

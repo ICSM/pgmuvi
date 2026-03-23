@@ -270,7 +270,7 @@ class NormalFrequencyPrior(NormalPrior):
             - torch.log(self.scale)
             - 0.5 * math.log(2 * math.pi)
         )
-        # Jacobian correction: dp/df = -1/f², log|J| = -2·log(f)
+        # Jacobian correction: dp/df = -1/f^2, log|J| = -2*log(f)
         lp = lp - 2.0 * torch.log(f)
         if self.lower_period is not None:
             lb = torch.as_tensor(self.lower_period, dtype=f.dtype, device=f.device)
