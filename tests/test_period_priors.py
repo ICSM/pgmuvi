@@ -55,12 +55,27 @@ class TestLogNormalPeriodPrior(unittest.TestCase):
         self.assertTrue(torch.isinf(lp) and lp < 0)
 
     def test_log_prob_no_bounds(self):
-        """Without bounds, log_prob matches plain LogNormal."""
+        """Without bounds, log_prob matches plain LogNormal (no normalizer offset)."""
         prior = LogNormalPeriodPrior(mu=5.0, sigma=1.0)
         import gpytorch
         ref = gpytorch.priors.LogNormalPrior(5.0, 1.0)
         x = torch.tensor([100.0, 200.0, 500.0])
         self.assertTrue(torch.allclose(prior.log_prob(x), ref.log_prob(x)))
+
+    def test_normalizer_nonzero_with_bounds(self):
+        """Truncated prior has a non-trivial log normalizer."""
+        prior = LogNormalPeriodPrior(mu=5.0, sigma=1.0, lower_bound=100.0)
+        self.assertLess(prior._log_normalizer, 0.0)  # CDF mass < 1 → log < 0
+
+    def test_normalization_integrates_to_one(self):
+        """Truncated log_prob integrates to ~1 over the allowed range."""
+        prior = LogNormalPeriodPrior(mu=5.0, sigma=1.0, lower_bound=100.0, upper_bound=800.0)
+        # Numerical integration on log-uniform grid
+        x = torch.exp(torch.linspace(math.log(100.0), math.log(800.0), 200000))
+        dx = x[1:] - x[:-1]
+        lp = prior.log_prob((x[1:] + x[:-1]) / 2)
+        integral = (torch.exp(lp) * dx).sum().item()
+        self.assertAlmostEqual(integral, 1.0, places=2)
 
     def test_default_parameters(self):
         """Default mu=5, sigma=1."""
@@ -95,6 +110,19 @@ class TestNormalPeriodPrior(unittest.TestCase):
         lp = prior.log_prob(torch.tensor([50.0]))
         self.assertTrue(torch.isinf(lp) and lp < 0)
 
+    def test_normalizer_nonzero_with_bounds(self):
+        prior = NormalPeriodPrior(mean=300.0, std=75.0, lower_bound=100.0)
+        self.assertLess(prior._log_normalizer, 0.0)
+
+    def test_normalization_integrates_to_one(self):
+        """Truncated log_prob integrates to ~1 over the allowed range."""
+        prior = NormalPeriodPrior(mean=300.0, std=75.0, lower_bound=100.0, upper_bound=600.0)
+        x = torch.linspace(100.0, 600.0, 500000)
+        dx = x[1] - x[0]
+        lp = prior.log_prob((x[1:] + x[:-1]) / 2)
+        integral = (torch.exp(lp) * dx).sum().item()
+        self.assertAlmostEqual(integral, 1.0, places=2)
+
     def test_default_parameters(self):
         """Default mean=300, std=75."""
         prior = NormalPeriodPrior()
@@ -118,7 +146,7 @@ class TestLogNormalFrequencyPrior(unittest.TestCase):
     """Tests for LogNormalFrequencyPrior."""
 
     def test_log_prob_jacobian_identity(self):
-        """f ~ LogNormal(-mu, sigma) is Jacobian-correct for P=1/f ~ LogNormal(mu,sigma)."""
+        """Without bounds, log_prob == Jacobian-correct frequency transformation."""
         mu, sigma = 5.0, 1.0
         period = torch.tensor(150.0)
         freq = 1.0 / period
@@ -127,8 +155,7 @@ class TestLogNormalFrequencyPrior(unittest.TestCase):
         period_prior = gpytorch.priors.LogNormalPrior(mu, sigma)
         freq_prior = LogNormalFrequencyPrior(mu=mu, sigma=sigma)
 
-        # The Jacobian-corrected log_prob in frequency space should equal
-        # log p_period(1/f) - 2*log(f) = LogNormal(-mu,sigma).log_prob(f)
+        # No bounds → no normalizer offset
         expected = period_prior.log_prob(period) - 2.0 * torch.log(freq)
         got = freq_prior.log_prob(freq)
         self.assertAlmostEqual(expected.item(), got.item(), places=4)
@@ -147,6 +174,17 @@ class TestLogNormalFrequencyPrior(unittest.TestCase):
         lp = prior.log_prob(f_long)
         self.assertTrue(torch.isfinite(lp))
 
+    def test_normalization_integrates_to_one(self):
+        """Truncated log_prob integrates to ~1 over the allowed frequency range."""
+        prior = LogNormalFrequencyPrior(mu=5.0, sigma=1.0,
+                                        lower_period=100.0, upper_period=800.0)
+        f_low, f_high = 1.0 / 800.0, 1.0 / 100.0
+        f = torch.exp(torch.linspace(math.log(f_low), math.log(f_high), 300000))
+        df = f[1:] - f[:-1]
+        lp = prior.log_prob((f[1:] + f[:-1]) / 2)
+        integral = (torch.exp(lp) * df).sum().item()
+        self.assertAlmostEqual(integral, 1.0, places=2)
+
     def test_loc_negated(self):
         """LogNormalFrequencyPrior stores loc=-mu."""
         prior = LogNormalFrequencyPrior(mu=5.0, sigma=1.0)
@@ -156,6 +194,23 @@ class TestLogNormalFrequencyPrior(unittest.TestCase):
         """LogNormalFrequencyPrior preserves sigma as scale."""
         prior = LogNormalFrequencyPrior(mu=5.0, sigma=2.0)
         self.assertAlmostEqual(prior.scale.item(), 2.0, places=5)
+
+    def test_period_false_equivalence(self):
+        """period=False with frequency bounds gives same result as period=True with period bounds."""
+        # min period = 100 days = max frequency = 0.01
+        prior_p = LogNormalFrequencyPrior(mu=5.0, sigma=1.0, lower_period=100.0, period=True)
+        prior_f = LogNormalFrequencyPrior(mu=5.0, sigma=1.0, upper_period=0.01, period=False)
+        self.assertAlmostEqual(prior_p.lower_period, prior_f.lower_period, places=5)
+        freqs = torch.tensor([1.0 / 150.0, 1.0 / 300.0])
+        self.assertTrue(torch.allclose(prior_p.log_prob(freqs), prior_f.log_prob(freqs)))
+
+    def test_period_false_blocks_high_freq(self):
+        """period=False: frequencies above max_freq are blocked."""
+        # max freq = 0.01 (period >= 100 days required)
+        prior = LogNormalFrequencyPrior(mu=5.0, sigma=1.0, upper_period=0.01, period=False)
+        f_high = torch.tensor(1.0 / 50.0)  # freq=0.02 > 0.01 → blocked
+        lp = prior.log_prob(f_high)
+        self.assertTrue(torch.isinf(lp) and lp < 0)
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +222,7 @@ class TestNormalFrequencyPrior(unittest.TestCase):
     """Tests for NormalFrequencyPrior."""
 
     def test_jacobian_correction(self):
-        """log_prob(f) = Normal(mean,std).log_prob(1/f) - 2*log(f)."""
+        """Without bounds, log_prob(f) = Normal(mean,std).log_prob(1/f) - 2*log(f)."""
         mean, std = 300.0, 75.0
         f = torch.tensor(1.0 / 300.0)
         period = 1.0 / f
@@ -192,10 +247,28 @@ class TestNormalFrequencyPrior(unittest.TestCase):
         lp = prior.log_prob(f_ok)
         self.assertTrue(torch.isfinite(lp))
 
+    def test_normalization_integrates_to_one(self):
+        """Truncated log_prob integrates to ~1 over the allowed frequency range."""
+        prior = NormalFrequencyPrior(mean=300.0, std=75.0,
+                                     lower_period=100.0, upper_period=600.0)
+        f_low, f_high = 1.0 / 600.0, 1.0 / 100.0
+        f = torch.linspace(f_low, f_high, 500000)
+        df = f[1] - f[0]
+        lp = prior.log_prob((f[1:] + f[:-1]) / 2)
+        integral = (torch.exp(lp) * df).sum().item()
+        self.assertAlmostEqual(integral, 1.0, places=2)
+
     def test_default_parameters(self):
         prior = NormalFrequencyPrior()
         self.assertAlmostEqual(prior.loc.item(), 300.0, places=4)
         self.assertAlmostEqual(prior.scale.item(), 75.0, places=4)
+
+    def test_period_false_equivalence(self):
+        """period=False with frequency bounds gives same result as period=True."""
+        prior_p = NormalFrequencyPrior(mean=300.0, std=75.0, lower_period=100.0, period=True)
+        prior_f = NormalFrequencyPrior(mean=300.0, std=75.0, upper_period=0.01, period=False)
+        freqs = torch.tensor([1.0 / 150.0, 1.0 / 300.0])
+        self.assertTrue(torch.allclose(prior_p.log_prob(freqs), prior_f.log_prob(freqs)))
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +288,9 @@ class TestPriorSetsDefinition(unittest.TestCase):
     def test_lpv_has_normal(self):
         self.assertIn("normal", PRIOR_SETS["LPV"])
 
-    def test_lpv_has_period_bounds(self):
-        self.assertIn("period_bounds", PRIOR_SETS["LPV"])
+    def test_lpv_no_period_bounds_in_raw_dict(self):
+        """period_bounds is not stored in PRIOR_SETS (derived at runtime from CONSTRAINT_SETS)."""
+        self.assertNotIn("period_bounds", PRIOR_SETS["LPV"])
 
     def test_lpv_lognormal_mu(self):
         self.assertEqual(PRIOR_SETS["LPV"]["lognormal"]["mu"], 5.0)
@@ -230,22 +304,41 @@ class TestPriorSetsDefinition(unittest.TestCase):
     def test_lpv_normal_std(self):
         self.assertEqual(PRIOR_SETS["LPV"]["normal"]["std"], 75.0)
 
-    def test_lpv_period_lower_active(self):
-        lower_val, lower_active = PRIOR_SETS["LPV"]["period_bounds"]["lower"]
-        self.assertTrue(lower_active)
-        self.assertIsNotNone(lower_val)
-
-    def test_lpv_period_upper_inactive(self):
-        upper_val, upper_active = PRIOR_SETS["LPV"]["period_bounds"]["upper"]
-        self.assertFalse(upper_active)
-
 
 class TestGetPriorSet(unittest.TestCase):
-    """get_prior_set returns a deep copy and raises for unknown names."""
+    """get_prior_set returns a deep copy with period_bounds from CONSTRAINT_SETS."""
 
     def test_get_lpv(self):
         ps = get_prior_set("LPV")
         self.assertIn("lognormal", ps)
+
+    def test_get_lpv_has_period_bounds(self):
+        """get_prior_set includes period_bounds derived from CONSTRAINT_SETS."""
+        ps = get_prior_set("LPV")
+        self.assertIn("period_bounds", ps)
+
+    def test_get_lpv_period_lower_matches_constraint_set(self):
+        """period_bounds lower matches CONSTRAINT_SETS['LPV']['period']['lower']."""
+        from pgmuvi.constraints import CONSTRAINT_SETS
+        ps = get_prior_set("LPV")
+        self.assertEqual(ps["period_bounds"]["lower"],
+                         CONSTRAINT_SETS["LPV"]["period"]["lower"])
+
+    def test_get_lpv_period_upper_matches_constraint_set(self):
+        """period_bounds upper matches CONSTRAINT_SETS['LPV']['period']['upper']."""
+        from pgmuvi.constraints import CONSTRAINT_SETS
+        ps = get_prior_set("LPV")
+        self.assertEqual(ps["period_bounds"]["upper"],
+                         CONSTRAINT_SETS["LPV"]["period"]["upper"])
+
+    def test_get_lpv_period_lower_active(self):
+        lower_val, lower_active = get_prior_set("LPV")["period_bounds"]["lower"]
+        self.assertTrue(lower_active)
+        self.assertIsNotNone(lower_val)
+
+    def test_get_lpv_period_upper_inactive(self):
+        upper_val, upper_active = get_prior_set("LPV")["period_bounds"]["upper"]
+        self.assertFalse(upper_active)
 
     def test_get_lpv_returns_copy(self):
         ps1 = get_prior_set("LPV")
