@@ -1621,9 +1621,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         -------
         dict
             A dictionary mapping prior names (str) to their
-            :class:`gpytorch.priors.Prior` objects.  Returns an empty dict if
-            no priors have been registered or the model has not yet been
-            initialised.
+            :class:`gpytorch.priors.Prior` objects. Returns an empty dict if
+            no priors have been registered.
 
         Raises
         ------
