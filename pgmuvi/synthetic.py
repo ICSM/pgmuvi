@@ -806,6 +806,23 @@ def make_multi_sinusoid_chromatic_2d(
     n_bands = len(wavelengths)
 
     if t_span is None:
+        if not components:
+            raise ValueError(
+                "When 't_span' is None, 'components' must be a non-empty sequence "
+                "of dicts with a numeric 'period' key."
+            )
+        for idx, comp in enumerate(components):
+            if "period" not in comp:
+                raise ValueError(
+                    "Each component must define a 'period' key when 't_span' is "
+                    f"None (missing in component index {idx})."
+                )
+            period = comp["period"]
+            if not isinstance(period, (int, float)) or not math.isfinite(period):
+                raise ValueError(
+                    "Each component 'period' must be a finite numeric value when "
+                    f"'t_span' is None (invalid in component index {idx})."
+                )
         t_span = 2.3 * max(c["period"] for c in components)
 
     rng = _rng(seed)
