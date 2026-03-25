@@ -1609,6 +1609,58 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # let's see if this works!
         self.__PRIORS_SET = True
 
+    def get_default_priors(self):
+        """Return the priors currently registered on the model.
+
+        Iterates over all priors registered on the model (via GPyTorch's
+        ``named_priors``) and returns a dictionary mapping each prior name to
+        the corresponding prior object.  A formatted summary is also printed to
+        standard output.
+
+        Returns
+        -------
+        dict
+            A dictionary mapping prior names (str) to their
+            :class:`gpytorch.priors.Prior` objects.  Returns an empty dict if
+            no priors have been registered or the model has not yet been
+            initialised.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been set yet (call :meth:`set_model` first).
+
+        See Also
+        --------
+        set_default_priors
+        get_period_prior
+
+        Examples
+        --------
+        ::
+
+            lc.set_model("1D", num_mixtures=4)
+            lc.set_default_priors()
+            priors = lc.get_default_priors()
+        """
+        if not hasattr(self, "_model_pars"):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before "
+                "get_default_priors()."
+            )
+        priors = {}
+        for name, _module, prior, _closure, _setting_closure in (
+            self.model.named_priors()
+        ):
+            priors[name] = prior
+        print("Registered priors:")
+        if priors:
+            for name, prior in priors.items():
+                print(f"  {name}: {prior}")
+        else:
+            print("  (none)")
+        return priors
+
     def set_period_prior(
         self,
         prior_set=None,
@@ -1864,6 +1916,77 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             stacklevel=2,
         )
 
+    def get_period_prior(self):
+        """Return the period or frequency prior currently registered on the model.
+
+        Searches for a prior on the period or frequency parameter of the model
+        (``mixture_means_prior`` for spectral-mixture models,
+        ``period_length_prior`` for quasi-periodic models) and returns a
+        dictionary of the priors found, keyed by the full parameter path.  A
+        formatted summary is also printed to standard output.
+
+        Returns
+        -------
+        dict
+            A dictionary mapping prior names (str) to their prior objects.
+            Returns an empty dict if no period/frequency prior has been
+            registered or the model has no periodicity parameter.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been set yet (call :meth:`set_model` first).
+
+        See Also
+        --------
+        set_period_prior
+        get_default_priors
+
+        Examples
+        --------
+        ::
+
+            lc.set_model("1D", num_mixtures=4)
+            lc.set_period_prior(prior_set="LPV")
+            prior_info = lc.get_period_prior()
+        """
+        if not hasattr(self, "_model_pars"):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before "
+                "get_period_prior()."
+            )
+        period_priors = {}
+        for name, _module, prior, _closure, _setting_closure in (
+            self.model.named_priors()
+        ):
+            if "mixture_means_prior" in name or "period_length_prior" in name:
+                period_priors[name] = prior
+
+        print("Registered period/frequency priors:")
+        if period_priors:
+            for name, prior in period_priors.items():
+                prior_type = type(prior).__name__
+                line = f"  {name}: {prior_type}"
+                params = []
+                if hasattr(prior, "loc"):
+                    params.append(f"loc={float(prior.loc):.4g}")
+                if hasattr(prior, "scale"):
+                    params.append(f"scale={float(prior.scale):.4g}")
+                if hasattr(prior, "lower_period") and prior.lower_period is not None:
+                    params.append(f"lower_period={float(prior.lower_period):.4g}")
+                if hasattr(prior, "upper_period") and prior.upper_period is not None:
+                    params.append(f"upper_period={float(prior.upper_period):.4g}")
+                if hasattr(prior, "lower_bound") and prior.lower_bound is not None:
+                    params.append(f"lower_bound={float(prior.lower_bound):.4g}")
+                if hasattr(prior, "upper_bound") and prior.upper_bound is not None:
+                    params.append(f"upper_bound={float(prior.upper_bound):.4g}")
+                if params:
+                    line += f"({', '.join(params)})"
+                print(line)
+        else:
+            print("  (none)")
+        return period_priors
+
     def _validate_2d_setup(self):
         """Validate that the 2D setup is correct
 
@@ -2106,6 +2229,55 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # to-do - check if constraints on mixture scales are useful!
         self.__CONTRAINTS_SET = True
+
+    def get_default_constraints(self):
+        """Return the constraints currently registered on the model.
+
+        Iterates over all constraints registered on the model (via GPyTorch's
+        ``named_constraints``) and returns a dictionary mapping each constraint
+        name to the corresponding constraint object.  A formatted summary is
+        also printed to standard output.
+
+        Returns
+        -------
+        dict
+            A dictionary mapping constraint names (str) to their
+            :class:`gpytorch.constraints.Constraint` objects.  Returns an
+            empty dict if no constraints have been registered or the model has
+            not yet been initialised.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been set yet (call :meth:`set_model` first).
+
+        See Also
+        --------
+        set_default_constraints
+
+        Examples
+        --------
+        ::
+
+            lc.set_model("1D", num_mixtures=4)
+            lc.set_default_constraints()
+            constraints = lc.get_default_constraints()
+        """
+        if not hasattr(self, "_model_pars"):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before "
+                "get_default_constraints()."
+            )
+        constraints = {}
+        for name, constraint in self.model.named_constraints():
+            constraints[name] = constraint
+        print("Registered constraints:")
+        if constraints:
+            for name, constraint in constraints.items():
+                print(f"  {name}: {constraint}")
+        else:
+            print("  (none)")
+        return constraints
 
     def set_hypers(self, hypers=None, debug=False, **kwargs):
         """Set the hyperparameters for the model and likelihood. This is a
