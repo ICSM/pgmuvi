@@ -1553,6 +1553,32 @@ class TestPlotWithoutFit(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.lc.plot(mcmc_samples=True)
 
+    def test_plot_2d_without_fit_returns_list_of_figures(self):
+        """plot() before fit() on a 2D Lightcurve should return one figure per wavelength."""
+        xdata = torch.as_tensor(
+            [[1.0, 0.8], [2.0, 0.8], [3.0, 0.8], [1.0, 2.2], [2.0, 2.2], [3.0, 2.2]]
+        )
+        ydata = torch.as_tensor([1.0, 2.0, 1.0, 0.5, 1.0, 0.5])
+        lc_2d = Lightcurve(xdata, ydata)
+        figs = lc_2d.plot(show=False)
+        # Should return a list of two figures (one per wavelength)
+        self.assertIsInstance(figs, list)
+        self.assertEqual(len(figs), 2)
+
+    def test_plot_2d_without_fit_data_not_mixed(self):
+        """Each figure from plot() before fit() should contain only one wavelength's data."""
+        xdata = torch.as_tensor(
+            [[1.0, 0.8], [2.0, 0.8], [3.0, 0.8], [1.0, 2.2], [2.0, 2.2], [3.0, 2.2]]
+        )
+        ydata = torch.as_tensor([1.0, 2.0, 1.0, 0.5, 1.0, 0.5])
+        lc_2d = Lightcurve(xdata, ydata)
+        figs = lc_2d.plot(show=False)
+        # Each figure must cover only 3 data points (one wavelength)
+        for fig in figs:
+            ax = fig.axes[0]
+            # lines contain the data plot ("k*")
+            self.assertEqual(len(ax.lines[0].get_xdata()), 3)
+
 
 class TestExtinctionAmplitude(unittest.TestCase):
     """Tests that the extinction amplitude law decreases with wavelength."""

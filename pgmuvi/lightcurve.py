@@ -4600,10 +4600,40 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Used when the GP has not yet been fitted.
         """
+        if self.ndim == 2:
+            unique_values_axis2 = torch.unique(self.xdata[:, 1])
+            figs = []
+            for val in unique_values_axis2:
+                mask = self.xdata[:, 1] == val
+                x_plot = self.xdata[mask, 0].cpu().numpy()
+                y_plot = self.ydata[mask].cpu().numpy()
+                fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+                if hasattr(self, "yerr") and self.yerr is not None:
+                    ax.errorbar(
+                        x_plot,
+                        y_plot,
+                        yerr=self.yerr[mask].cpu().numpy(),
+                        fmt="k*",
+                        label="Observed",
+                    )
+                else:
+                    ax.plot(x_plot, y_plot, "k*", label="Observed")
+                current_yscale, current_ylim = self._yscale_and_ylim(
+                    y_plot, yscale, ylim
+                )
+                ax.set_yscale(current_yscale)
+                if current_ylim is not None:
+                    ax.set_ylim(current_ylim)
+                ax.set_ylabel("y")
+                ax.set_xlabel("x")
+                ax.set_title(f"y vs x for {val}")
+                ax.legend()
+                if show:
+                    plt.show()
+                figs.append(fig)
+            return figs
         f, ax = plt.subplots(1, 1, figsize=(8, 6))
         x_plot = self.xdata.cpu().numpy()
-        if self.ndim == 2:
-            x_plot = self.xdata[:, 0].cpu().numpy()
         y_plot = self.ydata.cpu().numpy()
         if hasattr(self, "yerr") and self.yerr is not None:
             ax.errorbar(
