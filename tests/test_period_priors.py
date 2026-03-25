@@ -1,10 +1,18 @@
 """Tests for pgmuvi.priors and Lightcurve.set_period_prior."""
 
 import math
+import os
 import unittest
 import warnings
 
 import torch
+
+# Set PGMUVI_TEST_HIGH_PRECISION=1 (or "true"/"yes"/"on") to use large
+# integration grids for high-accuracy normalisation tests.  In CI the default
+# fast mode uses smaller grids that are still accurate to two decimal places.
+_HIGH_PRECISION = os.environ.get("PGMUVI_TEST_HIGH_PRECISION", "").strip().lower() in (
+    "1", "true", "yes", "on"
+)
 
 from pgmuvi.priors import (
     PRIOR_SETS,
@@ -67,11 +75,19 @@ class TestLogNormalPeriodPrior(unittest.TestCase):
         prior = LogNormalPeriodPrior(mu=5.0, sigma=1.0, lower_bound=100.0)
         self.assertLess(prior._log_normalizer, 0.0)  # CDF mass < 1 → log < 0
 
+    def test_invalid_bounds_raise(self):
+        """lower_bound >= upper_bound raises ValueError."""
+        with self.assertRaises(ValueError):
+            LogNormalPeriodPrior(mu=5.0, sigma=1.0, lower_bound=500.0, upper_bound=100.0)
+        with self.assertRaises(ValueError):
+            LogNormalPeriodPrior(mu=5.0, sigma=1.0, lower_bound=200.0, upper_bound=200.0)
+
     def test_normalization_integrates_to_one(self):
         """Truncated log_prob integrates to ~1 over the allowed range."""
         prior = LogNormalPeriodPrior(mu=5.0, sigma=1.0, lower_bound=100.0, upper_bound=800.0)
         # Numerical integration on log-uniform grid
-        x = torch.exp(torch.linspace(math.log(100.0), math.log(800.0), 200000))
+        n_pts = 200000 if _HIGH_PRECISION else 10000
+        x = torch.exp(torch.linspace(math.log(100.0), math.log(800.0), n_pts))
         dx = x[1:] - x[:-1]
         lp = prior.log_prob((x[1:] + x[:-1]) / 2)
         integral = (torch.exp(lp) * dx).sum().item()
@@ -114,10 +130,18 @@ class TestNormalPeriodPrior(unittest.TestCase):
         prior = NormalPeriodPrior(mean=300.0, std=75.0, lower_bound=100.0)
         self.assertLess(prior._log_normalizer, 0.0)
 
+    def test_invalid_bounds_raise(self):
+        """lower_bound >= upper_bound raises ValueError."""
+        with self.assertRaises(ValueError):
+            NormalPeriodPrior(mean=300.0, std=75.0, lower_bound=600.0, upper_bound=100.0)
+        with self.assertRaises(ValueError):
+            NormalPeriodPrior(mean=300.0, std=75.0, lower_bound=300.0, upper_bound=300.0)
+
     def test_normalization_integrates_to_one(self):
         """Truncated log_prob integrates to ~1 over the allowed range."""
         prior = NormalPeriodPrior(mean=300.0, std=75.0, lower_bound=100.0, upper_bound=600.0)
-        x = torch.linspace(100.0, 600.0, 500000)
+        n_pts = 500000 if _HIGH_PRECISION else 20000
+        x = torch.linspace(100.0, 600.0, n_pts)
         dx = x[1] - x[0]
         lp = prior.log_prob((x[1:] + x[:-1]) / 2)
         integral = (torch.exp(lp) * dx).sum().item()
@@ -179,7 +203,8 @@ class TestLogNormalFrequencyPrior(unittest.TestCase):
         prior = LogNormalFrequencyPrior(mu=5.0, sigma=1.0,
                                         lower_period=100.0, upper_period=800.0)
         f_low, f_high = 1.0 / 800.0, 1.0 / 100.0
-        f = torch.exp(torch.linspace(math.log(f_low), math.log(f_high), 300000))
+        n_pts = 300000 if _HIGH_PRECISION else 10000
+        f = torch.exp(torch.linspace(math.log(f_low), math.log(f_high), n_pts))
         df = f[1:] - f[:-1]
         lp = prior.log_prob((f[1:] + f[:-1]) / 2)
         integral = (torch.exp(lp) * df).sum().item()
@@ -211,6 +236,24 @@ class TestLogNormalFrequencyPrior(unittest.TestCase):
         f_high = torch.tensor(1.0 / 50.0)  # freq=0.02 > 0.01 → blocked
         lp = prior.log_prob(f_high)
         self.assertTrue(torch.isinf(lp) and lp < 0)
+
+    def test_invalid_period_bounds_raise(self):
+        """lower_period >= upper_period (after unit conversion) raises ValueError."""
+        with self.assertRaises(ValueError):
+            LogNormalFrequencyPrior(mu=5.0, sigma=1.0,
+                                    lower_period=500.0, upper_period=100.0)
+        with self.assertRaises(ValueError):
+            LogNormalFrequencyPrior(mu=5.0, sigma=1.0,
+                                    lower_period=200.0, upper_period=200.0)
+
+    def test_invalid_freq_bounds_raise(self):
+        """period=False: lower_freq >= upper_freq raises ValueError."""
+        # When period=False: lower_period arg = min_freq, upper_period arg = max_freq.
+        # Conversion: lower_period_stored = 1/max_freq, upper_period_stored = 1/min_freq.
+        # Here min_freq=0.02 > max_freq=0.01 → lower_period_stored=50 > upper_period_stored=100 → error.
+        with self.assertRaises(ValueError):
+            LogNormalFrequencyPrior(mu=5.0, sigma=1.0,
+                                    lower_period=0.02, upper_period=0.01, period=False)
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +295,8 @@ class TestNormalFrequencyPrior(unittest.TestCase):
         prior = NormalFrequencyPrior(mean=300.0, std=75.0,
                                      lower_period=100.0, upper_period=600.0)
         f_low, f_high = 1.0 / 600.0, 1.0 / 100.0
-        f = torch.linspace(f_low, f_high, 500000)
+        n_pts = 500000 if _HIGH_PRECISION else 20000
+        f = torch.linspace(f_low, f_high, n_pts)
         df = f[1] - f[0]
         lp = prior.log_prob((f[1:] + f[:-1]) / 2)
         integral = (torch.exp(lp) * df).sum().item()
@@ -269,6 +313,15 @@ class TestNormalFrequencyPrior(unittest.TestCase):
         prior_f = NormalFrequencyPrior(mean=300.0, std=75.0, upper_period=0.01, period=False)
         freqs = torch.tensor([1.0 / 150.0, 1.0 / 300.0])
         self.assertTrue(torch.allclose(prior_p.log_prob(freqs), prior_f.log_prob(freqs)))
+
+    def test_invalid_period_bounds_raise(self):
+        """lower_period >= upper_period raises ValueError."""
+        with self.assertRaises(ValueError):
+            NormalFrequencyPrior(mean=300.0, std=75.0,
+                                 lower_period=600.0, upper_period=100.0)
+        with self.assertRaises(ValueError):
+            NormalFrequencyPrior(mean=300.0, std=75.0,
+                                 lower_period=300.0, upper_period=300.0)
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +469,37 @@ class TestSetPeriodPriorSpectralMixture(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.lc.set_period_prior(prior_type="invalid")
 
+    def test_prior_type_case_insensitive(self):
+        """prior_type is case-insensitive (e.g. 'LogNormal' is accepted)."""
+        for variant in ("LogNormal", "LOGNORMAL", "Normal", "NORMAL"):
+            with self.subTest(variant=variant):
+                lc = _make_1d_lc(span_days=500.0)
+                lc.set_model("1D", num_mixtures=2)
+                # Should not raise
+                lc.set_period_prior(
+                    prior_type=variant, lower_period=100.0, upper_period=500.0
+                )
+
     def test_invalid_prior_set_raises(self):
         with self.assertRaises(ValueError):
             self.lc.set_period_prior(prior_set="UNKNOWN")
+
+    def test_period_false_registers_prior(self):
+        """period=False: bounds in frequency units are correctly converted."""
+        # max freq = 1/100 = 0.01 days^-1 → lower period = 100 days
+        self.lc.set_period_prior(
+            prior_type="lognormal",
+            lower_period=1.0 / 500.0,  # min freq = 1/500
+            upper_period=1.0 / 100.0,  # max freq = 1/100
+            period=False,
+        )
+        # Verify the prior is registered
+        pars = self.lc._model_pars
+        self.assertIn("mixture_means", pars)
+        module = pars["mixture_means"]["module"]
+        self.assertIn("mixture_means_prior", module._priors)
+        prior = module._priors["mixture_means_prior"][0]
+        self.assertIsInstance(prior, LogNormalFrequencyPrior)
 
 
 class TestSetPeriodPriorQuasiPeriodic(unittest.TestCase):

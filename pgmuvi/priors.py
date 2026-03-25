@@ -90,7 +90,14 @@ def _lognormal_log_normalizer(mu, sigma, lower, upper):
         if upper is not None
         else torch.ones(1)
     )
-    return torch.log(cdf_upper - cdf_lower)
+    mass = cdf_upper - cdf_lower
+    if mass <= 0:
+        raise ValueError(
+            f"Truncated LogNormal({mu}, {sigma}) has zero probability mass "
+            f"on [{lower}, {upper}]. Check that lower < upper and that the "
+            "interval overlaps the distribution's support."
+        )
+    return torch.log(mass)
 
 
 def _normal_log_normalizer(mean, std, lower, upper):
@@ -112,7 +119,14 @@ def _normal_log_normalizer(mean, std, lower, upper):
         if upper is not None
         else torch.ones(1)
     )
-    return torch.log(cdf_upper - cdf_lower)
+    mass = cdf_upper - cdf_lower
+    if mass <= 0:
+        raise ValueError(
+            f"Truncated Normal({mean}, {std}) has zero probability mass "
+            f"on [{lower}, {upper}]. Check that lower < upper and that the "
+            "interval overlaps the distribution's support."
+        )
+    return torch.log(mass)
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +145,12 @@ class LogNormalPeriodPrior(LogNormalPrior):
     Parameters
     ----------
     mu : float, optional
-        Log-mean of the distribution (log-median = mu).  Default ``5.0``
-        (median ~ 148 days, appropriate for LPVs).
+        Mean of the underlying normal distribution (i.e. the log-mean of the
+        log-normal).  Default ``5.0`` (median ~ 148 days, appropriate for
+        LPVs).
     sigma : float, optional
-        Log-standard-deviation.  Default ``1.0``.
+        Standard deviation of the underlying normal distribution (i.e. the
+        log-standard-deviation of the log-normal).  Default ``1.0``.
     lower_bound : float or None, optional
         Minimum period.  Values below this bound receive ``-inf`` log-prob.
     upper_bound : float or None, optional
@@ -151,6 +167,15 @@ class LogNormalPeriodPrior(LogNormalPrior):
 
     def __init__(self, mu=5.0, sigma=1.0, lower_bound=None, upper_bound=None):
         super().__init__(loc=mu, scale=sigma)
+        if (
+            lower_bound is not None
+            and upper_bound is not None
+            and lower_bound >= upper_bound
+        ):
+            raise ValueError(
+                f"lower_bound ({lower_bound}) must be less than "
+                f"upper_bound ({upper_bound})."
+            )
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
         # Pre-compute log normalizer for the truncated support
@@ -201,6 +226,15 @@ class NormalPeriodPrior(NormalPrior):
 
     def __init__(self, mean=300.0, std=75.0, lower_bound=None, upper_bound=None):
         super().__init__(loc=mean, scale=std)
+        if (
+            lower_bound is not None
+            and upper_bound is not None
+            and lower_bound >= upper_bound
+        ):
+            raise ValueError(
+                f"lower_bound ({lower_bound}) must be less than "
+                f"upper_bound ({upper_bound})."
+            )
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
         if lower_bound is None and upper_bound is None:
@@ -240,9 +274,13 @@ class LogNormalFrequencyPrior(LogNormalPrior):
     Parameters
     ----------
     mu : float, optional
-        Log-mean of the *period* distribution.  Default ``5.0``.
+        Mean of the underlying normal distribution for the *period*
+        (i.e. the log-mean of the log-normal period distribution).
+        Default ``5.0`` (median period ~ 148 days, appropriate for LPVs).
     sigma : float, optional
-        Log-standard-deviation of the *period* distribution.  Default ``1.0``.
+        Standard deviation of the underlying normal distribution for the
+        *period* (i.e. the log-standard-deviation of the log-normal period
+        distribution).  Default ``1.0``.
     lower_period : float or None, optional
         Lower bound on the allowed range.  Interpretation depends on
         ``period``:
@@ -306,6 +344,15 @@ class LogNormalFrequencyPrior(LogNormalPrior):
             self.upper_period = (
                 1.0 / lower_period if lower_period is not None else None
             )
+        if (
+            self.lower_period is not None
+            and self.upper_period is not None
+            and self.lower_period >= self.upper_period
+        ):
+            raise ValueError(
+                f"lower_period ({self.lower_period}) must be less than "
+                f"upper_period ({self.upper_period}) after unit conversion."
+            )
         # Normalizer computed in period space using LogNormal(mu, sigma) CDF
         if self.lower_period is None and self.upper_period is None:
             self._log_normalizer = 0.0
@@ -346,9 +393,10 @@ class NormalFrequencyPrior(NormalPrior):
     Parameters
     ----------
     mean : float, optional
-        Mean of the *period* Normal distribution.  Default ``300.0``.
+        Mean of the *period* Normal distribution (days).  Default ``300.0``.
     std : float, optional
-        Standard deviation of the *period* distribution.  Default ``75.0``.
+        Standard deviation of the *period* Normal distribution (days).
+        Default ``75.0``.
     lower_period : float or None, optional
         Lower bound on the allowed range.  Interpretation depends on
         ``period``:
@@ -391,6 +439,15 @@ class NormalFrequencyPrior(NormalPrior):
             )
             self.upper_period = (
                 1.0 / lower_period if lower_period is not None else None
+            )
+        if (
+            self.lower_period is not None
+            and self.upper_period is not None
+            and self.lower_period >= self.upper_period
+        ):
+            raise ValueError(
+                f"lower_period ({self.lower_period}) must be less than "
+                f"upper_period ({self.upper_period}) after unit conversion."
             )
         # Normalizer computed in period space using Normal(mean, std) CDF
         if self.lower_period is None and self.upper_period is None:

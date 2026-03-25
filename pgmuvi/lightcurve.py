@@ -1619,6 +1619,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         std=75.0,
         lower_period=None,
         upper_period=None,
+        period=True,
     ):
         """Set a prior on the period or frequency parameter of the model.
 
@@ -1650,22 +1651,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Which prior family to use.  Either ``"lognormal"`` (the default,
             LogNormal in period space with ``mu`` and ``sigma``) or
             ``"normal"`` (Normal in period space with ``mean`` and ``std``).
+            Case-insensitive.
         mu : float, optional
-            Log-mean for the Log-Normal period prior.  Default ``5.0``
-            (median period ≈ 148 days).
+            Mean of the underlying normal distribution for the Log-Normal
+            period prior (i.e. the log-mean).  Default ``5.0``
+            (median period ≈ 148 days).  Dimensionless (logarithmic units).
         sigma : float, optional
-            Log-sigma for the Log-Normal period prior.  Default ``1.0``.
+            Standard deviation of the underlying normal distribution for the
+            Log-Normal period prior (i.e. the log-standard-deviation).
+            Default ``1.0``.  Dimensionless (logarithmic units).
         mean : float, optional
             Mean for the Normal period prior (days).  Default ``300.0``.
         std : float, optional
-            Standard deviation for the Normal period prior.  Default ``75.0``.
+            Standard deviation for the Normal period prior (days).
+            Default ``75.0``.
         lower_period : float or None, optional
-            Lower bound on period in the *original* (untransformed) data
-            units.  Values outside this bound receive ``-inf`` log-prob.
+            Lower bound on period.  When ``period=True`` (default), this is
+            in days (the assumed time unit of the data).  When ``period=False``
+            this is a lower bound in frequency units (1/days).
+            Values outside this bound receive ``-inf`` log-prob.
             If ``None`` and a *prior_set* is provided, the bound is taken
             from the prior set.
         upper_period : float or None, optional
-            Upper bound on period in the *original* data units.
+            Upper bound on period (days when ``period=True``, 1/days
+            when ``period=False``).
+        period : bool, optional
+            Controls the interpretation of ``lower_period`` and
+            ``upper_period`` for *frequency-parameterised* models (i.e.
+            spectral-mixture models whose periodicity is encoded as
+            ``mixture_means``).  If ``True`` (default), bounds are in period
+            units (days).  If ``False``, bounds are in frequency units
+            (1/days).  Has no effect for period-parameterised models
+            (e.g. ``QuasiPeriodicGPModel``), which always use period units.
 
         Raises
         ------
@@ -1711,6 +1728,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise RuntimeError(
                 "Model has not been set yet. Call set_model() before "
                 "set_period_prior()."
+            )
+
+        # Normalise prior_type to lower case so callers can use any case
+        prior_type = prior_type.lower()
+
+        # If bounds are in frequency units, convert to period units now so the
+        # rest of the logic always works in period space.  The prior_set always
+        # stores bounds in period space, so we only convert user-provided bounds.
+        if not period:
+            # lower frequency ↔ upper period, and vice versa
+            if lower_period is not None and lower_period <= 0:
+                raise ValueError(
+                    f"lower_period as a frequency bound must be positive, "
+                    f"got {lower_period}."
+                )
+            if upper_period is not None and upper_period <= 0:
+                raise ValueError(
+                    f"upper_period as a frequency bound must be positive, "
+                    f"got {upper_period}."
+                )
+            lower_period, upper_period = (
+                (1.0 / upper_period if upper_period is not None else None),
+                (1.0 / lower_period if lower_period is not None else None),
             )
 
         # --- Resolve prior-set defaults ---
@@ -1780,12 +1820,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     mu=mu, sigma=sigma,
                     lower_period=lower_model,
                     upper_period=upper_model,
+                    period=True,
                 )
             else:
                 prior = NormalFrequencyPrior(
                     mean=mean, std=std,
                     lower_period=lower_model,
                     upper_period=upper_model,
+                    period=True,
                 )
             self._model_pars["mixture_means"]["module"].register_prior(
                 "mixture_means_prior", prior, "mixture_means"
