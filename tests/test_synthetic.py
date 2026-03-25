@@ -479,5 +479,84 @@ class TestNoiseType(unittest.TestCase):
         self.assertTrue(torch.allclose(lc_g.ydata, lc_p.ydata))
 
 
+class TestYerrPopulated(unittest.TestCase):
+    """Tests that yerr is populated on returned Lightcurve objects."""
+
+    def test_simple_sinusoid_gaussian_yerr_set(self):
+        """make_simple_sinusoid_1d with gaussian noise populates yerr."""
+        lc = make_simple_sinusoid_1d(noise_level=0.1, noise_type="gaussian", seed=0)
+        self.assertIsNotNone(lc.yerr)
+        self.assertEqual(lc.yerr.shape, lc.ydata.shape)
+
+    def test_simple_sinusoid_gaussian_yerr_constant(self):
+        """Gaussian noise gives constant uncertainties equal to noise_level."""
+        noise_level = 0.2
+        lc = make_simple_sinusoid_1d(
+            noise_level=noise_level, noise_type="gaussian", seed=0
+        )
+        np.testing.assert_allclose(
+            lc.yerr.numpy(), noise_level, rtol=1e-5
+        )
+
+    def test_simple_sinusoid_poisson_yerr_set(self):
+        """make_simple_sinusoid_1d with poisson noise populates yerr."""
+        lc = make_simple_sinusoid_1d(noise_level=0.1, noise_type="poisson", seed=0)
+        self.assertIsNotNone(lc.yerr)
+        self.assertEqual(lc.yerr.shape, lc.ydata.shape)
+
+    def test_simple_sinusoid_poisson_yerr_positive(self):
+        """Poisson uncertainties must all be positive."""
+        lc = make_simple_sinusoid_1d(noise_level=0.1, noise_type="poisson", seed=0)
+        self.assertTrue((lc.yerr > 0).all())
+
+    def test_simple_sinusoid_no_noise_yerr_none(self):
+        """With noise_level=0, yerr should not be set."""
+        lc = make_simple_sinusoid_1d(noise_level=0.0, seed=0)
+        self.assertIsNone(getattr(lc, "yerr", None))
+
+    def test_multi_sinusoid_1d_gaussian_yerr_set(self):
+        """make_multi_sinusoid_1d with gaussian noise populates yerr."""
+        lc = make_multi_sinusoid_1d(noise_level=0.1, noise_type="gaussian", seed=0)
+        self.assertIsNotNone(lc.yerr)
+        self.assertEqual(lc.yerr.shape, lc.ydata.shape)
+
+    def test_multi_sinusoid_1d_no_noise_yerr_none(self):
+        """With noise_level=0, yerr should not be set."""
+        lc = make_multi_sinusoid_1d(noise_level=0.0, seed=0)
+        self.assertIsNone(getattr(lc, "yerr", None))
+
+    def test_chromatic_2d_gaussian_yerr_set(self):
+        """make_chromatic_sinusoid_2d with gaussian noise populates yerr."""
+        lc = make_chromatic_sinusoid_2d(noise_level=0.1, noise_type="gaussian", seed=0)
+        self.assertIsNotNone(lc.yerr)
+        self.assertEqual(lc.yerr.shape, lc.ydata.shape)
+
+    def test_chromatic_2d_no_noise_yerr_none(self):
+        """With noise_level=0, yerr should not be set."""
+        lc = make_chromatic_sinusoid_2d(noise_level=0.0, seed=0)
+        self.assertIsNone(getattr(lc, "yerr", None))
+
+    def test_multi_chromatic_2d_gaussian_yerr_set(self):
+        """make_multi_sinusoid_chromatic_2d with gaussian noise populates yerr."""
+        lc = make_multi_sinusoid_chromatic_2d(
+            noise_level=0.1, noise_type="gaussian", seed=0
+        )
+        self.assertIsNotNone(lc.yerr)
+        self.assertEqual(lc.yerr.shape, lc.ydata.shape)
+
+    def test_multi_chromatic_2d_poisson_yerr_set(self):
+        """make_multi_sinusoid_chromatic_2d with poisson noise populates yerr."""
+        lc = make_multi_sinusoid_chromatic_2d(
+            noise_level=0.1, noise_type="poisson", seed=0
+        )
+        self.assertIsNotNone(lc.yerr)
+        self.assertEqual(lc.yerr.shape, lc.ydata.shape)
+
+    def test_multi_chromatic_2d_no_noise_yerr_none(self):
+        """With noise_level=0, yerr should not be set."""
+        lc = make_multi_sinusoid_chromatic_2d(noise_level=0.0, seed=0)
+        self.assertIsNone(getattr(lc, "yerr", None))
+
+
 if __name__ == "__main__":
     unittest.main()

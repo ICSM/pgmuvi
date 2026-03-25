@@ -218,8 +218,8 @@ def _apply_noise(
     noise_level: float,
     noise_type: str,
     rng: np.random.Generator,
-) -> np.ndarray:
-    """Apply noise to *y_signal* and return the noisy array.
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Apply noise to *y_signal* and return the noisy array and uncertainties.
 
     Two noise models are supported:
 
@@ -239,7 +239,7 @@ def _apply_noise(
         The noiseless signal array (1-D, float64).
     noise_level:
         Overall noise scale.  If ``<= 0``, the signal is returned
-        unchanged.
+        unchanged and no uncertainties are produced.
     noise_type:
         ``"gaussian"`` or ``"poisson"``.
     rng:
@@ -247,8 +247,12 @@ def _apply_noise(
 
     Returns
     -------
-    np.ndarray
+    y_noisy : np.ndarray
         Signal with noise added (a new array; *y_signal* is not modified).
+        If *noise_level* is ``<= 0`` this is a copy of *y_signal*.
+    y_err : np.ndarray or None
+        Per-point 1-sigma uncertainties corresponding to the applied noise.
+        ``None`` when *noise_level* is ``<= 0`` (no noise added).
 
     Raises
     ------
@@ -256,10 +260,11 @@ def _apply_noise(
         If *noise_type* is not ``"gaussian"`` or ``"poisson"``.
     """
     if noise_level <= 0:
-        return y_signal.copy()
+        return y_signal.copy(), None
     n = len(y_signal)
     if noise_type == "gaussian":
-        return y_signal + rng.standard_normal(n) * noise_level
+        y_err = np.full(n, noise_level)
+        return y_signal + rng.standard_normal(n) * noise_level, y_err
     if noise_type == "poisson":
         # Shift to strictly positive: floor = 1 % of peak signal (or eps)
         peak = float(np.abs(y_signal).max())
@@ -267,7 +272,7 @@ def _apply_noise(
         y_pos = y_signal - float(y_signal.min()) + y_floor
         y_ref = float(y_pos.mean())
         noise_std = noise_level * np.sqrt(y_pos / y_ref)
-        return y_signal + rng.standard_normal(n) * noise_std
+        return y_signal + rng.standard_normal(n) * noise_std, noise_std
     raise ValueError(
         f"Unknown noise_type '{noise_type}'. Choose 'gaussian' or 'poisson'."
     )
@@ -342,11 +347,12 @@ def make_simple_sinusoid_1d(
     rng = _rng(seed)
     t = _make_times(n_obs, t_min, t_span, irregular, rng)
     y = amplitude * np.sin(2 * math.pi * t / period + phase)
-    y = _apply_noise(y, noise_level, noise_type, rng)
+    y, y_err = _apply_noise(y, noise_level, noise_type, rng)
 
     t_tensor = torch.as_tensor(t, dtype=torch.float32)
     y_tensor = torch.as_tensor(y, dtype=torch.float32)
-    return Lightcurve(t_tensor, y_tensor)
+    yerr_tensor = None if y_err is None else torch.as_tensor(y_err, dtype=torch.float32)
+    return Lightcurve(t_tensor, y_tensor, yerr=yerr_tensor)
 
 
 def make_multi_sinusoid_1d(
@@ -432,11 +438,12 @@ def make_multi_sinusoid_1d(
             2 * math.pi * t / comp["period"] + comp["phase"]
         )
 
-    y = _apply_noise(y, noise_level, noise_type, rng)
+    y, y_err = _apply_noise(y, noise_level, noise_type, rng)
 
     t_tensor = torch.as_tensor(t, dtype=torch.float32)
     y_tensor = torch.as_tensor(y, dtype=torch.float32)
-    return Lightcurve(t_tensor, y_tensor)
+    yerr_tensor = None if y_err is None else torch.as_tensor(y_err, dtype=torch.float32)
+    return Lightcurve(t_tensor, y_tensor, yerr=yerr_tensor)
 
 
 def make_chromatic_sinusoid_2d(
@@ -585,17 +592,19 @@ def make_chromatic_sinusoid_2d(
             f"Unknown phase_law '{phase_law}'. Choose 'none' or 'linear'."
         )
 
-    t_list, wl_list, y_list = [], [], []
+    t_list, wl_list, y_list, yerr_list = [], [], [], []
     for i, (wl, n, amp, ph) in enumerate(
         zip(wavelengths, n_per_band_list, amplitudes, phases, strict=False)
     ):
         t_band = _make_times(n, t_min, t_span, irregular, rng)
         y_band = amp * np.sin(2 * math.pi * t_band / period + ph)
-        y_band = _apply_noise(y_band, noise_level, noise_type, rng)
+        y_band, y_err_band = _apply_noise(y_band, noise_level, noise_type, rng)
 
         t_list.append(t_band)
         wl_list.append(np.full(n, wl))
         y_list.append(y_band)
+        if y_err_band is not None:
+            yerr_list.append(y_err_band)
 
     t_all = np.concatenate(t_list)
     wl_all = np.concatenate(wl_list)
@@ -605,7 +614,12 @@ def make_chromatic_sinusoid_2d(
         np.column_stack([t_all, wl_all]), dtype=torch.float32
     )
     y = torch.tensor(y_all, dtype=torch.float32)
-    return Lightcurve(x, y)
+    yerr = (
+        torch.tensor(np.concatenate(yerr_list), dtype=torch.float32)
+        if yerr_list
+        else None
+    )
+    return Lightcurve(x, y, yerr=yerr)
 
 
 def make_multi_sinusoid_chromatic_2d(
@@ -769,7 +783,7 @@ def make_multi_sinusoid_chromatic_2d(
             f"Unknown phase_law '{phase_law}'. Choose 'none' or 'linear'."
         )
 
-    t_list, wl_list, y_list = [], [], []
+    t_list, wl_list, y_list, yerr_list = [], [], [], []
     for wl, n, band_amp, band_ph in zip(
         wavelengths, n_per_band_list, band_amplitudes, band_phases, strict=False
     ):
@@ -784,11 +798,13 @@ def make_multi_sinusoid_chromatic_2d(
                 2 * math.pi * t_band / comp_period + comp_phase + band_ph
             )
 
-        y_band = _apply_noise(y_band, noise_level, noise_type, rng)
+        y_band, y_err_band = _apply_noise(y_band, noise_level, noise_type, rng)
 
         t_list.append(t_band)
         wl_list.append(np.full(n, wl))
         y_list.append(y_band)
+        if y_err_band is not None:
+            yerr_list.append(y_err_band)
 
     t_all = np.concatenate(t_list)
     wl_all = np.concatenate(wl_list)
@@ -798,4 +814,9 @@ def make_multi_sinusoid_chromatic_2d(
         np.column_stack([t_all, wl_all]), dtype=torch.float32
     )
     y = torch.tensor(y_all, dtype=torch.float32)
-    return Lightcurve(x, y)
+    yerr = (
+        torch.tensor(np.concatenate(yerr_list), dtype=torch.float32)
+        if yerr_list
+        else None
+    )
+    return Lightcurve(x, y, yerr=yerr)
