@@ -17,7 +17,7 @@ light curves.  Four model families are provided:
 
     * ``"linear"`` - amplitude scales linearly with wavelength.
     * ``"extinction"`` - amplitude follows a power-law dust-extinction law,
-      ``A(wl) = overall_amplitude * exp(-tau * wl**(-alpha))``, mimicking the
+      ``A(wl) = overall_amplitude * exp(-tau * wl**alpha)``, mimicking the
       wavelength-dependent attenuation discussed elsewhere in the code.
 
 (d) :func:`make_multi_sinusoid_chromatic_2d`
@@ -165,7 +165,7 @@ def _extinction_amplitude(
 ) -> np.ndarray:
     """Per-wavelength amplitude from a dust-extinction power law.
 
-    ``A(wl) = overall_amplitude * exp(-tau * wl**(-alpha)) + offset``
+    ``A(wl) = overall_amplitude * exp(-tau * wl**alpha) + offset``
 
     Parameters
     ----------
@@ -181,7 +181,7 @@ def _extinction_amplitude(
         Additive background offset.
     """
     wl = np.asarray(wavelengths, dtype=float)
-    extinction = tau * wl ** (-alpha)
+    extinction = tau * wl ** alpha
     return overall_amplitude * np.exp(-extinction) + offset
 
 
@@ -472,7 +472,7 @@ def make_chromatic_sinusoid_2d(
     * ``"linear"`` (default) -
       ``A(wl) = amplitude * (1 + amplitude_slope * (wl - wl_ref))``
     * ``"extinction"`` -
-      ``A(wl) = overall_amplitude * exp(-tau * wl**(-alpha)) + offset``
+      ``A(wl) = overall_amplitude * exp(-tau * wl**alpha) + offset``
       (dust power-law extinction, matching the DustMean mean function).
 
     Two phase laws are provided:
