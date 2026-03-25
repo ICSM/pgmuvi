@@ -320,8 +320,8 @@ def make_simple_sinusoid_1d(
     n_obs:
         Number of observations.
     period:
-        Period of the sinusoid (same units as *t_span*).  Defaults to
-        ``150.0`` days.
+        Period of the sinusoid, in the same units as *t_span* (typically
+        days). Defaults to ``150.0``.
     amplitude:
         Peak amplitude *A*.
     phase:
