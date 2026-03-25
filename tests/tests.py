@@ -1554,6 +1554,50 @@ class TestPlotWithoutFit(unittest.TestCase):
             self.lc.plot(mcmc_samples=True)
 
 
+class TestMultibandPlotWithoutFit(unittest.TestCase):
+    """Test that plot() handles multiband (2-D) data correctly before fitting."""
+
+    def setUp(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        self.plt = plt
+        # Two wavelengths (0.5 and 1.5), two observations each
+        self.xdata_2d = torch.as_tensor(
+            [[1.0, 0.5], [2.0, 0.5], [3.0, 1.5], [4.0, 1.5]], dtype=torch.float32
+        )
+        self.ydata_2d = torch.as_tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float32)
+        self.lc_2d = Lightcurve(self.xdata_2d, self.ydata_2d)
+
+    def tearDown(self):
+        self.plt.close("all")
+
+    def test_multiband_plot_returns_list_of_figures(self):
+        """plot() should return a list of figures for multiband data."""
+        result = self.lc_2d.plot(show=False)
+        self.assertIsInstance(result, list)
+
+    def test_multiband_plot_one_figure_per_wavelength(self):
+        """There should be one figure per unique wavelength."""
+        figs = self.lc_2d.plot(show=False)
+        self.assertEqual(len(figs), 2)
+
+    def test_multiband_plot_figures_are_matplotlib_figures(self):
+        """Each element in the returned list should be a Figure."""
+        import matplotlib.figure
+        figs = self.lc_2d.plot(show=False)
+        for fig in figs:
+            self.assertIsInstance(fig, matplotlib.figure.Figure)
+
+    def test_multiband_plot_with_yerr(self):
+        """Multiband plot should work when yerr is provided."""
+        yerr_2d = torch.as_tensor([0.1, 0.1, 0.1, 0.1], dtype=torch.float32)
+        lc_2d_err = Lightcurve(self.xdata_2d, self.ydata_2d, yerr=yerr_2d)
+        figs = lc_2d_err.plot(show=False)
+        self.assertIsInstance(figs, list)
+        self.assertEqual(len(figs), 2)
+
+
 class TestExtinctionAmplitude(unittest.TestCase):
     """Tests that the extinction amplitude law decreases with wavelength."""
 
