@@ -184,6 +184,16 @@ class TestSeparableGPModel(unittest.TestCase):
         model = SeparableGPModel(self.x, self.y, lik, time_kernel=t_k, wavelength_kernel=w_k)
         self.assertIsInstance(model.covar_module, gpytorch.kernels.ProductKernel)
 
+    def test_time_kernel_active_dims(self):
+        """Time kernel (kernels[0]) must operate on column 0 (time axis)."""
+        time_kernel = self.model.covar_module.kernels[0]
+        self.assertEqual(time_kernel.active_dims.tolist(), [0])
+
+    def test_wavelength_kernel_active_dims(self):
+        """Wavelength kernel (kernels[1]) must operate on column 1 (wavelength axis)."""
+        wl_kernel = self.model.covar_module.kernels[1]
+        self.assertEqual(wl_kernel.active_dims.tolist(), [1])
+
 
 class TestAchromaticGPModel(unittest.TestCase):
     """Tests for AchromaticGPModel."""
