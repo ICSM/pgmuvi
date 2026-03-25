@@ -478,6 +478,91 @@ class TestNoiseType(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(lc_g.ydata, lc_p.ydata))
 
+    def test_noise_type_none_simple_1d_returns_lightcurve(self):
+        """noise_type=None produces a Lightcurve with no noise."""
+        lc = make_simple_sinusoid_1d(noise_type=None, noise_level=0.5, seed=0)
+        self.assertIsInstance(lc, Lightcurve)
+
+    def test_noise_type_none_simple_1d_no_yerr(self):
+        """noise_type=None leaves yerr unset."""
+        lc = make_simple_sinusoid_1d(noise_type=None, noise_level=0.5, seed=0)
+        self.assertIsNone(getattr(lc, "yerr", None))
+
+    def test_noise_type_none_simple_1d_same_as_noise_free(self):
+        """noise_type=None with any noise_level gives the noiseless signal."""
+        lc_none = make_simple_sinusoid_1d(
+            noise_type=None, noise_level=1.0, irregular=False, seed=0
+        )
+        lc_zero = make_simple_sinusoid_1d(
+            noise_type="gaussian", noise_level=0.0, irregular=False, seed=0
+        )
+        self.assertTrue(torch.allclose(lc_none.ydata, lc_zero.ydata))
+
+    def test_noise_type_none_multi_1d(self):
+        """noise_type=None works for make_multi_sinusoid_1d."""
+        lc = make_multi_sinusoid_1d(noise_type=None, noise_level=0.5, seed=0)
+        self.assertIsNone(getattr(lc, "yerr", None))
+
+    def test_noise_type_none_chromatic_2d(self):
+        """noise_type=None works for make_chromatic_sinusoid_2d."""
+        lc = make_chromatic_sinusoid_2d(noise_type=None, noise_level=0.5, seed=0)
+        self.assertIsNone(getattr(lc, "yerr", None))
+
+    def test_noise_type_none_multi_chromatic_2d(self):
+        """noise_type=None works for make_multi_sinusoid_chromatic_2d."""
+        lc = make_multi_sinusoid_chromatic_2d(
+            noise_type=None, noise_level=0.5, seed=0
+        )
+        self.assertIsNone(getattr(lc, "yerr", None))
+
+    def test_default_noise_type_is_poisson(self):
+        """Default noise_type is 'poisson': yerr values vary (not constant)."""
+        lc = make_simple_sinusoid_1d(noise_level=0.1, seed=0)
+        self.assertIsNotNone(lc.yerr)
+        # Poisson yerr is non-constant; gaussian yerr would be all-equal
+        self.assertGreater(lc.yerr.std().item(), 0.0)
+
+
+class TestMultiSinusoid1DValidation(unittest.TestCase):
+    """Tests for input validation in make_multi_sinusoid_1d."""
+
+    def test_component_missing_period_raises(self):
+        """Component dict without 'period' raises ValueError."""
+        bad = [{"amplitude": 1.0, "phase": 0.0}]
+        with self.assertRaises(ValueError):
+            make_multi_sinusoid_1d(components=bad, seed=0)
+
+    def test_component_missing_amplitude_raises(self):
+        """Component dict without 'amplitude' raises ValueError."""
+        bad = [{"period": 5.0, "phase": 0.0}]
+        with self.assertRaises(ValueError):
+            make_multi_sinusoid_1d(components=bad, seed=0)
+
+    def test_component_missing_phase_raises(self):
+        """Component dict without 'phase' raises ValueError."""
+        bad = [{"period": 5.0, "amplitude": 1.0}]
+        with self.assertRaises(ValueError):
+            make_multi_sinusoid_1d(components=bad, seed=0)
+
+    def test_component_missing_multiple_keys_raises(self):
+        """Component dict missing multiple required keys reports all of them."""
+        bad = [{"period": 5.0}]  # missing 'amplitude' and 'phase'
+        with self.assertRaises(ValueError) as ctx:
+            make_multi_sinusoid_1d(components=bad, seed=0)
+        msg = str(ctx.exception)
+        self.assertIn("amplitude", msg)
+        self.assertIn("phase", msg)
+
+    def test_unknown_noise_type_raises_multi_1d(self):
+        """Invalid noise_type raises ValueError."""
+        with self.assertRaises(ValueError):
+            make_multi_sinusoid_1d(noise_type="bad_type", seed=0)
+
+    def test_unknown_noise_type_raises_multi_chromatic_2d(self):
+        """Invalid noise_type raises ValueError."""
+        with self.assertRaises(ValueError):
+            make_multi_sinusoid_chromatic_2d(noise_type="bad_type", seed=0)
+
 
 class TestYerrPopulated(unittest.TestCase):
     """Tests that yerr is populated on returned Lightcurve objects."""

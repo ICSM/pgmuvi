@@ -213,25 +213,39 @@ def _linear_phase(
     return phase_ref + phase_slope * (wl - wl_ref)
 
 
+_VALID_NOISE_TYPES = ("gaussian", "poisson")
+
+
+def _validate_noise_type(noise_type: str | None) -> None:
+    """Raise ``ValueError`` if *noise_type* is not a recognised value."""
+    if noise_type is not None and noise_type not in _VALID_NOISE_TYPES:
+        raise ValueError(
+            f"Unknown noise_type '{noise_type}'. "
+            f"Choose one of {list(_VALID_NOISE_TYPES)} or None."
+        )
+
+
 def _apply_noise(
     y_signal: np.ndarray,
     noise_level: float,
-    noise_type: str,
+    noise_type: str | None,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Apply noise to *y_signal* and return the noisy array and uncertainties.
 
-    Two noise models are supported:
+    Three noise modes are supported:
 
+    * ``None`` - no noise is added and no uncertainties are produced.
+      The signal is returned unchanged.
     * ``"gaussian"`` - constant-sigma Gaussian noise.
       ``noise ~ N(0, noise_level**2)`` at every data point.
-    * ``"poisson"`` - shot-noise approximation where the noise standard
-      deviation scales as the square root of the local flux, mimicking
-      Poisson statistics.  Brighter data points have higher *absolute*
-      noise but lower *fractional* noise, consistent with the behaviour
-      seen for real astronomical sources.  The signal is shifted so that
-      it is always positive; the noise level at the *mean* flux equals
-      *noise_level*.
+    * ``"poisson"`` (default) - shot-noise approximation where the noise
+      standard deviation scales as the square root of the local flux,
+      mimicking Poisson statistics.  Brighter data points have higher
+      *absolute* noise but lower *fractional* noise, consistent with the
+      behaviour seen for real astronomical sources.  The signal is shifted
+      so that it is always positive; the noise level at the *mean* flux
+      equals *noise_level*.
 
     Parameters
     ----------
@@ -241,7 +255,8 @@ def _apply_noise(
         Overall noise scale.  If ``<= 0``, the signal is returned
         unchanged and no uncertainties are produced.
     noise_type:
-        ``"gaussian"`` or ``"poisson"``.
+        ``None``, ``"gaussian"``, or ``"poisson"``.  Pass ``None`` to
+        explicitly produce a noise-free output with no uncertainties.
     rng:
         The random-number generator to use.
 
@@ -249,33 +264,32 @@ def _apply_noise(
     -------
     y_noisy : np.ndarray
         Signal with noise added (a new array; *y_signal* is not modified).
-        If *noise_level* is ``<= 0`` this is a copy of *y_signal*.
+        If *noise_level* is ``<= 0`` or *noise_type* is ``None`` this is
+        a copy of *y_signal*.
     y_err : np.ndarray or None
         Per-point 1-sigma uncertainties corresponding to the applied noise.
-        ``None`` when *noise_level* is ``<= 0`` (no noise added).
+        ``None`` when no noise is added.
 
     Raises
     ------
     ValueError
-        If *noise_type* is not ``"gaussian"`` or ``"poisson"``.
+        If *noise_type* is not ``None``, ``"gaussian"``, or ``"poisson"``.
     """
-    if noise_level <= 0:
+    _validate_noise_type(noise_type)
+    if noise_type is None or noise_level <= 0:
         return y_signal.copy(), None
     n = len(y_signal)
     if noise_type == "gaussian":
         y_err = np.full(n, noise_level)
         return y_signal + rng.standard_normal(n) * noise_level, y_err
-    if noise_type == "poisson":
-        # Shift to strictly positive: floor = 1 % of peak signal (or eps)
-        peak = float(np.abs(y_signal).max())
-        y_floor = peak * 0.01 + 1e-10
-        y_pos = y_signal - float(y_signal.min()) + y_floor
-        y_ref = float(y_pos.mean())
-        noise_std = noise_level * np.sqrt(y_pos / y_ref)
-        return y_signal + rng.standard_normal(n) * noise_std, noise_std
-    raise ValueError(
-        f"Unknown noise_type '{noise_type}'. Choose 'gaussian' or 'poisson'."
-    )
+    # noise_type == "poisson"
+    # Shift to strictly positive: floor = 1 % of peak signal (or eps)
+    peak = float(np.abs(y_signal).max())
+    y_floor = peak * 0.01 + 1e-10
+    y_pos = y_signal - float(y_signal.min()) + y_floor
+    y_ref = float(y_pos.mean())
+    noise_std = noise_level * np.sqrt(y_pos / y_ref)
+    return y_signal + rng.standard_normal(n) * noise_std, noise_std
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +303,7 @@ def make_simple_sinusoid_1d(
     amplitude: float = 1.0,
     phase: float = 0.0,
     noise_level: float = 0.1,
-    noise_type: str = "gaussian",
+    noise_type: str | None = "poisson",
     t_min: float = 0.0,
     t_span: float = 20.0,
     irregular: bool = False,
@@ -315,10 +329,11 @@ def make_simple_sinusoid_1d(
         Overall noise scale.  Interpretation depends on *noise_type*.
         Set to ``0`` for a noise-free light curve.
     noise_type:
-        ``"gaussian"`` (default) - constant-sigma Gaussian noise with
-        ``sigma = noise_level``.  ``"poisson"`` - shot-noise approximation
-        where the noise standard deviation scales as the square root of the
-        local flux (brighter = lower fractional noise).
+        ``"poisson"`` (default) - shot-noise approximation where the noise
+        standard deviation scales as the square root of the local flux
+        (brighter = lower fractional noise).  ``"gaussian"`` - constant-sigma
+        Gaussian noise with ``sigma = noise_level``.  ``None`` - no noise is
+        added and ``yerr`` is not populated.
     t_min:
         Start time of the observation window.
     t_span:
@@ -359,7 +374,7 @@ def make_multi_sinusoid_1d(
     n_obs: int = 80,
     components: list[dict] | None = None,
     noise_level: float = 0.1,
-    noise_type: str = "gaussian",
+    noise_type: str | None = "poisson",
     t_min: float = 0.0,
     t_span: float = 20.0,
     irregular: bool = False,
@@ -397,9 +412,9 @@ def make_multi_sinusoid_1d(
     noise_level:
         Overall noise scale.  Interpretation depends on *noise_type*.
     noise_type:
-        ``"gaussian"`` (default) - constant-sigma Gaussian noise.
-        ``"poisson"`` - shot-noise approximation (brighter = lower
-        fractional noise).
+        ``"poisson"`` (default) - shot-noise approximation (brighter = lower
+        fractional noise).  ``"gaussian"`` - constant-sigma Gaussian noise.
+        ``None`` - no noise is added and ``yerr`` is not populated.
     t_min:
         Start time.
     t_span:
@@ -414,6 +429,13 @@ def make_multi_sinusoid_1d(
     Lightcurve
         A 1-D light curve object.
 
+    Raises
+    ------
+    ValueError
+        If any component dictionary is missing the required ``"period"``,
+        ``"amplitude"``, or ``"phase"`` keys, or if *noise_type* is not a
+        recognised value.
+
     Examples
     --------
     >>> lc = make_multi_sinusoid_1d(seed=0)
@@ -422,12 +444,23 @@ def make_multi_sinusoid_1d(
     """
     from pgmuvi.lightcurve import Lightcurve
 
+    _validate_noise_type(noise_type)
+
     if components is None:
         components = [
             {"period": 5.0, "amplitude": 1.0, "phase": 0.0},
             {"period": 3.0, "amplitude": 0.5, "phase": math.pi / 3},
             {"period": 7.0, "amplitude": 0.3, "phase": 2 * math.pi / 3},
         ]
+
+    for i, comp in enumerate(components):
+        missing = [k for k in ("period", "amplitude", "phase") if k not in comp]
+        if missing:
+            raise ValueError(
+                f"Component {i} is missing required key(s): {missing}. "
+                "Each component dict must have 'period', 'amplitude', "
+                "and 'phase' keys."
+            )
 
     rng = _rng(seed)
     t = _make_times(n_obs, t_min, t_span, irregular, rng)
@@ -462,7 +495,7 @@ def make_chromatic_sinusoid_2d(
     phase_law: str = "none",
     phase_slope: float = 0.1,
     noise_level: float = 0.1,
-    noise_type: str = "gaussian",
+    noise_type: str | None = "poisson",
     t_min: float = 0.0,
     t_span: float = 20.0,
     irregular: bool = True,
@@ -529,9 +562,10 @@ def make_chromatic_sinusoid_2d(
     noise_level:
         Overall noise scale.  Interpretation depends on *noise_type*.
     noise_type:
-        ``"gaussian"`` (default) - constant-sigma Gaussian noise.
-        ``"poisson"`` - shot-noise approximation (brighter = lower
-        fractional noise), applied independently per band.
+        ``"poisson"`` (default) - shot-noise approximation (brighter = lower
+        fractional noise), applied independently per band.  ``"gaussian"`` -
+        constant-sigma Gaussian noise.  ``None`` - no noise is added and
+        ``yerr`` is not populated.
     t_min:
         Start time.
     t_span:
@@ -560,6 +594,8 @@ def make_chromatic_sinusoid_2d(
         )
     """
     from pgmuvi.lightcurve import Lightcurve
+
+    _validate_noise_type(noise_type)
 
     if wavelengths is None:
         wavelengths = [450.0, 600.0, 750.0]
@@ -636,7 +672,7 @@ def make_multi_sinusoid_chromatic_2d(
     phase_law: str = "linear",
     phase_slope: float = 0.1,
     noise_level: float = 0.1,
-    noise_type: str = "gaussian",
+    noise_type: str | None = "poisson",
     t_min: float = 0.0,
     t_span: float = 1200.0,
     irregular: bool = True,
@@ -705,9 +741,10 @@ def make_multi_sinusoid_chromatic_2d(
     noise_level:
         Overall noise scale.  Interpretation depends on *noise_type*.
     noise_type:
-        ``"gaussian"`` (default) - constant-sigma Gaussian noise.
-        ``"poisson"`` - shot-noise approximation (brighter = lower
-        fractional noise), applied independently per band.
+        ``"poisson"`` (default) - shot-noise approximation (brighter = lower
+        fractional noise), applied independently per band.  ``"gaussian"`` -
+        constant-sigma Gaussian noise.  ``None`` - no noise is added and
+        ``yerr`` is not populated.
     t_min:
         Start time.
     t_span:
@@ -743,6 +780,8 @@ def make_multi_sinusoid_chromatic_2d(
         )
     """
     from pgmuvi.lightcurve import Lightcurve
+
+    _validate_noise_type(noise_type)
 
     if components is None:
         components = [
