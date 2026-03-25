@@ -4116,8 +4116,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Returns
         -------
-        fig : matplotlib.pyplot.Figure
-            The figure object of the plot.
+        fig : matplotlib.pyplot.Figure or list of matplotlib.pyplot.Figure
+            The figure object of the plot.  For 2-D (multiwavelength) data a
+            list of figures is returned, one per wavelength.
         """
         _VALID_YSCALES = ("auto", "linear", "log")
         if yscale not in _VALID_YSCALES:
@@ -4321,11 +4322,55 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Plot only the data, without any GP predictions.
 
         Used when the GP has not yet been fitted.
+
+        For 1-D data, a single figure is returned.  For 2-D (multiband) data,
+        a separate figure is created for each wavelength (matching the layout
+        of :meth:`_plot_2d` used after fitting), and a list of figures is
+        returned.
         """
+        if self.ndim == 2:
+            unique_values_axis2 = torch.unique(self.xdata[:, 1])
+            figs = []
+            for val in unique_values_axis2:
+                mask = self.xdata[:, 1] == val
+                x_plot = self.xdata[mask, 0].cpu().numpy()
+                y_data_for_val = self.ydata[mask]
+                y_plot = y_data_for_val.cpu().numpy()
+
+                fig = plt.figure()
+                ax = fig.add_subplot(111)
+
+                if hasattr(self, "yerr") and self.yerr is not None:
+                    ax.errorbar(
+                        x_plot,
+                        y_plot,
+                        yerr=self.yerr[mask].cpu().numpy(),
+                        fmt="k*",
+                        label="Observed",
+                    )
+                else:
+                    ax.plot(x_plot, y_plot, "k*", label="Observed")
+
+                ax.set_ylabel("y")
+                ax.set_xlabel("x")
+                ax.set_title(f"y vs x for {val}")
+
+                current_yscale, current_ylim = self._yscale_and_ylim(
+                    y_plot, yscale, ylim
+                )
+                ax.set_yscale(current_yscale)
+                if current_ylim is not None:
+                    ax.set_ylim(current_ylim)
+                ax.legend()
+
+                if show:
+                    plt.show()
+                figs.append(fig)
+            return figs
+
+        # 1-D case
         f, ax = plt.subplots(1, 1, figsize=(8, 6))
         x_plot = self.xdata.cpu().numpy()
-        if self.ndim == 2:
-            x_plot = self.xdata[:, 0].cpu().numpy()
         y_plot = self.ydata.cpu().numpy()
         if hasattr(self, "yerr") and self.yerr is not None:
             ax.errorbar(
