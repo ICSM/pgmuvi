@@ -413,7 +413,7 @@ class TestMakeMultiSinusoidChromatic2D(unittest.TestCase):
         lc = make_multi_sinusoid_chromatic_2d(
             n_per_band=10, noise_level=0.0, seed=0
         )
-        # With period 400 and t_span 1200, we should see variation
+        # With period 400 and t_span 2.3 * 400 = 920, we should see variation
         self.assertGreater(lc.ydata.abs().max().item(), 0.0)
 
 
