@@ -458,21 +458,42 @@ class NormalFrequencyPrior(NormalPrior):
             )
 
     def log_prob(self, f):
-        period = 1.0 / f
-        # Normal log_prob evaluated at period = 1/f
-        lp = (
-            -0.5 * ((period - self.loc) / self.scale) ** 2
+        f = torch.as_tensor(f)
+        # Frequencies must be strictly positive; initialise all to -inf
+        lp = torch.full_like(f, float("-inf"))
+        valid = f > 0
+        if not torch.any(valid):
+            return lp
+
+        f_valid = f[valid]
+        period_valid = 1.0 / f_valid
+        # Normal log_prob evaluated at period = 1/f for valid entries
+        lp_valid = (
+            -0.5 * ((period_valid - self.loc) / self.scale) ** 2
             - torch.log(self.scale)
             - 0.5 * math.log(2 * math.pi)
         )
         # Jacobian correction: dp/df = -1/f^2, log|J| = -2*log(f)
-        lp = lp - 2.0 * torch.log(f) - self._log_normalizer
+        lp_valid = lp_valid - 2.0 * torch.log(f_valid) - self._log_normalizer
         if self.lower_period is not None:
-            lb = torch.as_tensor(self.lower_period, dtype=f.dtype, device=f.device)
-            lp = torch.where(period >= lb, lp, torch.full_like(lp, float("-inf")))
+            lb = torch.as_tensor(
+                self.lower_period, dtype=f_valid.dtype, device=f_valid.device
+            )
+            lp_valid = torch.where(
+                period_valid >= lb,
+                lp_valid,
+                torch.full_like(lp_valid, float("-inf")),
+            )
         if self.upper_period is not None:
-            ub = torch.as_tensor(self.upper_period, dtype=f.dtype, device=f.device)
-            lp = torch.where(period <= ub, lp, torch.full_like(lp, float("-inf")))
+            ub = torch.as_tensor(
+                self.upper_period, dtype=f_valid.dtype, device=f_valid.device
+            )
+            lp_valid = torch.where(
+                period_valid <= ub,
+                lp_valid,
+                torch.full_like(lp_valid, float("-inf")),
+            )
+        lp[valid] = lp_valid
         return lp
 
 

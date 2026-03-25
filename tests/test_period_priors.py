@@ -284,6 +284,21 @@ class TestNormalFrequencyPrior(unittest.TestCase):
         lp = prior.log_prob(f_short)
         self.assertTrue(torch.isinf(lp) and lp < 0)
 
+    def test_nonpositive_freq_returns_neginf(self):
+        """Non-positive frequencies return -inf without NaN."""
+        prior = NormalFrequencyPrior(mean=300.0, std=75.0)
+        for f_val in [0.0, -1.0, -0.001]:
+            with self.subTest(f=f_val):
+                lp = prior.log_prob(torch.tensor([f_val]))
+                self.assertTrue(torch.isinf(lp) and lp.item() < 0,
+                                f"Expected -inf for f={f_val}, got {lp}")
+        # Mixed batch: non-positive entries are -inf, valid entries are finite
+        mixed = torch.tensor([-1.0, 0.0, 1.0 / 300.0])
+        lp = prior.log_prob(mixed)
+        self.assertTrue(torch.all(torch.isinf(lp[:2]) & (lp[:2] < 0)))
+        self.assertTrue(torch.isfinite(lp[2]))
+        self.assertFalse(torch.any(torch.isnan(lp)))
+
     def test_finite_for_valid_period(self):
         prior = NormalFrequencyPrior(mean=300.0, std=75.0, lower_period=100.0)
         f_ok = torch.tensor(1.0 / 300.0)
