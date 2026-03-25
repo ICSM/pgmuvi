@@ -2241,9 +2241,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         -------
         dict
             A dictionary mapping constraint names (str) to their
-            :class:`gpytorch.constraints.Constraint` objects.  Returns an
-            empty dict if no constraints have been registered or the model has
-            not yet been initialised.
+            :class:`gpytorch.constraints.Constraint` objects. Returns an empty
+            dict if no constraints have been registered.
 
         Raises
         ------
