@@ -3103,6 +3103,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         guess=None,
         periods=None,
         use_mls_init=True,
+        constraint_set=None,
         grid_size=2000,
         cuda=False,
         training_iter=300,
@@ -3206,6 +3207,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             for those models MLS-based or period-based frequency seeding is
             not applied and the underlying GPyTorch defaults are used
             instead.
+        constraint_set : str or None, optional
+            Name of a pre-defined source-type constraint set to apply via
+            :meth:`set_default_constraints`.  When provided, the period bounds
+            defined in the constraint set are also used to filter MLS peaks
+            *before* the model is constructed: peaks whose frequencies fall
+            outside the constraint-set allowed range are excluded from the
+            initialisation (with a ``RuntimeWarning``).  Currently supported
+            values are ``"LPV"`` (Long-Period Variables, minimum period 100 in
+            the native time units).  Pass ``None`` (the default) to use only
+            the data-driven bounds.
         grid_size : int, optional
             The number of points to use in the grid for the KISS-GP models,
             by default 2000.
@@ -3389,23 +3400,55 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _init_freqs = 1.0 / _periods_tensor
             num_mixtures = len(_init_freqs)
         elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
+            # Compute constraint-set frequency bounds in raw data units.
+            # These are used in addition to the data-span bounds to exclude
+            # MLS peaks that would lie outside user-requested period limits.
+            _cs_freq_lower = _freq_lower  # default: data-span lower bound
+            _cs_freq_upper = _freq_upper  # default: Nyquist upper bound
+            if constraint_set is not None:
+                try:
+                    cs = get_constraint_set(constraint_set)
+                    if "period" in cs:
+                        _pb = cs["period"]
+                        _p_lower_val, _p_lower_active = _pb["lower"]
+                        _p_upper_val, _p_upper_active = _pb["upper"]
+                        # Period lower limit → max allowed frequency
+                        if _p_lower_active and _p_lower_val is not None:
+                            _cs_freq_upper = min(
+                                _cs_freq_upper, 1.0 / _p_lower_val
+                            )
+                        # Period upper limit → min allowed frequency
+                        if _p_upper_active and _p_upper_val is not None:
+                            _cs_freq_lower = max(
+                                _cs_freq_lower, 1.0 / _p_upper_val
+                            )
+                except (ValueError, KeyError):
+                    pass  # unrecognised constraint_set; ignore
+
             # Run the MLS periodogram to choose num_mixtures and seed frequencies.
             try:
                 _max_peaks = max(num_mixtures or 1, 10)
                 ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
 
-                # Filter peaks whose period exceeds the data span.  Such
-                # peaks correspond to periods the data cannot constrain and
-                # would violate the minimum-frequency constraint applied later
-                # by set_default_constraints().
-                if len(ls_freqs) > 0 and _freq_lower > 0:
-                    _valid = ls_freqs >= _freq_lower
+                # Filter peaks whose period exceeds the data span or falls
+                # outside user-specified constraint-set period bounds.
+                if len(ls_freqs) > 0 and _cs_freq_lower > 0:
+                    _valid = (ls_freqs >= _cs_freq_lower) & (
+                        ls_freqs <= _cs_freq_upper
+                    )
                     if not _valid.all():
                         _n_filtered = int((~_valid).sum().item())
                         warnings.warn(
-                            f"{_n_filtered} MLS peak(s) had periods longer "
-                            f"than the data span (f < {_freq_lower:.4g}) and "
-                            "were excluded from the initialisation.",
+                            f"{_n_filtered} MLS peak(s) fell outside the "
+                            f"allowed frequency range "
+                            f"[{_cs_freq_lower:.4g}, {_cs_freq_upper:.4g}] "
+                            "(derived from data span"
+                            + (
+                                f" and constraint_set={constraint_set!r}"
+                                if constraint_set is not None
+                                else ""
+                            )
+                            + ") and were excluded from the initialisation.",
                             RuntimeWarning,
                             stacklevel=2,
                         )
@@ -3490,7 +3533,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._validate_2d_setup()
 
         if not self.__CONTRAINTS_SET:
-            self.set_default_constraints()
+            self.set_default_constraints(constraint_set=constraint_set)
 
         if cuda:
             self.cuda()

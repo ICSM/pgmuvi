@@ -329,13 +329,58 @@ class TestMLSInitConstraintFiltering(unittest.TestCase):
         self.assertTrue(
             any(
                 issubclass(w.category, RuntimeWarning)
-                and "longer than the data span" in str(w.message)
+                and "allowed frequency range" in str(w.message)
                 for w in caught
             ),
             "Expected a RuntimeWarning about out-of-range MLS frequencies.",
         )
         # Only the valid frequency should remain → 1 mixture component.
         self.assertEqual(self.lc.model.covar_module.num_mixtures, 1)
+
+    def test_constraint_set_filters_peaks(self):
+        """MLS peaks outside constraint_set period bounds are filtered."""
+        # Use a long time span so the LPV constraint (min period=100) is
+        # testable: with t_span=1000, f_lower=0.001 and LPV f_upper=0.01.
+        # Valid range: [0.001, 0.01] (periods 100..1000 in data units).
+        lc_lpv = make_simple_sinusoid_1d(
+            n_obs=100,
+            period=200.0,  # period=200, valid for LPV (> 100)
+            noise_level=0.1,
+            noise_type="gaussian",
+            irregular=False,
+            t_span=1000.0,
+            seed=42,
+        )
+        # Simulate two MLS peaks:
+        #   f=0.005 → period=200 (within LPV range [100, 1000])
+        #   f=0.02  → period=50  (below LPV min period=100 → too high freq)
+        valid_freq = torch.tensor([0.005], dtype=torch.float32)   # period=200
+        invalid_freq = torch.tensor([0.02], dtype=torch.float32)  # period=50
+        all_freqs = torch.cat([valid_freq, invalid_freq])
+        all_mask = torch.tensor([True, True], dtype=torch.bool)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch.object(lc_lpv, "fit_LS", return_value=(all_freqs, all_mask)):
+                with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
+                    with patch.object(lc_lpv, "_train"):
+                        with patch.object(lc_lpv, "print_parameters"):
+                            lc_lpv.fit(
+                                model="1D",
+                                check_sampling=False,
+                                training_iter=1,
+                                constraint_set="LPV",
+                            )
+        # A filtering warning mentioning the constraint_set should be emitted.
+        self.assertTrue(
+            any(
+                issubclass(w.category, RuntimeWarning)
+                and "constraint_set='LPV'" in str(w.message)
+                for w in caught
+            ),
+            "Expected a RuntimeWarning mentioning the LPV constraint_set.",
+        )
+        # Only the LPV-valid frequency should remain → 1 mixture component.
+        self.assertEqual(lc_lpv.model.covar_module.num_mixtures, 1)
 
 
 class TestMLSInit2D(unittest.TestCase):
