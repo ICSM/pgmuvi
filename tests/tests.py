@@ -1143,6 +1143,52 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
             lc1d.assess_sampling_quality_per_band()
         with self.assertRaises(ValueError):
             lc1d.filter_well_sampled_bands()
+
+    def test_fit_check_sampling_2d_all_bands_fail_raises(self):
+        """fit() raises ValueError when ALL 2D bands fail sampling checks."""
+        # 3 bands, each with only 4 points (below min_points=6 default)
+        wavelengths = [3.6, 4.5, 5.8]
+        t_all, wl_all, y_all, ye_all = [], [], [], []
+        for wl in wavelengths:
+            t_all.extend([0.0, 1.0, 2.0, 3.0])
+            wl_all.extend([wl] * 4)
+            y_all.extend([1.0] * 4)
+            ye_all.extend([0.1] * 4)
+        xdata = np.column_stack([t_all, wl_all])
+        lc2d_bad = Lightcurve(
+            torch.as_tensor(xdata, dtype=torch.float32),
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+        )
+        with self.assertRaises(ValueError) as ctx:
+            lc2d_bad.fit(check_sampling=True)
+        self.assertIn('sampling quality checks', str(ctx.exception))
+
+    def test_fit_check_sampling_2d_some_bands_fail_filters(self):
+        """fit() with check_sampling=True filters out poorly-sampled 2D bands."""
+        # Band 3.6: 50 good points (passes); band 4.5: 4 points (fails)
+        t_good = np.linspace(0, 100, 50)
+        t_bad = [0.0, 1.0, 2.0, 3.0]
+        t_all = list(t_good) + t_bad
+        wl_all = [3.6] * 50 + [4.5] * 4
+        y_all = [1.0] * 54
+        ye_all = [0.01] * 54
+        xdata = np.column_stack([t_all, wl_all])
+        lc2d_mixed = Lightcurve(
+            torch.as_tensor(xdata, dtype=torch.float32),
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+        )
+        # fit() should warn about band 4.5 then fail on missing model, not on
+        # sampling.
+        with self.assertRaises(ValueError) as ctx:
+            lc2d_mixed.fit(check_sampling=True)
+        self.assertNotIn('sampling quality checks', str(ctx.exception))
+        # The poorly-sampled band should have been filtered from the data.
+        remaining_wls = torch.unique(lc2d_mixed._xdata_raw[:, 1]).tolist()
+        self.assertEqual(len(remaining_wls), 1)
+        self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
+
 # Import variability tests so they are discovered when this file is run
 from test_variability import (  # noqa: E402, F401
     TestComputeFvar,
