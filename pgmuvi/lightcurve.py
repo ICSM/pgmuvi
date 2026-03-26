@@ -3455,6 +3455,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         RuntimeWarning,
                         stacklevel=2,
                     )
+                    # Normalise invalid constraint_set so that later code does not
+                    # attempt to apply or validate an unknown set again.
+                    constraint_set = None
 
             # Run the MLS periodogram to choose num_mixtures and seed frequencies.
             try:
