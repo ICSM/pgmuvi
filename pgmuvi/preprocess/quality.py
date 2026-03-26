@@ -3,7 +3,9 @@ Sampling quality assessment utilities for lightcurve data.
 
 Provides metrics and validation gates to detect poorly sampled lightcurves
 before GP fitting, preventing bad fits due to sparse coverage, large gaps,
-or inadequate baseline.
+or inadequate baseline.  Also provides :func:`subsample_lightcurve` to
+reduce oversized datasets to a manageable size while preserving the temporal
+sampling structure.
 """
 
 import numpy as np
@@ -363,3 +365,115 @@ def assess_sampling_quality(
         print("=" * 70 + "\n")
 
     return passes, diagnostics
+
+
+def subsample_lightcurve(
+    t,
+    max_samples=3000,
+    max_gap_fraction=0.3,
+    random_seed=None,
+):
+    """
+    Return indices selecting at most *max_samples* points from *t* while
+    preserving the temporal baseline and the *max_gap_fraction* constraint.
+
+    The algorithm always keeps the earliest and latest time points so that
+    the full temporal baseline is preserved.  It then fills the remaining
+    budget with randomly chosen interior points.  If the resulting selection
+    contains any gap larger than ``max_gap_fraction * baseline``, the
+    original data point closest to the midpoint of each offending gap is
+    added iteratively until the constraint is satisfied or no more candidate
+    points remain.
+
+    Parameters
+    ----------
+    t : array_like
+        Observation times (1-D).
+    max_samples : int, default 3000
+        Maximum number of points to include in the subsample.
+    max_gap_fraction : float, default 0.3
+        Maximum allowed gap between consecutive selected times as a fraction
+        of the total temporal baseline.
+    random_seed : int or None, optional
+        Seed for the random number generator (reproducibility).
+
+    Returns
+    -------
+    indices : np.ndarray of int
+        Indices into *t* that form the subsample, ordered by ascending time.
+        If ``len(t) <= max_samples`` the full range ``np.arange(len(t))``
+        is returned unchanged.
+
+    Notes
+    -----
+    Gap repairs may push the returned count slightly above *max_samples*
+    when large gaps in the original data cannot be covered without exceeding
+    the budget; this is intentional and ensures the constraint is honoured
+    whenever sufficient data are available.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> rng = np.random.default_rng(0)
+    >>> t = rng.uniform(0, 100, 5000)
+    >>> idx = subsample_lightcurve(t, max_samples=500, random_seed=42)
+    >>> len(idx) <= 500
+    True
+    """
+    t = np.asarray(t, dtype=float)
+    n = len(t)
+
+    if n <= max_samples:
+        return np.arange(n)
+
+    rng = np.random.default_rng(random_seed)
+
+    sort_order = np.argsort(t)
+    t_sorted = t[sort_order]
+
+    baseline = float(t_sorted[-1] - t_sorted[0])
+    if baseline == 0:
+        # Degenerate case: all times identical - return first max_samples.
+        return sort_order[:max_samples].copy()
+
+    max_gap_allowed = max_gap_fraction * baseline
+
+    # Always keep the first and last points to preserve the full baseline.
+    must_include = {int(sort_order[0]), int(sort_order[-1])}
+
+    # Fill remaining budget from interior points chosen at random.
+    interior = sort_order[1:-1]
+    target = max(0, max_samples - 2)
+    if len(interior) <= target:
+        chosen_interior = interior.tolist()
+    else:
+        chosen_interior = rng.choice(interior, size=target, replace=False).tolist()
+
+    selected_set = must_include | set(chosen_interior)
+    all_unused = set(range(n)) - selected_set
+
+    # Iteratively repair any gap that exceeds the allowed fraction.
+    while True:
+        selected = sorted(selected_set, key=lambda i: t[i])
+        t_sel = t[selected]
+        gaps = np.diff(t_sel)
+        bad = np.where(gaps > max_gap_allowed)[0]
+        if len(bad) == 0:
+            break
+
+        # Repair the largest offending gap first.
+        gap_idx = int(bad[np.argmax(gaps[bad])])
+        t_left = t_sel[gap_idx]
+        t_right = t_sel[gap_idx + 1]
+        t_mid = 0.5 * (t_left + t_right)
+
+        # Find candidates from unused points that fall inside this gap.
+        candidates = [i for i in all_unused if t_left < t[i] < t_right]
+        if not candidates:
+            break  # Gap cannot be filled - accept the constraint violation.
+
+        best = min(candidates, key=lambda i: abs(t[i] - t_mid))
+        selected_set.add(best)
+        all_unused.discard(best)
+
+    return np.array(sorted(selected_set, key=lambda i: t[i]), dtype=np.intp)

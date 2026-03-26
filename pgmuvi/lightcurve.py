@@ -3276,6 +3276,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         sampling_kwargs: dict | None = None,
         check_variability: bool = False,
         variability_kwargs: dict | None = None,
+        max_samples: int | None = 3000,
+        subsample_seed: int | None = None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -3382,6 +3384,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
+        max_samples : int or None, default 3000
+            Maximum number of time-axis points used for GP fitting.  When the
+            lightcurve has more than *max_samples* observations, a random
+            subsample of *max_samples* points is drawn before model setup and
+            training.  The subsample always includes the earliest and latest
+            observations (preserving the full temporal baseline) and is
+            repaired to satisfy the *max_gap_fraction* constraint taken from
+            *sampling_kwargs* (default 0.3).  A :class:`UserWarning` is issued
+            whenever subsampling occurs.  Set to ``None`` to disable
+            subsampling entirely.
+        subsample_seed : int or None, default None
+            Random seed passed to :func:`subsample_lightcurve` when
+            subsampling is performed.  Use a fixed integer for reproducible
+            subsamples; ``None`` (default) produces a non-deterministic
+            subsample.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -3453,78 +3470,133 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "To force fitting anyway, use: fit(check_variability=False)"
                 )
 
-        if not hasattr(self, "likelihood"):
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
-        elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
-            # if no likelihood is passed, we only want to set the likelihood
-            # if it hasn't already been set
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
-        elif likelihood is not None:
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
-        # if likelihood is None and not hasattr(self, 'likelihood'):
-        #     raise ValueError("""You must provide a likelihood function""")
-        # elif likelihood is not None:
-        #     self.set_likelihood(likelihood, **kwargs)
+        # ------------------------------------------------------------------
+        # Subsampling: if the lightcurve has more points than max_samples,
+        # temporarily replace the data buffers with a random subsample that
+        # still honours the temporal-baseline and max-gap constraints.
+        # The original buffers are restored in the finally block below so
+        # that the Lightcurve object retains its full data after fitting.
+        # ------------------------------------------------------------------
+        _orig_buffers: dict | None = None
+        n_total = self._xdata_raw.shape[0]
+        if max_samples is not None and n_total > max_samples:
+            from pgmuvi.preprocess.quality import subsample_lightcurve
 
-        if model is None and not hasattr(self, "model"):
-            raise ValueError("""You must provide a model""")
-        elif model is not None:
-            self.set_model(
-                model,
-                self.likelihood,
-                num_mixtures=num_mixtures,
-                variance=variance,
-                **kwargs,
+            t_np = self._xdata_raw.detach().cpu().numpy()
+            if t_np.ndim > 1:
+                t_np = t_np[:, 0]
+            sk = sampling_kwargs or {}
+            mgf = sk.get("max_gap_fraction", 0.3)
+            idx = subsample_lightcurve(
+                t_np,
+                max_samples=max_samples,
+                max_gap_fraction=mgf,
+                random_seed=subsample_seed,
             )
-
-        # Validate 2D setup if we have 2D data
-        if self.ndim > 1:
-            self._validate_2d_setup()
-
-        if not self.__CONTRAINTS_SET:
-            self.set_default_constraints()
-
-        if cuda:
-            self.cuda()
-
-        if guess is not None:
-            # self.model.initialize(**guess)
-            self.set_hypers(guess)
-
-        if miniter is None:
-            miniter = training_iter
-
-        if max_cg_iterations is None:
-            max_cg_iterations = 10000
-
-        # Next we probably want to report some setup info
-        # later...
-
-        # Train the model
-        # self.model.train()
-        # self.likelihood.train()
-
-        # set training mode:
-        self._train()
-
-        # for param_name, param in self.model.named_parameters():
-        #    print(f'Parameter name: {param_name:42} value = {param.data}')
-        self.print_parameters()
-
-        # Now actually call the trainer!
-        with gpytorch.settings.max_cg_iterations(max_cg_iterations):
-            self.results = train(
-                self,
-                maxiter=training_iter,
-                miniter=miniter,
-                stop=stop,
-                lr=lr,
-                optim=optim,
-                stopavg=stopavg,
+            warnings.warn(
+                f"Lightcurve has {n_total} points, which exceeds "
+                f"max_samples={max_samples}. Fitting on a random subsample "
+                f"of {len(idx)} points. "
+                "Set max_samples=None to disable subsampling.",
+                UserWarning,
+                stacklevel=2,
             )
-        self.__FITTED_MAP = True
+            # Save original buffers (only those that exist).
+            _buffer_names = (
+                "_xdata_raw",
+                "_xdata_transformed",
+                "_ydata_raw",
+                "_ydata_transformed",
+                "_yerr_raw",
+                "_yerr_transformed",
+            )
+            _orig_buffers = {
+                name: getattr(self, name)
+                for name in _buffer_names
+                if hasattr(self, name) and getattr(self, name) is not None
+            }
+            idx_t = torch.as_tensor(idx, dtype=torch.long)
+            for name, buf in _orig_buffers.items():
+                self.register_buffer(name, buf[idx_t])
 
-        return self.results
+        try:
+            if not hasattr(self, "likelihood"):
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
+                # if no likelihood is passed, we only want to set the likelihood
+                # if it hasn't already been set
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            elif likelihood is not None:
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            # if likelihood is None and not hasattr(self, 'likelihood'):
+            #     raise ValueError("""You must provide a likelihood function""")
+            # elif likelihood is not None:
+            #     self.set_likelihood(likelihood, **kwargs)
+
+            if model is None and not hasattr(self, "model"):
+                raise ValueError("""You must provide a model""")
+            elif model is not None:
+                self.set_model(
+                    model,
+                    self.likelihood,
+                    num_mixtures=num_mixtures,
+                    variance=variance,
+                    **kwargs,
+                )
+
+            # Validate 2D setup if we have 2D data
+            if self.ndim > 1:
+                self._validate_2d_setup()
+
+            if not self.__CONTRAINTS_SET:
+                self.set_default_constraints()
+
+            if cuda:
+                self.cuda()
+
+            if guess is not None:
+                # self.model.initialize(**guess)
+                self.set_hypers(guess)
+
+            if miniter is None:
+                miniter = training_iter
+
+            if max_cg_iterations is None:
+                max_cg_iterations = 10000
+
+            # Next we probably want to report some setup info
+            # later...
+
+            # Train the model
+            # self.model.train()
+            # self.likelihood.train()
+
+            # set training mode:
+            self._train()
+
+            # for param_name, param in self.model.named_parameters():
+            #    print(f'Parameter name: {param_name:42} value = {param.data}')
+            self.print_parameters()
+
+            # Now actually call the trainer!
+            with gpytorch.settings.max_cg_iterations(max_cg_iterations):
+                self.results = train(
+                    self,
+                    maxiter=training_iter,
+                    miniter=miniter,
+                    stop=stop,
+                    lr=lr,
+                    optim=optim,
+                    stopavg=stopavg,
+                )
+            self.__FITTED_MAP = True
+
+            return self.results
+        finally:
+            # Restore original data buffers if they were replaced for subsampling.
+            if _orig_buffers is not None:
+                for name, buf in _orig_buffers.items():
+                    self.register_buffer(name, buf)
 
     def mcmc(
         self,
