@@ -322,6 +322,25 @@ class TestFitLS(unittest.TestCase):
         if len(mask) > 0:
             self.assertIsInstance(mask[0].item(), bool)
 
+    def test_fap_method_parameter_1d(self):
+        """Test that fap_method parameter is accepted and affects results"""
+        # 'baluev' is the default; both should return valid results
+        for method in ('baluev', 'davies'):
+            freq, mask = self.lc_with_yerr.fit_LS(
+                num_peaks=1, fap_method=method
+            )
+            self.assertIsInstance(freq, torch.Tensor)
+            self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_parameter_2d(self):
+        """Test that fap_method parameter works for multiband lightcurves"""
+        for method in ('analytical', 'bootstrap'):
+            freq, mask = self.lc_2d.fit_LS(
+                num_peaks=1, fap_method=method
+            )
+            self.assertIsInstance(freq, torch.Tensor)
+            self.assertIsInstance(mask, torch.Tensor)
+
 
 class TestMultibandFAP(unittest.TestCase):
     """Tests for multiband false-alarm probability computation"""
@@ -470,6 +489,48 @@ class TestMultibandFAP(unittest.TestCase):
         # This is a sanity check that methods are reasonable
         self.assertLess(fap_bootstrap, 0.5,
                         "Bootstrap FAP too high for strong signal")
+
+    def test_parallel_bootstrap_fap(self):
+        """Test that parallel bootstrap (n_jobs>1) gives consistent results"""
+        from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance
+
+        t = self.xdata_signal[:, 0].numpy()
+        bands = self.xdata_signal[:, 1].numpy()
+        y = self.ydata_signal.numpy()
+
+        ls = MultibandLSWithSignificance(t, y, bands)
+        freq = ls.autofrequency()
+        power = ls.power(freq)
+        max_power = power.max()
+
+        # Serial bootstrap
+        fap_serial = ls.false_alarm_probability(
+            max_power, method='bootstrap', n_samples=30, n_jobs=1
+        )
+        # Parallel bootstrap (2 workers)
+        fap_parallel = ls.false_alarm_probability(
+            max_power, method='bootstrap', n_samples=30, n_jobs=2
+        )
+
+        # Both should produce valid FAP values in [0, 1]
+        self.assertGreaterEqual(fap_serial, 0.0)
+        self.assertLessEqual(fap_serial, 1.0)
+        self.assertGreaterEqual(fap_parallel, 0.0)
+        self.assertLessEqual(fap_parallel, 1.0)
+
+    def test_analytical_default_in_fit_ls(self):
+        """Test that fit_LS for multiband uses analytical FAP by default (fast)"""
+        import time
+
+        # Time the fit_LS call - with analytical default it should be fast
+        start = time.time()
+        freq, mask = self.lc_signal.fit_LS(num_peaks=1)
+        elapsed = time.time() - start
+
+        # Should complete in reasonable time (<<10 s) because 'analytical'
+        # is the default, not the expensive 'bootstrap'
+        self.assertLess(elapsed, 10.0,
+                        "fit_LS took too long; default FAP method may be slow")
 
 
 

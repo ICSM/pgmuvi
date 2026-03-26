@@ -2266,6 +2266,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         num_peaks: int = 1,
         single_threshold: float = 0.05,
         Nyquist_factor: int = 5,
+        fap_method: str | None = None,
         **kwargs,
     ) -> tuple:
         """
@@ -2297,6 +2298,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Lomb-Scargle periodogram.
             This will be approximately the number of points sampling
             the maximum in the resulting periodogram.
+        - fap_method: str or None, optional, default=None
+            Method used to compute the false-alarm probability (FAP).
+            For 1D lightcurves the default is ``'baluev'`` (fast analytical
+            approximation; see astropy docs for other valid options such as
+            ``'davies'`` or ``'bootstrap'``).
+            For multi-band lightcurves the default is ``'analytical'`` (fast
+            Baluev-style approximation).  Slower but more accurate options
+            are ``'bootstrap'``, ``'phase_scramble'``, and ``'calibrated'``
+            (see
+            :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`).
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
@@ -2365,6 +2376,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             bands = self.xdata[:, 1]
             y = self.ydata
 
+            # Default FAP method for multiband: analytical (fast)
+            _fap_method = fap_method if fap_method is not None else 'analytical'
+
             has_yerr = (
                 hasattr(self, "_yerr_transformed")
                 and self._yerr_transformed is not None
@@ -2412,7 +2426,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
             # Compute FAP for multiband periodogram
-            fap_max = LS.false_alarm_probability(power.max(), method='bootstrap')
+            fap_max = LS.false_alarm_probability(power.max(),
+                                                 method=_fap_method)
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:
@@ -2428,7 +2443,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             # Calculate FAP for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
-                                                    method='bootstrap')
+                                                    method=_fap_method)
 
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
@@ -2448,6 +2463,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
         else:
             t, y = self.xdata, self.ydata
+
+            # Default FAP method for single-band: 'baluev' (fast analytical)
+            _fap_method = fap_method if fap_method is not None else 'baluev'
+
             has_yerr = (
                 hasattr(self, "_yerr_transformed")
                 and self._yerr_transformed is not None
@@ -2488,7 +2507,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
             # Calculate the false alarm probability for the highest peak
-            fap_max = LS.false_alarm_probability(power.max())
+            fap_max = LS.false_alarm_probability(power.max(),
+                                                 method=_fap_method)
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:
@@ -2505,7 +2525,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                 )
             # Calculate the false alarm probability for each peak independently
-            fap_single = LS.false_alarm_probability(power[peaks], method="single")
+            fap_single = LS.false_alarm_probability(power[peaks],
+                                                    method=_fap_method)
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
             significant_mask[0] = True  # since fap_max <= single_threshold
