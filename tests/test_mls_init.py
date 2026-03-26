@@ -382,6 +382,21 @@ class TestMLSInitConstraintFiltering(unittest.TestCase):
         # Only the LPV-valid frequency should remain → 1 mixture component.
         self.assertEqual(lc_lpv.model.covar_module.num_mixtures, 1)
 
+    def test_unrecognised_constraint_set_warns(self):
+        """Passing an unrecognised constraint_set emits a RuntimeWarning and is ignored."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _fit_without_training(self.lc, constraint_set="INVALID_SET")
+        self.assertTrue(
+            any(
+                issubclass(w.category, RuntimeWarning)
+                and "INVALID_SET" in str(w.message)
+                and "not recognised" in str(w.message)
+                for w in caught
+            ),
+            "Expected a RuntimeWarning about the unrecognised constraint_set.",
+        )
+
 
 class TestMLSInit2D(unittest.TestCase):
     """MLS initialisation with 2D (multiband) light curves."""

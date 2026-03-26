@@ -3403,8 +3403,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Compute constraint-set frequency bounds in raw data units.
             # These are used in addition to the data-span bounds to exclude
             # MLS peaks that would lie outside user-requested period limits.
+            # Note: fit_LS uses Nyquist_factor > 1, so its frequencies can
+            # exceed the standard Nyquist.  We therefore only apply an upper
+            # frequency limit when the constraint_set explicitly demands one
+            # (via a minimum-period specification); otherwise the upper bound
+            # is left unrestricted (inf).
             _cs_freq_lower = _freq_lower  # default: data-span lower bound
-            _cs_freq_upper = _freq_upper  # default: Nyquist upper bound
+            _cs_freq_upper = float("inf")  # no upper cap unless constraint_set says so
             if constraint_set is not None:
                 try:
                     cs = get_constraint_set(constraint_set)
@@ -3423,7 +3428,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                 _cs_freq_lower, 1.0 / _p_upper_val
                             )
                 except (ValueError, KeyError):
-                    pass  # unrecognised constraint_set; ignore
+                    warnings.warn(
+                        f"constraint_set={constraint_set!r} is not recognised "
+                        "and will be ignored for MLS peak filtering. "
+                        "Only the data-span frequency bounds will be applied.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
             # Run the MLS periodogram to choose num_mixtures and seed frequencies.
             try:
