@@ -93,8 +93,8 @@ class TestMLSInitNumMixturesOverride(unittest.TestCase):
 
     def test_num_mixtures_zero_uses_fallback(self):
         """num_mixtures=0 is not meaningful; MLS logic should still produce ≥1."""
-        # The MLS path picks max(sig, 1); the fallback is 4.
-        _fit_without_training(self.lc)
+        # The MLS path picks max(sig, 1); the fallback is 4 even if num_mixtures=0.
+        _fit_without_training(self.lc, num_mixtures=0)
         self.assertGreaterEqual(self.lc.model.covar_module.num_mixtures, 1)
 
 
