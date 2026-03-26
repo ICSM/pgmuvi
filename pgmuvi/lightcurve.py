@@ -3372,8 +3372,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     # MLS found no peaks at all.
                     if num_mixtures is None:
                         num_mixtures = 4
-            except Exception:
-                # MLS failed for any reason; fall back gracefully.
+            except Exception as exc:
+                # MLS failed for any reason; fall back gracefully but warn the user.
+                warnings.warn(
+                    "MLS-based initialisation failed; falling back to "
+                    "num_mixtures=4. Original error was: "
+                    f"{exc}",
+                    RuntimeWarning,
+                )
                 if num_mixtures is None:
                     num_mixtures = 4
 
