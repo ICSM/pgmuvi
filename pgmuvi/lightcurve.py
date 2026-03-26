@@ -3338,8 +3338,33 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # elif likelihood is not None:
         #     self.set_likelihood(likelihood, **kwargs)
 
+        # Validate explicitly-provided num_mixtures early.
+        if num_mixtures is not None and num_mixtures < 1:
+            raise ValueError(
+                "`num_mixtures` must be a positive integer or None, "
+                f"got {num_mixtures}."
+            )
+
         # --- MLS-based initialisation ---
         _init_freqs = None  # frequencies (raw units) to seed the SM kernel
+
+        # Minimum frequency in raw data units: the period cannot exceed the
+        # total span of the data.  Used to filter obviously unphysical MLS
+        # peaks and to generate padding frequencies when not enough peaks are
+        # available.
+        _t_raw = (
+            self._xdata_raw[:, 0] if self.ndim > 1 else self._xdata_raw
+        )
+        _t_span = float(_t_raw.max() - _t_raw.min())
+        _freq_lower = 1.0 / _t_span if _t_span > 0 else 0.0
+        _t_sorted = _t_raw.sort().values
+        _t_diffs = _t_sorted[1:] - _t_sorted[:-1]
+        _pos_diffs = _t_diffs[_t_diffs > 0]
+        _freq_upper = (
+            1.0 / (2.0 * float(_pos_diffs.min()))
+            if len(_pos_diffs) > 0
+            else float("inf")
+        )
 
         if periods is not None:
             # User supplied explicit period guesses — skip MLS entirely.
@@ -3369,6 +3394,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _max_peaks = max(num_mixtures or 1, 10)
                 ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
 
+                # Filter peaks whose period exceeds the data span.  Such
+                # peaks correspond to periods the data cannot constrain and
+                # would violate the minimum-frequency constraint applied later
+                # by set_default_constraints().
+                if len(ls_freqs) > 0 and _freq_lower > 0:
+                    _valid = ls_freqs >= _freq_lower
+                    if not _valid.all():
+                        _n_filtered = int((~_valid).sum().item())
+                        warnings.warn(
+                            f"{_n_filtered} MLS peak(s) had periods longer "
+                            f"than the data span (f < {_freq_lower:.4g}) and "
+                            "were excluded from the initialisation.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                        ls_freqs = ls_freqs[_valid]
+                        ls_sig = ls_sig[_valid]
+
                 if len(ls_freqs) > 0:
                     ls_sig_freqs = ls_freqs[ls_sig]
                     ls_insig_freqs = ls_freqs[~ls_sig]
@@ -3384,15 +3427,34 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             _init_freqs = ls_freqs[:1]
                     else:
                         # User specified num_mixtures: fill with significant peaks
-                        # first, then non-significant ones as needed.
+                        # first, then non-significant ones, then pad with
+                        # evenly-spaced frequencies if still not enough.
                         n_sig = len(ls_sig_freqs)
                         if num_mixtures <= n_sig:
                             _init_freqs = ls_sig_freqs[:num_mixtures]
                         else:
                             _extra = num_mixtures - n_sig
-                            _init_freqs = torch.cat(
-                                [ls_sig_freqs, ls_insig_freqs[:_extra]]
-                            )
+                            _available_insig = ls_insig_freqs[:_extra]
+                            _init_freqs = torch.cat([ls_sig_freqs, _available_insig])
+                            # Pad with evenly-spaced frequencies if still short.
+                            _n_pad = num_mixtures - len(_init_freqs)
+                            if _n_pad > 0 and _freq_upper > _freq_lower:
+                                warnings.warn(
+                                    f"Only {len(_init_freqs)} MLS peak(s) found but "
+                                    f"{num_mixtures} were requested. Padding with "
+                                    f"{_n_pad} evenly-spaced frequenc"
+                                    f"{'y' if _n_pad == 1 else 'ies'} in "
+                                    f"[{_freq_lower:.4g}, {_freq_upper:.4g}].",
+                                    RuntimeWarning,
+                                    stacklevel=2,
+                                )
+                                _pad = torch.linspace(
+                                    _freq_lower,
+                                    _freq_upper,
+                                    _n_pad + 2,
+                                    dtype=_init_freqs.dtype,
+                                )[1:-1]
+                                _init_freqs = torch.cat([_init_freqs, _pad])
                 else:
                     # MLS found no peaks at all.
                     if num_mixtures is None:
@@ -3404,6 +3466,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "num_mixtures=4. Original error was: "
                     f"{exc}",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
                 if num_mixtures is None:
                     num_mixtures = 4

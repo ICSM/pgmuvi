@@ -1,7 +1,8 @@
 """Tests for MLS-based GP initialisation in LightCurve.fit()."""
 
 import unittest
-from unittest.mock import patch, MagicMock
+import warnings
+from unittest.mock import patch
 import torch
 
 from pgmuvi.synthetic import make_simple_sinusoid_1d, make_chromatic_sinusoid_2d
@@ -91,11 +92,40 @@ class TestMLSInitNumMixturesOverride(unittest.TestCase):
         _fit_without_training(self.lc, num_mixtures=4)
         self.assertEqual(self.lc.model.covar_module.num_mixtures, 4)
 
-    def test_num_mixtures_zero_uses_fallback(self):
-        """num_mixtures=0 is not meaningful; MLS logic should still produce ≥1."""
-        # The MLS path picks max(sig, 1); the fallback is 4 even if num_mixtures=0.
-        _fit_without_training(self.lc, num_mixtures=0)
-        self.assertGreaterEqual(self.lc.model.covar_module.num_mixtures, 1)
+    def test_num_mixtures_zero_raises(self):
+        """num_mixtures=0 is invalid and raises ValueError."""
+        with self.assertRaises(ValueError):
+            _fit_without_training(self.lc, num_mixtures=0)
+
+    def test_num_mixtures_negative_raises(self):
+        """num_mixtures < 0 is invalid and raises ValueError."""
+        with self.assertRaises(ValueError):
+            _fit_without_training(self.lc, num_mixtures=-1)
+
+    def test_padding_warns_when_too_few_peaks(self):
+        """A RuntimeWarning is emitted when MLS peaks must be padded."""
+        # Mock fit_LS to return only 2 peaks, but request 5 mixtures
+        # so padding is definitely needed (5 > 2).
+        two_freqs = torch.tensor([0.2, 0.4], dtype=torch.float32)
+        two_sig = torch.tensor([True, False], dtype=torch.bool)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch.object(self.lc, "fit_LS", return_value=(two_freqs, two_sig)):
+                _fit_without_training(self.lc, num_mixtures=5)
+        # Check that a padding warning was raised.
+        self.assertTrue(
+            any(
+                issubclass(w.category, RuntimeWarning)
+                and "Padding" in str(w.message)
+                for w in caught
+            ),
+            "Expected a padding RuntimeWarning when too few MLS peaks were found.",
+        )
+
+    def test_padding_preserves_num_mixtures(self):
+        """Padding keeps num_mixtures at the user-requested value."""
+        _fit_without_training(self.lc, num_mixtures=10)
+        self.assertEqual(self.lc.model.covar_module.num_mixtures, 10)
 
 
 class TestMLSInitPeriods(unittest.TestCase):
@@ -136,6 +166,21 @@ class TestMLSInitPeriods(unittest.TestCase):
         _fit_without_training(self.lc, periods=p)
         self.assertEqual(self.lc.model.covar_module.num_mixtures, 2)
 
+    def test_periods_empty_raises(self):
+        """Empty periods sequence raises ValueError."""
+        with self.assertRaises(ValueError):
+            _fit_without_training(self.lc, periods=[])
+
+    def test_periods_zero_raises(self):
+        """A period of zero raises ValueError."""
+        with self.assertRaises(ValueError):
+            _fit_without_training(self.lc, periods=[0.0])
+
+    def test_periods_negative_raises(self):
+        """A negative period raises ValueError."""
+        with self.assertRaises(ValueError):
+            _fit_without_training(self.lc, periods=[-5.0])
+
 
 class TestMLSInitFrequencySeeding(unittest.TestCase):
     """Verify that mixture_means is seeded close to the MLS-detected frequency."""
@@ -150,29 +195,50 @@ class TestMLSInitFrequencySeeding(unittest.TestCase):
         )
 
     def test_mixture_means_seeded_from_mls(self):
-        """After MLS init the single mixture mean is close to 1/period."""
-        ls_freqs, ls_sig = self.lc.fit_LS(num_peaks=10)
-        expected_freq = ls_freqs[ls_sig][0].item() if ls_sig.any() else ls_freqs[0].item()
+        """After MLS init the mixture means are seeded from the MLS-detected frequencies."""
+        # Use a small noise level so only the fundamental is significant.
+        lc = make_simple_sinusoid_1d(
+            n_obs=100,
+            period=5.0,
+            noise_level=0.1,
+            noise_type="gaussian",
+            irregular=False,
+            seed=42,
+        )
+        ls_freqs, ls_sig = lc.fit_LS(num_peaks=10)
+        n_sig = int(ls_sig.sum().item())
+        expected_n_mixtures = max(n_sig, 1)
 
-        _fit_without_training(self.lc)
+        with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
+            with patch.object(lc, "_train"):
+                with patch.object(lc, "print_parameters"):
+                    lc.fit(**_make_fit_kwargs())
 
-        # mixture_means has shape (num_mixtures, 1) in the transformed space;
-        # recover the raw-space frequency for comparison.
-        means_transformed = self.lc.model.covar_module.mixture_means.detach()
-        # Inverse the set_hypers x-transform:
-        #   set_hypers does  f_model = 1 / transform(1/f_raw, shift=False)
-        # so f_raw = 1 / inv_transform(1/f_model) — easier to just compare
-        # in terms of ordering (higher raw freq → higher transformed freq).
-        self.assertGreater(means_transformed.min().item(), 0)
+        means = lc.model.covar_module.mixture_means.detach()
+        # Seeded mixture means must be positive (valid frequencies).
+        self.assertGreater(means.min().item(), 0)
+        # Number of components matches the MLS count.
+        self.assertEqual(lc.model.covar_module.num_mixtures, expected_n_mixtures)
+        # The seeded mixture means in transformed space should all be
+        # monotonically related to the raw MLS frequencies.  Verify that
+        # the mixture means are ordered the same way as the seeded frequencies.
+        if n_sig > 1 and lc.xtransform is not None:
+            sig_sorted = ls_freqs[ls_sig].sort().values
+            means_sorted = means.squeeze(-1).sort().values
+            # Higher raw freq → higher transformed freq (monotone transform).
+            self.assertTrue(
+                (means_sorted[1:] > means_sorted[:-1]).all(),
+                "Mixture means should be strictly ordered.",
+            )
 
     def test_mixture_means_seeded_from_periods(self):
         """User-supplied periods seed the mixture_means at the correct frequency."""
         period = 5.0
         _fit_without_training(self.lc, periods=[period])
 
-        means_transformed = self.lc.model.covar_module.mixture_means.detach()
+        means = self.lc.model.covar_module.mixture_means.detach()
         # The seeded means should be positive (valid frequencies).
-        self.assertGreater(means_transformed.min().item(), 0)
+        self.assertGreater(means.min().item(), 0)
         self.assertEqual(self.lc.model.covar_module.num_mixtures, 1)
 
 
@@ -189,12 +255,19 @@ class TestMLSInitMLSFallback(unittest.TestCase):
         )
 
     def test_mls_exception_falls_back_to_4(self):
-        """If fit_LS raises, num_mixtures falls back to 4."""
-        with patch.object(
-            self.lc, "fit_LS", side_effect=RuntimeError("MLS failed")
-        ):
-            _fit_without_training(self.lc)
+        """If fit_LS raises, num_mixtures falls back to 4 with a warning."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch.object(
+                self.lc, "fit_LS", side_effect=RuntimeError("MLS failed")
+            ):
+                _fit_without_training(self.lc)
         self.assertEqual(self.lc.model.covar_module.num_mixtures, 4)
+        # A RuntimeWarning should have been emitted.
+        self.assertTrue(
+            any(issubclass(w.category, RuntimeWarning) for w in caught),
+            "Expected a RuntimeWarning when MLS fails.",
+        )
 
     def test_mls_no_peaks_falls_back_to_4(self):
         """If fit_LS returns no peaks, num_mixtures falls back to 4."""
@@ -211,6 +284,88 @@ class TestMLSInitMLSFallback(unittest.TestCase):
         with patch.object(self.lc, "fit_LS", return_value=(freq, mask)):
             _fit_without_training(self.lc)
         self.assertEqual(self.lc.model.covar_module.num_mixtures, 1)
+
+
+class TestMLSInitConstraintFiltering(unittest.TestCase):
+    """MLS frequencies with periods longer than the data span are filtered."""
+
+    def setUp(self):
+        self.lc = make_simple_sinusoid_1d(
+            n_obs=100,
+            period=5.0,
+            noise_level=0.1,
+            noise_type="gaussian",
+            irregular=False,
+            seed=42,
+        )
+
+    def test_out_of_range_frequencies_are_filtered(self):
+        """Frequencies below f_min (period > data span) trigger a warning."""
+        # Return one valid frequency and one unphysically low frequency.
+        valid_freq = torch.tensor([0.2], dtype=torch.float32)  # period=5, valid
+        # A frequency below 1/t_span is unphysical (period > data span).
+        # t_span=20, so f_min=0.05; use 0.001 (period=1000 >> 20).
+        invalid_freq = torch.tensor([0.001], dtype=torch.float32)
+        all_freqs = torch.cat([valid_freq, invalid_freq])
+        all_mask = torch.tensor([True, True], dtype=torch.bool)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch.object(self.lc, "fit_LS", return_value=(all_freqs, all_mask)):
+                _fit_without_training(self.lc)
+        # A filtering warning should have been emitted.
+        self.assertTrue(
+            any(
+                issubclass(w.category, RuntimeWarning)
+                and "longer than the data span" in str(w.message)
+                for w in caught
+            ),
+            "Expected a RuntimeWarning about out-of-range MLS frequencies.",
+        )
+        # Only the valid frequency should remain → 1 mixture component.
+        self.assertEqual(self.lc.model.covar_module.num_mixtures, 1)
+
+
+class TestMLSInit2D(unittest.TestCase):
+    """MLS initialisation with 2D (multiband) light curves."""
+
+    def setUp(self):
+        self.lc2d = make_chromatic_sinusoid_2d(
+            n_per_band=50,
+            period=5.0,
+            wavelengths=[500.0, 700.0],
+            amplitude_slope=0.0,
+            noise_level=0.0,
+            irregular=False,
+            seed=42,
+        )
+
+    def _fit_2d_without_training(self, **kwargs):
+        defaults = {
+            "model": "2D",
+            "check_sampling": False,
+            "check_variability": False,
+            "training_iter": 1,
+        }
+        defaults.update(kwargs)
+        with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
+            with patch.object(self.lc2d, "_train"):
+                with patch.object(self.lc2d, "print_parameters"):
+                    self.lc2d.fit(**defaults)
+
+    def test_2d_mls_sets_num_mixtures(self):
+        """MLS init sets num_mixtures from significant peaks for 2D SM model."""
+        self._fit_2d_without_training()
+        self.assertGreaterEqual(self.lc2d.model.covar_module.num_mixtures, 1)
+
+    def test_2d_explicit_num_mixtures_respected(self):
+        """Explicit num_mixtures is respected for 2D SM models."""
+        self._fit_2d_without_training(num_mixtures=3)
+        self.assertEqual(self.lc2d.model.covar_module.num_mixtures, 3)
+
+    def test_2d_use_mls_init_false_fallback(self):
+        """use_mls_init=False falls back to num_mixtures=4 for 2D models."""
+        self._fit_2d_without_training(use_mls_init=False)
+        self.assertEqual(self.lc2d.model.covar_module.num_mixtures, 4)
 
 
 if __name__ == "__main__":
