@@ -1,5 +1,5 @@
-"""Tests for the get_default_priors, get_period_prior, and
-get_default_constraints companion methods."""
+"""Tests for the get_priors, get_period_prior, and
+get_constraints companion methods."""
 
 import contextlib
 import io
@@ -25,21 +25,21 @@ def _make_1d_lc(n=80, span_days=500.0, seed=0):
 
 
 # ---------------------------------------------------------------------------
-# Tests for get_default_priors
+# Tests for get_priors
 # ---------------------------------------------------------------------------
 
 
-class TestGetDefaultPriorsNotInitialised(unittest.TestCase):
-    """get_default_priors raises RuntimeError if model not set."""
+class TestGetPriorsNotInitialised(unittest.TestCase):
+    """get_priors raises RuntimeError if model not set."""
 
     def test_raises_runtime_error(self):
         lc = Lightcurve(torch.linspace(0, 100, 20), torch.randn(20))
         with self.assertRaises(RuntimeError):
-            lc.get_default_priors()
+            lc.get_priors()
 
 
-class TestGetDefaultPriorsSpectral(unittest.TestCase):
-    """get_default_priors on a SpectralMixture model after set_default_priors."""
+class TestGetPriorsSpectral(unittest.TestCase):
+    """get_priors on a SpectralMixture model after set_default_priors."""
 
     def setUp(self):
         self.lc = _make_1d_lc()
@@ -47,22 +47,22 @@ class TestGetDefaultPriorsSpectral(unittest.TestCase):
         self.lc.set_default_priors()
 
     def test_returns_dict(self):
-        result = self.lc.get_default_priors()
+        result = self.lc.get_priors()
         self.assertIsInstance(result, dict)
 
     def test_dict_is_nonempty(self):
-        result = self.lc.get_default_priors()
+        result = self.lc.get_priors()
         self.assertTrue(len(result) > 0)
 
     def test_mixture_means_prior_present(self):
-        result = self.lc.get_default_priors()
+        result = self.lc.get_priors()
         keys = list(result.keys())
         self.assertTrue(any("mixture_means_prior" in k for k in keys))
 
     def test_prints_output(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            self.lc.get_default_priors()
+            self.lc.get_priors()
         output = buf.getvalue()
         self.assertIn("Registered priors:", output)
         self.assertIn("mixture_means_prior", output)
@@ -73,7 +73,7 @@ class TestGetDefaultPriorsSpectral(unittest.TestCase):
         lc.set_model("1D", num_mixtures=2)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            lc.get_default_priors()
+            lc.get_priors()
         output = buf.getvalue()
         self.assertIn("(none)", output)
 
@@ -167,21 +167,21 @@ class TestGetPeriodPriorNoPeriodicity(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests for get_default_constraints
+# Tests for get_constraints
 # ---------------------------------------------------------------------------
 
 
-class TestGetDefaultConstraintsNotInitialised(unittest.TestCase):
-    """get_default_constraints raises RuntimeError if model not set."""
+class TestGetConstraintsNotInitialised(unittest.TestCase):
+    """get_constraints raises RuntimeError if model not set."""
 
     def test_raises_runtime_error(self):
         lc = Lightcurve(torch.linspace(0, 100, 20), torch.randn(20))
         with self.assertRaises(RuntimeError):
-            lc.get_default_constraints()
+            lc.get_constraints()
 
 
-class TestGetDefaultConstraintsSpectral(unittest.TestCase):
-    """get_default_constraints on a SpectralMixture model after
+class TestGetConstraintsSpectral(unittest.TestCase):
+    """get_constraints on a SpectralMixture model after
     set_default_constraints."""
 
     def setUp(self):
@@ -190,22 +190,22 @@ class TestGetDefaultConstraintsSpectral(unittest.TestCase):
         self.lc.set_default_constraints()
 
     def test_returns_dict(self):
-        result = self.lc.get_default_constraints()
+        result = self.lc.get_constraints()
         self.assertIsInstance(result, dict)
 
     def test_dict_is_nonempty(self):
-        result = self.lc.get_default_constraints()
+        result = self.lc.get_constraints()
         self.assertTrue(len(result) > 0)
 
     def test_mixture_means_constraint_present(self):
-        result = self.lc.get_default_constraints()
+        result = self.lc.get_constraints()
         keys = list(result.keys())
         self.assertTrue(any("mixture_means" in k for k in keys))
 
     def test_prints_output(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            self.lc.get_default_constraints()
+            self.lc.get_constraints()
         output = buf.getvalue()
         self.assertIn("Registered constraints:", output)
         self.assertIn("mixture_means", output)
@@ -221,7 +221,7 @@ class TestGetDefaultConstraintsSpectral(unittest.TestCase):
         lc.set_model("1D", num_mixtures=2)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            lc.get_default_constraints()
+            lc.get_constraints()
         output = buf.getvalue()
         self.assertIn("Registered constraints:", output)
 

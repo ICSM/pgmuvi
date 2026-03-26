@@ -1609,7 +1609,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # let's see if this works!
         self.__PRIORS_SET = True
 
-    def get_default_priors(self):
+    def get_priors(self):
         """Return the priors currently registered on the model.
 
         Iterates over all priors registered on the model (via GPyTorch's
@@ -1640,12 +1640,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             lc.set_model("1D", num_mixtures=4)
             lc.set_default_priors()
-            priors = lc.get_default_priors()
+            priors = lc.get_priors()
         """
         if not hasattr(self, "_model_pars"):
             raise RuntimeError(
                 "Model has not been set yet. Call set_model() before "
-                "get_default_priors()."
+                "get_priors()."
             )
         priors = {}
         for name, _module, prior, _closure, _setting_closure in (
@@ -1939,7 +1939,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         See Also
         --------
         set_period_prior
-        get_default_priors
+        get_priors
 
         Examples
         --------
@@ -2229,7 +2229,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # to-do - check if constraints on mixture scales are useful!
         self.__CONTRAINTS_SET = True
 
-    def get_default_constraints(self):
+    def get_constraints(self):
         """Return the constraints currently registered on the model.
 
         Iterates over all constraints registered on the model (via GPyTorch's
@@ -2259,12 +2259,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             lc.set_model("1D", num_mixtures=4)
             lc.set_default_constraints()
-            constraints = lc.get_default_constraints()
+            constraints = lc.get_constraints()
         """
         if not hasattr(self, "_model_pars"):
             raise RuntimeError(
                 "Model has not been set yet. Call set_model() before "
-                "get_default_constraints()."
+                "get_constraints()."
             )
         constraints = {}
         for name, constraint in self.model.named_constraints():
