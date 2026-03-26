@@ -14,6 +14,7 @@ from pgmuvi.synthetic import (
     make_simple_sinusoid_1d,
 )
 from pgmuvi.synthetic import _resolve_n_per_band  # internal helper
+from pgmuvi.synthetic import _DEFAULT_TSPAN_FACTOR  # internal constant
 
 
 class TestResolveNPerBand(unittest.TestCase):
@@ -641,6 +642,86 @@ class TestYerrPopulated(unittest.TestCase):
         """With noise_level=0, yerr should not be set."""
         lc = make_multi_sinusoid_chromatic_2d(noise_level=0.0, seed=0)
         self.assertIsNone(getattr(lc, "yerr", None))
+
+
+class TestDefaultTSpan(unittest.TestCase):
+    """Tests that t_span=None computes the span from _DEFAULT_TSPAN_FACTOR * period."""
+
+    def test_simple_sinusoid_1d_default_tspan(self):
+        """make_simple_sinusoid_1d: default t_span == _DEFAULT_TSPAN_FACTOR * period."""
+        period = 50.0
+        lc = make_simple_sinusoid_1d(
+            period=period, n_obs=100, noise_level=0.0, irregular=False, seed=0
+        )
+        expected_span = _DEFAULT_TSPAN_FACTOR * period
+        actual_span = lc.xdata.max().item() - lc.xdata.min().item()
+        self.assertAlmostEqual(actual_span, expected_span, places=3)
+
+    def test_simple_sinusoid_1d_explicit_tspan_unchanged(self):
+        """Explicit t_span is used as-is (not scaled by factor)."""
+        lc = make_simple_sinusoid_1d(
+            period=50.0, t_span=200.0, n_obs=100, noise_level=0.0,
+            irregular=False, seed=0,
+        )
+        actual_span = lc.xdata.max().item() - lc.xdata.min().item()
+        self.assertAlmostEqual(actual_span, 200.0, places=3)
+
+    def test_multi_sinusoid_1d_default_tspan_uses_max_period(self):
+        """make_multi_sinusoid_1d: default t_span == factor * max(component periods)."""
+        components = [
+            {"period": 5.0, "amplitude": 1.0, "phase": 0.0},
+            {"period": 12.0, "amplitude": 0.5, "phase": 0.0},
+            {"period": 3.0, "amplitude": 0.3, "phase": 0.0},
+        ]
+        lc = make_multi_sinusoid_1d(
+            components=components, n_obs=100, noise_level=0.0,
+            irregular=False, seed=0,
+        )
+        expected_span = _DEFAULT_TSPAN_FACTOR * 12.0
+        actual_span = lc.xdata.max().item() - lc.xdata.min().item()
+        self.assertAlmostEqual(actual_span, expected_span, places=3)
+
+    def test_chromatic_sinusoid_2d_default_tspan(self):
+        """make_chromatic_sinusoid_2d: default t_span == factor * period."""
+        period = 200.0
+        lc = make_chromatic_sinusoid_2d(
+            period=period, n_per_band=50, noise_level=0.0,
+            irregular=False, seed=0,
+        )
+        expected_span = _DEFAULT_TSPAN_FACTOR * period
+        # xdata[:, 0] is time; check span per band
+        times = lc.xdata[:, 0]
+        actual_span = times.max().item() - times.min().item()
+        self.assertAlmostEqual(actual_span, expected_span, places=3)
+
+    def test_multi_sinusoid_chromatic_2d_default_tspan_uses_max_period(self):
+        """make_multi_sinusoid_chromatic_2d: default t_span uses max period."""
+        components = [
+            {"period": 400.0, "amplitude_fraction": 0.4, "phase": 0.0},
+            {"period": 200.0, "amplitude_fraction": 0.1, "phase": 0.0},
+        ]
+        lc = make_multi_sinusoid_chromatic_2d(
+            components=components, n_per_band=50, noise_level=0.0,
+            irregular=False, seed=0,
+        )
+        expected_span = _DEFAULT_TSPAN_FACTOR * 400.0
+        times = lc.xdata[:, 0]
+        actual_span = times.max().item() - times.min().item()
+        self.assertAlmostEqual(actual_span, expected_span, places=3)
+
+
+class TestEmptyComponentsValidation(unittest.TestCase):
+    """Tests that passing an empty components list raises a clear ValueError."""
+
+    def test_multi_sinusoid_1d_empty_components_raises(self):
+        """make_multi_sinusoid_1d: components=[] raises ValueError."""
+        with self.assertRaises(ValueError):
+            make_multi_sinusoid_1d(components=[], seed=0)
+
+    def test_multi_sinusoid_chromatic_2d_empty_components_raises(self):
+        """make_multi_sinusoid_chromatic_2d: components=[] raises ValueError."""
+        with self.assertRaises(ValueError):
+            make_multi_sinusoid_chromatic_2d(components=[], seed=0)
 
 
 if __name__ == "__main__":

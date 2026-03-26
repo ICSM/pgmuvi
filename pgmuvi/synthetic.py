@@ -466,6 +466,12 @@ def make_multi_sinusoid_1d(
             {"period": 7.0, "amplitude": 0.3, "phase": 2 * math.pi / 3},
         ]
 
+    if not components:
+        raise ValueError(
+            "'components' must be a non-empty sequence of dicts with "
+            "'period', 'amplitude', and 'phase' keys."
+        )
+
     for i, comp in enumerate(components):
         missing = [k for k in ("period", "amplitude", "phase") if k not in comp]
         if missing:
