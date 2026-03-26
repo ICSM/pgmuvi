@@ -935,7 +935,7 @@ def _make_qp_kernel(period):
     return ScaleKernel(ProductKernel(periodic_k, rbf_k))
 
 
-def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=False, **kwargs):
+def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_flicker=False, **kwargs):
     """Build a time kernel from a string name or a Kernel instance.
 
     Parameters
@@ -956,10 +956,11 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=F
         Initial period for the quasi-periodic option. Ignored for other types.
     num_mixtures : int, optional
         Number of mixture components for ``'spectral_mixture'``.  Default 4.
-    add_red_noise : bool, optional
+    add_flicker : bool, optional
         When ``True`` and ``time_kernel_type`` is ``'spectral_mixture'``/``'sm'``,
-        an additional ``ScaleKernel(RBFKernel)`` red-noise component is added to
-        the spectral-mixture kernel.  Default ``False``.
+        an additional ``ScaleKernel(RBFKernel)`` flicker component is added to
+        the spectral-mixture kernel to capture short-timescale stochastic
+        variability unrelated to the periodic signal.  Default ``False``.
 
         .. warning::
             This is a work-in-progress feature whose stability has not yet been
@@ -969,13 +970,6 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=F
     -------
     gpytorch.kernels.Kernel
     """
-    if add_red_noise:
-        warnings.warn(
-            "add_red_noise=True is a work-in-progress feature whose stability "
-            "has not yet been confirmed. Use with caution.",
-            UserWarning,
-            stacklevel=2,
-        )
     if isinstance(time_kernel_type, gpt.kernels.Kernel):
         warnings.warn(
             "A Kernel instance was supplied for time_kernel_type. "
@@ -993,7 +987,13 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=F
         return ScaleKernel(RBFKernel())
     if time_kernel_type in ("spectral_mixture", "sm"):
         # SMK incorporates its own output scale; no wrapping ScaleKernel needed.
-        if add_red_noise:
+        if add_flicker:
+            warnings.warn(
+                "add_flicker=True is a work-in-progress feature whose stability "
+                "has not yet been confirmed. Use with caution.",
+                UserWarning,
+                stacklevel=2,
+            )
             return SMK(num_mixtures=num_mixtures, ard_num_dims=1) + ScaleKernel(RBFKernel(ard_num_dims=1))
         return SMK(num_mixtures=num_mixtures, ard_num_dims=1)
     raise ValueError(
@@ -1511,9 +1511,11 @@ class WavelengthDependentGPModel(SeparableGPModel):
     num_mixtures : int, optional
         Number of mixture components when ``time_kernel_type='spectral_mixture'``.
         Default 4.
-    add_red_noise : bool, optional
+    add_flicker : bool, optional
         When ``True`` and ``time_kernel_type`` is ``'spectral_mixture'``/``'sm'``,
-        an additional red-noise component is added to the spectral-mixture kernel.
+        an additional flicker component is added to the spectral-mixture kernel
+        to capture short-timescale stochastic variability unrelated to the
+        periodic signal of interest.
         Default ``False``.
 
         .. warning::
@@ -1566,7 +1568,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
         wavelength_lengthscale=None,
         num_mixtures=4,
         mean_module=None,
-        add_red_noise=False,
+        add_flicker=False,
         wavelength_scaling='constant',
         **kwargs
     ):
@@ -1602,7 +1604,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
             )
 
 
-        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures, add_red_noise=add_red_noise)
+        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures, add_flicker=add_flicker)
         wl_kernel = _build_wavelength_kernel(
             wavelength_kernel_type, wavelength_lengthscale, scaling=wavelength_scaling
         )
