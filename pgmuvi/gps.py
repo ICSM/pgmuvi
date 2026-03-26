@@ -251,7 +251,7 @@ class SpectralMixtureLinearMeanGPModel(ExactGP):
 
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
         super().__init__(train_x, train_y, likelihood)
-        self.mean_module = LinearMean()
+        self.mean_module = LinearMean(input_size=1)
         self.covar_module = SMK(num_mixtures=num_mixtures)
         self.covar_module.initialize_from_data(train_x, train_y)
 
@@ -470,7 +470,7 @@ class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=2000):
         super().__init__(train_x, train_y, likelihood)
-        self.mean_module = LinearMean()
+        self.mean_module = LinearMean(input_size=1)
         self.covar_module = GIK(SMK(num_mixtures=num_mixtures), grid_size=grid_size)
         self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 
@@ -934,7 +934,7 @@ def _make_qp_kernel(period):
     return ScaleKernel(ProductKernel(periodic_k, rbf_k))
 
 
-def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=True, **kwargs):
+def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=False, **kwargs):
     """Build a time kernel from a string name or a Kernel instance.
 
     Parameters
@@ -1544,7 +1544,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
         wavelength_lengthscale=None,
         num_mixtures=4,
         mean_module=None,
-        add_red_noise=True,
+        add_red_noise=False,
         wavelength_scaling='constant',
         **kwargs
     ):

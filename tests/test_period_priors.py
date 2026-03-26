@@ -446,21 +446,21 @@ class TestSetPeriodPriorSpectralMixture(unittest.TestCase):
         self.assertAlmostEqual(prior.loc.item(), -5.0, places=4)
 
     def test_lpv_prior_truncates_short_periods(self):
-        """Frequencies corresponding to period < 100 days get -inf."""
+        """Frequencies corresponding to period < 20 days get -inf."""
         self.lc.set_period_prior(prior_set="LPV")
         module = self.lc._model_pars["mixture_means"]["module"]
         prior = module._priors["mixture_means_prior"][0]
-        # period = 50 days < lower = 100 days -> -inf
-        f_short = torch.tensor(1.0 / 50.0)
+        # period = 10 days < lower = 20 days -> -inf
+        f_short = torch.tensor(1.0 / 10.0)
         lp = prior.log_prob(f_short)
         self.assertTrue(torch.isinf(lp) and lp < 0)
 
     def test_lpv_prior_allows_long_periods(self):
-        """Frequencies corresponding to period >= 100 days are finite."""
+        """Frequencies corresponding to period >= 20 days are finite."""
         self.lc.set_period_prior(prior_set="LPV")
         module = self.lc._model_pars["mixture_means"]["module"]
         prior = module._priors["mixture_means_prior"][0]
-        # period = 150 days > lower = 100 days -> finite
+        # period = 150 days > lower = 20 days -> finite
         f_ok = torch.tensor(1.0 / 150.0)
         lp = prior.log_prob(f_ok)
         self.assertTrue(torch.isfinite(lp))
@@ -548,7 +548,7 @@ class TestSetPeriodPriorQuasiPeriodic(unittest.TestCase):
         self.assertAlmostEqual(prior.loc.item(), 5.0, places=4)
 
     def test_lpv_prior_lower_bound(self):
-        """LPV lower_bound is derived from the 100-day period limit."""
+        """LPV lower_bound is derived from the 20-day period limit."""
         self.lc.set_period_prior(prior_set="LPV")
         period_keys = [
             k for k in self.lc._model_pars
@@ -556,8 +556,8 @@ class TestSetPeriodPriorQuasiPeriodic(unittest.TestCase):
         ]
         module = self.lc._model_pars[period_keys[0]]["module"]
         prior = module._priors["period_length_prior"][0]
-        # No xtransform, so lower_bound should be 100.0
-        self.assertAlmostEqual(prior.lower_bound, 100.0, places=4)
+        # No xtransform, so lower_bound should be 20.0
+        self.assertAlmostEqual(prior.lower_bound, 20.0, places=4)
 
     def test_period_below_lower_gets_neginf(self):
         """Periods below lower_bound get -inf log_prob."""
@@ -568,7 +568,7 @@ class TestSetPeriodPriorQuasiPeriodic(unittest.TestCase):
         ]
         module = self.lc._model_pars[period_keys[0]]["module"]
         prior = module._priors["period_length_prior"][0]
-        lp = prior.log_prob(torch.tensor(50.0))
+        lp = prior.log_prob(torch.tensor(10.0))
         self.assertTrue(torch.isinf(lp) and lp < 0)
 
     def test_normal_period_prior(self):

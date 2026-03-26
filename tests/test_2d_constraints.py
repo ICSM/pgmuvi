@@ -65,15 +65,16 @@ class Test2DConstraintSetup(unittest.TestCase):
         self.assertIn('raw_mixture_means_constraint', mixture_means_module._constraints)
 
     def test_constraint_type_is_greater_than(self):
-        """Test that the constraint is GreaterThan for 2D data"""
+        """Test that the constraint is Interval for 2D data (bounded above by Nyquist)"""
         # Use Lightcurve.set_model which handles initialization properly
         self.lightcurve_2d.set_model('2D', likelihood=None, num_mixtures=2)
         self.lightcurve_2d.set_default_constraints()
 
-        # Check constraint type
+        # Check constraint type — 2D uses Interval to enforce both a lower
+        # frequency bound (period ≤ data span) and an upper bound (Nyquist)
         # GPyTorch adds _constraint suffix
         constraint = self.lightcurve_2d._model_pars['mixture_means']['module']._constraints['raw_mixture_means_constraint']
-        self.assertIsInstance(constraint, GreaterThan)
+        self.assertIsInstance(constraint, Interval)
 
 
 class Test2DHyperparameterTransforms(unittest.TestCase):
