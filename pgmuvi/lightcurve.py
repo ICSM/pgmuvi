@@ -3501,23 +3501,43 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             _extra = num_mixtures - n_sig
                             _available_insig = ls_insig_freqs[:_extra]
                             _init_freqs = torch.cat([ls_sig_freqs, _available_insig])
-                            # Pad with evenly-spaced frequencies if still short.
+                            # Pad with additional frequencies if still short.
                             _n_pad = num_mixtures - len(_init_freqs)
-                            if _n_pad > 0 and _freq_upper > _freq_lower:
-                                warnings.warn(
-                                    f"Only {len(_init_freqs)} MLS peak(s) found but "
-                                    f"{num_mixtures} were requested. Padding with "
-                                    f"{_n_pad} evenly-spaced frequencies in "
-                                    f"[{_freq_lower:.4g}, {_freq_upper:.4g}].",
-                                    RuntimeWarning,
-                                    stacklevel=2,
-                                )
-                                _pad = torch.linspace(
-                                    _freq_lower,
-                                    _freq_upper,
-                                    _n_pad + 2,
-                                    dtype=_init_freqs.dtype,
-                                )[1:-1]
+                            if _n_pad > 0:
+                                # Determine padding interval as the intersection of
+                                # the data-based frequency range and any
+                                # constraint-set bounds.
+                                _pad_lower = _freq_lower
+                                _pad_upper = _freq_upper
+                                if _cs_freq_lower > 0:
+                                    _pad_lower = max(_pad_lower, _cs_freq_lower)
+                                    _pad_upper = min(_pad_upper, _cs_freq_upper)
+                                if _pad_upper > _pad_lower:
+                                    warnings.warn(
+                                        f"Only {len(_init_freqs)} MLS peak(s) found but "
+                                        f"{num_mixtures} were requested. Padding with "
+                                        f"{_n_pad} evenly-spaced frequencies in "
+                                        f"[{_pad_lower:.4g}, {_pad_upper:.4g}].",
+                                        RuntimeWarning,
+                                        stacklevel=2,
+                                    )
+                                    _pad = torch.linspace(
+                                        _pad_lower,
+                                        _pad_upper,
+                                        _n_pad + 2,
+                                        dtype=_init_freqs.dtype,
+                                    )[1:-1]
+                                else:
+                                    warnings.warn(
+                                        "Could not construct a valid frequency range "
+                                        "for padding MLS initialisation; repeating the "
+                                        "last available MLS frequency to reach the "
+                                        f"requested num_mixtures={num_mixtures}.",
+                                        RuntimeWarning,
+                                        stacklevel=2,
+                                    )
+                                    _last_freq = _init_freqs[-1]
+                                    _pad = _init_freqs.new_full((_n_pad,), _last_freq)
                                 _init_freqs = torch.cat([_init_freqs, _pad])
                 else:
                     # MLS found no peaks at all.
