@@ -3361,11 +3361,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         #     self.set_likelihood(likelihood, **kwargs)
 
         # Validate explicitly-provided num_mixtures early.
-        if num_mixtures is not None and num_mixtures < 1:
-            raise ValueError(
-                "`num_mixtures` must be a positive integer or None, "
-                f"got {num_mixtures}."
-            )
+        if num_mixtures is not None:
+            # Must be a (non-bool) integer and strictly positive.
+            if isinstance(num_mixtures, bool) or not isinstance(
+                num_mixtures, int
+            ):
+                raise TypeError(
+                    "`num_mixtures` must be a positive integer or None, "
+                    f"got {num_mixtures!r} of type {type(num_mixtures)!r}."
+                )
+            if num_mixtures < 1:
+                raise ValueError(
+                    "`num_mixtures` must be a positive integer or None, "
+                    f"got {num_mixtures}."
+                )
 
         # --- MLS-based initialisation ---
         _init_freqs = None  # frequencies (raw units) to seed the SM kernel
