@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import torch as t
 import gpytorch as gpt
@@ -934,7 +935,7 @@ def _make_qp_kernel(period):
     return ScaleKernel(ProductKernel(periodic_k, rbf_k))
 
 
-def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=True, **kwargs):
+def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=False, **kwargs):
     """Build a time kernel from a string name or a Kernel instance.
 
     Parameters
@@ -955,14 +956,27 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=T
         Initial period for the quasi-periodic option. Ignored for other types.
     num_mixtures : int, optional
         Number of mixture components for ``'spectral_mixture'``.  Default 4.
+    add_red_noise : bool, optional
+        When ``True`` and ``time_kernel_type`` is ``'spectral_mixture'``/``'sm'``,
+        an additional ``ScaleKernel(RBFKernel)`` red-noise component is added to
+        the spectral-mixture kernel.  Default ``False``.
+
+        .. warning::
+            This is a work-in-progress feature whose stability has not yet been
+            confirmed.  A ``UserWarning`` is raised when this option is enabled.
 
     Returns
     -------
     gpytorch.kernels.Kernel
     """
-    # red_noise_kernel = ScaleKernel(RBFKernel(ard_num_dims=1)) if add_red_noise else None
+    if add_red_noise:
+        warnings.warn(
+            "add_red_noise=True is a work-in-progress feature whose stability "
+            "has not yet been confirmed. Use with caution.",
+            UserWarning,
+            stacklevel=2,
+        )
     if isinstance(time_kernel_type, gpt.kernels.Kernel):
-        import warnings
         warnings.warn(
             "A Kernel instance was supplied for time_kernel_type. "
             "Ensure this kernel is appropriate for the time (first) dimension "
@@ -1497,6 +1511,14 @@ class WavelengthDependentGPModel(SeparableGPModel):
     num_mixtures : int, optional
         Number of mixture components when ``time_kernel_type='spectral_mixture'``.
         Default 4.
+    add_red_noise : bool, optional
+        When ``True`` and ``time_kernel_type`` is ``'spectral_mixture'``/``'sm'``,
+        an additional red-noise component is added to the spectral-mixture kernel.
+        Default ``False``.
+
+        .. warning::
+            This is a work-in-progress feature whose stability has not yet been
+            confirmed.  A ``UserWarning`` is raised when this option is enabled.
     mean_module : str or gpytorch.means.Mean, optional
         Mean function for the GP.  Accepted string values:
 
@@ -1544,7 +1566,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
         wavelength_lengthscale=None,
         num_mixtures=4,
         mean_module=None,
-        add_red_noise=True,
+        add_red_noise=False,
         wavelength_scaling='constant',
         **kwargs
     ):
