@@ -2300,9 +2300,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             the maximum in the resulting periodogram.
         - fap_method: str or None, optional, default=None
             Method used to compute the false-alarm probability (FAP).
-            For 1D lightcurves the default is ``'baluev'`` (fast analytical
-            approximation; see astropy docs for other valid options such as
-            ``'davies'`` or ``'bootstrap'``).
+            For 1D lightcurves the default is ``'davies'`` (fast analytical
+            upper bound; equivalent to ``'baluev'`` for practical purposes
+            but significantly faster). Other valid astropy options are
+            ``'baluev'`` and ``'bootstrap'``.
             For multi-band lightcurves the default is ``'analytical'`` (fast
             Baluev-style approximation).  Slower but more accurate options
             are ``'bootstrap'``, ``'phase_scramble'``, and ``'calibrated'``
@@ -2464,8 +2465,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         else:
             t, y = self.xdata, self.ydata
 
-            # Default FAP method for single-band: 'baluev' (fast analytical)
-            _fap_method = fap_method if fap_method is not None else 'baluev'
+            # Default FAP method for single-band: 'davies' (fast analytical
+            # upper bound; same accuracy as 'baluev' for typical use cases
+            # but much faster). 'baluev' is another good analytical choice.
+            _fap_method = fap_method if fap_method is not None else 'davies'
 
             has_yerr = (
                 hasattr(self, "_yerr_transformed")
@@ -2481,7 +2484,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 t, y = t[mask], y[mask]
                 LS = LombScargle(t, y)
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
-            power = LS.power(freq)
+            # assume_regular_frequency=True: autofrequency() always produces
+            # a regular grid, so skip the regularity check for a minor speedup
+            power = LS.power(freq, assume_regular_frequency=True)
             if freq_only:
                 return (
                     torch.as_tensor(

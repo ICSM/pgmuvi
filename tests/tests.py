@@ -324,8 +324,8 @@ class TestFitLS(unittest.TestCase):
 
     def test_fap_method_parameter_1d(self):
         """Test that fap_method parameter is accepted and affects results"""
-        # 'baluev' is the default; both should return valid results
-        for method in ('baluev', 'davies'):
+        # 'davies' is the default; all should return valid results
+        for method in ('baluev', 'davies', 'single'):
             freq, mask = self.lc_with_yerr.fit_LS(
                 num_peaks=1, fap_method=method
             )
