@@ -3182,20 +3182,30 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             parameter, it will be ignored.
         periods : array-like or None, optional
             Initial guesses for the periods (in the same units as the
-            lightcurve time axis).  When provided, the MLS initialisation is
-            skipped entirely: ``num_mixtures`` is set to the number of
-            supplied periods and the spectral-mixture kernel frequencies are
-            initialised from these values.  If both ``periods`` and ``guess``
-            are supplied, entries in ``guess`` take priority over the
-            period-derived frequencies.
+            lightcurve time axis).  When provided for 1D spectral-mixture
+            kernels (i.e. when ``ard_num_dims == 1``), the MLS
+            initialisation is skipped entirely: ``num_mixtures`` is set to
+            the number of supplied periods and the spectral-mixture kernel
+            frequencies are initialised from these values.  If both
+            ``periods`` and ``guess`` are supplied, entries in ``guess`` take
+            priority over the period-derived frequencies.  For multi-
+            dimensional spectral-mixture models (e.g. 2D kernels), the
+            current implementation does not use ``periods`` to seed mixture
+            means; in those cases, only explicit initial values provided via
+            ``guess`` (or the model's own defaults) will be used.
         use_mls_init : bool, optional
-            If ``True`` (default) and ``periods`` is ``None`` and a spectral
-            mixture model string is given, the Multiband Lomb-Scargle (MLS)
-            periodogram is run first to estimate the number of significant
-            periods and their frequencies, which are used as initial guesses
-            for the spectral-mixture kernel.  Set to ``False`` to disable
-            this behaviour and fall back to GPyTorch's
-            ``initialize_from_data``.
+            If ``True`` (default) and ``periods`` is ``None`` and a 1D
+            spectral-mixture model string is given (``ard_num_dims == 1``),
+            the Multiband Lomb-Scargle (MLS) periodogram is run first to
+            estimate the number of significant periods and their frequencies,
+            which are used as initial guesses for the spectral-mixture kernel
+            frequencies.  Set to ``False`` to disable this behaviour and, for
+            models that call it, fall back to GPyTorch's
+            ``initialize_from_data``.  Note that several 2D spectral-mixture
+            models do not currently call ``initialize_from_data`` at all, so
+            for those models MLS-based or period-based frequency seeding is
+            not applied and the underlying GPyTorch defaults are used
+            instead.
         grid_size : int, optional
             The number of points to use in the grid for the KISS-GP models,
             by default 2000.
