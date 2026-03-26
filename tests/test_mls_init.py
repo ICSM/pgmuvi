@@ -283,12 +283,20 @@ class TestMLSInitMLSFallback(unittest.TestCase):
         )
 
     def test_mls_no_peaks_falls_back_to_4(self):
-        """If fit_LS returns no peaks, num_mixtures falls back to 4."""
+        """If fit_LS returns no peaks, num_mixtures falls back to 4 with a warning."""
         empty_freqs = torch.tensor([], dtype=torch.float32)
         empty_mask = torch.tensor([], dtype=torch.bool)
-        with patch.object(self.lc, "fit_LS", return_value=(empty_freqs, empty_mask)):
-            _fit_without_training(self.lc)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch.object(
+                self.lc, "fit_LS", return_value=(empty_freqs, empty_mask)
+            ):
+                _fit_without_training(self.lc)
         self.assertEqual(self.lc.model.covar_module.num_mixtures, 4)
+        self.assertTrue(
+            any(issubclass(w.category, RuntimeWarning) for w in caught),
+            "Expected a RuntimeWarning when MLS finds no peaks.",
+        )
 
     def test_mls_no_significant_peaks_uses_1(self):
         """If no significant peaks, uses the single strongest peak (num_mixtures=1)."""

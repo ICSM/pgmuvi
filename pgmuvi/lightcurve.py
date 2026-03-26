@@ -3552,7 +3552,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                     _pad = _init_freqs.new_full((_n_pad,), _last_freq)
                                 _init_freqs = torch.cat([_init_freqs, _pad])
                 else:
-                    # MLS found no peaks at all.
+                    # MLS found no peaks at all; warn and fall back.
+                    warnings.warn(
+                        "MLS periodogram returned no peaks; falling back to "
+                        "num_mixtures=4.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
                     if num_mixtures is None:
                         num_mixtures = 4
             except Exception as exc:
