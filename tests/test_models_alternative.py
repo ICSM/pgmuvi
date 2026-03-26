@@ -360,6 +360,90 @@ class TestWavelengthDependentGPModel(unittest.TestCase):
             SeparableGPModel,
         )
 
+    def test_add_red_noise_default_is_false_no_warning(self):
+        """Default add_red_noise=False emits no UserWarning."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2
+            )
+        red_noise_warnings = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "add_red_noise" in str(w.message)
+        ]
+        self.assertEqual(len(red_noise_warnings), 0)
+
+    def test_add_red_noise_true_emits_warning(self):
+        """add_red_noise=True emits a UserWarning about WIP status."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2,
+                add_red_noise=True,
+            )
+        red_noise_warnings = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "add_red_noise" in str(w.message)
+        ]
+        self.assertEqual(len(red_noise_warnings), 1)
+        self.assertIn("work-in-progress", str(red_noise_warnings[0].message))
+
+    def test_add_red_noise_false_kernel_is_pure_smk(self):
+        """Without red noise the time kernel is a bare SpectralMixtureKernel."""
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        import warnings
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            model = WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2,
+                add_red_noise=False,
+            )
+        time_k = model.covar_module.kernels[0]
+        self.assertIsInstance(time_k, gpytorch.kernels.SpectralMixtureKernel)
+
+    def test_add_red_noise_true_kernel_is_additive(self):
+        """With red noise the time kernel is SMK + ScaleKernel(RBF)."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            model = WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2,
+                add_red_noise=True,
+            )
+        time_k = model.covar_module.kernels[0]
+        self.assertIsInstance(time_k, gpytorch.kernels.AdditiveKernel)
+        sub_kernels = time_k.kernels
+        self.assertIsInstance(sub_kernels[0], gpytorch.kernels.SpectralMixtureKernel)
+        self.assertIsInstance(sub_kernels[1], gpytorch.kernels.ScaleKernel)
+        self.assertIsInstance(sub_kernels[1].base_kernel, gpytorch.kernels.RBFKernel)
+
+    def test_add_red_noise_true_forward_shape(self):
+        """Model with add_red_noise=True produces predictions of correct shape."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            model = WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2,
+                add_red_noise=True,
+            )
+        model.eval()
+        with torch.no_grad():
+            pred = model(self.x)
+        self.assertEqual(pred.mean.shape, self.y.shape)
+
 
 class TestLinearMeanQuasiPeriodicGPModel(unittest.TestCase):
     """Tests for LinearMeanQuasiPeriodicGPModel."""
