@@ -351,6 +351,14 @@ class Test2DValidationSeparableModels(unittest.TestCase):
         lc = self._make_lc("2DSeparable")
         lc._validate_2d_setup()  # should not raise
 
+    def test_separable_model_active_dims(self):
+        """SeparableGPModel: time kernel (kernels[0]) uses dim 0, wavelength kernel (kernels[1]) uses dim 1."""
+        lc = self._make_lc("2DSeparable")
+        time_kernel = lc.model.covar_module.kernels[0]
+        wl_kernel = lc.model.covar_module.kernels[1]
+        self.assertEqual(time_kernel.active_dims.tolist(), [0])
+        self.assertEqual(wl_kernel.active_dims.tolist(), [1])
+
     def test_achromatic_model_passes_validation(self):
         """2DAchromatic should not raise in _validate_2d_setup."""
         lc = self._make_lc("2DAchromatic")
