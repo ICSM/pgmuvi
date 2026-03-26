@@ -3336,6 +3336,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _periods_tensor = torch.as_tensor(
                 periods, dtype=self._xdata_raw.dtype
             ).flatten()
+
+            # Validate user-supplied periods: must be non-empty, finite, and > 0
+            if _periods_tensor.numel() == 0:
+                raise ValueError(
+                    "When providing explicit `periods`, the sequence must be "
+                    "non-empty."
+                )
+            if not torch.isfinite(_periods_tensor).all():
+                raise ValueError(
+                    "All values in `periods` must be finite (no NaN or inf)."
+                )
+            if not (_periods_tensor > 0).all():
+                raise ValueError(
+                    "All values in `periods` must be strictly positive."
+                )
             _init_freqs = 1.0 / _periods_tensor
             num_mixtures = len(_init_freqs)
         elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
