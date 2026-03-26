@@ -68,6 +68,14 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+#: Multiplier applied to the (maximum) period to compute the default ``t_span``
+#: when ``t_span=None`` is passed to any generator function.
+_DEFAULT_TSPAN_FACTOR: float = 2.3
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -299,13 +307,13 @@ def _apply_noise(
 
 def make_simple_sinusoid_1d(
     n_obs: int = 80,
-    period: float = 5.0,
+    period: float = 150.0,
     amplitude: float = 1.0,
     phase: float = 0.0,
     noise_level: float = 0.1,
     noise_type: str | None = "poisson",
     t_min: float = 0.0,
-    t_span: float = 20.0,
+    t_span: float | None = None,
     irregular: bool = False,
     seed: int | None = None,
 ) -> Lightcurve:
@@ -320,7 +328,8 @@ def make_simple_sinusoid_1d(
     n_obs:
         Number of observations.
     period:
-        Period of the sinusoid (same units as *t_span*).
+        Period of the sinusoid, in the same units as *t_span* (typically
+        days). Defaults to ``150.0``.
     amplitude:
         Peak amplitude *A*.
     phase:
@@ -337,7 +346,8 @@ def make_simple_sinusoid_1d(
     t_min:
         Start time of the observation window.
     t_span:
-        Total time span of the observations.
+        Total time span of the observations.  If ``None`` (default) the span
+        is set to ``_DEFAULT_TSPAN_FACTOR * period``.
     irregular:
         If ``True`` the observation times are drawn uniformly at random from
         ``[t_min, t_min + t_span]`` and then sorted.  If ``False`` (default)
@@ -359,6 +369,8 @@ def make_simple_sinusoid_1d(
     """
     from pgmuvi.lightcurve import Lightcurve
 
+    if t_span is None:
+        t_span = _DEFAULT_TSPAN_FACTOR * period
     rng = _rng(seed)
     t = _make_times(n_obs, t_min, t_span, irregular, rng)
     y = amplitude * np.sin(2 * math.pi * t / period + phase)
@@ -376,7 +388,7 @@ def make_multi_sinusoid_1d(
     noise_level: float = 0.1,
     noise_type: str | None = "poisson",
     t_min: float = 0.0,
-    t_span: float = 20.0,
+    t_span: float | None = None,
     irregular: bool = False,
     seed: int | None = None,
 ) -> Lightcurve:
@@ -418,7 +430,8 @@ def make_multi_sinusoid_1d(
     t_min:
         Start time.
     t_span:
-        Total time span.
+        Total time span.  If ``None`` (default) the span is set to
+        ``_DEFAULT_TSPAN_FACTOR * max(period)`` across all components.
     irregular:
         If ``True`` observation times are randomly sampled.
     seed:
@@ -453,6 +466,12 @@ def make_multi_sinusoid_1d(
             {"period": 7.0, "amplitude": 0.3, "phase": 2 * math.pi / 3},
         ]
 
+    if not components:
+        raise ValueError(
+            "'components' must be a non-empty sequence of dicts with "
+            "'period', 'amplitude', and 'phase' keys."
+        )
+
     for i, comp in enumerate(components):
         missing = [k for k in ("period", "amplitude", "phase") if k not in comp]
         if missing:
@@ -463,6 +482,8 @@ def make_multi_sinusoid_1d(
             )
 
     rng = _rng(seed)
+    if t_span is None:
+        t_span = _DEFAULT_TSPAN_FACTOR * max(c["period"] for c in components)
     t = _make_times(n_obs, t_min, t_span, irregular, rng)
 
     y = np.zeros(n_obs)
@@ -481,7 +502,7 @@ def make_multi_sinusoid_1d(
 
 def make_chromatic_sinusoid_2d(
     n_per_band: int | tuple[int, int] | list[int] = 50,
-    period: float = 5.0,
+    period: float = 150.0,
     amplitude: float = 1.0,
     phase: float = 0.0,
     wavelengths: list[float] | None = None,
@@ -497,7 +518,7 @@ def make_chromatic_sinusoid_2d(
     noise_level: float = 0.1,
     noise_type: str | None = "poisson",
     t_min: float = 0.0,
-    t_span: float = 20.0,
+    t_span: float | None = None,
     irregular: bool = True,
     seed: int | None = None,
 ) -> Lightcurve:
@@ -533,7 +554,7 @@ def make_chromatic_sinusoid_2d(
         * **list[int]** - explicit count per band; length must equal the
           number of wavelengths.
     period:
-        Period of the sinusoid.
+        Period of the sinusoid.  Defaults to ``150.0`` days.
     amplitude:
         Base amplitude used by the ``"linear"`` law.
     phase:
@@ -569,7 +590,8 @@ def make_chromatic_sinusoid_2d(
     t_min:
         Start time.
     t_span:
-        Total time span.
+        Total time span.  If ``None`` (default) the span is set to
+        ``_DEFAULT_TSPAN_FACTOR * period``.
     irregular:
         If ``True`` observation times within each band are randomly sampled.
     seed:
@@ -600,6 +622,9 @@ def make_chromatic_sinusoid_2d(
     if wavelengths is None:
         wavelengths = [450.0, 600.0, 750.0]
     n_bands = len(wavelengths)
+
+    if t_span is None:
+        t_span = _DEFAULT_TSPAN_FACTOR * period
 
     rng = _rng(seed)
     n_per_band_list = _resolve_n_per_band(n_per_band, n_bands, rng)
@@ -674,7 +699,7 @@ def make_multi_sinusoid_chromatic_2d(
     noise_level: float = 0.1,
     noise_type: str | None = "poisson",
     t_min: float = 0.0,
-    t_span: float = 1200.0,
+    t_span: float | None = None,
     irregular: bool = True,
     seed: int | None = None,
 ) -> Lightcurve:
@@ -748,7 +773,8 @@ def make_multi_sinusoid_chromatic_2d(
     t_min:
         Start time.
     t_span:
-        Total time span.  Defaults to ``1200.0`` (three 400-day periods).
+        Total time span.  If ``None`` (default) the span is set to
+        ``_DEFAULT_TSPAN_FACTOR * max(period)`` across all components.
     irregular:
         If ``True`` observation times within each band are randomly sampled.
     seed:
@@ -792,6 +818,26 @@ def make_multi_sinusoid_chromatic_2d(
     if wavelengths is None:
         wavelengths = [0.8, 1.2, 2.2]
     n_bands = len(wavelengths)
+
+    if t_span is None:
+        if not components:
+            raise ValueError(
+                "When 't_span' is None, 'components' must be a non-empty sequence "
+                "of dicts with a numeric 'period' key."
+            )
+        for idx, comp in enumerate(components):
+            if "period" not in comp:
+                raise ValueError(
+                    "Each component must define a 'period' key when 't_span' is "
+                    f"None (missing in component index {idx})."
+                )
+            period = comp["period"]
+            if not isinstance(period, (int, float)) or not math.isfinite(period):
+                raise ValueError(
+                    "Each component 'period' must be a finite numeric value when "
+                    f"'t_span' is None (invalid in component index {idx})."
+                )
+        t_span = _DEFAULT_TSPAN_FACTOR * max(c["period"] for c in components)
 
     rng = _rng(seed)
     n_per_band_list = _resolve_n_per_band(n_per_band, n_bands, rng)
