@@ -3442,8 +3442,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                 warnings.warn(
                                     f"Only {len(_init_freqs)} MLS peak(s) found but "
                                     f"{num_mixtures} were requested. Padding with "
-                                    f"{_n_pad} evenly-spaced frequenc"
-                                    f"{'y' if _n_pad == 1 else 'ies'} in "
+                                    f"{_n_pad} evenly-spaced frequencies in "
                                     f"[{_freq_lower:.4g}, {_freq_upper:.4g}].",
                                     RuntimeWarning,
                                     stacklevel=2,

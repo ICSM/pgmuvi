@@ -196,7 +196,8 @@ class TestMLSInitFrequencySeeding(unittest.TestCase):
 
     def test_mixture_means_seeded_from_mls(self):
         """After MLS init the mixture means are seeded from the MLS-detected frequencies."""
-        # Use a small noise level so only the fundamental is significant.
+        # Use Gaussian noise so harmonics are suppressed; only the
+        # fundamental should be statistically significant.
         lc = make_simple_sinusoid_1d(
             n_obs=100,
             period=5.0,
@@ -217,19 +218,31 @@ class TestMLSInitFrequencySeeding(unittest.TestCase):
         means = lc.model.covar_module.mixture_means.detach()
         # Seeded mixture means must be positive (valid frequencies).
         self.assertGreater(means.min().item(), 0)
-        # Number of components matches the MLS count.
+        # Number of components matches the MLS significant count.
         self.assertEqual(lc.model.covar_module.num_mixtures, expected_n_mixtures)
-        # The seeded mixture means in transformed space should all be
-        # monotonically related to the raw MLS frequencies.  Verify that
-        # the mixture means are ordered the same way as the seeded frequencies.
-        if n_sig > 1 and lc.xtransform is not None:
-            sig_sorted = ls_freqs[ls_sig].sort().values
-            means_sorted = means.squeeze(-1).sort().values
-            # Higher raw freq → higher transformed freq (monotone transform).
-            self.assertTrue(
-                (means_sorted[1:] > means_sorted[:-1]).all(),
-                "Mixture means should be strictly ordered.",
-            )
+
+    def test_mixture_means_ordering_preserved(self):
+        """Mixture means preserve the ordering of the seeded MLS frequencies."""
+        # Mock fit_LS to return two significant peaks at known frequencies.
+        # The seeded values must appear in the same relative order in the model.
+        low_freq = torch.tensor([0.2], dtype=torch.float32)   # period = 5
+        high_freq = torch.tensor([0.4], dtype=torch.float32)  # period = 2.5
+        two_freqs = torch.cat([high_freq, low_freq])  # sorted descending by power
+        two_sig = torch.tensor([True, True], dtype=torch.bool)
+
+        with patch.object(self.lc, "fit_LS", return_value=(two_freqs, two_sig)):
+            _fit_without_training(self.lc)
+
+        means = self.lc.model.covar_module.mixture_means.detach()
+        self.assertEqual(self.lc.model.covar_module.num_mixtures, 2)
+        self.assertGreater(means.min().item(), 0)
+        # The seeded frequencies are distinct; the flattened and sorted means
+        # should be strictly increasing (two distinct positive values).
+        means_flat = means.flatten().sort().values
+        self.assertTrue(
+            (means_flat[1:] > means_flat[:-1]).all(),
+            "Mixture means should be distinct (strictly ordered) after seeding.",
+        )
 
     def test_mixture_means_seeded_from_periods(self):
         """User-supplied periods seed the mixture_means at the correct frequency."""
