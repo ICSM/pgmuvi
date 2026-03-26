@@ -686,11 +686,22 @@ class InputHelpers:
 
 
 # Spectral-mixture model names that support MLS-based initialisation in fit().
-_SM_MODELS: frozenset[str] = frozenset({
-    "2D", "1D", "1DLinear", "2DLinear", "2DPowerLaw", "2DDust",
-    "1DSKI", "2DSKI", "1DLinearSKI", "2DLinearSKI",
-    "2DPowerLawSKI", "2DDustSKI",
-})
+_SM_MODELS: frozenset[str] = frozenset(
+    {
+        "2D",
+        "1D",
+        "1DLinear",
+        "2DLinear",
+        "2DPowerLaw",
+        "2DDust",
+        "1DSKI",
+        "2DSKI",
+        "1DLinearSKI",
+        "2DLinearSKI",
+        "2DPowerLawSKI",
+        "2DDustSKI",
+    }
+)
 
 
 class Lightcurve(InputHelpers, gpytorch.Module):
