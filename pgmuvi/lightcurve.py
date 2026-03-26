@@ -681,7 +681,16 @@ class InputHelpers:
         y = torch.as_tensor(clean[ycol], dtype=torch.float32)
         yerr = torch.as_tensor(clean[yerrcol], dtype=torch.float32) if yerrcol else None
 
+
         return cls(xdata=x, ydata=y, yerr=yerr)
+
+
+# Spectral-mixture model names that support MLS-based initialisation in fit().
+_SM_MODELS: frozenset[str] = frozenset({
+    "2D", "1D", "1DLinear", "2DLinear", "2DPowerLaw", "2DDust",
+    "1DSKI", "2DSKI", "1DLinearSKI", "2DLinearSKI",
+    "2DPowerLawSKI", "2DDustSKI",
+})
 
 
 class Lightcurve(InputHelpers, gpytorch.Module):
@@ -3320,13 +3329,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         #     self.set_likelihood(likelihood, **kwargs)
 
         # --- MLS-based initialisation ---
-        # Spectral-mixture model names for which MLS init applies.
-        _SM_MODELS = {
-            "2D", "1D", "1DLinear", "2DLinear", "2DPowerLaw", "2DDust",
-            "1DSKI", "2DSKI", "1DLinearSKI", "2DLinearSKI",
-            "2DPowerLawSKI", "2DDustSKI",
-        }
-
         _init_freqs = None  # frequencies (raw units) to seed the SM kernel
 
         if periods is not None:
