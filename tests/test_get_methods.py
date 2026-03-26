@@ -1,8 +1,8 @@
 """Tests for the get_default_priors, get_period_prior, and
 get_default_constraints companion methods."""
 
+import contextlib
 import io
-import sys
 import unittest
 
 import torch
@@ -61,11 +61,8 @@ class TestGetDefaultPriorsSpectral(unittest.TestCase):
 
     def test_prints_output(self):
         buf = io.StringIO()
-        sys.stdout = buf
-        try:
+        with contextlib.redirect_stdout(buf):
             self.lc.get_default_priors()
-        finally:
-            sys.stdout = sys.__stdout__
         output = buf.getvalue()
         self.assertIn("Registered priors:", output)
         self.assertIn("mixture_means_prior", output)
@@ -75,11 +72,8 @@ class TestGetDefaultPriorsSpectral(unittest.TestCase):
         lc = _make_1d_lc()
         lc.set_model("1D", num_mixtures=2)
         buf = io.StringIO()
-        sys.stdout = buf
-        try:
+        with contextlib.redirect_stdout(buf):
             lc.get_default_priors()
-        finally:
-            sys.stdout = sys.__stdout__
         output = buf.getvalue()
         self.assertIn("(none)", output)
 
@@ -122,11 +116,8 @@ class TestGetPeriodPriorSpectral(unittest.TestCase):
 
     def test_prints_prior_type_and_params(self):
         buf = io.StringIO()
-        sys.stdout = buf
-        try:
+        with contextlib.redirect_stdout(buf):
             self.lc.get_period_prior()
-        finally:
-            sys.stdout = sys.__stdout__
         output = buf.getvalue()
         self.assertIn("Registered period/frequency priors:", output)
         self.assertIn("LogNormalFrequencyPrior", output)
@@ -169,11 +160,8 @@ class TestGetPeriodPriorNoPeriodicity(unittest.TestCase):
         lc = _make_1d_lc()
         lc.set_model("1DMatern")
         buf = io.StringIO()
-        sys.stdout = buf
-        try:
+        with contextlib.redirect_stdout(buf):
             lc.get_period_prior()
-        finally:
-            sys.stdout = sys.__stdout__
         output = buf.getvalue()
         self.assertIn("(none)", output)
 
@@ -216,11 +204,8 @@ class TestGetDefaultConstraintsSpectral(unittest.TestCase):
 
     def test_prints_output(self):
         buf = io.StringIO()
-        sys.stdout = buf
-        try:
+        with contextlib.redirect_stdout(buf):
             self.lc.get_default_constraints()
-        finally:
-            sys.stdout = sys.__stdout__
         output = buf.getvalue()
         self.assertIn("Registered constraints:", output)
         self.assertIn("mixture_means", output)
@@ -235,11 +220,8 @@ class TestGetDefaultConstraintsSpectral(unittest.TestCase):
         lc = Lightcurve(torch.linspace(0, 100, 20), torch.randn(20))
         lc.set_model("1D", num_mixtures=2)
         buf = io.StringIO()
-        sys.stdout = buf
-        try:
+        with contextlib.redirect_stdout(buf):
             lc.get_default_constraints()
-        finally:
-            sys.stdout = sys.__stdout__
         output = buf.getvalue()
         self.assertIn("Registered constraints:", output)
 
