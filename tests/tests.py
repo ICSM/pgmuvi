@@ -519,18 +519,29 @@ class TestMultibandFAP(unittest.TestCase):
         self.assertLessEqual(fap_parallel, 1.0)
 
     def test_analytical_default_in_fit_ls(self):
-        """Test that fit_LS for multiband uses analytical FAP by default (fast)"""
-        import time
+        """Test that fit_LS for multiband uses analytical FAP by default"""
+        from unittest.mock import patch
+        from pgmuvi import multiband_ls_significance as mls
 
-        # Time the fit_LS call - with analytical default it should be fast
-        start = time.time()
-        freq, mask = self.lc_signal.fit_LS(num_peaks=1)
-        elapsed = time.time() - start
+        _orig_fap = mls.MultibandLSWithSignificance.false_alarm_probability
+        called_methods = []
 
-        # Should complete in reasonable time (<<10 s) because 'analytical'
-        # is the default, not the expensive 'bootstrap'
-        self.assertLess(elapsed, 10.0,
-                        "fit_LS took too long; default FAP method may be slow")
+        def _recording_fap(self_, power_values, method='analytical', **kw):
+            called_methods.append(method)
+            return _orig_fap(self_, power_values, method=method, **kw)
+
+        with patch.object(mls.MultibandLSWithSignificance,
+                          'false_alarm_probability', _recording_fap):
+            self.lc_signal.fit_LS(num_peaks=1)
+
+        # Every call to false_alarm_probability should have used 'analytical'
+        self.assertGreater(len(called_methods), 0,
+                           "false_alarm_probability was never called")
+        for method_used in called_methods:
+            self.assertEqual(
+                method_used, 'analytical',
+                f"Expected 'analytical' FAP method by default, got '{method_used}'"
+            )
 
 
 

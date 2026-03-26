@@ -16,6 +16,78 @@ except ImportError:
     _JOBLIB_AVAILABLE = False
 
 
+def _compute_bootstrap_sample_max_power(t, y, bands, dy, freq_grid):
+    """Compute max LS power for one bootstrap (band-permuted) sample.
+
+    Parameters
+    ----------
+    t : ndarray
+        Time values
+    y : ndarray
+        Observed values
+    bands : ndarray
+        Band identifiers
+    dy : ndarray or None
+        Uncertainties
+    freq_grid : ndarray
+        Frequency grid for power computation
+
+    Returns
+    -------
+    float
+        Maximum Lomb-Scargle power over ``freq_grid``
+    """
+    y_permuted = y.copy()
+    unique_bands = np.unique(bands)
+    for band in unique_bands:
+        band_mask = bands == band
+        band_indices = np.where(band_mask)[0]
+        permuted_indices = np.random.permutation(band_indices)
+        y_permuted[band_mask] = y[permuted_indices]
+    if dy is not None:
+        ls_null = LombScargleMultiband(t, y_permuted, bands, dy=dy)
+    else:
+        ls_null = LombScargleMultiband(t, y_permuted, bands)
+    return ls_null.power(freq_grid).max()
+
+
+def _compute_phase_scramble_sample_max_power(t, y, bands, dy, freq_grid):
+    """Compute max LS power for one phase-scrambled sample.
+
+    Parameters
+    ----------
+    t : ndarray
+        Time values
+    y : ndarray
+        Observed values
+    bands : ndarray
+        Band identifiers
+    dy : ndarray or None
+        Uncertainties
+    freq_grid : ndarray
+        Frequency grid for power computation
+
+    Returns
+    -------
+    float
+        Maximum Lomb-Scargle power over ``freq_grid``
+    """
+    y_scrambled = y.copy()
+    unique_bands = np.unique(bands)
+    for band in unique_bands:
+        band_mask = bands == band
+        y_band = y[band_mask]
+        fft = np.fft.fft(y_band)
+        random_phases = np.exp(2j * np.pi * np.random.random(len(fft)))
+        fft_scrambled = np.abs(fft) * random_phases
+        y_scrambled[band_mask] = np.real(np.fft.ifft(fft_scrambled))
+    if dy is not None:
+        ls_null = LombScargleMultiband(t, y_scrambled, bands, dy=dy)
+    else:
+        ls_null = LombScargleMultiband(t, y_scrambled, bands)
+    return ls_null.power(freq_grid).max()
+
+
 class MultibandLSWithSignificance:
     """
     Wrapper around LombScargleMultiband with significance testing.
@@ -239,23 +311,9 @@ class MultibandLSWithSignificance:
         fap : ndarray
             False alarm probability for each power value
         """
-        def _one_bootstrap_sample(t, y, bands, dy, freq_grid):
-            y_permuted = y.copy()
-            unique_bands = np.unique(bands)
-            for band in unique_bands:
-                band_mask = (bands == band)
-                band_indices = np.where(band_mask)[0]
-                permuted_indices = np.random.permutation(band_indices)
-                y_permuted[band_mask] = y[permuted_indices]
-            if dy is not None:
-                ls_null = LombScargleMultiband(t, y_permuted, bands, dy=dy)
-            else:
-                ls_null = LombScargleMultiband(t, y_permuted, bands)
-            return ls_null.power(freq_grid).max()
-
         if _JOBLIB_AVAILABLE and n_jobs != 1:
             max_powers_null = Parallel(n_jobs=n_jobs)(
-                delayed(_one_bootstrap_sample)(
+                delayed(_compute_bootstrap_sample_max_power)(
                     self.t, self.y, self.bands, self.dy, freq_grid
                 )
                 for _ in range(n_samples)
@@ -263,7 +321,7 @@ class MultibandLSWithSignificance:
             max_powers_null = np.array(max_powers_null)
         else:
             max_powers_null = np.array([
-                _one_bootstrap_sample(
+                _compute_bootstrap_sample_max_power(
                     self.t, self.y, self.bands, self.dy, freq_grid
                 )
                 for _ in range(n_samples)
@@ -303,25 +361,9 @@ class MultibandLSWithSignificance:
         fap : ndarray
             False alarm probability for each power value
         """
-        def _one_phase_scramble_sample(t, y, bands, dy, freq_grid):
-            y_scrambled = y.copy()
-            unique_bands = np.unique(bands)
-            for band in unique_bands:
-                band_mask = (bands == band)
-                y_band = y[band_mask]
-                fft = np.fft.fft(y_band)
-                random_phases = np.exp(2j * np.pi * np.random.random(len(fft)))
-                fft_scrambled = np.abs(fft) * random_phases
-                y_scrambled[band_mask] = np.real(np.fft.ifft(fft_scrambled))
-            if dy is not None:
-                ls_null = LombScargleMultiband(t, y_scrambled, bands, dy=dy)
-            else:
-                ls_null = LombScargleMultiband(t, y_scrambled, bands)
-            return ls_null.power(freq_grid).max()
-
         if _JOBLIB_AVAILABLE and n_jobs != 1:
             max_powers_null = Parallel(n_jobs=n_jobs)(
-                delayed(_one_phase_scramble_sample)(
+                delayed(_compute_phase_scramble_sample_max_power)(
                     self.t, self.y, self.bands, self.dy, freq_grid
                 )
                 for _ in range(n_samples)
@@ -329,7 +371,7 @@ class MultibandLSWithSignificance:
             max_powers_null = np.array(max_powers_null)
         else:
             max_powers_null = np.array([
-                _one_phase_scramble_sample(
+                _compute_phase_scramble_sample_max_power(
                     self.t, self.y, self.bands, self.dy, freq_grid
                 )
                 for _ in range(n_samples)
