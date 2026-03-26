@@ -3090,8 +3090,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self,
         model=None,
         likelihood=None,
-        num_mixtures=4,
+        num_mixtures=None,
         guess=None,
+        periods=None,
+        use_mls_init=True,
         grid_size=2000,
         cuda=False,
         training_iter=300,
@@ -3152,11 +3154,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If likelihood is passed, it will be passed along to `set_likelihood()`
             and used to set the likelihood function for the model. For details, see
             the documentation for `set_likelihood()`.
-        num_mixtures : int, optional
-            The number of mixtures to use in the spectral mixture kernel, by
-            default 4. If None, a default value will be used. This value
-            is passed to the constructor for the model if a string is passed
-            as the model argument.
+        num_mixtures : int or None, optional
+            The number of mixtures to use in the spectral mixture kernel.  By
+            default ``None``, which lets the MLS initialisation (see
+            ``use_mls_init``) choose the value automatically.  When
+            ``use_mls_init=True`` and ``periods`` is ``None``, setting
+            ``num_mixtures`` to an integer *N* overrides the automatic count:
+            the first *N* significant MLS periods are used; if *N* exceeds the
+            number of significant periods, non-significant peaks are added to
+            make up the difference.  When ``use_mls_init=False`` and
+            ``num_mixtures`` is ``None`` a fallback of 4 is used.
         guess : dict, optional
             A dictionary of the hyperparameters to use for the model and
             likelihood. The keys should be the names of the parameters, and the
@@ -3164,6 +3171,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If None, no hyperparameters will be set. If a hyperparameter is
             passed for a parameter that is not a model or likelihood
             parameter, it will be ignored.
+        periods : array-like or None, optional
+            Initial guesses for the periods (in the same units as the
+            lightcurve time axis).  When provided, the MLS initialisation is
+            skipped entirely: ``num_mixtures`` is set to the number of
+            supplied periods and the spectral-mixture kernel frequencies are
+            initialised from these values.  If both ``periods`` and ``guess``
+            are supplied, entries in ``guess`` take priority over the
+            period-derived frequencies.
+        use_mls_init : bool, optional
+            If ``True`` (default) and ``periods`` is ``None`` and a spectral
+            mixture model string is given, the Multiband Lomb-Scargle (MLS)
+            periodogram is run first to estimate the number of significant
+            periods and their frequencies, which are used as initial guesses
+            for the spectral-mixture kernel.  Set to ``False`` to disable
+            this behaviour and fall back to GPyTorch's
+            ``initialize_from_data``.
         grid_size : int, optional
             The number of points to use in the grid for the KISS-GP models,
             by default 2000.
@@ -3296,6 +3319,66 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # elif likelihood is not None:
         #     self.set_likelihood(likelihood, **kwargs)
 
+        # --- MLS-based initialisation ---
+        # Spectral-mixture model names for which MLS init applies.
+        _SM_MODELS = {
+            "2D", "1D", "1DLinear", "2DLinear", "2DPowerLaw", "2DDust",
+            "1DSKI", "2DSKI", "1DLinearSKI", "2DLinearSKI",
+            "2DPowerLawSKI", "2DDustSKI",
+        }
+
+        _init_freqs = None  # frequencies (raw units) to seed the SM kernel
+
+        if periods is not None:
+            # User supplied explicit period guesses — skip MLS entirely.
+            _periods_tensor = torch.as_tensor(
+                periods, dtype=self._xdata_raw.dtype
+            ).flatten()
+            _init_freqs = 1.0 / _periods_tensor
+            num_mixtures = len(_init_freqs)
+        elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
+            # Run the MLS periodogram to choose num_mixtures and seed frequencies.
+            try:
+                _max_peaks = max(num_mixtures or 1, 10)
+                ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
+
+                if len(ls_freqs) > 0:
+                    ls_sig_freqs = ls_freqs[ls_sig]
+                    ls_insig_freqs = ls_freqs[~ls_sig]
+
+                    if num_mixtures is None:
+                        # Default: use only the statistically significant peaks.
+                        if len(ls_sig_freqs) > 0:
+                            num_mixtures = len(ls_sig_freqs)
+                            _init_freqs = ls_sig_freqs
+                        else:
+                            # No significant peaks; fall back to the strongest one.
+                            num_mixtures = 1
+                            _init_freqs = ls_freqs[:1]
+                    else:
+                        # User specified num_mixtures: fill with significant peaks
+                        # first, then non-significant ones as needed.
+                        n_sig = len(ls_sig_freqs)
+                        if num_mixtures <= n_sig:
+                            _init_freqs = ls_sig_freqs[:num_mixtures]
+                        else:
+                            _extra = num_mixtures - n_sig
+                            _init_freqs = torch.cat(
+                                [ls_sig_freqs, ls_insig_freqs[:_extra]]
+                            )
+                else:
+                    # MLS found no peaks at all.
+                    if num_mixtures is None:
+                        num_mixtures = 4
+            except Exception:
+                # MLS failed for any reason; fall back gracefully.
+                if num_mixtures is None:
+                    num_mixtures = 4
+
+        # Final fallback when MLS init is disabled or not applicable.
+        if num_mixtures is None:
+            num_mixtures = 4
+
         if model is None and not hasattr(self, "model"):
             raise ValueError("""You must provide a model""")
         elif model is not None:
@@ -3317,9 +3400,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if cuda:
             self.cuda()
 
+        # Build the combined hyperparameter initialisation dict.
+        # MLS-derived (or user-supplied) period frequencies act as the base;
+        # any explicit `guess` entries take priority on top.
+        _hypers_to_set = {}
+        if (
+            _init_freqs is not None
+            and hasattr(self, "model")
+            and hasattr(self.model, "covar_module")
+            and hasattr(self.model.covar_module, "mixture_means")
+            and getattr(self.model.covar_module, "ard_num_dims", 1) == 1
+        ):
+            _hypers_to_set["covar_module.mixture_means"] = _init_freqs
         if guess is not None:
-            # self.model.initialize(**guess)
-            self.set_hypers(guess)
+            _hypers_to_set.update(guess)
+        if _hypers_to_set:
+            self.set_hypers(_hypers_to_set)
 
         if miniter is None:
             miniter = training_iter
