@@ -68,6 +68,14 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+#: Multiplier applied to the (maximum) period to compute the default ``t_span``
+#: when ``t_span=None`` is passed to any generator function.
+_DEFAULT_TSPAN_FACTOR: float = 2.3
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -339,7 +347,7 @@ def make_simple_sinusoid_1d(
         Start time of the observation window.
     t_span:
         Total time span of the observations.  If ``None`` (default) the span
-        is set to ``2.3 * period``.
+        is set to ``_DEFAULT_TSPAN_FACTOR * period``.
     irregular:
         If ``True`` the observation times are drawn uniformly at random from
         ``[t_min, t_min + t_span]`` and then sorted.  If ``False`` (default)
@@ -362,7 +370,7 @@ def make_simple_sinusoid_1d(
     from pgmuvi.lightcurve import Lightcurve
 
     if t_span is None:
-        t_span = 2.3 * period
+        t_span = _DEFAULT_TSPAN_FACTOR * period
     rng = _rng(seed)
     t = _make_times(n_obs, t_min, t_span, irregular, rng)
     y = amplitude * np.sin(2 * math.pi * t / period + phase)
@@ -423,7 +431,7 @@ def make_multi_sinusoid_1d(
         Start time.
     t_span:
         Total time span.  If ``None`` (default) the span is set to
-        ``2.3 * max(period)`` across all components.
+        ``_DEFAULT_TSPAN_FACTOR * max(period)`` across all components.
     irregular:
         If ``True`` observation times are randomly sampled.
     seed:
@@ -469,7 +477,7 @@ def make_multi_sinusoid_1d(
 
     rng = _rng(seed)
     if t_span is None:
-        t_span = 2.3 * max(c["period"] for c in components)
+        t_span = _DEFAULT_TSPAN_FACTOR * max(c["period"] for c in components)
     t = _make_times(n_obs, t_min, t_span, irregular, rng)
 
     y = np.zeros(n_obs)
@@ -577,7 +585,7 @@ def make_chromatic_sinusoid_2d(
         Start time.
     t_span:
         Total time span.  If ``None`` (default) the span is set to
-        ``2.3 * period``.
+        ``_DEFAULT_TSPAN_FACTOR * period``.
     irregular:
         If ``True`` observation times within each band are randomly sampled.
     seed:
@@ -610,7 +618,7 @@ def make_chromatic_sinusoid_2d(
     n_bands = len(wavelengths)
 
     if t_span is None:
-        t_span = 2.3 * period
+        t_span = _DEFAULT_TSPAN_FACTOR * period
 
     rng = _rng(seed)
     n_per_band_list = _resolve_n_per_band(n_per_band, n_bands, rng)
@@ -760,7 +768,7 @@ def make_multi_sinusoid_chromatic_2d(
         Start time.
     t_span:
         Total time span.  If ``None`` (default) the span is set to
-        ``2.3 * max(period)`` across all components.
+        ``_DEFAULT_TSPAN_FACTOR * max(period)`` across all components.
     irregular:
         If ``True`` observation times within each band are randomly sampled.
     seed:
@@ -823,7 +831,7 @@ def make_multi_sinusoid_chromatic_2d(
                     "Each component 'period' must be a finite numeric value when "
                     f"'t_span' is None (invalid in component index {idx})."
                 )
-        t_span = 2.3 * max(c["period"] for c in components)
+        t_span = _DEFAULT_TSPAN_FACTOR * max(c["period"] for c in components)
 
     rng = _rng(seed)
     n_per_band_list = _resolve_n_per_band(n_per_band, n_bands, rng)
