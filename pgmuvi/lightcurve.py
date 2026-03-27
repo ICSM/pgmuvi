@@ -3436,17 +3436,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         f"Fitting with {n_pass}/{n_total} wavelength bands "
                         f"(skipping \u03bb = {skipped})."
                     )
-                    xdata = self._xdata_raw
-                    keep_mask = torch.isin(
-                        xdata[:, 1],
-                        torch.tensor(
-                            passing, dtype=xdata.dtype, device=xdata.device
-                        ),
-                    )
-                    self.xdata = xdata[keep_mask].clone()
-                    self.ydata = self._ydata_raw[keep_mask].clone()
-                    if hasattr(self, "_yerr_raw"):
-                        self.yerr = self._yerr_raw[keep_mask].clone()
+                    # Use the shared helper to filter to well-sampled bands,
+                    # keeping band-selection behavior consistent across the codebase.
+                    self.filter_well_sampled_bands(passing)
             else:
                 # 1D: raise ValueError if sampling is poor
                 from pgmuvi.preprocess.quality import assess_sampling_quality
