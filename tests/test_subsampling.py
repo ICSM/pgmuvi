@@ -182,68 +182,54 @@ class TestSubsampleLightcurveWarning(unittest.TestCase):
     def test_no_warning_when_below_limit(self):
         """No UserWarning should be issued when N <= max_samples."""
         lc = _make_lightcurve(50)
+        max_samples = 3000  # Larger than N, so no subsampling should occur.
         with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            t_np = lc._xdata_raw.detach().cpu().numpy()
-            max_samples = 3000
-            if len(t_np) > max_samples:
-                warnings.warn("should not happen", UserWarning, stacklevel=1)
-        subsample_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+            warnings.simplefilter("always", UserWarning)
+            lc.fit(
+                training_iter=1,
+                miniter=1,
+                max_samples=max_samples,
+                subsample_seed=0,
+            )
+        subsample_warnings = [
+            w for w in caught if issubclass(w.category, UserWarning)
+        ]
         self.assertEqual(len(subsample_warnings), 0)
 
     def test_warning_issued_when_above_limit(self):
         """A UserWarning about subsampling should be issued when N > max_samples."""
         lc = _make_lightcurve(200)
+        max_samples = 100  # Smaller than N, so subsampling should occur.
         with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            t_np = lc._xdata_raw.detach().cpu().numpy()
-            max_samples = 100
-            if len(t_np) > max_samples:
-                warnings.warn(
-                    f"Lightcurve has {len(t_np)} points, which exceeds "
-                    f"max_samples={max_samples}. Fitting on a random subsample "
-                    f"of 100 points. Set max_samples=None to disable subsampling.",
-                    UserWarning,
-                    stacklevel=1,
-                )
-        subsample_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+            warnings.simplefilter("always", UserWarning)
+            lc.fit(
+                training_iter=1,
+                miniter=1,
+                max_samples=max_samples,
+                subsample_seed=0,
+            )
+        subsample_warnings = [
+            w for w in caught if issubclass(w.category, UserWarning)
+        ]
         self.assertGreater(len(subsample_warnings), 0)
-        self.assertIn("max_samples", str(subsample_warnings[0].message))
+        first_msg = str(subsample_warnings[0].message)
+        self.assertIn("max_samples", first_msg)
+        self.assertIn("subsample", first_msg.lower())
 
     def test_buffers_restored_after_subsampling(self):
         """After fit() with subsampling, original data buffers must be restored."""
         lc = _make_lightcurve(200)
         orig_n = lc._xdata_raw.shape[0]
 
-        # Simulate the buffer-swap logic from fit().
-        max_samples = 50
-        t_np = lc._xdata_raw.detach().cpu().numpy()
-        idx = subsample_lightcurve(t_np, max_samples=max_samples, random_seed=0)
-        _buffer_names = (
-            "_xdata_raw",
-            "_xdata_transformed",
-            "_ydata_raw",
-            "_ydata_transformed",
-            "_yerr_raw",
-            "_yerr_transformed",
+        # Call fit() with subsampling enabled; internal buffers should be restored.
+        lc.fit(
+            training_iter=1,
+            miniter=1,
+            max_samples=50,
+            subsample_seed=0,
         )
-        orig_buffers = {
-            name: getattr(lc, name)
-            for name in _buffer_names
-            if hasattr(lc, name) and getattr(lc, name) is not None
-        }
-        idx_t = torch.as_tensor(idx, dtype=torch.long)
-        for name, buf in orig_buffers.items():
-            lc.register_buffer(name, buf[idx_t])
 
-        # Buffers should now be subsampled.
-        self.assertEqual(lc._xdata_raw.shape[0], len(idx))
-
-        # Restore.
-        for name, buf in orig_buffers.items():
-            lc.register_buffer(name, buf)
-
-        # Buffers should be back to the original size.
+        # Buffers should be back to the original size after fit().
         self.assertEqual(lc._xdata_raw.shape[0], orig_n)
 
 
