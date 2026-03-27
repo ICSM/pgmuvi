@@ -10,6 +10,7 @@ from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.preprocess import subsample_lightcurve
 from pgmuvi.preprocess.quality import subsample_lightcurve as subsample_from_quality
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
+from pgmuvi.preprocess.quality import subsample_lightcurve
 
 
 class TestSubsampleLightcurveSmall(unittest.TestCase):
@@ -38,7 +39,7 @@ class TestSubsampleLightcurveLarge(unittest.TestCase):
         self.max_gap_fraction = 0.3
 
     def test_output_size_at_most_max_samples(self):
-        """Result length should be <= max_samples (ignoring gap-repair additions)."""
+        """Result length should be <= max_samples (budget strictly enforced)."""
         idx = subsample_lightcurve(
             self.t_uniform,
             max_samples=self.max_samples,
@@ -47,6 +48,7 @@ class TestSubsampleLightcurveLarge(unittest.TestCase):
         )
         # Allow a small buffer for gap-repair additions
         self.assertLessEqual(len(idx), self.max_samples + 10)
+        self.assertLessEqual(len(idx), self.max_samples)
 
     def test_indices_are_valid(self):
         """All returned indices should be valid indices into the original array."""
@@ -118,6 +120,24 @@ class TestSubsampleLightcurveLarge(unittest.TestCase):
         self.assertFalse(np.array_equal(idx1, idx2))
 
 
+class TestSubsampleLightcurveValidation(unittest.TestCase):
+    """Input validation tests for subsample_lightcurve."""
+
+    def test_max_samples_less_than_2_raises(self):
+        """max_samples values less than 2 should raise ValueError."""
+        t = np.linspace(0, 100, 50)
+        for bad_value in (1, 0, -1, -100):
+            with self.subTest(max_samples=bad_value):
+                with self.assertRaises(ValueError):
+                    subsample_lightcurve(t, max_samples=bad_value)
+
+    def test_max_samples_non_integer_raises(self):
+        """Non-integer max_samples should raise ValueError."""
+        t = np.linspace(0, 100, 50)
+        with self.assertRaises(ValueError):
+            subsample_lightcurve(t, max_samples=2.5)
+
+
 class TestSubsampleLightcurveEdgeCases(unittest.TestCase):
     """Edge-case behaviour of subsample_lightcurve."""
 
@@ -155,6 +175,7 @@ class TestSubsampleLightcurveEdgeCases(unittest.TestCase):
         """A very tight max_gap_fraction should force extra points to be added."""
         rng = np.random.default_rng(0)
         t = rng.uniform(0, 100, 5000)
+        # Use a very tight gap constraint.
         idx = subsample_lightcurve(
             t, max_samples=100, max_gap_fraction=0.05, random_seed=0
         )
@@ -330,6 +351,77 @@ class TestFitLSSubsampling2D(unittest.TestCase):
             warnings.simplefilter("always")
             self.lc_2d.fit_LS(max_samples=50, subsample_seed=0)
         self.assertEqual(self.lc_2d.xdata.shape[0], orig_n)
+def _make_lightcurve(n):
+    """Create a simple 1-D Lightcurve with *n* uniformly-spaced points."""
+    rng = np.random.default_rng(42)
+    t = np.sort(rng.uniform(0, 100, n))
+    y = np.sin(2 * np.pi * t / 10) + rng.normal(0, 0.1, n)
+    yerr = np.full(n, 0.1)
+    return Lightcurve(
+        xdata=torch.tensor(t, dtype=torch.float32),
+        ydata=torch.tensor(y, dtype=torch.float32),
+        yerr=torch.tensor(yerr, dtype=torch.float32),
+    )
+
+
+class TestSubsampleLightcurveWarning(unittest.TestCase):
+    """Lightcurve.fit should warn and subsample when N > max_samples."""
+
+    def test_no_warning_when_below_limit(self):
+        """No UserWarning should be issued when N <= max_samples."""
+        lc = _make_lightcurve(50)
+        max_samples = 3000  # Larger than N, so no subsampling should occur.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", UserWarning)
+            lc.fit(
+                model="1D",
+                training_iter=1,
+                miniter=1,
+                max_samples=max_samples,
+                subsample_seed=0,
+            )
+        subsample_warnings = [
+            w for w in caught if issubclass(w.category, UserWarning)
+        ]
+        self.assertEqual(len(subsample_warnings), 0)
+
+    def test_warning_issued_when_above_limit(self):
+        """A UserWarning about subsampling should be issued when N > max_samples."""
+        lc = _make_lightcurve(200)
+        max_samples = 100  # Smaller than N, so subsampling should occur.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", UserWarning)
+            lc.fit(
+                model="1D",
+                training_iter=1,
+                miniter=1,
+                max_samples=max_samples,
+                subsample_seed=0,
+            )
+        subsample_warnings = [
+            w for w in caught if issubclass(w.category, UserWarning)
+        ]
+        self.assertGreater(len(subsample_warnings), 0)
+        first_msg = str(subsample_warnings[0].message)
+        self.assertIn("max_samples", first_msg)
+        self.assertIn("subsample", first_msg.lower())
+
+    def test_buffers_restored_after_subsampling(self):
+        """After fit() with subsampling, original data buffers must be restored."""
+        lc = _make_lightcurve(200)
+        orig_n = lc._xdata_raw.shape[0]
+
+        # Call fit() with subsampling enabled; internal buffers should be restored.
+        lc.fit(
+            model="1D",
+            training_iter=1,
+            miniter=1,
+            max_samples=50,
+            subsample_seed=0,
+        )
+
+        # Buffers should be back to the original size after fit().
+        self.assertEqual(lc._xdata_raw.shape[0], orig_n)
 
 
 if __name__ == "__main__":
