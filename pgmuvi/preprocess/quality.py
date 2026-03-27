@@ -461,19 +461,27 @@ def subsample_lightcurve(
         if len(bad) == 0:
             break
 
-        # Repair the largest offending gap first.
-        gap_idx = int(bad[np.argmax(gaps[bad])])
-        t_left = t_sel[gap_idx]
-        t_right = t_sel[gap_idx + 1]
-        t_mid = 0.5 * (t_left + t_right)
+        # Attempt to repair offending gaps, starting from the largest.
+        bad_sorted = bad[np.argsort(gaps[bad])[::-1]]
+        repaired = False
+        for gap_idx in bad_sorted:
+            gap_idx = int(gap_idx)
+            t_left = t_sel[gap_idx]
+            t_right = t_sel[gap_idx + 1]
+            t_mid = 0.5 * (t_left + t_right)
 
-        # Find candidates from unused points that fall inside this gap.
-        candidates = [i for i in all_unused if t_left < t[i] < t_right]
-        if not candidates:
-            break  # Gap cannot be filled - accept the constraint violation.
+            # Find candidates from unused points that fall inside this gap.
+            candidates = [i for i in all_unused if t_left < t[i] < t_right]
+            if not candidates:
+                continue
 
-        best = min(candidates, key=lambda i: abs(t[i] - t_mid))
-        selected_set.add(best)
-        all_unused.discard(best)
+            best = min(candidates, key=lambda i: abs(t[i] - t_mid))
+            selected_set.add(best)
+            all_unused.discard(best)
+            repaired = True
+            break
 
+        # If no gap could be repaired in this iteration, accept remaining violations.
+        if not repaired:
+            break
     return np.array(sorted(selected_set, key=lambda i: t[i]), dtype=np.intp)
