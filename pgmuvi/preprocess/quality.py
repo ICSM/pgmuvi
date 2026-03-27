@@ -458,9 +458,10 @@ def subsample_lightcurve(
     selected_mask[chosen_pos] = True
 
     # Iterative gap repair with strict budget enforcement.
-    # Using a hard iteration cap (n iterations) prevents infinite loops in
+    # Each iteration repairs at most one gap.  The cap (2 * max_samples + 1)
+    # covers at most max_samples swap cycles, preventing infinite loops in
     # pathological cases where swaps oscillate between two states.
-    for _ in range(n):
+    for _ in range(2 * max_samples + 1):
         sel_positions = np.where(selected_mask)[0]  # sorted positions
         t_sel = t_sorted[sel_positions]
         gaps = np.diff(t_sel)

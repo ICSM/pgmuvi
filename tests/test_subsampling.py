@@ -122,8 +122,9 @@ class TestSubsampleLightcurveValidation(unittest.TestCase):
         """max_samples values less than 2 should raise ValueError."""
         t = np.linspace(0, 100, 50)
         for bad_value in (1, 0, -1, -100):
-            with self.assertRaises(ValueError, msg=f"max_samples={bad_value}"):
-                subsample_lightcurve(t, max_samples=bad_value)
+            with self.subTest(max_samples=bad_value):
+                with self.assertRaises(ValueError):
+                    subsample_lightcurve(t, max_samples=bad_value)
 
     def test_max_samples_non_integer_raises(self):
         """Non-integer max_samples should raise ValueError."""
