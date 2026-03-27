@@ -1320,6 +1320,49 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         self.assertEqual(len(remaining_wls), 1)
         self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
 
+    def test_fit_band_filter_recreates_model_and_likelihood(self):
+        """fit() recreates the model and likelihood after band filtering."""
+        # Band 3.6: 50 good points (passes); band 4.5: 4 points (fails)
+        t_good = np.linspace(0, 100, 50)
+        t_bad = [0.0, 1.0, 2.0, 3.0]
+        t_all = list(t_good) + t_bad
+        wl_all = [3.6] * 50 + [4.5] * 4
+        y_all = (np.sin(2 * np.pi * np.array(t_all) / 10.0) + 1.0).tolist()
+        ye_all = [0.01] * 54
+        xdata = np.column_stack([t_all, wl_all])
+        lc = Lightcurve(
+            torch.as_tensor(xdata, dtype=torch.float32),
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+        )
+        # Explicitly set a model before calling fit() without a model arg.
+        lc.set_model('2D', likelihood=None, num_mixtures=2)
+        model_before = lc.model
+        self.assertIsNotNone(model_before)
+
+        # fit() without model= should filter band 4.5, then re-create the '2D'
+        # model and likelihood bound to the filtered data, and train.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = lc.fit(
+                check_sampling=True,
+                use_mls_init=False,
+                training_iter=5,
+                miniter=2,
+                lr=0.05,
+            )
+
+        # A new model was created (not the same object as before filtering).
+        self.assertIsNotNone(lc.model)
+        self.assertIsNot(lc.model, model_before)
+        # Only the well-sampled band remains.
+        remaining_wls = torch.unique(lc._xdata_raw[:, 1]).tolist()
+        self.assertEqual(len(remaining_wls), 1)
+        self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
+        # fit() completed and returned results.
+        self.assertIsNotNone(results)
+
 # Import variability tests so they are discovered when this file is run
 from test_variability import (  # noqa: E402, F401
     TestComputeFvar,

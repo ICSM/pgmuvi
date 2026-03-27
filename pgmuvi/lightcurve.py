@@ -1198,6 +1198,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Any other keyword arguments to be passed to the model constructor.
         """
         self.__SET_MODEL_CALLED = True
+        if isinstance(model, str):
+            self._model_str = model
         model_dic_1 = {
             "2D": TwoDSpectralMixtureGPModel,
             "1D": SpectralMixtureGPModel,
@@ -3595,10 +3597,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     if hasattr(self, "_yerr_raw"):
                         self.yerr = self._yerr_raw[keep_mask].clone()
                     # Filtering bands mutates the training data; ensure any
-                    # existing GP model bound to the old data is discarded so
-                    # that a fresh model is created with the filtered data.
+                    # existing GP model and likelihood bound to the old data
+                    # are discarded so that fresh instances are created with
+                    # the filtered data.
                     if hasattr(self, "model"):
                         self.model = None
+                        self.__SET_LIKELIHOOD_CALLED = False
+                        self.__CONTRAINTS_SET = False
             else:
                 # 1D: raise ValueError if sampling is poor
                 from pgmuvi.preprocess.quality import assess_sampling_quality
@@ -3945,6 +3950,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if model is None and not hasattr(self, "model"):
                 raise ValueError("""You must provide a model""")
+            elif model is None and self.model is None:
+                # The model was discarded (e.g. after band filtering). Re-create
+                # it with the updated training data using the previously stored
+                # model string.
+                if not hasattr(self, "_model_str") or self._model_str is None:
+                    raise ValueError("""You must provide a model""")
+                self.set_model(
+                    self._model_str,
+                    self.likelihood,
+                    num_mixtures=num_mixtures,
+                    variance=variance,
+                    **kwargs,
+                )
             elif model is not None:
                 self.set_model(
                     model,
