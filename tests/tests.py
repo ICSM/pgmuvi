@@ -324,13 +324,48 @@ class TestFitLS(unittest.TestCase):
 
     def test_fap_method_parameter_1d(self):
         """Test that fap_method parameter is accepted and affects results"""
-        # 'davies' is the default; all should return valid results
-        for method in ('baluev', 'davies', 'single'):
+        # 'davies' is the default; 'baluev' also valid
+        for method in ('baluev', 'davies'):
             freq, mask = self.lc_with_yerr.fit_LS(
                 num_peaks=1, fap_method=method
             )
             self.assertIsInstance(freq, torch.Tensor)
             self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_single_warns_for_fap_max(self):
+        """Test that fap_method='single' issues a warning for fap_max"""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            freq, mask = self.lc_with_yerr.fit_LS(
+                num_peaks=1, fap_method='single'
+            )
+            # Should have issued exactly one UserWarning about 'single'
+            user_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "'single'" in str(x.message)
+            ]
+            self.assertEqual(len(user_warnings), 1)
+        self.assertIsInstance(freq, torch.Tensor)
+        self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_forwarded_1d(self):
+        """Test that the chosen fap_method is actually forwarded to astropy"""
+        from unittest.mock import patch, MagicMock
+        from astropy.timeseries import LombScargle
+
+        original_fap = LombScargle.false_alarm_probability
+        called_methods = []
+
+        def mock_fap(self_ls, power, method='baluev'):
+            called_methods.append(method)
+            return original_fap(self_ls, power, method='davies')
+
+        with patch.object(LombScargle, 'false_alarm_probability', mock_fap):
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='baluev')
+
+        # fap_max should use 'baluev'
+        self.assertIn('baluev', called_methods)
 
     def test_fap_method_parameter_2d(self):
         """Test that fap_method parameter works for multiband lightcurves"""
@@ -340,6 +375,30 @@ class TestFitLS(unittest.TestCase):
             )
             self.assertIsInstance(freq, torch.Tensor)
             self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_forwarded_multiband(self):
+        """Test that fap_method and freq_grid are forwarded for multiband"""
+        from unittest.mock import patch
+        from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance
+
+        original_fap = MultibandLSWithSignificance.false_alarm_probability
+        call_kwargs = []
+
+        def mock_fap(self_ls, power, method='analytical', n_samples=100,
+                     freq_grid=None, n_jobs=1):
+            call_kwargs.append({'method': method, 'freq_grid': freq_grid})
+            return original_fap(self_ls, power, method='analytical',
+                                freq_grid=freq_grid)
+
+        with patch.object(MultibandLSWithSignificance, 'false_alarm_probability',
+                          mock_fap):
+            self.lc_2d.fit_LS(num_peaks=1, fap_method='analytical')
+
+        # Both calls should use 'analytical' and pass a freq_grid (not None)
+        self.assertGreaterEqual(len(call_kwargs), 1)
+        for kw in call_kwargs:
+            self.assertEqual(kw['method'], 'analytical')
+            self.assertIsNotNone(kw['freq_grid'])
 
 
 class TestMultibandFAP(unittest.TestCase):
