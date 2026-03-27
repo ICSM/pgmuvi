@@ -1183,7 +1183,7 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         # sampling.
         with self.assertRaises(ValueError) as ctx:
             lc2d_mixed.fit(check_sampling=True)
-        self.assertNotIn('sampling quality checks', str(ctx.exception))
+        self.assertIn('must provide a model', str(ctx.exception))
         # The poorly-sampled band should have been filtered from the data.
         remaining_wls = torch.unique(lc2d_mixed._xdata_raw[:, 1]).tolist()
         self.assertEqual(len(remaining_wls), 1)

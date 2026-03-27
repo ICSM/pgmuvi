@@ -3407,6 +3407,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if self.ndim > 1:
                 # 2D multiband: check each wavelength band independently and
                 # skip (filter out) any bands that fail the quality gates.
+                # Ensure xdata has the expected (N, 2) shape with wavelength
+                # in column 1 before running per-band diagnostics.
+                xdata = self._xdata_raw
+                if xdata.dim() != 2 or xdata.shape[1] != 2:
+                    raise ValueError(
+                        "For 2D/multiband light curves, xdata must have shape "
+                        "(N, 2) with wavelength values in column 1. Received "
+                        f"shape {tuple(xdata.shape)}. Please ensure "
+                        "that your input is not transposed or otherwise malformed."
+                    )
                 results = self.assess_sampling_quality_per_band(
                     verbose=False, **sk
                 )
@@ -3416,9 +3426,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 for wl in failing:
                     diag = results[float(wl)]
                     warnings_str = ", ".join(diag["warnings"])
-                    print(
-                        f"Warning: Skipping band \u03bb={wl} due to poor "
-                        f"temporal sampling: {warnings_str}"
+                    warnings.warn(
+                        f"Skipping band \u03bb={wl} due to poor "
+                        f"temporal sampling: {warnings_str}",
+                        UserWarning,
+                        stacklevel=2,
                     )
 
                 if not passing:
@@ -3432,13 +3444,28 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     n_pass = len(passing)
                     n_total = results["summary"]["n_bands"]
                     skipped = [round(w, 4) for w in failing]
-                    print(
+                    warnings.warn(
                         f"Fitting with {n_pass}/{n_total} wavelength bands "
-                        f"(skipping \u03bb = {skipped})."
+                        f"(skipping \u03bb = {skipped}).",
+                        UserWarning,
+                        stacklevel=2,
                     )
-                    # Use the shared helper to filter to well-sampled bands,
-                    # keeping band-selection behavior consistent across the codebase.
-                    self.filter_well_sampled_bands(passing)
+                    # Filter data in-place to only well-sampled bands.
+                    keep_mask = torch.isin(
+                        xdata[:, 1],
+                        torch.tensor(
+                            passing, dtype=xdata.dtype, device=xdata.device
+                        ),
+                    )
+                    self.xdata = xdata[keep_mask].clone()
+                    self.ydata = self._ydata_raw[keep_mask].clone()
+                    if hasattr(self, "_yerr_raw"):
+                        self.yerr = self._yerr_raw[keep_mask].clone()
+                    # Filtering bands mutates the training data; ensure any
+                    # existing GP model bound to the old data is discarded so
+                    # that a fresh model is created with the filtered data.
+                    if hasattr(self, "model"):
+                        self.model = None
             else:
                 # 1D: raise ValueError if sampling is poor
                 from pgmuvi.preprocess.quality import assess_sampling_quality
