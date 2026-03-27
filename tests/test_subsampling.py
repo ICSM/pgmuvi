@@ -201,6 +201,27 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         ]
         self.assertEqual(len(sub_warns), 0)
 
+    def test_warning_when_above_default_limit(self):
+        """A UserWarning should be issued when N exceeds the default max_samples."""
+        # Build a lightcurve large enough to trigger the default limit (10000)
+        rng = np.random.default_rng(42)
+        n = 12000
+        t = np.sort(rng.uniform(0, 100, n))
+        y = np.sin(2 * np.pi * t / 5)
+        lc_large = Lightcurve(
+            xdata=torch.tensor(t, dtype=torch.float32),
+            ydata=torch.tensor(y, dtype=torch.float32),
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            lc_large.fit_LS()  # default max_samples=10000
+        sub_warns = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "max_samples" in str(w.message)
+        ]
+        self.assertGreater(len(sub_warns), 0)
+
     def test_warning_when_above_limit(self):
         """A UserWarning about subsampling should be issued when N > max_samples."""
         with warnings.catch_warnings(record=True) as caught:

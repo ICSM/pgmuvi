@@ -2582,6 +2582,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # ------------------------------------------------------------------
         # Optional subsampling for large lightcurves
         # ------------------------------------------------------------------
+        _has_yerr = (
+            hasattr(self, "_yerr_transformed")
+            and self._yerr_transformed is not None
+        )
         if max_samples is not None:
             from pgmuvi.preprocess.quality import subsample_lightcurve
 
@@ -2608,27 +2612,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                         device=xdata_all.device)
                 _xdata = xdata_all[idx_t]
                 _ydata = self.ydata[idx_t]
-                has_yerr_sub = (
-                    hasattr(self, "_yerr_transformed")
-                    and self._yerr_transformed is not None
-                )
-                _yerr = self.yerr[idx_t] if has_yerr_sub else None
+                _yerr = self.yerr[idx_t] if _has_yerr else None
             else:
                 _xdata = self.xdata
                 _ydata = self.ydata
-                has_yerr_sub = (
-                    hasattr(self, "_yerr_transformed")
-                    and self._yerr_transformed is not None
-                )
-                _yerr = self.yerr if has_yerr_sub else None
+                _yerr = self.yerr if _has_yerr else None
         else:
             _xdata = self.xdata
             _ydata = self.ydata
-            has_yerr_sub = (
-                hasattr(self, "_yerr_transformed")
-                and self._yerr_transformed is not None
-            )
-            _yerr = self.yerr if has_yerr_sub else None
+            _yerr = self.yerr if _has_yerr else None
 
         if self.ndim > 1:
             # Multi-band case: xdata[:, 0] is time, xdata[:, 1] is band/wavelength

@@ -453,6 +453,9 @@ def subsample_lightcurve(
     all_unused = set(range(n)) - selected_set
 
     # Iteratively repair any gap that exceeds the allowed fraction.
+    # The loop terminates when either (a) all gaps satisfy the constraint,
+    # or (b) no unused candidate point falls inside the largest offending gap
+    # (e.g. the original data itself contains an irreducible gap).
     while True:
         selected = sorted(selected_set, key=lambda i: t[i])
         t_sel = t[selected]
