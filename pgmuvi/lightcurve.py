@@ -3482,8 +3482,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             default 30.
         check_sampling : bool, default=True
             If True, verify lightcurve has adequate temporal sampling before
-            fitting. Raises ValueError if sampling is poor. Set to False to
-            force fitting.
+            fitting. For 1D lightcurves, raises ValueError if sampling is
+            poor. For 2D (multiband) lightcurves, checks each wavelength band
+            independently: bands that fail are removed from the data with a
+            printed warning, and the fit proceeds with the remaining bands.
+            Raises ValueError only if no bands pass. Set to False to force
+            fitting without any sampling quality check.
         sampling_kwargs : dict, optional
             Keyword arguments for sampling quality gates (min_points,
             max_gap_fraction, min_baseline_factor, min_snr,
@@ -3527,35 +3531,103 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Raises
         ------
         ValueError
-            If check_sampling is True and the lightcurve has poor temporal
-            sampling, or if no model is provided.
+            If check_sampling is True and the lightcurve (1D) has poor
+            temporal sampling, or all 2D bands fail sampling checks, or if
+            no model is provided.
         """
         if check_sampling:
-            from pgmuvi.preprocess.quality import assess_sampling_quality
-
             sk = sampling_kwargs or {}
-            t = self._xdata_raw.detach().cpu().numpy()
-            if t.ndim > 1:
-                t = t[:, 0]
-            y = (
-                self._ydata_raw.detach().cpu().numpy()
-                if hasattr(self, "_ydata_raw")
-                else None
-            )
-            yerr = (
-                self._yerr_raw.detach().cpu().numpy()
-                if hasattr(self, "_yerr_raw")
-                else None
-            )
-            passes, diag = assess_sampling_quality(t, y, yerr, verbose=False, **sk)
-            if not passes:
-                warnings_str = "\n".join(f"  • {w}" for w in diag["warnings"])
-                raise ValueError(
-                    f"Lightcurve has poor temporal sampling:\n{warnings_str}\n\n"
-                    f"Recommendation: {diag['recommendation']}\n"
-                    "GP fitting not recommended for poorly sampled data.\n"
-                    "To force fitting anyway, use: fit(check_sampling=False)"
+            if self.ndim > 1:
+                # 2D multiband: check each wavelength band independently and
+                # skip (filter out) any bands that fail the quality gates.
+                # Ensure xdata has the expected (N, 2) shape with wavelength
+                # in column 1 before running per-band diagnostics.
+                xdata = self._xdata_raw
+                if xdata.dim() != 2 or xdata.shape[1] != 2:
+                    raise ValueError(
+                        "For 2D/multiband light curves, xdata must have shape "
+                        "(N, 2) with wavelength values in column 1. Received "
+                        f"shape {tuple(xdata.shape)}. Please ensure "
+                        "that your input is not transposed or otherwise malformed."
+                    )
+                results = self.assess_sampling_quality_per_band(
+                    verbose=False, **sk
                 )
+                failing = results["summary"]["failing_wavelengths"]
+                passing = results["summary"]["passing_wavelengths"]
+
+                for wl in failing:
+                    diag = results[float(wl)]
+                    warnings_str = ", ".join(diag["warnings"])
+                    warnings.warn(
+                        f"Skipping band \u03bb={wl} due to poor "
+                        f"temporal sampling: {warnings_str}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+
+                if not passing:
+                    raise ValueError(
+                        "No wavelength bands passed sampling quality checks. "
+                        "GP fitting is not recommended.\n"
+                        "To force fitting anyway, use: fit(check_sampling=False)"
+                    )
+
+                if failing:
+                    n_pass = len(passing)
+                    n_total = results["summary"]["n_bands"]
+                    skipped = [round(w, 4) for w in failing]
+                    warnings.warn(
+                        f"Fitting with {n_pass}/{n_total} wavelength bands "
+                        f"(skipping \u03bb = {skipped}).",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    # Filter data in-place to only well-sampled bands.
+                    keep_mask = torch.isin(
+                        xdata[:, 1],
+                        torch.tensor(
+                            passing, dtype=xdata.dtype, device=xdata.device
+                        ),
+                    )
+                    self.xdata = xdata[keep_mask].clone()
+                    self.ydata = self._ydata_raw[keep_mask].clone()
+                    if hasattr(self, "_yerr_raw"):
+                        self.yerr = self._yerr_raw[keep_mask].clone()
+                    # Filtering bands mutates the training data; ensure any
+                    # existing GP model bound to the old data is discarded so
+                    # that a fresh model is created with the filtered data.
+                    if hasattr(self, "model"):
+                        self.model = None
+            else:
+                # 1D: raise ValueError if sampling is poor
+                from pgmuvi.preprocess.quality import assess_sampling_quality
+
+                t = self._xdata_raw.detach().cpu().numpy()
+                y = (
+                    self._ydata_raw.detach().cpu().numpy()
+                    if hasattr(self, "_ydata_raw")
+                    else None
+                )
+                yerr = (
+                    self._yerr_raw.detach().cpu().numpy()
+                    if hasattr(self, "_yerr_raw")
+                    else None
+                )
+                passes, diag = assess_sampling_quality(
+                    t, y, yerr, verbose=False, **sk
+                )
+                if not passes:
+                    warnings_str = "\n".join(
+                        f"  • {w}" for w in diag["warnings"]
+                    )
+                    raise ValueError(
+                        f"Lightcurve has poor temporal sampling:\n"
+                        f"{warnings_str}\n\n"
+                        f"Recommendation: {diag['recommendation']}\n"
+                        "GP fitting not recommended for poorly sampled data.\n"
+                        "To force fitting anyway, use: fit(check_sampling=False)"
+                    )
         if check_variability:
             from pgmuvi.preprocess.variability import is_variable
 
