@@ -36,15 +36,14 @@ class TestSubsampleLightcurveLarge(unittest.TestCase):
         self.max_gap_fraction = 0.3
 
     def test_output_size_at_most_max_samples(self):
-        """Result length should be <= max_samples (ignoring gap-repair additions)."""
+        """Result length should be <= max_samples (budget strictly enforced)."""
         idx = subsample_lightcurve(
             self.t_uniform,
             max_samples=self.max_samples,
             max_gap_fraction=self.max_gap_fraction,
             random_seed=42,
         )
-        # Allow a small buffer for gap-repair additions
-        self.assertLessEqual(len(idx), self.max_samples + 10)
+        self.assertLessEqual(len(idx), self.max_samples)
 
     def test_indices_are_valid(self):
         """All returned indices should be valid indices into the original array."""
@@ -114,6 +113,23 @@ class TestSubsampleLightcurveLarge(unittest.TestCase):
         idx1 = subsample_lightcurve(self.t_uniform, max_samples=200, random_seed=1)
         idx2 = subsample_lightcurve(self.t_uniform, max_samples=200, random_seed=2)
         self.assertFalse(np.array_equal(idx1, idx2))
+
+
+class TestSubsampleLightcurveValidation(unittest.TestCase):
+    """Input validation tests for subsample_lightcurve."""
+
+    def test_max_samples_less_than_2_raises(self):
+        """max_samples values less than 2 should raise ValueError."""
+        t = np.linspace(0, 100, 50)
+        for bad_value in (1, 0, -1, -100):
+            with self.assertRaises(ValueError, msg=f"max_samples={bad_value}"):
+                subsample_lightcurve(t, max_samples=bad_value)
+
+    def test_max_samples_non_integer_raises(self):
+        """Non-integer max_samples should raise ValueError."""
+        t = np.linspace(0, 100, 50)
+        with self.assertRaises(ValueError):
+            subsample_lightcurve(t, max_samples=2.5)
 
 
 class TestSubsampleLightcurveEdgeCases(unittest.TestCase):
@@ -186,6 +202,7 @@ class TestSubsampleLightcurveWarning(unittest.TestCase):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", UserWarning)
             lc.fit(
+                model="1D",
                 training_iter=1,
                 miniter=1,
                 max_samples=max_samples,
@@ -203,6 +220,7 @@ class TestSubsampleLightcurveWarning(unittest.TestCase):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", UserWarning)
             lc.fit(
+                model="1D",
                 training_iter=1,
                 miniter=1,
                 max_samples=max_samples,
@@ -223,6 +241,7 @@ class TestSubsampleLightcurveWarning(unittest.TestCase):
 
         # Call fit() with subsampling enabled; internal buffers should be restored.
         lc.fit(
+            model="1D",
             training_iter=1,
             miniter=1,
             max_samples=50,

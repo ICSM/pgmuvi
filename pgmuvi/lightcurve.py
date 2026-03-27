@@ -3084,10 +3084,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             - fvar_min: float (default 0.05)
             - stetson_k_min: float (default 0.95)
             - verbose: bool (default False)
-        
+
         Returns
         -------
-          Variability diagnostics from is_variable()        
+          Variability diagnostics from is_variable()
           If the lightcurve is multiband (ndim > 1). Use
           check_variability_per_band() instead.
 
@@ -3118,10 +3118,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Parameters
         ----------
         **kwargs : dict
-            Arguments passed to is_variable()                   
+            Arguments passed to is_variable()
                     'n_variable': int,
                     'variable_wavelengths': list[float]
-        
+
         Returns
         -------
             If the lightcurve is not 2-D multiband data (ndim != 2 columns
@@ -3173,9 +3173,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "variable_wavelengths": variable_bands,
         }
         return results
-        
 
-    
+
+
     def filter_variable_bands(self, **kwargs):
         """
         Create new Lightcurve with only variable bands retained.
@@ -3183,7 +3183,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Only applicable for multiband (2D) lightcurves where
         ``xdata[:, 1]`` encodes the band/wavelength.
 
-        
+
          Parameters
          ----------
             Arguments passed to is_variable()
@@ -3634,242 +3634,242 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             idx_t = torch.as_tensor(idx, dtype=torch.long)
             for name, buf in _orig_buffers.items():
                 self.register_buffer(name, buf[idx_t])
-            
+
 
         try:
-              if not hasattr(self, "likelihood"):
-                  self.set_likelihood(likelihood, variance=variance, **kwargs)
-              elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
-                  # if no likelihood is passed, we only want to set the likelihood
-                  # if it hasn't already been set
-                  self.set_likelihood(likelihood, variance=variance, **kwargs)
-              elif likelihood is not None:
-                  self.set_likelihood(likelihood, variance=variance, **kwargs)
-              # if likelihood is None and not hasattr(self, 'likelihood'):
-              #     raise ValueError("""You must provide a likelihood function""")
-              # elif likelihood is not None:
-              #     self.set_likelihood(likelihood, **kwargs)
-              
-              # Validate explicitly-provided num_mixtures early.
-              if num_mixtures is not None:
-                  # Must be a (non-bool) integer and strictly positive.
-                  if isinstance(num_mixtures, bool) or not isinstance(
-                      num_mixtures, int
-                  ):
-                      raise TypeError(
-                          "`num_mixtures` must be a positive integer or None, "
-                          f"got {num_mixtures!r} of type {type(num_mixtures)!r}."
-                      )
-                  if num_mixtures < 1:
-                      raise ValueError(
-                          "`num_mixtures` must be a positive integer or None, "
-                          f"got {num_mixtures}."
-                      )
+            if not hasattr(self, "likelihood"):
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
+                # if no likelihood is passed, we only want to set the likelihood
+                # if it hasn't already been set
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            elif likelihood is not None:
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            # if likelihood is None and not hasattr(self, 'likelihood'):
+            #     raise ValueError("""You must provide a likelihood function""")
+            # elif likelihood is not None:
+            #     self.set_likelihood(likelihood, **kwargs)
 
-              # --- MLS-based initialisation ---
-              _init_freqs = None  # frequencies (raw units) to seed the SM kernel
+            # Validate explicitly-provided num_mixtures early.
+            if num_mixtures is not None:
+                # Must be a (non-bool) integer and strictly positive.
+                if isinstance(num_mixtures, bool) or not isinstance(
+                    num_mixtures, int
+                ):
+                    raise TypeError(
+                        "`num_mixtures` must be a positive integer or None, "
+                        f"got {num_mixtures!r} of type {type(num_mixtures)!r}."
+                    )
+                if num_mixtures < 1:
+                    raise ValueError(
+                        "`num_mixtures` must be a positive integer or None, "
+                        f"got {num_mixtures}."
+                    )
 
-              # Minimum frequency in raw data units: the period cannot exceed the
-              # total span of the data.  Used to filter obviously unphysical MLS
-              # peaks and to generate padding frequencies when not enough peaks are
-              # available.
-              _t_raw = (
-                  self._xdata_raw[:, 0] if self.ndim > 1 else self._xdata_raw
-              )
-              _t_span = float(_t_raw.max() - _t_raw.min())
-              _freq_lower = 1.0 / _t_span if _t_span > 0 else 0.0
-              _t_sorted = _t_raw.sort().values
-              _t_diffs = _t_sorted[1:] - _t_sorted[:-1]
-              _pos_diffs = _t_diffs[_t_diffs > 0]
-              _freq_upper = (
-                  1.0 / (2.0 * float(_pos_diffs.min()))
-                  if len(_pos_diffs) > 0
-                  else float("inf")
-              )
+            # --- MLS-based initialisation ---
+            _init_freqs = None  # frequencies (raw units) to seed the SM kernel
 
-              if periods is not None:
-                  # User supplied explicit period guesses — skip MLS entirely.
-                  _periods_tensor = torch.as_tensor(
-                      periods, dtype=self._xdata_raw.dtype
-                  ).flatten()
+            # Minimum frequency in raw data units: the period cannot exceed the
+            # total span of the data.  Used to filter obviously unphysical MLS
+            # peaks and to generate padding frequencies when not enough peaks are
+            # available.
+            _t_raw = (
+                self._xdata_raw[:, 0] if self.ndim > 1 else self._xdata_raw
+            )
+            _t_span = float(_t_raw.max() - _t_raw.min())
+            _freq_lower = 1.0 / _t_span if _t_span > 0 else 0.0
+            _t_sorted = _t_raw.sort().values
+            _t_diffs = _t_sorted[1:] - _t_sorted[:-1]
+            _pos_diffs = _t_diffs[_t_diffs > 0]
+            _freq_upper = (
+                1.0 / (2.0 * float(_pos_diffs.min()))
+                if len(_pos_diffs) > 0
+                else float("inf")
+            )
 
-                  # Validate user-supplied periods: must be non-empty, finite, and > 0
-                  if _periods_tensor.numel() == 0:
-                      raise ValueError(
-                          "When providing explicit `periods`, the sequence must be "
-                          "non-empty."
-                      )
-                  if not torch.isfinite(_periods_tensor).all():
-                      raise ValueError(
-                          "All values in `periods` must be finite (no NaN or inf)."
-                      )
-                  if not (_periods_tensor > 0).all():
-                      raise ValueError(
-                          "All values in `periods` must be strictly positive."
-                      )
-                  _init_freqs = 1.0 / _periods_tensor
-                  num_mixtures = len(_init_freqs)
-              elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
-                  # Compute constraint-set frequency bounds in raw data units.
-                  # These are used in addition to the data-span bounds to exclude
-                  # MLS peaks that would lie outside user-requested period limits.
-                  # Note: fit_LS uses Nyquist_factor > 1, so its frequencies can
-                  # exceed the standard Nyquist.  We therefore only apply an upper
-                  # frequency limit when the constraint_set explicitly demands one
-                  # (via a minimum-period specification); otherwise the upper bound
-                  # is left unrestricted (inf).
-                  _cs_freq_lower = _freq_lower  # default: data-span lower bound
-                  _cs_freq_upper = float("inf")  # no upper cap unless constraint_set says so
-                  if constraint_set is not None:
-                      try:
-                          cs = get_constraint_set(constraint_set)
-                          if "period" in cs:
-                              _pb = cs["period"]
-                              _p_lower_val, _p_lower_active = _pb["lower"]
-                              _p_upper_val, _p_upper_active = _pb["upper"]
-                              # Period lower limit → max allowed frequency
-                              if _p_lower_active and _p_lower_val is not None:
-                                  _cs_freq_upper = min(
-                                      _cs_freq_upper, 1.0 / _p_lower_val
-                                  )
-                              # Period upper limit → min allowed frequency
-                              if _p_upper_active and _p_upper_val is not None:
-                                  _cs_freq_lower = max(
-                                      _cs_freq_lower, 1.0 / _p_upper_val
-                                  )
-                      except (ValueError, KeyError):
-                          warnings.warn(
-                              f"constraint_set={constraint_set!r} is not recognised "
-                              "and will be ignored for MLS peak filtering. "
-                              "Only the data-span frequency bounds will be applied.",
-                              RuntimeWarning,
-                              stacklevel=2,
-                          )
-                          # Normalise invalid constraint_set so that later code does not
-                          # attempt to apply or validate an unknown set again.
-                          constraint_set = None
+            if periods is not None:
+                # User supplied explicit period guesses — skip MLS entirely.
+                _periods_tensor = torch.as_tensor(
+                    periods, dtype=self._xdata_raw.dtype
+                ).flatten()
 
-                  # Run the MLS periodogram to choose num_mixtures and seed frequencies.
-                  try:
-                      _max_peaks = max(num_mixtures or 1, 10)
-                      ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
+                # Validate user-supplied periods: must be non-empty, finite, and > 0
+                if _periods_tensor.numel() == 0:
+                    raise ValueError(
+                        "When providing explicit `periods`, the sequence must be "
+                        "non-empty."
+                    )
+                if not torch.isfinite(_periods_tensor).all():
+                    raise ValueError(
+                        "All values in `periods` must be finite (no NaN or inf)."
+                    )
+                if not (_periods_tensor > 0).all():
+                    raise ValueError(
+                        "All values in `periods` must be strictly positive."
+                    )
+                _init_freqs = 1.0 / _periods_tensor
+                num_mixtures = len(_init_freqs)
+            elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
+                # Compute constraint-set frequency bounds in raw data units.
+                # These are used in addition to the data-span bounds to exclude
+                # MLS peaks that would lie outside user-requested period limits.
+                # Note: fit_LS uses Nyquist_factor > 1, so its frequencies can
+                # exceed the standard Nyquist.  We therefore only apply an upper
+                # frequency limit when the constraint_set explicitly demands one
+                # (via a minimum-period specification); otherwise the upper bound
+                # is left unrestricted (inf).
+                _cs_freq_lower = _freq_lower  # default: data-span lower bound
+                _cs_freq_upper = float("inf")  # no upper cap unless constraint_set says so
+                if constraint_set is not None:
+                    try:
+                        cs = get_constraint_set(constraint_set)
+                        if "period" in cs:
+                            _pb = cs["period"]
+                            _p_lower_val, _p_lower_active = _pb["lower"]
+                            _p_upper_val, _p_upper_active = _pb["upper"]
+                            # Period lower limit → max allowed frequency
+                            if _p_lower_active and _p_lower_val is not None:
+                                _cs_freq_upper = min(
+                                    _cs_freq_upper, 1.0 / _p_lower_val
+                                )
+                            # Period upper limit → min allowed frequency
+                            if _p_upper_active and _p_upper_val is not None:
+                                _cs_freq_lower = max(
+                                    _cs_freq_lower, 1.0 / _p_upper_val
+                                )
+                    except (ValueError, KeyError):
+                        warnings.warn(
+                            f"constraint_set={constraint_set!r} is not recognised "
+                            "and will be ignored for MLS peak filtering. "
+                            "Only the data-span frequency bounds will be applied.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                        # Normalise invalid constraint_set so that later code does not
+                        # attempt to apply or validate an unknown set again.
+                        constraint_set = None
 
-                      # Filter peaks whose period exceeds the data span or falls
-                      # outside user-specified constraint-set period bounds.
-                      if len(ls_freqs) > 0 and _cs_freq_lower > 0:
-                          _valid = (ls_freqs >= _cs_freq_lower) & (
-                              ls_freqs <= _cs_freq_upper
-                          )
-                          if not _valid.all():
-                              _n_filtered = int((~_valid).sum().item())
-                              warnings.warn(
-                                  f"{_n_filtered} MLS peak(s) fell outside the "
-                                  f"allowed frequency range "
-                                  f"[{_cs_freq_lower:.4g}, {_cs_freq_upper:.4g}] "
-                                  "(derived from data span"
-                                  + (
-                                      f" and constraint_set={constraint_set!r}"
-                                      if constraint_set is not None
-                                      else ""
-                                  )
-                                  + ") and were excluded from the initialisation.",
-                                  RuntimeWarning,
-                                  stacklevel=2,
-                              )
-                              ls_freqs = ls_freqs[_valid]
-                              ls_sig = ls_sig[_valid]
+                # Run the MLS periodogram to choose num_mixtures and seed frequencies.
+                try:
+                    _max_peaks = max(num_mixtures or 1, 10)
+                    ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
 
-                      if len(ls_freqs) > 0:
-                          ls_sig_freqs = ls_freqs[ls_sig]
-                          ls_insig_freqs = ls_freqs[~ls_sig]
+                    # Filter peaks whose period exceeds the data span or falls
+                    # outside user-specified constraint-set period bounds.
+                    if len(ls_freqs) > 0 and _cs_freq_lower > 0:
+                        _valid = (ls_freqs >= _cs_freq_lower) & (
+                            ls_freqs <= _cs_freq_upper
+                        )
+                        if not _valid.all():
+                            _n_filtered = int((~_valid).sum().item())
+                            warnings.warn(
+                                f"{_n_filtered} MLS peak(s) fell outside the "
+                                f"allowed frequency range "
+                                f"[{_cs_freq_lower:.4g}, {_cs_freq_upper:.4g}] "
+                                "(derived from data span"
+                                + (
+                                    f" and constraint_set={constraint_set!r}"
+                                    if constraint_set is not None
+                                    else ""
+                                )
+                                + ") and were excluded from the initialisation.",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                            ls_freqs = ls_freqs[_valid]
+                            ls_sig = ls_sig[_valid]
 
-                          if num_mixtures is None:
-                              # Default: use only the statistically significant peaks.
-                              if len(ls_sig_freqs) > 0:
-                                  num_mixtures = len(ls_sig_freqs)
-                                  _init_freqs = ls_sig_freqs
-                              else:
-                                  # No significant peaks; fall back to the strongest one.
-                                  num_mixtures = 1
-                                  _init_freqs = ls_freqs[:1]
-                          else:
-                              # User specified num_mixtures: fill with significant peaks
-                              # first, then non-significant ones, then pad with
-                              # evenly-spaced frequencies if still not enough.
-                              n_sig = len(ls_sig_freqs)
-                              if num_mixtures <= n_sig:
-                                  _init_freqs = ls_sig_freqs[:num_mixtures]
-                              else:
-                                  _extra = num_mixtures - n_sig
-                                  _available_insig = ls_insig_freqs[:_extra]
-                                  _init_freqs = torch.cat([ls_sig_freqs, _available_insig])
-                                  # Pad with additional frequencies if still short.
-                                  _n_pad = num_mixtures - len(_init_freqs)
-                                  if _n_pad > 0:
-                                      # Determine padding interval as the intersection of
-                                      # the data-based frequency range and any
-                                      # constraint-set bounds.
-                                      _pad_lower = _freq_lower
-                                      _pad_upper = _freq_upper
-                                      if _cs_freq_lower > 0:
-                                          _pad_lower = max(_pad_lower, _cs_freq_lower)
-                                          _pad_upper = min(_pad_upper, _cs_freq_upper)
-                                      if _pad_upper > _pad_lower:
-                                          warnings.warn(
-                                              f"Only {len(_init_freqs)} MLS peak(s) found but "
-                                              f"{num_mixtures} were requested. Padding with "
-                                              f"{_n_pad} evenly-spaced frequencies in "
-                                              f"[{_pad_lower:.4g}, {_pad_upper:.4g}].",
-                                              RuntimeWarning,
-                                              stacklevel=2,
-                                          )
-                                          _pad = torch.linspace(
-                                              _pad_lower,
-                                              _pad_upper,
-                                              _n_pad + 2,
-                                              dtype=_init_freqs.dtype,
-                                          )[1:-1]
-                                      else:
-                                          warnings.warn(
-                                              "Could not construct a valid frequency range "
-                                              "for padding MLS initialisation; repeating the "
-                                              "last available MLS frequency to reach the "
-                                              f"requested num_mixtures={num_mixtures}.",
-                                              RuntimeWarning,
-                                              stacklevel=2,
-                                          )
-                                          _last_freq = _init_freqs[-1]
-                                          _pad = _init_freqs.new_full((_n_pad,), _last_freq)
-                                      _init_freqs = torch.cat([_init_freqs, _pad])
-                      else:
-                          # MLS found no peaks at all; warn and fall back.
+                    if len(ls_freqs) > 0:
+                        ls_sig_freqs = ls_freqs[ls_sig]
+                        ls_insig_freqs = ls_freqs[~ls_sig]
 
-                          if num_mixtures is None:
-                              num_mixtures = 4
-                          # This Warning has to be raised after the if, so that the user-defined number of mixtures
-                          # is used and they still see the warning if they set a value.
-                          warnings.warn(  
-                              "MLS periodogram returned no peaks; falling back to "
-                              f"num_mixtures={num_mixtures} with default initialisation.",
-                              RuntimeWarning,
-                              stacklevel=2,
-                          )
-                  except Exception as exc:
-                      # MLS failed for any reason; fall back gracefully but warn the user.
+                        if num_mixtures is None:
+                            # Default: use only the statistically significant peaks.
+                            if len(ls_sig_freqs) > 0:
+                                num_mixtures = len(ls_sig_freqs)
+                                _init_freqs = ls_sig_freqs
+                            else:
+                                # No significant peaks; fall back to the strongest one.
+                                num_mixtures = 1
+                                _init_freqs = ls_freqs[:1]
+                        else:
+                            # User specified num_mixtures: fill with significant peaks
+                            # first, then non-significant ones, then pad with
+                            # evenly-spaced frequencies if still not enough.
+                            n_sig = len(ls_sig_freqs)
+                            if num_mixtures <= n_sig:
+                                _init_freqs = ls_sig_freqs[:num_mixtures]
+                            else:
+                                _extra = num_mixtures - n_sig
+                                _available_insig = ls_insig_freqs[:_extra]
+                                _init_freqs = torch.cat([ls_sig_freqs, _available_insig])
+                                # Pad with additional frequencies if still short.
+                                _n_pad = num_mixtures - len(_init_freqs)
+                                if _n_pad > 0:
+                                    # Determine padding interval as the intersection of
+                                    # the data-based frequency range and any
+                                    # constraint-set bounds.
+                                    _pad_lower = _freq_lower
+                                    _pad_upper = _freq_upper
+                                    if _cs_freq_lower > 0:
+                                        _pad_lower = max(_pad_lower, _cs_freq_lower)
+                                        _pad_upper = min(_pad_upper, _cs_freq_upper)
+                                    if _pad_upper > _pad_lower:
+                                        warnings.warn(
+                                            f"Only {len(_init_freqs)} MLS peak(s) found but "
+                                            f"{num_mixtures} were requested. Padding with "
+                                            f"{_n_pad} evenly-spaced frequencies in "
+                                            f"[{_pad_lower:.4g}, {_pad_upper:.4g}].",
+                                            RuntimeWarning,
+                                            stacklevel=2,
+                                        )
+                                        _pad = torch.linspace(
+                                            _pad_lower,
+                                            _pad_upper,
+                                            _n_pad + 2,
+                                            dtype=_init_freqs.dtype,
+                                        )[1:-1]
+                                    else:
+                                        warnings.warn(
+                                            "Could not construct a valid frequency range "
+                                            "for padding MLS initialisation; repeating the "
+                                            "last available MLS frequency to reach the "
+                                            f"requested num_mixtures={num_mixtures}.",
+                                            RuntimeWarning,
+                                            stacklevel=2,
+                                        )
+                                        _last_freq = _init_freqs[-1]
+                                        _pad = _init_freqs.new_full((_n_pad,), _last_freq)
+                                    _init_freqs = torch.cat([_init_freqs, _pad])
+                    else:
+                        # MLS found no peaks at all; warn and fall back.
 
-                      if num_mixtures is None:
-                          num_mixtures = 4
-                      warnings.warn(
-                          "MLS-based initialisation failed; falling back to "
-                          f"num_mixtures={num_mixtures}. Original error was: "
-                          f"{exc}",
-                          RuntimeWarning,
-                          stacklevel=2,
-                      )
+                        if num_mixtures is None:
+                            num_mixtures = 4
+                        # This Warning has to be raised after the if, so that the user-defined number of mixtures
+                        # is used and they still see the warning if they set a value.
+                        warnings.warn(
+                            "MLS periodogram returned no peaks; falling back to "
+                            f"num_mixtures={num_mixtures} with default initialisation.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                except Exception as exc:
+                    # MLS failed for any reason; fall back gracefully but warn the user.
 
-              # Final fallback when MLS init is disabled or not applicable.
-              if num_mixtures is None:
-                  num_mixtures = 4
+                    if num_mixtures is None:
+                        num_mixtures = 4
+                    warnings.warn(
+                        "MLS-based initialisation failed; falling back to "
+                        f"num_mixtures={num_mixtures}. Original error was: "
+                        f"{exc}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+
+            # Final fallback when MLS init is disabled or not applicable.
+            if num_mixtures is None:
+                num_mixtures = 4
 
             if model is None and not hasattr(self, "model"):
                 raise ValueError("""You must provide a model""")
