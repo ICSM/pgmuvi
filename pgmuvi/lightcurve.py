@@ -2031,7 +2031,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # (num_mixtures, 1, ard_num_dims), we use a single scalar
                 # constraint.  We take the minimum to ensure both dimensions
                 # satisfy their physical constraints:
-                # - Time frequencies >= 1/time_span (periods shorter than data)
+                # - Time frequencies >= 1/time_span (periods not longer than
+                #   the data span; i.e., period <= time_span)
                 # - Wavelength frequencies >= ~0 (allow achromatic variability)
                 overall_min_frequency = min(
                     min_time_frequency, min_wavelength_frequency
