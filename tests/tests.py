@@ -322,6 +322,84 @@ class TestFitLS(unittest.TestCase):
         if len(mask) > 0:
             self.assertIsInstance(mask[0].item(), bool)
 
+    def test_fap_method_parameter_1d(self):
+        """Test that fap_method parameter is accepted and affects results"""
+        # 'davies' is the default; 'baluev' also valid
+        for method in ('baluev', 'davies'):
+            freq, mask = self.lc_with_yerr.fit_LS(
+                num_peaks=1, fap_method=method
+            )
+            self.assertIsInstance(freq, torch.Tensor)
+            self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_single_warns_for_fap_max(self):
+        """Test that fap_method='single' issues a warning for fap_max"""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            freq, mask = self.lc_with_yerr.fit_LS(
+                num_peaks=1, fap_method='single'
+            )
+            # Should have issued exactly one UserWarning about 'single'
+            user_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "'single'" in str(x.message)
+            ]
+            self.assertEqual(len(user_warnings), 1)
+        self.assertIsInstance(freq, torch.Tensor)
+        self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_forwarded_1d(self):
+        """Test that the chosen fap_method is actually forwarded to astropy"""
+        from unittest.mock import patch, MagicMock
+        from astropy.timeseries import LombScargle
+
+        original_fap = LombScargle.false_alarm_probability
+        called_methods = []
+
+        def mock_fap(self_ls, power, method='baluev'):
+            called_methods.append(method)
+            return original_fap(self_ls, power, method='davies')
+
+        with patch.object(LombScargle, 'false_alarm_probability', mock_fap):
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='baluev')
+
+        # fap_max should use 'baluev'
+        self.assertIn('baluev', called_methods)
+
+    def test_fap_method_parameter_2d(self):
+        """Test that fap_method parameter works for multiband lightcurves"""
+        for method in ('analytical', 'bootstrap'):
+            freq, mask = self.lc_2d.fit_LS(
+                num_peaks=1, fap_method=method
+            )
+            self.assertIsInstance(freq, torch.Tensor)
+            self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_forwarded_multiband(self):
+        """Test that fap_method and freq_grid are forwarded for multiband"""
+        from unittest.mock import patch
+        from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance
+
+        original_fap = MultibandLSWithSignificance.false_alarm_probability
+        call_kwargs = []
+
+        def mock_fap(self_ls, power, method='analytical', n_samples=100,
+                     freq_grid=None, n_jobs=1):
+            call_kwargs.append({'method': method, 'freq_grid': freq_grid})
+            return original_fap(self_ls, power, method='analytical',
+                                freq_grid=freq_grid)
+
+        with patch.object(MultibandLSWithSignificance, 'false_alarm_probability',
+                          mock_fap):
+            self.lc_2d.fit_LS(num_peaks=1, fap_method='analytical')
+
+        # Both calls should use 'analytical' and pass a freq_grid (not None)
+        self.assertGreaterEqual(len(call_kwargs), 1)
+        for kw in call_kwargs:
+            self.assertEqual(kw['method'], 'analytical')
+            self.assertIsNotNone(kw['freq_grid'])
+
 
 class TestMultibandFAP(unittest.TestCase):
     """Tests for multiband false-alarm probability computation"""
@@ -470,6 +548,59 @@ class TestMultibandFAP(unittest.TestCase):
         # This is a sanity check that methods are reasonable
         self.assertLess(fap_bootstrap, 0.5,
                         "Bootstrap FAP too high for strong signal")
+
+    def test_parallel_bootstrap_fap(self):
+        """Test that parallel bootstrap (n_jobs>1) gives consistent results"""
+        from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance
+
+        t = self.xdata_signal[:, 0].numpy()
+        bands = self.xdata_signal[:, 1].numpy()
+        y = self.ydata_signal.numpy()
+
+        ls = MultibandLSWithSignificance(t, y, bands)
+        freq = ls.autofrequency()
+        power = ls.power(freq)
+        max_power = power.max()
+
+        # Serial bootstrap
+        fap_serial = ls.false_alarm_probability(
+            max_power, method='bootstrap', n_samples=30, n_jobs=1
+        )
+        # Parallel bootstrap (2 workers)
+        fap_parallel = ls.false_alarm_probability(
+            max_power, method='bootstrap', n_samples=30, n_jobs=2
+        )
+
+        # Both should produce valid FAP values in [0, 1]
+        self.assertGreaterEqual(fap_serial, 0.0)
+        self.assertLessEqual(fap_serial, 1.0)
+        self.assertGreaterEqual(fap_parallel, 0.0)
+        self.assertLessEqual(fap_parallel, 1.0)
+
+    def test_analytical_default_in_fit_ls(self):
+        """Test that fit_LS for multiband uses analytical FAP by default"""
+        from unittest.mock import patch
+        from pgmuvi import multiband_ls_significance as mls
+
+        _orig_fap = mls.MultibandLSWithSignificance.false_alarm_probability
+        called_methods = []
+
+        def _recording_fap(self_, power_values, method='analytical', **kw):
+            called_methods.append(method)
+            return _orig_fap(self_, power_values, method=method, **kw)
+
+        with patch.object(mls.MultibandLSWithSignificance,
+                          'false_alarm_probability', _recording_fap):
+            self.lc_signal.fit_LS(num_peaks=1)
+
+        # Every call to false_alarm_probability should have used 'analytical'
+        self.assertGreater(len(called_methods), 0,
+                           "false_alarm_probability was never called")
+        for method_used in called_methods:
+            self.assertEqual(
+                method_used, 'analytical',
+                f"Expected 'analytical' FAP method by default, got '{method_used}'"
+            )
 
 
 

@@ -2456,6 +2456,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         num_peaks: int = 1,
         single_threshold: float = 0.05,
         Nyquist_factor: int = 5,
+        fap_method: str | None = None,
         **kwargs,
     ) -> tuple:
         """
@@ -2487,6 +2488,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Lomb-Scargle periodogram.
             This will be approximately the number of points sampling
             the maximum in the resulting periodogram.
+        - fap_method: str or None, optional, default=None
+            Method used to compute the false-alarm probability (FAP) of the
+            *maximum* periodogram peak (the global significance test).
+            For 1D lightcurves the default is ``'davies'`` (fast analytical
+            upper bound; equivalent to ``'baluev'`` for practical purposes
+            but significantly faster). Other valid astropy options are
+            ``'baluev'`` and ``'bootstrap'``. Note: ``'single'`` is a
+            valid astropy option that computes the FAP for a single
+            pre-specified frequency and is not appropriate for ``fap_max``
+            (a warning is issued and ``'baluev'`` is used instead); it is
+            however used internally as the per-frequency p-value when
+            applying the Benjamini-Hochberg correction.
+            For multi-band lightcurves the default is ``'analytical'`` (fast
+            Baluev-style approximation).  Slower but more accurate options
+            are ``'bootstrap'``, ``'phase_scramble'``, and ``'calibrated'``
+            (see
+            :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`).
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
@@ -2555,6 +2573,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             bands = self.xdata[:, 1]
             y = self.ydata
 
+            # Default FAP method for multiband: analytical (fast)
+            _fap_method = fap_method if fap_method is not None else 'analytical'
+
             has_yerr = (
                 hasattr(self, "_yerr_transformed")
                 and self._yerr_transformed is not None
@@ -2602,7 +2623,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
             # Compute FAP for multiband periodogram
-            fap_max = LS.false_alarm_probability(power.max(), method='bootstrap')
+            fap_max = LS.false_alarm_probability(power.max(),
+                                                 method=_fap_method,
+                                                 freq_grid=freq)
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:
@@ -2618,7 +2641,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             # Calculate FAP for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
-                                                    method='bootstrap')
+                                                    method=_fap_method,
+                                                    freq_grid=freq)
 
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
@@ -2638,6 +2662,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
         else:
             t, y = self.xdata, self.ydata
+
+            # Default FAP method for single-band: 'davies' (fast analytical
+            # upper bound; same accuracy as 'baluev' for typical use cases
+            # but much faster). 'baluev' is another good analytical choice.
+            _fap_method = fap_method if fap_method is not None else 'davies'
+
             has_yerr = (
                 hasattr(self, "_yerr_transformed")
                 and self._yerr_transformed is not None
@@ -2652,7 +2682,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 t, y = t[mask], y[mask]
                 LS = LombScargle(t, y)
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
-            power = LS.power(freq)
+            # assume_regular_frequency=True: autofrequency() always produces
+            # a regular grid, so skip the regularity check for a minor speedup
+            power = LS.power(freq, assume_regular_frequency=True)
             if freq_only:
                 return (
                     torch.as_tensor(
@@ -2677,8 +2709,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     torch.as_tensor([], dtype=torch.bool, device=self.xdata.device),
                 )
 
-            # Calculate the false alarm probability for the highest peak
-            fap_max = LS.false_alarm_probability(power.max())
+            # Calculate the false alarm probability for the highest peak.
+            # 'single' is not appropriate for fap_max (it computes the FAP
+            # for a single pre-specified frequency, not the global maximum).
+            _fap_method_max = _fap_method
+            if _fap_method_max == 'single':
+                warnings.warn(
+                    "fap_method='single' is not appropriate for the false alarm "
+                    "probability of the maximum peak (it computes the FAP for a "
+                    "single pre-specified frequency, not the global maximum). "
+                    "Using method='baluev' for fap_max instead.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                _fap_method_max = 'baluev'
+            fap_max = LS.false_alarm_probability(power.max(),
+                                                 method=_fap_method_max)
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:
@@ -2694,8 +2740,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         device=self.xdata.device,
                     ),
                 )
-            # Calculate the false alarm probability for each peak independently
-            fap_single = LS.false_alarm_probability(power[peaks], method="single")
+            # Per-peak FAP for the Benjamini-Hochberg correction.
+            # We use method='single' here: it gives the single-frequency FAP
+            # (probability that one pre-specified frequency shows at least
+            # this power by chance), which is the correct uncorrected p-value
+            # to supply to BH.  The 'davies'/'baluev' methods already account
+            # for multiple-frequency comparisons and would be too conservative.
+            fap_single = LS.false_alarm_probability(power[peaks],
+                                                    method='single')
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
             significant_mask[0] = True  # since fap_max <= single_threshold
