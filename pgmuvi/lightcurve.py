@@ -2002,55 +2002,61 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # this should correspond to the longest frequency entirely
             # contained in the dataset:
             if self.ndim > 1:
-                # For 2D data, calculate minimum frequency per dimension
-                # Dimension 0 (time): based on temporal data span
-                # Dimension 1 (wavelength): allow near-zero for achromatic
-                # variability
+                # For 2D spectral-mixture models the mixture_means parameter
+                # has shape (num_mixtures, 1, ard_num_dims), where ard_num_dims
+                # equals the number of input dimensions (typically 2: time and
+                # wavelength).  GPyTorch applies a *single scalar* constraint
+                # element-wise to every entry in that tensor — it is not
+                # possible to set different lower bounds for the time dimension
+                # and the wavelength dimension simultaneously via the standard
+                # register_constraint API.
+                #
+                # We therefore base the lower bound exclusively on the *time*
+                # dimension (column 0 of xdata_transformed):
+                #
+                #   lower_bound = 1 / time_span
+                #
+                # This guarantees that the time-axis frequencies are always
+                # >= 1/time_span, i.e., that the inferred periods are not
+                # longer than the observational baseline — a physically
+                # meaningful and stable lower bound.
+                #
+                # Note that this same lower bound is also applied to the
+                # wavelength-axis frequency elements of mixture_means.  In
+                # practice, wavelength frequencies represent the spatial
+                # frequency of the SED variation across bands; constraining
+                # them to be >= 1/time_span is conservative (frequencies
+                # corresponding to structures much narrower in wavelength than
+                # the observation baseline are still allowed), and is
+                # preferable to using min(time_bound, wavelength_bound) which
+                # would make the time lower bound arbitrarily permissive
+                # whenever the wavelength span is large or the wavelength
+                # range is zero.
+                #
+                # Users who need achromatic behaviour (wavelength-frequency
+                # near zero) should use the separable model classes
+                # (AchromaticGPModel, WavelengthDependentGPModel) which apply
+                # kernels to each dimension independently, avoiding this
+                # limitation entirely.
                 time_span = (
                     self._xdata_transformed[:, 0].max()
                     - self._xdata_transformed[:, 0].min()
                 )
-                min_time_frequency = 1.0 / time_span
+                lower_frequency = 1.0 / time_span
 
-                # For wavelength dimension, we want to allow achromatic
-                # variability (same behavior across wavelengths), so we use a
-                # very small minimum. 1e-6 allows frequencies near zero,
-                # enabling the model to capture achromatic (wavelength-
-                # independent) variability patterns
-                wavelength_span = (
-                    self._xdata_transformed[:, 1].max()
-                    - self._xdata_transformed[:, 1].min()
-                )
-                min_wavelength_frequency = (
-                    1.0 / wavelength_span if wavelength_span > 0 else 1e-6
-                )
-
-                # GPyTorch limitation: Constraints on ARD parameters apply
-                # element-wise to ALL elements (cannot set different constraints
-                # per dimension).  For mixture_means with shape
-                # (num_mixtures, 1, ard_num_dims), we use a single scalar
-                # constraint.  We take the minimum to ensure both dimensions
-                # satisfy their physical constraints:
-                # - Time frequencies >= 1/time_span (periods not longer than
-                #   the data span; i.e., period <= time_span)
-                # - Wavelength frequencies >= ~0 (allow achromatic variability)
-                overall_min_frequency = min(
-                    min_time_frequency, min_wavelength_frequency
-                )
-                diffs = (
-                    self._xdata_transformed[:, 0].unsqueeze(-1)
-                    - self._xdata_transformed[:, 0].unsqueeze(-1).T
-                )
-                positive_diffs = diffs[diffs > 0].flatten().abs()
+                # Compute the Nyquist upper bound from the minimum positive
+                # gap between consecutive sorted timestamps (O(N log N), O(N)
+                # memory — avoids the O(N²) pairwise-difference matrix).
+                t_sorted = self._xdata_transformed[:, 0].sort().values
+                consecutive_diffs = (t_sorted[1:] - t_sorted[:-1])
+                positive_diffs = consecutive_diffs[consecutive_diffs > 0]
                 if positive_diffs.numel() > 0:
                     min_diff = positive_diffs.min()
                     max_freq = 1 / (2 * min_diff)  # Nyquist based on time sampling
-                    mixture_means_constraint = Interval(
-                        overall_min_frequency, max_freq
-                    )
+                    mixture_means_constraint = Interval(lower_frequency, max_freq)
                 else:
                     # All timestamps identical — fall back to a lower bound only
-                    mixture_means_constraint = GreaterThan(overall_min_frequency)
+                    mixture_means_constraint = GreaterThan(lower_frequency)
             else:
                 mixture_means_constraint = GreaterThan(
                     1 / self._xdata_transformed.max()
