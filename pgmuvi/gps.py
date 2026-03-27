@@ -955,6 +955,17 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=F
         Initial period for the quasi-periodic option. Ignored for other types.
     num_mixtures : int, optional
         Number of mixture components for ``'spectral_mixture'``.  Default 4.
+    add_red_noise : bool, optional
+        Only applicable when ``time_kernel_type`` is ``'spectral_mixture'`` /
+        ``'sm'``.  When ``True``, the spectral-mixture kernel is wrapped in an
+        :class:`~gpytorch.kernels.AdditiveKernel` together with
+        ``ScaleKernel(RBFKernel(ard_num_dims=1))``, adding a slowly-varying
+        "red noise" (power-law background) component to the model.  This extra
+        component changes the parameter structure of the model (the covar_module
+        becomes an AdditiveKernel rather than a plain SMK), so
+        :meth:`~pgmuvi.lightcurve.Lightcurve.set_default_constraints` and any
+        downstream code that inspects ``_model_pars['mixture_means']`` must be
+        aware of this.  Default ``False``.
 
     Returns
     -------
@@ -1497,6 +1508,16 @@ class WavelengthDependentGPModel(SeparableGPModel):
     num_mixtures : int, optional
         Number of mixture components when ``time_kernel_type='spectral_mixture'``.
         Default 4.
+    add_red_noise : bool, optional
+        Only applicable when ``time_kernel_type`` is ``'spectral_mixture'`` /
+        ``'sm'``.  When ``True``, the spectral-mixture time kernel is augmented
+        with ``ScaleKernel(RBFKernel(ard_num_dims=1))`` to model slowly-varying
+        "red noise" variability.  Default ``False``.
+
+        .. note::
+            Prior to the fix released with this parameter, the default was
+            effectively ``True`` (red noise was added silently).  If you were
+            relying on that behaviour, pass ``add_red_noise=True`` explicitly.
     mean_module : str or gpytorch.means.Mean, optional
         Mean function for the GP.  Accepted string values:
 

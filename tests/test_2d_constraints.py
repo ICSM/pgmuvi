@@ -64,7 +64,7 @@ class Test2DConstraintSetup(unittest.TestCase):
         # GPyTorch adds _constraint suffix
         self.assertIn('raw_mixture_means_constraint', mixture_means_module._constraints)
 
-    def test_constraint_type_is_greater_than(self):
+    def test_constraint_type_is_interval(self):
         """Test that the constraint is Interval for 2D data (bounded above by Nyquist)"""
         # Use Lightcurve.set_model which handles initialization properly
         self.lightcurve_2d.set_model('2D', likelihood=None, num_mixtures=2)
