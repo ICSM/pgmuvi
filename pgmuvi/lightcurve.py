@@ -3553,25 +3553,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                 _init_freqs = torch.cat([_init_freqs, _pad])
                 else:
                     # MLS found no peaks at all; warn and fall back.
-                    warnings.warn(
+                    
+                    if num_mixtures is None:
+                        num_mixtures = 4
+                    # This Warning has to be raised after the if, so that the user-defined number of mixtures
+                    # is used and they still see the warning if they set a value.
+                    warnings.warn(  
                         "MLS periodogram returned no peaks; falling back to "
-                        "num_mixtures=4.",
+                        f"num_mixtures={num_mixtures} with default initialisation.",
                         RuntimeWarning,
                         stacklevel=2,
                     )
-                    if num_mixtures is None:
-                        num_mixtures = 4
             except Exception as exc:
                 # MLS failed for any reason; fall back gracefully but warn the user.
+                
+                if num_mixtures is None:
+                    num_mixtures = 4
                 warnings.warn(
                     "MLS-based initialisation failed; falling back to "
-                    "num_mixtures=4. Original error was: "
+                    f"num_mixtures={num_mixtures}. Original error was: "
                     f"{exc}",
                     RuntimeWarning,
                     stacklevel=2,
                 )
-                if num_mixtures is None:
-                    num_mixtures = 4
 
         # Final fallback when MLS init is disabled or not applicable.
         if num_mixtures is None:
