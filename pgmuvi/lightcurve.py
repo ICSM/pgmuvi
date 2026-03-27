@@ -2457,6 +2457,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         single_threshold: float = 0.05,
         Nyquist_factor: int = 5,
         fap_method: str | None = None,
+        max_samples: int | None = 10000,
+        subsample_seed: int | None = None,
         **kwargs,
     ) -> tuple:
         """
@@ -2505,6 +2507,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             are ``'bootstrap'``, ``'phase_scramble'``, and ``'calibrated'``
             (see
             :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`).
+        - max_samples : int or None, optional, default=10000
+            Maximum number of observations to use when computing the
+            Lomb-Scargle periodogram.  When the lightcurve contains more
+            than *max_samples* points a random subsample is drawn
+            automatically (see :func:`~pgmuvi.preprocess.subsample_lightcurve`
+            for details of the gap-preserving algorithm).  Set to ``None``
+            to disable subsampling entirely.
+        - subsample_seed : int or None, optional, default=None
+            Seed for the random number generator used when subsampling.
+            Provide an integer for reproducible results.
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
@@ -2567,22 +2579,68 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 result = np.zeros(N, dtype=bool)
             return result
 
+        # ------------------------------------------------------------------
+        # Optional subsampling for large lightcurves
+        # ------------------------------------------------------------------
+        if max_samples is not None:
+            from pgmuvi.preprocess.quality import subsample_lightcurve
+
+            xdata_all = self.xdata
+            t_for_sub = (
+                xdata_all[:, 0] if self.ndim > 1 else xdata_all
+            )
+            t_np = t_for_sub.detach().cpu().numpy()
+            if len(t_np) > max_samples:
+                warnings.warn(
+                    f"Lightcurve has {len(t_np)} points, which exceeds "
+                    f"max_samples={max_samples}. Computing the Lomb-Scargle "
+                    f"periodogram on a random subsample of {max_samples} "
+                    f"points. Set max_samples=None to disable subsampling.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                idx = subsample_lightcurve(
+                    t_np,
+                    max_samples=max_samples,
+                    random_seed=subsample_seed,
+                )
+                idx_t = torch.as_tensor(idx, dtype=torch.long,
+                                        device=xdata_all.device)
+                _xdata = xdata_all[idx_t]
+                _ydata = self.ydata[idx_t]
+                has_yerr_sub = (
+                    hasattr(self, "_yerr_transformed")
+                    and self._yerr_transformed is not None
+                )
+                _yerr = self.yerr[idx_t] if has_yerr_sub else None
+            else:
+                _xdata = self.xdata
+                _ydata = self.ydata
+                has_yerr_sub = (
+                    hasattr(self, "_yerr_transformed")
+                    and self._yerr_transformed is not None
+                )
+                _yerr = self.yerr if has_yerr_sub else None
+        else:
+            _xdata = self.xdata
+            _ydata = self.ydata
+            has_yerr_sub = (
+                hasattr(self, "_yerr_transformed")
+                and self._yerr_transformed is not None
+            )
+            _yerr = self.yerr if has_yerr_sub else None
+
         if self.ndim > 1:
             # Multi-band case: xdata[:, 0] is time, xdata[:, 1] is band/wavelength
-            t = self.xdata[:, 0]
-            bands = self.xdata[:, 1]
-            y = self.ydata
+            t = _xdata[:, 0]
+            bands = _xdata[:, 1]
+            y = _ydata
 
             # Default FAP method for multiband: analytical (fast)
             _fap_method = fap_method if fap_method is not None else 'analytical'
 
-            has_yerr = (
-                hasattr(self, "_yerr_transformed")
-                and self._yerr_transformed is not None
-            )
-
-            if has_yerr:
-                yerr = self.yerr
+            if _yerr is not None:
+                yerr = _yerr
                 mask = (
                     torch.isfinite(t)
                     & torch.isfinite(bands)
@@ -2661,19 +2719,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             )
         else:
-            t, y = self.xdata, self.ydata
+            t, y = _xdata, _ydata
 
             # Default FAP method for single-band: 'davies' (fast analytical
             # upper bound; same accuracy as 'baluev' for typical use cases
             # but much faster). 'baluev' is another good analytical choice.
             _fap_method = fap_method if fap_method is not None else 'davies'
 
-            has_yerr = (
-                hasattr(self, "_yerr_transformed")
-                and self._yerr_transformed is not None
-            )
-            if has_yerr:
-                yerr = self.yerr
+            if _yerr is not None:
+                yerr = _yerr
                 mask = torch.isfinite(t) & torch.isfinite(y) & torch.isfinite(yerr)
                 t, y, yerr = t[mask], y[mask], yerr[mask]
                 LS = LombScargle(t, y, yerr)
