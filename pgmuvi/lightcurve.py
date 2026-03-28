@@ -3729,6 +3729,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
 
         try:
+            # Capture the caller's original num_mixtures argument before any
+            # mutation (MLS init / fallback default).  Used later to decide
+            # whether to substitute the stored _model_num_mixtures.
+            _num_mixtures_arg = num_mixtures
+
             if not hasattr(self, "likelihood"):
                 self.set_likelihood(likelihood, variance=variance, **kwargs)
             elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
@@ -3971,15 +3976,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _stored_instance = getattr(self, "_model_instance", None)
                 _stored_str = getattr(self, "_model_str", None)
                 # Preserve the originally configured num_mixtures when the
-                # caller did not explicitly request a different value.
-                _effective_num_mixtures = num_mixtures
-                if _effective_num_mixtures == 4 and hasattr(self, "_model_num_mixtures"):
-                    # num_mixtures was set to the fallback default (4) earlier
-                    # in fit(); use the originally stored value instead when it
-                    # is available so we don't silently change the model config.
+                # caller did not explicitly provide a value (i.e. passed None).
+                # If the caller explicitly supplied num_mixtures, honour that
+                # value even if it happens to equal the stored one.
+                if _num_mixtures_arg is None and hasattr(self, "_model_num_mixtures"):
                     stored_nm = self._model_num_mixtures
-                    if stored_nm is not None:
-                        _effective_num_mixtures = stored_nm
+                    _effective_num_mixtures = stored_nm if stored_nm is not None else num_mixtures
+                else:
+                    _effective_num_mixtures = num_mixtures
                 if _stored_instance is not None:
                     # User originally provided a GP instance. Re-bind it to the
                     # new (filtered) training data via set_train_data() if the
