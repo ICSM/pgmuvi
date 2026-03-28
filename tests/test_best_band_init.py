@@ -1,7 +1,6 @@
 """Tests for best-band initialisation in fit_LS() and fit()."""
 
 import unittest
-import warnings
 from unittest.mock import patch
 import torch
 import numpy as np
@@ -272,7 +271,7 @@ class TestBestBandInitHeterogeneousSampling(unittest.TestCase):
         lc_best = self.lc._get_best_sampled_band_lc()
         freqs, sig = lc_best.fit_LS(num_peaks=10)
         self.assertGreater(len(freqs), 0)
-        # The true period is 5 days (freq ≈ 0.2 Hz).  It should appear among
+        # The true period is 5 days (freq ≈ 0.2 in 1/day units).  It should appear among
         # the returned peaks (though not necessarily at index 0 due to aliases
         # from regular sampling).
         periods = 1.0 / freqs.numpy()

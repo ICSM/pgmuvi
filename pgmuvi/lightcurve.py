@@ -2690,7 +2690,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _best_mask = bands == _best_val
                 _t_best = t[_best_mask].detach().cpu().numpy()
                 _y_best = y[_best_mask].detach().cpu().numpy()
-                if has_yerr:
+                if _has_yerr:
                     _dy_best = yerr[_best_mask].detach().cpu().numpy()
                     _ls_1d_best = LombScargle(_t_best, _y_best, _dy_best)
                 else:
@@ -3163,8 +3163,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Lightcurve
             1D Lightcurve (xdata is the time column only) built from the
             raw (untransformed) data of the most-sampled wavelength band.
-            If all bands have equal counts the band with the lowest index
-            is returned.
+            If multiple bands share the same (maximum) number of observations,
+            the band with the smallest band value (as returned by
+            ``torch.unique``) is returned.
         """
         if self.ndim <= 1:
             return self
@@ -3909,46 +3910,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "When providing explicit `periods`, the sequence must be "
                         "non-empty."
                     )
-
-            # Run the MLS periodogram to choose num_mixtures and seed frequencies.
-            try:
-                _max_peaks = max(num_mixtures or 1, 10)
-                if use_best_band_init and self.ndim > 1:
-                    # Use a 1D LS on the most-sampled band to get reliable
-                    # temporal frequency estimates instead of the multiband LS.
-                    # This is beneficial when sampling is highly heterogeneous
-                    # across bands: the best-sampled band provides the most
-                    # accurate period constraints.
-                    _best_band_lc = self._get_best_sampled_band_lc()
-                    ls_freqs, ls_sig = _best_band_lc.fit_LS(
-                        num_peaks=_max_peaks
-                    )
-                    # Compute the best-band's own Nyquist as the upper
-                    # frequency bound.  The best-band 1D LS may find alias
-                    # peaks above this Nyquist (when Nyquist_factor > 1);
-                    # cap at the Nyquist to avoid out-of-range initialisation.
-                    _bb_t = _best_band_lc._xdata_raw.sort().values
-                    _bb_diffs = _bb_t[1:] - _bb_t[:-1]
-                    _bb_pos = _bb_diffs[_bb_diffs > 0]
-                    _bb_nyquist = (
-                        float(1.0 / (2.0 * _bb_pos.min()))
-                        if len(_bb_pos) > 0
-                        else float("inf")
-                    )
-                else:
-                    ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
-                    _bb_nyquist = float("inf")
-
-                # Filter peaks whose period exceeds the data span or falls
-                # outside user-specified constraint-set period bounds.
-                # When use_best_band_init=True also cap at the best-band
-                # Nyquist to remove alias peaks that exceed the true sampling
-                # limit of the best-sampled band.
-                _eff_upper = min(_cs_freq_upper, _bb_nyquist)
-                if len(ls_freqs) > 0 and _cs_freq_lower > 0:
-                    _valid = (ls_freqs >= _cs_freq_lower) & (
-                        ls_freqs <= _eff_upper
-                    )
                 if not torch.isfinite(_periods_tensor).all():
                     raise ValueError(
                         "All values in `periods` must be finite (no NaN or inf)."
@@ -3989,16 +3950,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                 )
                     except (ValueError, KeyError):
                         warnings.warn(
-                            f"{_n_filtered} MLS peak(s) fell outside the "
-                            f"allowed frequency range "
-                            f"[{_cs_freq_lower:.4g}, {_eff_upper:.4g}] "
-                            "(derived from data span"
-                            + (
-                                f" and constraint_set={constraint_set!r}"
-                                if constraint_set is not None
-                                else ""
-                            )
-                            + ") and were excluded from the initialisation.",
                             f"constraint_set={constraint_set!r} is not recognised "
                             "and will be ignored for MLS peak filtering. "
                             "Only the data-span frequency bounds will be applied.",
@@ -4012,20 +3963,54 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # Run the MLS periodogram to choose num_mixtures and seed frequencies.
                 try:
                     _max_peaks = max(num_mixtures or 1, 10)
-                    ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
+                    if use_best_band_init and self.ndim > 1:
+                        # Use a 1D LS on the most-sampled band to get reliable
+                        # temporal frequency estimates instead of the multiband LS.
+                        # This is beneficial when sampling is highly heterogeneous
+                        # across bands: the best-sampled band provides the most
+                        # accurate period constraints.
+                        _best_band_lc = self._get_best_sampled_band_lc()
+                        ls_freqs, ls_sig = _best_band_lc.fit_LS(
+                            num_peaks=_max_peaks
+                        )
+                        # Compute the best-band's own Nyquist as the upper
+                        # frequency bound.  The best-band 1D LS may find alias
+                        # peaks above this Nyquist (when Nyquist_factor > 1);
+                        # cap at the Nyquist to avoid out-of-range initialisation.
+                        _bb_t = _best_band_lc._xdata_raw.sort().values
+                        _bb_diffs = _bb_t[1:] - _bb_t[:-1]
+                        _bb_pos = _bb_diffs[_bb_diffs > 0]
+                        _bb_nyquist = (
+                            float(1.0 / (2.0 * _bb_pos.min()))
+                            if len(_bb_pos) > 0
+                            else float("inf")
+                        )
+                    else:
+                        ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
+                        _bb_nyquist = float("inf")
 
                     # Filter peaks whose period exceeds the data span or falls
                     # outside user-specified constraint-set period bounds.
+                    # When use_best_band_init=True also cap at the best-band
+                    # Nyquist to remove alias peaks that exceed the true sampling
+                    # limit of the best-sampled band.
+                    _eff_upper = min(_cs_freq_upper, _bb_nyquist)
+                    # Ensure that any subsequent use of the frequency upper bound
+                    # (e.g. for padding when num_mixtures exceeds the number of
+                    # LS peaks) also respects the best-band Nyquist cap.
+                    if use_best_band_init and self.ndim > 1:
+                        _cs_freq_upper = _eff_upper
+                        _freq_upper = _eff_upper
                     if len(ls_freqs) > 0 and _cs_freq_lower > 0:
                         _valid = (ls_freqs >= _cs_freq_lower) & (
-                            ls_freqs <= _cs_freq_upper
+                            ls_freqs <= _eff_upper
                         )
                         if not _valid.all():
                             _n_filtered = int((~_valid).sum().item())
                             warnings.warn(
                                 f"{_n_filtered} MLS peak(s) fell outside the "
                                 f"allowed frequency range "
-                                f"[{_cs_freq_lower:.4g}, {_cs_freq_upper:.4g}] "
+                                f"[{_cs_freq_lower:.4g}, {_eff_upper:.4g}] "
                                 "(derived from data span"
                                 + (
                                     f" and constraint_set={constraint_set!r}"
@@ -4158,14 +4143,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # any explicit `guess` entries take priority on top.
             _hypers_to_set = {}
             if (
-              _init_freqs is not None
-              and hasattr(self, "model")
-              and hasattr(self.model, "covar_module")
-              and hasattr(self.model.covar_module, "mixture_means")
-              and getattr(self.model.covar_module, "ard_num_dims", 1) == 1
+                _init_freqs is not None
+                and hasattr(self, "model")
+                and hasattr(self.model, "covar_module")
+                and hasattr(self.model.covar_module, "mixture_means")
+                and getattr(self.model.covar_module, "ard_num_dims", 1) == 1
             ):
-              _hypers_to_set["covar_module.mixture_means"] = _init_freqs
-             elif (
+                _hypers_to_set["covar_module.mixture_means"] = _init_freqs
+            elif (
                 use_best_band_init
                 and _init_freqs is not None
                 and self.ndim > 1
@@ -4174,32 +4159,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 and hasattr(self.model.covar_module, "mixture_means")
                 and getattr(self.model.covar_module, "ard_num_dims", 1) == 2
             ):
-              # For 2D SM models: initialise the temporal dimension (dim 0)
-              # from the best-band 1D LS frequencies and use the minimum
-              # wavelength frequency (1/wavelength_span) as a placeholder for
-              # the wavelength dimension (dim 1), which encodes approximately
-              # achromatic variability.  This avoids leaving all mixture means
-              # at GPyTorch defaults while still seeding the most informative
-              # (temporal) dimension from the best-sampled band.
-              _bands_raw = self._xdata_raw[:, 1]
-              _wl_span = float(_bands_raw.max() - _bands_raw.min())
-              _default_wl_freq = 1.0 / _wl_span if _wl_span > 0 else 1e-6
-              _n_mix = len(_init_freqs)
-              # Build a [num_mixtures, 2] tensor: col 0 = temporal frequencies
-              # from the best-band LS, col 1 = default wavelength frequency.
-              # Using new_full preserves device and dtype of _init_freqs.
-              _init_freqs_2d = torch.stack(
-                  [
-                      _init_freqs,
-                      _init_freqs.new_full((_n_mix,), _default_wl_freq),
-                  ],
-                  dim=1,  # shape: [num_mixtures, 2]
-              )
-              _hypers_to_set["covar_module.mixture_means"] = _init_freqs_2d
+                # For 2D SM models: initialise the temporal dimension (dim 0)
+                # from the best-band 1D LS frequencies and use the minimum
+                # wavelength frequency (1/wavelength_span) as a placeholder for
+                # the wavelength dimension (dim 1), which encodes approximately
+                # achromatic variability.  This avoids leaving all mixture means
+                # at GPyTorch defaults while still seeding the most informative
+                # (temporal) dimension from the best-sampled band.
+                _bands_raw = self._xdata_raw[:, 1]
+                _wl_span = float(_bands_raw.max() - _bands_raw.min())
+                _default_wl_freq = 1.0 / _wl_span if _wl_span > 0 else 1e-6
+                _n_mix = len(_init_freqs)
+                # Build a [num_mixtures, 2] tensor: col 0 = temporal frequencies
+                # from the best-band LS, col 1 = default wavelength frequency.
+                # Using new_full preserves device and dtype of _init_freqs.
+                _init_freqs_2d = torch.stack(
+                    [
+                        _init_freqs,
+                        _init_freqs.new_full((_n_mix,), _default_wl_freq),
+                    ],
+                    dim=1,  # shape: [num_mixtures, 2]
+                )
+                _hypers_to_set["covar_module.mixture_means"] = _init_freqs_2d
             if guess is not None:
-              _hypers_to_set.update(guess)
+                _hypers_to_set.update(guess)
             if _hypers_to_set:
-              self.set_hypers(_hypers_to_set)
+                self.set_hypers(_hypers_to_set)
 
 #             if guess is not None:
 #                 # self.model.initialize(**guess)
