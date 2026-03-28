@@ -2196,6 +2196,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     self._xdata_transformed[:, 0].max()
                     - self._xdata_transformed[:, 0].min()
                 )
+                if float(time_span) <= 0.0:
+                    raise ValueError(
+                        "set_default_constraints requires a dataset whose "
+                        "timestamps span a positive time range, but all "
+                        "timestamps in the 2D input are identical "
+                        "(time_span = 0). Ensure the training data covers "
+                        "more than one distinct observation time."
+                    )
                 lower_frequency = 1.0 / time_span
 
                 # Compute the Nyquist upper bound from the minimum positive
@@ -2209,12 +2217,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     max_freq = 1 / (2 * min_diff)  # Nyquist based on time sampling
                     mixture_means_constraint = Interval(lower_frequency, max_freq)
                 else:
-                    # All timestamps identical — fall back to a lower bound only
-                    mixture_means_constraint = GreaterThan(lower_frequency)
+                    # time_span > 0 guarantees at least two distinct timestamps,
+                    # so positive_diffs is always non-empty here.  This branch
+                    # is unreachable in practice.
+                    raise ValueError(  # pragma: no cover
+                        "Unexpected degenerate timestamps: time_span > 0 but "
+                        "no consecutive positive differences found."
+                    )
             else:
-                mixture_means_constraint = GreaterThan(
-                    1 / self._xdata_transformed.max()
+                # 1D case: base the lower-frequency bound on the time span
+                # (max - min) rather than the absolute maximum. This prevents
+                # allowing periods longer than the observational baseline and
+                # is consistent with the 2D logic above.
+                time_span = (
+                    self._xdata_transformed.max()
+                    - self._xdata_transformed.min()
                 )
+                if float(time_span) <= 0.0:
+                    raise ValueError(
+                        "set_default_constraints requires a dataset whose "
+                        "timestamps span a positive time range, but all "
+                        "timestamps in the 1D input are identical "
+                        "(time_span = 0). Ensure the training data covers "
+                        "more than one distinct observation time."
+                    )
+                mixture_means_constraint = GreaterThan(1 / time_span)
 
             # Apply any constraint_set period bounds to the mixture_means
             # constraint
