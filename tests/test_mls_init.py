@@ -360,10 +360,10 @@ class TestMLSInitConstraintFiltering(unittest.TestCase):
             seed=42,
         )
         # Simulate two MLS peaks:
-        #   f=0.005 → period=200 (within LPV range [100, 1000])
-        #   f=0.02  → period=50  (below LPV min period=100 → too high freq)
+        #   f=0.005 → period=200 (within LPV range [>= 20])
+        #   f=0.1   → period=10  (below LPV min period=20 → too high freq)
         valid_freq = torch.tensor([0.005], dtype=torch.float32)   # period=200
-        invalid_freq = torch.tensor([0.02], dtype=torch.float32)  # period=50
+        invalid_freq = torch.tensor([0.1], dtype=torch.float32)   # period=10
         all_freqs = torch.cat([valid_freq, invalid_freq])
         all_mask = torch.tensor([True, True], dtype=torch.bool)
         with warnings.catch_warnings(record=True) as caught:

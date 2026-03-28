@@ -4313,6 +4313,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ],
                     dim=1,  # shape: [num_mixtures, 2]
                 )
+                # The mixture_means constraint is derived from the temporal
+                # dimension and is applied element-wise to all entries,
+                # including the wavelength dimension.  The wavelength
+                # frequency (1/wavelength_span) may fall below the
+                # temporal-based lower bound, causing a RuntimeError.
+                # Clamp to the constraint bounds to prevent this.
+                _mixture_means_constraint = getattr(
+                    self.model.covar_module,
+                    "raw_mixture_means_constraint",
+                    None,
+                )
+                if _mixture_means_constraint is not None and hasattr(
+                    _mixture_means_constraint, "lower_bound"
+                ):
+                    _clamp_lower = float(_mixture_means_constraint.lower_bound)
+                    _clamp_upper = (
+                        float(_mixture_means_constraint.upper_bound)
+                        if hasattr(_mixture_means_constraint, "upper_bound")
+                        else float("inf")
+                    )
+                    _init_freqs_2d = _init_freqs_2d.clamp(
+                        min=_clamp_lower, max=_clamp_upper
+                    )
                 _hypers_to_set["covar_module.mixture_means"] = _init_freqs_2d
             if guess is not None:
                 _hypers_to_set.update(guess)
