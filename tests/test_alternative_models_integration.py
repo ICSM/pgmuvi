@@ -60,6 +60,15 @@ class TestSetModelAlternative(unittest.TestCase):
         from pgmuvi.models import SeparableGPModel
         self.assertIsInstance(lc.model, SeparableGPModel)
 
+    def test_separable_2d_active_dims(self):
+        """After set_model('2DSeparable'), time kernel uses col 0 and wavelength kernel uses col 1."""
+        lc = _make_lc_2d()
+        lc.set_model("2DSeparable")
+        time_kernel = lc.model.covar_module.kernels[0]
+        wl_kernel = lc.model.covar_module.kernels[1]
+        self.assertEqual(time_kernel.active_dims.tolist(), [0])
+        self.assertEqual(wl_kernel.active_dims.tolist(), [1])
+
     def test_set_achromatic_2d(self):
         lc = _make_lc_2d()
         lc.set_model("2DAchromatic")

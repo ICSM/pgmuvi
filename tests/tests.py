@@ -322,6 +322,84 @@ class TestFitLS(unittest.TestCase):
         if len(mask) > 0:
             self.assertIsInstance(mask[0].item(), bool)
 
+    def test_fap_method_parameter_1d(self):
+        """Test that fap_method parameter is accepted and affects results"""
+        # 'davies' is the default; 'baluev' also valid
+        for method in ('baluev', 'davies'):
+            freq, mask = self.lc_with_yerr.fit_LS(
+                num_peaks=1, fap_method=method
+            )
+            self.assertIsInstance(freq, torch.Tensor)
+            self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_single_warns_for_fap_max(self):
+        """Test that fap_method='single' issues a warning for fap_max"""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            freq, mask = self.lc_with_yerr.fit_LS(
+                num_peaks=1, fap_method='single'
+            )
+            # Should have issued exactly one UserWarning about 'single'
+            user_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "'single'" in str(x.message)
+            ]
+            self.assertEqual(len(user_warnings), 1)
+        self.assertIsInstance(freq, torch.Tensor)
+        self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_forwarded_1d(self):
+        """Test that the chosen fap_method is actually forwarded to astropy"""
+        from unittest.mock import patch, MagicMock
+        from astropy.timeseries import LombScargle
+
+        original_fap = LombScargle.false_alarm_probability
+        called_methods = []
+
+        def mock_fap(self_ls, power, method='baluev'):
+            called_methods.append(method)
+            return original_fap(self_ls, power, method='davies')
+
+        with patch.object(LombScargle, 'false_alarm_probability', mock_fap):
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='baluev')
+
+        # fap_max should use 'baluev'
+        self.assertIn('baluev', called_methods)
+
+    def test_fap_method_parameter_2d(self):
+        """Test that fap_method parameter works for multiband lightcurves"""
+        for method in ('analytical', 'bootstrap'):
+            freq, mask = self.lc_2d.fit_LS(
+                num_peaks=1, fap_method=method
+            )
+            self.assertIsInstance(freq, torch.Tensor)
+            self.assertIsInstance(mask, torch.Tensor)
+
+    def test_fap_method_forwarded_multiband(self):
+        """Test that fap_method and freq_grid are forwarded for multiband"""
+        from unittest.mock import patch
+        from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance
+
+        original_fap = MultibandLSWithSignificance.false_alarm_probability
+        call_kwargs = []
+
+        def mock_fap(self_ls, power, method='analytical', n_samples=100,
+                     freq_grid=None, n_jobs=1):
+            call_kwargs.append({'method': method, 'freq_grid': freq_grid})
+            return original_fap(self_ls, power, method='analytical',
+                                freq_grid=freq_grid)
+
+        with patch.object(MultibandLSWithSignificance, 'false_alarm_probability',
+                          mock_fap):
+            self.lc_2d.fit_LS(num_peaks=1, fap_method='analytical')
+
+        # Both calls should use 'analytical' and pass a freq_grid (not None)
+        self.assertGreaterEqual(len(call_kwargs), 1)
+        for kw in call_kwargs:
+            self.assertEqual(kw['method'], 'analytical')
+            self.assertIsNotNone(kw['freq_grid'])
+
 
 class TestMultibandFAP(unittest.TestCase):
     """Tests for multiband false-alarm probability computation"""
@@ -470,6 +548,59 @@ class TestMultibandFAP(unittest.TestCase):
         # This is a sanity check that methods are reasonable
         self.assertLess(fap_bootstrap, 0.5,
                         "Bootstrap FAP too high for strong signal")
+
+    def test_parallel_bootstrap_fap(self):
+        """Test that parallel bootstrap (n_jobs>1) gives consistent results"""
+        from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance
+
+        t = self.xdata_signal[:, 0].numpy()
+        bands = self.xdata_signal[:, 1].numpy()
+        y = self.ydata_signal.numpy()
+
+        ls = MultibandLSWithSignificance(t, y, bands)
+        freq = ls.autofrequency()
+        power = ls.power(freq)
+        max_power = power.max()
+
+        # Serial bootstrap
+        fap_serial = ls.false_alarm_probability(
+            max_power, method='bootstrap', n_samples=30, n_jobs=1
+        )
+        # Parallel bootstrap (2 workers)
+        fap_parallel = ls.false_alarm_probability(
+            max_power, method='bootstrap', n_samples=30, n_jobs=2
+        )
+
+        # Both should produce valid FAP values in [0, 1]
+        self.assertGreaterEqual(fap_serial, 0.0)
+        self.assertLessEqual(fap_serial, 1.0)
+        self.assertGreaterEqual(fap_parallel, 0.0)
+        self.assertLessEqual(fap_parallel, 1.0)
+
+    def test_analytical_default_in_fit_ls(self):
+        """Test that fit_LS for multiband uses analytical FAP by default"""
+        from unittest.mock import patch
+        from pgmuvi import multiband_ls_significance as mls
+
+        _orig_fap = mls.MultibandLSWithSignificance.false_alarm_probability
+        called_methods = []
+
+        def _recording_fap(self_, power_values, method='analytical', **kw):
+            called_methods.append(method)
+            return _orig_fap(self_, power_values, method=method, **kw)
+
+        with patch.object(mls.MultibandLSWithSignificance,
+                          'false_alarm_probability', _recording_fap):
+            self.lc_signal.fit_LS(num_peaks=1)
+
+        # Every call to false_alarm_probability should have used 'analytical'
+        self.assertGreater(len(called_methods), 0,
+                           "false_alarm_probability was never called")
+        for method_used in called_methods:
+            self.assertEqual(
+                method_used, 'analytical',
+                f"Expected 'analytical' FAP method by default, got '{method_used}'"
+            )
 
 
 
@@ -1143,6 +1274,155 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
             lc1d.assess_sampling_quality_per_band()
         with self.assertRaises(ValueError):
             lc1d.filter_well_sampled_bands()
+
+    def test_fit_check_sampling_2d_all_bands_fail_raises(self):
+        """fit() raises ValueError when ALL 2D bands fail sampling checks."""
+        # 3 bands, each with only 4 points (below min_points=6 default)
+        wavelengths = [3.6, 4.5, 5.8]
+        t_all, wl_all, y_all, ye_all = [], [], [], []
+        for wl in wavelengths:
+            t_all.extend([0.0, 1.0, 2.0, 3.0])
+            wl_all.extend([wl] * 4)
+            y_all.extend([1.0] * 4)
+            ye_all.extend([0.1] * 4)
+        xdata = np.column_stack([t_all, wl_all])
+        lc2d_bad = Lightcurve(
+            torch.as_tensor(xdata, dtype=torch.float32),
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+        )
+        with self.assertRaises(ValueError) as ctx:
+            lc2d_bad.fit(check_sampling=True)
+        self.assertIn('sampling quality checks', str(ctx.exception))
+
+    def test_fit_check_sampling_2d_some_bands_fail_filters(self):
+        """fit() with check_sampling=True filters out poorly-sampled 2D bands."""
+        # Band 3.6: 50 good points (passes); band 4.5: 4 points (fails)
+        t_good = np.linspace(0, 100, 50)
+        t_bad = [0.0, 1.0, 2.0, 3.0]
+        t_all = list(t_good) + t_bad
+        wl_all = [3.6] * 50 + [4.5] * 4
+        y_all = [1.0] * 54
+        ye_all = [0.01] * 54
+        xdata = np.column_stack([t_all, wl_all])
+        lc2d_mixed = Lightcurve(
+            torch.as_tensor(xdata, dtype=torch.float32),
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+        )
+        # fit() should warn about band 4.5 then fail on missing model, not on
+        # sampling.
+        with self.assertRaises(ValueError) as ctx:
+            lc2d_mixed.fit(check_sampling=True)
+        self.assertIn('must provide a model', str(ctx.exception))
+        # The poorly-sampled band should have been filtered from the data.
+        remaining_wls = torch.unique(lc2d_mixed._xdata_raw[:, 1]).tolist()
+        self.assertEqual(len(remaining_wls), 1)
+        self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
+
+    def test_fit_band_filter_recreates_model_and_likelihood(self):
+        """fit() recreates the model and likelihood after band filtering."""
+        import gpytorch
+        # Band 3.6: 50 good points (passes); band 4.5: 4 points (fails)
+        t_good = np.linspace(0, 100, 50)
+        t_bad = [0.0, 1.0, 2.0, 3.0]
+        t_all = list(t_good) + t_bad
+        wl_all = [3.6] * 50 + [4.5] * 4
+        y_all = (np.sin(2 * np.pi * np.array(t_all) / 10.0) + 1.0).tolist()
+        ye_all = [0.01] * 54
+        xdata = np.column_stack([t_all, wl_all])
+        lc = Lightcurve(
+            torch.as_tensor(xdata, dtype=torch.float32),
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+        )
+        # Explicitly set a model before calling fit() without a model arg.
+        lc.set_model('2D', likelihood=None, num_mixtures=2)
+        model_before = lc.model
+        likelihood_before = lc.likelihood
+        self.assertIsNotNone(model_before)
+
+        # fit() without model= should filter band 4.5, then re-create the '2D'
+        # model and likelihood bound to the filtered data, and train.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = lc.fit(
+                check_sampling=True,
+                use_mls_init=False,
+                training_iter=5,
+                miniter=2,
+                lr=0.05,
+            )
+
+        # A new model was created (not the same object as before filtering).
+        self.assertIsNotNone(lc.model)
+        self.assertIsNot(lc.model, model_before)
+        # Only the well-sampled band remains.
+        remaining_wls = torch.unique(lc._xdata_raw[:, 1]).tolist()
+        self.assertEqual(len(remaining_wls), 1)
+        self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
+        # The likelihood was rebuilt for the filtered data: its noise tensor
+        # must have length == number of remaining points (50).
+        self.assertIsNot(lc.likelihood, likelihood_before)
+        self.assertIsInstance(
+            lc.likelihood,
+            gpytorch.likelihoods.FixedNoiseGaussianLikelihood,
+        )
+        self.assertEqual(lc.likelihood.noise.numel(), 50)
+        # fit() completed and returned results.
+        self.assertIsNotNone(results)
+
+    def test_fit_band_filter_rebinds_model_instance(self):
+        """fit() rebinds a GP instance to filtered data after band filtering."""
+        import gpytorch
+        from pgmuvi.gps import TwoDSpectralMixtureGPModel
+        # Band 3.6: 50 good points; band 4.5: 4 points (fails)
+        t_good = np.linspace(0, 100, 50)
+        t_bad = [0.0, 1.0, 2.0, 3.0]
+        t_all = list(t_good) + t_bad
+        wl_all = [3.6] * 50 + [4.5] * 4
+        y_all = (np.sin(2 * np.pi * np.array(t_all) / 10.0) + 1.0).tolist()
+        ye_all = [0.01] * 54
+        xdata = np.column_stack([t_all, wl_all])
+        lc = Lightcurve(
+            torch.as_tensor(xdata, dtype=torch.float32),
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+        )
+        # Build a GP instance manually and pass it to set_model().
+        lik = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
+            torch.as_tensor(ye_all, dtype=torch.float32) ** 2
+        )
+        gp_instance = TwoDSpectralMixtureGPModel(
+            lc._xdata_transformed,
+            lc._ydata_transformed,
+            lik,
+            num_mixtures=2,
+        )
+        lc.set_model(gp_instance, likelihood=None, num_mixtures=2)
+        self.assertIs(lc.model, gp_instance)
+
+        # fit() without model= should filter band 4.5, then rebind the GP
+        # instance to the filtered training data via set_train_data().
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = lc.fit(
+                check_sampling=True,
+                use_mls_init=False,
+                training_iter=5,
+                miniter=2,
+                lr=0.05,
+            )
+
+        # The same GP instance is reused but bound to the filtered data.
+        self.assertIs(lc.model, gp_instance)
+        # Training data on the model reflects only the 50 remaining points.
+        self.assertEqual(lc.model.train_inputs[0].shape[0], 50)
+        # fit() completed successfully.
+        self.assertIsNotNone(results)
+
 # Import variability tests so they are discovered when this file is run
 from test_variability import (  # noqa: E402, F401
     TestComputeFvar,

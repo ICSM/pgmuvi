@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import torch as t
 import gpytorch as gpt
@@ -934,7 +935,7 @@ def _make_qp_kernel(period):
     return ScaleKernel(ProductKernel(periodic_k, rbf_k))
 
 
-def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=False, **kwargs):
+def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_flicker=False, **kwargs):
     """Build a time kernel from a string name or a Kernel instance.
 
     Parameters
@@ -955,25 +956,21 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=F
         Initial period for the quasi-periodic option. Ignored for other types.
     num_mixtures : int, optional
         Number of mixture components for ``'spectral_mixture'``.  Default 4.
-    add_red_noise : bool, optional
-        Only applicable when ``time_kernel_type`` is ``'spectral_mixture'`` /
-        ``'sm'``.  When ``True``, the spectral-mixture kernel is wrapped in an
-        :class:`~gpytorch.kernels.AdditiveKernel` together with
-        ``ScaleKernel(RBFKernel(ard_num_dims=1))``, adding a slowly-varying
-        "red noise" (power-law background) component to the model.  This extra
-        component changes the parameter structure of the model (the covar_module
-        becomes an AdditiveKernel rather than a plain SMK), so
-        :meth:`~pgmuvi.lightcurve.Lightcurve.set_default_constraints` and any
-        downstream code that inspects ``_model_pars['mixture_means']`` must be
-        aware of this.  Default ``False``.
+    add_flicker : bool, optional
+        When ``True`` and ``time_kernel_type`` is ``'spectral_mixture'``/``'sm'``,
+        an additional ``ScaleKernel(RBFKernel)`` flicker component is added to
+        the spectral-mixture kernel to capture short-timescale stochastic
+        variability unrelated to the periodic signal.  Default ``False``.
+
+        .. warning::
+            This is a work-in-progress feature whose stability has not yet been
+            confirmed.  A ``UserWarning`` is raised when this option is enabled.
 
     Returns
     -------
     gpytorch.kernels.Kernel
     """
-    # red_noise_kernel = ScaleKernel(RBFKernel(ard_num_dims=1)) if add_red_noise else None
     if isinstance(time_kernel_type, gpt.kernels.Kernel):
-        import warnings
         warnings.warn(
             "A Kernel instance was supplied for time_kernel_type. "
             "Ensure this kernel is appropriate for the time (first) dimension "
@@ -990,7 +987,13 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_red_noise=F
         return ScaleKernel(RBFKernel())
     if time_kernel_type in ("spectral_mixture", "sm"):
         # SMK incorporates its own output scale; no wrapping ScaleKernel needed.
-        if add_red_noise:
+        if add_flicker:
+            warnings.warn(
+                "add_flicker=True is a work-in-progress feature whose stability "
+                "has not yet been confirmed. Use with caution.",
+                UserWarning,
+                stacklevel=2,
+            )
             return SMK(num_mixtures=num_mixtures, ard_num_dims=1) + ScaleKernel(RBFKernel(ard_num_dims=1))
         return SMK(num_mixtures=num_mixtures, ard_num_dims=1)
     raise ValueError(
@@ -1316,10 +1319,10 @@ class SeparableGPModel(ExactGP):
 
         # Restrict each sub-kernel to its own dimension via active_dims.
         time_kernel.register_buffer(
-            "active_dims", t.tensor([1], dtype=t.long)
+            "active_dims", t.tensor([0], dtype=t.long)
         )
         wavelength_kernel.register_buffer(
-            "active_dims", t.tensor([0], dtype=t.long)
+            "active_dims", t.tensor([1], dtype=t.long)
         )
 
         # ProductKernel with active_dims gives the separable 2D covariance
@@ -1508,16 +1511,16 @@ class WavelengthDependentGPModel(SeparableGPModel):
     num_mixtures : int, optional
         Number of mixture components when ``time_kernel_type='spectral_mixture'``.
         Default 4.
-    add_red_noise : bool, optional
-        Only applicable when ``time_kernel_type`` is ``'spectral_mixture'`` /
-        ``'sm'``.  When ``True``, the spectral-mixture time kernel is augmented
-        with ``ScaleKernel(RBFKernel(ard_num_dims=1))`` to model slowly-varying
-        "red noise" variability.  Default ``False``.
+    add_flicker : bool, optional
+        When ``True`` and ``time_kernel_type`` is ``'spectral_mixture'``/``'sm'``,
+        an additional flicker component is added to the spectral-mixture kernel
+        to capture short-timescale stochastic variability unrelated to the
+        periodic signal of interest.
+        Default ``False``.
 
-        .. note::
-            Prior to the fix released with this parameter, the default was
-            effectively ``True`` (red noise was added silently).  If you were
-            relying on that behaviour, pass ``add_red_noise=True`` explicitly.
+        .. warning::
+            This is a work-in-progress feature whose stability has not yet been
+            confirmed.  A ``UserWarning`` is raised when this option is enabled.
     mean_module : str or gpytorch.means.Mean, optional
         Mean function for the GP.  Accepted string values:
 
@@ -1565,7 +1568,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
         wavelength_lengthscale=None,
         num_mixtures=4,
         mean_module=None,
-        add_red_noise=False,
+        add_flicker=False,
         wavelength_scaling='constant',
         **kwargs
     ):
@@ -1601,7 +1604,7 @@ class WavelengthDependentGPModel(SeparableGPModel):
             )
 
 
-        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures, add_red_noise=add_red_noise)
+        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures, add_flicker=add_flicker)
         wl_kernel = _build_wavelength_kernel(
             wavelength_kernel_type, wavelength_lengthscale, scaling=wavelength_scaling
         )

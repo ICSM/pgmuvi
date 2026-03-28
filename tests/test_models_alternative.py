@@ -184,6 +184,16 @@ class TestSeparableGPModel(unittest.TestCase):
         model = SeparableGPModel(self.x, self.y, lik, time_kernel=t_k, wavelength_kernel=w_k)
         self.assertIsInstance(model.covar_module, gpytorch.kernels.ProductKernel)
 
+    def test_time_kernel_active_dims(self):
+        """Time kernel (kernels[0]) must operate on column 0 (time axis)."""
+        time_kernel = self.model.covar_module.kernels[0]
+        self.assertEqual(time_kernel.active_dims.tolist(), [0])
+
+    def test_wavelength_kernel_active_dims(self):
+        """Wavelength kernel (kernels[1]) must operate on column 1 (wavelength axis)."""
+        wl_kernel = self.model.covar_module.kernels[1]
+        self.assertEqual(wl_kernel.active_dims.tolist(), [1])
+
 
 class TestAchromaticGPModel(unittest.TestCase):
     """Tests for AchromaticGPModel."""
@@ -359,6 +369,108 @@ class TestWavelengthDependentGPModel(unittest.TestCase):
             ),
             SeparableGPModel,
         )
+
+    def test_add_flicker_default_is_false_no_warning(self):
+        """Default add_flicker=False emits no UserWarning."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2
+            )
+        flicker_warnings = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "add_flicker" in str(w.message)
+        ]
+        self.assertEqual(len(flicker_warnings), 0)
+
+    def test_add_flicker_true_emits_warning(self):
+        """add_flicker=True emits a UserWarning about WIP status."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2,
+                add_flicker=True,
+            )
+        flicker_warnings = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "add_flicker" in str(w.message)
+        ]
+        self.assertEqual(len(flicker_warnings), 1)
+        self.assertIn("work-in-progress", str(flicker_warnings[0].message))
+
+    def test_add_flicker_true_warning_not_emitted_for_non_sm_kernel(self):
+        """add_flicker=True does NOT emit a warning for non-spectral-mixture kernels."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="matern",
+                add_flicker=True,
+            )
+        flicker_warnings = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "add_flicker" in str(w.message)
+        ]
+        self.assertEqual(len(flicker_warnings), 0)
+
+    def test_add_flicker_false_kernel_is_pure_smk(self):
+        """Without flicker the time kernel is a bare SpectralMixtureKernel."""
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        import warnings
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            model = WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2,
+                add_flicker=False,
+            )
+        time_k = model.covar_module.kernels[0]
+        self.assertIsInstance(time_k, gpytorch.kernels.SpectralMixtureKernel)
+
+    def test_add_flicker_true_kernel_is_additive(self):
+        """With flicker the time kernel is SMK + ScaleKernel(RBF)."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            model = WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2,
+                add_flicker=True,
+            )
+        time_k = model.covar_module.kernels[0]
+        self.assertIsInstance(time_k, gpytorch.kernels.AdditiveKernel)
+        sub_kernels = time_k.kernels
+        self.assertIsInstance(sub_kernels[0], gpytorch.kernels.SpectralMixtureKernel)
+        self.assertIsInstance(sub_kernels[1], gpytorch.kernels.ScaleKernel)
+        self.assertIsInstance(sub_kernels[1].base_kernel, gpytorch.kernels.RBFKernel)
+
+    def test_add_flicker_true_forward_shape(self):
+        """Model with add_flicker=True produces predictions of correct shape."""
+        import warnings
+        lik = gpytorch.likelihoods.GaussianLikelihood()
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            model = WavelengthDependentGPModel(
+                self.x, self.y, lik,
+                time_kernel_type="spectral_mixture", num_mixtures=2,
+                add_flicker=True,
+            )
+        model.eval()
+        with torch.no_grad():
+            pred = model(self.x)
+        self.assertEqual(pred.mean.shape, self.y.shape)
 
 
 class TestLinearMeanQuasiPeriodicGPModel(unittest.TestCase):

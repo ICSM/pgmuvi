@@ -3,7 +3,9 @@ Sampling quality assessment utilities for lightcurve data.
 
 Provides metrics and validation gates to detect poorly sampled lightcurves
 before GP fitting, preventing bad fits due to sparse coverage, large gaps,
-or inadequate baseline.
+or inadequate baseline.  Also provides :func:`subsample_lightcurve` to
+randomly draw a size-limited subset of observations while preserving the
+temporal baseline, sampling structure and gap-coverage constraints.
 """
 
 import numpy as np
@@ -363,3 +365,174 @@ def assess_sampling_quality(
         print("=" * 70 + "\n")
 
     return passes, diagnostics
+
+
+def subsample_lightcurve(
+    t,
+    max_samples=3000,
+    max_gap_fraction=0.3,
+    random_seed=None,
+):
+    """
+    Return indices selecting at most *max_samples* points from *t* while
+    preserving the temporal baseline and the *max_gap_fraction* constraint.
+
+    The algorithm always keeps the earliest and latest time points so that
+    the full temporal baseline is preserved.  It then fills the remaining
+    budget with randomly chosen interior points.  If the resulting selection
+    contains any gap larger than ``max_gap_fraction * baseline``, the
+    original data point closest to the midpoint of each offending gap is
+    added iteratively.  To keep the total count at or below *max_samples*,
+    each added point is paired with the removal of the interior point whose
+    removal creates the smallest new gap that still satisfies the constraint.
+    If no such drop candidate exists, that gap is left unrepaired and repair
+    continues for other gaps.  A hard iteration cap prevents infinite loops.
+
+    Parameters
+    ----------
+    t : array_like
+        Observation times (1-D).
+    max_samples : int, default 3000
+        Maximum number of points to include in the subsample.  Must be an
+        integer >= 2.
+    max_gap_fraction : float, default 0.3
+        Maximum allowed gap between consecutive selected times as a fraction
+        of the total temporal baseline.
+    random_seed : int or None, optional
+        Seed for the random number generator (reproducibility).
+
+    Returns
+    -------
+    indices : np.ndarray of int
+        Indices into *t* that form the subsample, ordered by ascending time.
+        If ``len(t) <= max_samples`` the full range ``np.arange(len(t))``
+        is returned unchanged.  The returned array always has length
+        <= *max_samples*.
+
+    Notes
+    -----
+    When filling a gap would exceed the budget, the densest interior point
+    (i.e. the one whose removal creates the smallest new gap while still
+    satisfying the gap constraint) is swapped out.  If no such drop candidate
+    exists, the gap is left unrepaired and repair continues for other gaps.
+    A hard iteration cap (``2 * max_samples + 1``) prevents infinite loops in
+    pathological cases.
+
+    Raises
+    ------
+    ValueError
+        If *max_samples* is not an integer >= 2.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> rng = np.random.default_rng(0)
+    >>> t = rng.uniform(0, 100, 5000)
+    >>> idx = subsample_lightcurve(t, max_samples=500, random_seed=42)
+    >>> len(idx) <= 500
+    True
+    """
+    if not isinstance(max_samples, (int, np.integer)) or max_samples < 2:
+        raise ValueError(
+            f"max_samples must be an integer >= 2, got {max_samples!r}"
+        )
+
+    t = np.asarray(t, dtype=float)
+    n = len(t)
+
+    if n <= max_samples:
+        return np.arange(n)
+
+    rng = np.random.default_rng(random_seed)
+
+    sort_order = np.argsort(t)
+    t_sorted = t[sort_order]
+
+    baseline = float(t_sorted[-1] - t_sorted[0])
+    if baseline == 0:
+        # Degenerate case: all times identical - return first max_samples.
+        return sort_order[:max_samples].copy()
+
+    max_gap_allowed = max_gap_fraction * baseline
+    
+    # Boolean mask indexed by sorted position; endpoints always selected.
+    selected_mask = np.zeros(n, dtype=bool)
+    selected_mask[0] = True
+    selected_mask[n - 1] = True
+
+    # Fill remaining budget with randomly chosen interior sorted positions.
+    interior_positions = np.arange(1, n - 1)
+    target = max(0, max_samples - 2)
+    chosen_pos = rng.choice(interior_positions, size=target, replace=False)
+    selected_mask[chosen_pos] = True
+
+    # Iterative gap repair with strict budget enforcement.
+    # Each iteration repairs at most one gap.  The cap (2 * max_samples + 1)
+    # covers at most max_samples swap cycles, preventing infinite loops in
+    # pathological cases where swaps oscillate between two states.
+    for _ in range(2 * max_samples + 1):
+        sel_positions = np.where(selected_mask)[0]  # sorted positions
+        t_sel = t_sorted[sel_positions]
+        gaps = np.diff(t_sel)
+        bad = np.where(gaps > max_gap_allowed)[0]
+        if len(bad) == 0:
+            break
+            
+        # Attempt repair starting from the largest offending gap.
+        bad_sorted = bad[np.argsort(gaps[bad])[::-1]]
+        repaired = False
+
+        for gap_idx in bad_sorted:
+            gap_idx = int(gap_idx)
+            t_left = t_sel[gap_idx]
+            t_right = t_sel[gap_idx + 1]
+            t_mid = 0.5 * (t_left + t_right)
+
+            # O(log N) lookup: positions in t_sorted that fall in the gap.
+            lo = int(np.searchsorted(t_sorted, t_left, side="right"))
+            hi = int(np.searchsorted(t_sorted, t_right, side="left"))
+
+            if lo >= hi:
+                continue
+
+            # Unselected sorted positions strictly inside this gap.
+            gap_range = np.arange(lo, hi)
+            unused_in_gap = gap_range[~selected_mask[lo:hi]]
+
+            if len(unused_in_gap) == 0:
+                continue  # all points in this gap already selected
+
+            # Best fill candidate: closest to the gap midpoint.
+            best_pos = int(
+                unused_in_gap[np.argmin(np.abs(t_sorted[unused_in_gap] - t_mid))]
+            )
+
+            # Budget enforcement: if at capacity, drop the interior selected
+            # point whose removal creates the smallest new gap that still
+            # satisfies the constraint (deterministic, from densest region).
+            if np.sum(selected_mask) >= max_samples:
+                drop_pos = None
+                min_new_gap = float("inf")
+                for k in range(1, len(sel_positions) - 1):
+                    new_gap = (
+                        t_sorted[sel_positions[k + 1]]
+                        - t_sorted[sel_positions[k - 1]]
+                    )
+                    if new_gap <= max_gap_allowed and new_gap < min_new_gap:
+                        min_new_gap = new_gap
+                        drop_pos = int(sel_positions[k])
+
+                if drop_pos is None:
+                    # Cannot free budget without creating a new violation.
+                    continue
+                selected_mask[drop_pos] = False
+
+            selected_mask[best_pos] = True
+            repaired = True
+            break
+
+        if not repaired:
+            break
+
+    sel_positions = np.where(selected_mask)[0]
+    return sort_order[sel_positions]

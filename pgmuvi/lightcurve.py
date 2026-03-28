@@ -681,7 +681,27 @@ class InputHelpers:
         y = torch.as_tensor(clean[ycol], dtype=torch.float32)
         yerr = torch.as_tensor(clean[yerrcol], dtype=torch.float32) if yerrcol else None
 
+
         return cls(xdata=x, ydata=y, yerr=yerr)
+
+
+# Spectral-mixture model names that support MLS-based initialisation in fit().
+_SM_MODELS: frozenset[str] = frozenset(
+    {
+        "2D",
+        "1D",
+        "1DLinear",
+        "2DLinear",
+        "2DPowerLaw",
+        "2DDust",
+        "1DSKI",
+        "2DSKI",
+        "1DLinearSKI",
+        "2DLinearSKI",
+        "2DPowerLawSKI",
+        "2DDustSKI",
+    }
+)
 
 
 class Lightcurve(InputHelpers, gpytorch.Module):
@@ -1178,6 +1198,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Any other keyword arguments to be passed to the model constructor.
         """
         self.__SET_MODEL_CALLED = True
+        if isinstance(model, str):
+            self._model_str = model
+            self._model_instance = None
+        elif "GP" in [t.__name__ for t in type(model).__mro__]:
+            # GP instance provided directly — store it so it can be rebound
+            # to new training data after band filtering.
+            self._model_instance = model
+            self._model_str = None
+        else:
+            self._model_str = None
+            self._model_instance = None
+        self._model_num_mixtures = num_mixtures
         model_dic_1 = {
             "2D": TwoDSpectralMixtureGPModel,
             "1D": SpectralMixtureGPModel,
@@ -1609,6 +1641,57 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # let's see if this works!
         self.__PRIORS_SET = True
 
+    def get_priors(self):
+        """Return the priors currently registered on the model.
+
+        Iterates over all priors registered on the model (via GPyTorch's
+        ``named_priors``) and returns a dictionary mapping each prior name to
+        the corresponding prior object.  A formatted summary is also printed to
+        standard output.
+
+        Returns
+        -------
+        dict
+            A dictionary mapping prior names (str) to their
+            :class:`gpytorch.priors.Prior` objects. Returns an empty dict if
+            no priors have been registered.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been set yet (call :meth:`set_model` first).
+
+        See Also
+        --------
+        set_default_priors
+        get_period_prior
+
+        Examples
+        --------
+        ::
+
+            lc.set_model("1D", num_mixtures=4)
+            lc.set_default_priors()
+            priors = lc.get_priors()
+        """
+        if not hasattr(self, "_model_pars"):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before "
+                "get_priors()."
+            )
+        priors = {}
+        for name, _module, prior, _closure, _setting_closure in (
+            self.model.named_priors()
+        ):
+            priors[name] = prior
+        print("Registered priors:")
+        if priors:
+            for name, prior in priors.items():
+                print(f"  {name}: {prior}")
+        else:
+            print("  (none)")
+        return priors
+
     def set_period_prior(
         self,
         prior_set=None,
@@ -1863,6 +1946,77 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "set_period_prior() has no effect for this model type.",
             stacklevel=2,
         )
+
+    def get_period_prior(self):
+        """Return the period or frequency prior currently registered on the model.
+
+        Searches for a prior on the period or frequency parameter of the model
+        (``mixture_means_prior`` for spectral-mixture models,
+        ``period_length_prior`` for quasi-periodic models) and returns a
+        dictionary of the priors found, keyed by the full parameter path.  A
+        formatted summary is also printed to standard output.
+
+        Returns
+        -------
+        dict
+            A dictionary mapping prior names (str) to their prior objects.
+            Returns an empty dict if no period/frequency prior has been
+            registered or the model has no periodicity parameter.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been set yet (call :meth:`set_model` first).
+
+        See Also
+        --------
+        set_period_prior
+        get_priors
+
+        Examples
+        --------
+        ::
+
+            lc.set_model("1D", num_mixtures=4)
+            lc.set_period_prior(prior_set="LPV")
+            prior_info = lc.get_period_prior()
+        """
+        if not hasattr(self, "_model_pars"):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before "
+                "get_period_prior()."
+            )
+        period_priors = {}
+        for name, _module, prior, _closure, _setting_closure in (
+            self.model.named_priors()
+        ):
+            if "mixture_means_prior" in name or "period_length_prior" in name:
+                period_priors[name] = prior
+
+        print("Registered period/frequency priors:")
+        if period_priors:
+            for name, prior in period_priors.items():
+                prior_type = type(prior).__name__
+                line = f"  {name}: {prior_type}"
+                params = []
+                if hasattr(prior, "loc"):
+                    params.append(f"loc={float(prior.loc):.4g}")
+                if hasattr(prior, "scale"):
+                    params.append(f"scale={float(prior.scale):.4g}")
+                if hasattr(prior, "lower_period") and prior.lower_period is not None:
+                    params.append(f"lower_period={float(prior.lower_period):.4g}")
+                if hasattr(prior, "upper_period") and prior.upper_period is not None:
+                    params.append(f"upper_period={float(prior.upper_period):.4g}")
+                if hasattr(prior, "lower_bound") and prior.lower_bound is not None:
+                    params.append(f"lower_bound={float(prior.lower_bound):.4g}")
+                if hasattr(prior, "upper_bound") and prior.upper_bound is not None:
+                    params.append(f"upper_bound={float(prior.upper_bound):.4g}")
+                if params:
+                    line += f"({', '.join(params)})"
+                print(line)
+        else:
+            print("  (none)")
+        return period_priors
 
     def _validate_2d_setup(self):
         """Validate that the 2D setup is correct
@@ -2141,6 +2295,54 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # to-do - check if constraints on mixture scales are useful!
         self.__CONTRAINTS_SET = True
 
+    def get_constraints(self):
+        """Return the constraints currently registered on the model.
+
+        Iterates over all constraints registered on the model (via GPyTorch's
+        ``named_constraints``) and returns a dictionary mapping each constraint
+        name to the corresponding constraint object.  A formatted summary is
+        also printed to standard output.
+
+        Returns
+        -------
+        dict
+            A dictionary mapping constraint names (str) to their
+            :class:`gpytorch.constraints.Constraint` objects. Returns an empty
+            dict if no constraints have been registered.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been set yet (call :meth:`set_model` first).
+
+        See Also
+        --------
+        set_default_constraints
+
+        Examples
+        --------
+        ::
+
+            lc.set_model("1D", num_mixtures=4)
+            lc.set_default_constraints()
+            constraints = lc.get_constraints()
+        """
+        if not hasattr(self, "_model_pars"):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before "
+                "get_constraints()."
+            )
+        constraints = {}
+        for name, constraint in self.model.named_constraints():
+            constraints[name] = constraint
+        print("Registered constraints:")
+        if constraints:
+            for name, constraint in constraints.items():
+                print(f"  {name}: {constraint}")
+        else:
+            print("  (none)")
+        return constraints
+
     def set_hypers(self, hypers=None, debug=False, **kwargs):
         """Set the hyperparameters for the model and likelihood. This is a
         convenience function that calls the model.initialize() to set the
@@ -2300,6 +2502,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         num_peaks: int = 1,
         single_threshold: float = 0.05,
         Nyquist_factor: int = 5,
+        fap_method: str | None = None,
+        use_best_band_init: bool = False,
+        max_samples: int | None = 3000,
+        subsample_seed: int | None = None,
         **kwargs,
     ) -> tuple:
         """
@@ -2331,6 +2537,41 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Lomb-Scargle periodogram.
             This will be approximately the number of points sampling
             the maximum in the resulting periodogram.
+        - fap_method: str or None, optional, default=None
+            Method used to compute the false-alarm probability (FAP) of the
+            *maximum* periodogram peak (the global significance test).
+            For 1D lightcurves the default is ``'davies'`` (fast analytical
+            upper bound; equivalent to ``'baluev'`` for practical purposes
+            but significantly faster). Other valid astropy options are
+            ``'baluev'`` and ``'bootstrap'``. Note: ``'single'`` is a
+            valid astropy option that computes the FAP for a single
+            pre-specified frequency and is not appropriate for ``fap_max``
+            (a warning is issued and ``'baluev'`` is used instead); it is
+            however used internally as the per-frequency p-value when
+            applying the Benjamini-Hochberg correction.
+            For multi-band lightcurves the default is ``'analytical'`` (fast
+            Baluev-style approximation).  Slower but more accurate options
+            are ``'bootstrap'``, ``'phase_scramble'``, and ``'calibrated'``
+            (see
+            :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`).
+        - use_best_band_init: bool, optional, default=False
+            If True and the lightcurve is multiband (ndim > 1), the
+            Lomb-Scargle frequency grid is derived from the band with the
+            most observations rather than from the full multiband dataset.
+            This yields a finer frequency resolution focused on the most
+            informative band, which can speed up and improve the
+            periodogram search when sampling is highly heterogeneous
+            across bands.  Has no effect for 1D lightcurves.
+        - max_samples : int or None, optional, default=3000
+            Maximum number of observations to use when computing the
+            Lomb-Scargle periodogram.  When the lightcurve contains more
+            than *max_samples* points a random subsample is drawn
+            automatically (see :func:`~pgmuvi.preprocess.subsample_lightcurve`
+            for details of the gap-preserving algorithm).  Set to ``None``
+            to disable subsampling entirely.
+        - subsample_seed : int or None, optional, default=None
+            Seed for the random number generator used when subsampling.
+            Provide an integer for reproducible results.
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
@@ -2393,33 +2634,116 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 result = np.zeros(N, dtype=bool)
             return result
 
+        # ------------------------------------------------------------------
+        # Build working arrays: apply finite-value mask first, then subsample.
+        # Masking before subsampling ensures the subsampler only sees finite
+        # times and the effective sample count is not diluted by NaN/inf rows.
+        # ------------------------------------------------------------------
+        _has_yerr = (
+            hasattr(self, "_yerr_transformed")
+            and self._yerr_transformed is not None
+        )
+        xdata_all = self.xdata
+        ydata_all = self.ydata
+        yerr_all = self.yerr if _has_yerr else None
+
+        # Step 1: build a finite-value mask and discard non-finite observations.
         if self.ndim > 1:
-            # Multi-band case: xdata[:, 0] is time, xdata[:, 1] is band/wavelength
-            t = self.xdata[:, 0]
-            bands = self.xdata[:, 1]
-            y = self.ydata
-
-            has_yerr = (
-                hasattr(self, "_yerr_transformed")
-                and self._yerr_transformed is not None
-            )
-
-            if has_yerr:
-                yerr = self.yerr
-                mask = (
-                    torch.isfinite(t)
-                    & torch.isfinite(bands)
-                    & torch.isfinite(y)
-                    & torch.isfinite(yerr)
+            t_all = xdata_all[:, 0]
+            bands_all = xdata_all[:, 1]
+            if yerr_all is not None:
+                finite_mask = (
+                    torch.isfinite(t_all)
+                    & torch.isfinite(bands_all)
+                    & torch.isfinite(ydata_all)
+                    & torch.isfinite(yerr_all)
                 )
-                t, bands, y, yerr = t[mask], bands[mask], y[mask], yerr[mask]
+            else:
+                finite_mask = (
+                    torch.isfinite(t_all)
+                    & torch.isfinite(bands_all)
+                    & torch.isfinite(ydata_all)
+                )
+        else:
+            if yerr_all is not None:
+                finite_mask = (
+                    torch.isfinite(xdata_all)
+                    & torch.isfinite(ydata_all)
+                    & torch.isfinite(yerr_all)
+                )
+            else:
+                finite_mask = (
+                    torch.isfinite(xdata_all) & torch.isfinite(ydata_all)
+                )
+        _xdata = xdata_all[finite_mask]
+        _ydata = ydata_all[finite_mask]
+        _yerr = yerr_all[finite_mask] if _has_yerr else None
+
+        # Step 2: optional subsampling on finite data only.
+        if max_samples is not None:
+            from pgmuvi.preprocess import subsample_lightcurve
+
+            t_for_sub = _xdata[:, 0] if self.ndim > 1 else _xdata
+            t_np = t_for_sub.detach().cpu().numpy()
+            if len(t_np) > max_samples:
+                warnings.warn(
+                    f"Lightcurve has {len(t_np)} finite points, which exceeds "
+                    f"max_samples={max_samples}. Computing the Lomb-Scargle "
+                    f"periodogram on a random subsample of {max_samples} "
+                    f"points. Set max_samples=None to disable subsampling.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                idx = subsample_lightcurve(
+                    t_np,
+                    max_samples=max_samples,
+                    random_seed=subsample_seed,
+                )
+                idx_t = torch.as_tensor(
+                    idx,
+                    dtype=torch.long,
+                    device=_xdata.device,
+                )
+                _xdata = _xdata[idx_t]
+                _ydata = _ydata[idx_t]
+                _yerr = _yerr[idx_t] if _has_yerr else None
+
+        if self.ndim > 1:
+            # Multi-band case: _xdata[:, 0] is time, _xdata[:, 1] is band/wavelength
+            t = _xdata[:, 0]
+            bands = _xdata[:, 1]
+            y = _ydata
+
+            # Default FAP method for multiband: analytical (fast)
+            _fap_method = fap_method if fap_method is not None else 'analytical'
+
+            if _yerr is not None:
+                yerr = _yerr
                 LS = MultibandLSWithSignificance(t, y, bands, dy=yerr, **kwargs)
             else:
-                mask = torch.isfinite(t) & torch.isfinite(bands) & torch.isfinite(y)
-                t, bands, y = t[mask], bands[mask], y[mask]
                 LS = MultibandLSWithSignificance(t, y, bands, **kwargs)
 
-            freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
+            if use_best_band_init:
+                # Use the most-sampled band's 1D autofrequency as the grid
+                # for the multiband LS.  The best-sampled band has finer
+                # temporal resolution (more data points), yielding a denser
+                # frequency grid that improves period recovery when sampling
+                # is highly heterogeneous across bands.
+                _unique_bands, _band_counts = torch.unique(
+                    bands, return_counts=True
+                )
+                _best_val = _unique_bands[_band_counts.argmax()]
+                _best_mask = bands == _best_val
+                _t_best = t[_best_mask].detach().cpu().numpy()
+                _y_best = y[_best_mask].detach().cpu().numpy()
+                if _has_yerr:
+                    _dy_best = yerr[_best_mask].detach().cpu().numpy()
+                    _ls_1d_best = LombScargle(_t_best, _y_best, _dy_best)
+                else:
+                    _ls_1d_best = LombScargle(_t_best, _y_best)
+                freq = _ls_1d_best.autofrequency(nyquist_factor=Nyquist_factor)
+            else:
+                freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
             power = LS.power(freq)
 
             if freq_only:
@@ -2446,7 +2770,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
             # Compute FAP for multiband periodogram
-            fap_max = LS.false_alarm_probability(power.max(), method='bootstrap')
+            fap_max = LS.false_alarm_probability(power.max(),
+                                                 method=_fap_method,
+                                                 freq_grid=freq)
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:
@@ -2462,7 +2788,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             # Calculate FAP for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
-                                                    method='bootstrap')
+                                                    method=_fap_method,
+                                                    freq_grid=freq)
 
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
@@ -2481,22 +2808,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             )
         else:
-            t, y = self.xdata, self.ydata
-            has_yerr = (
-                hasattr(self, "_yerr_transformed")
-                and self._yerr_transformed is not None
-            )
-            if has_yerr:
-                yerr = self.yerr
-                mask = torch.isfinite(t) & torch.isfinite(y) & torch.isfinite(yerr)
-                t, y, yerr = t[mask], y[mask], yerr[mask]
+            t, y = _xdata, _ydata
+
+            # Default FAP method for single-band: 'davies' (fast analytical
+            # upper bound; same accuracy as 'baluev' for typical use cases
+            # but much faster). 'baluev' is another good analytical choice.
+            _fap_method = fap_method if fap_method is not None else 'davies'
+
+            if _yerr is not None:
+                yerr = _yerr
                 LS = LombScargle(t, y, yerr)
             else:
-                mask = torch.isfinite(t) & torch.isfinite(y)
-                t, y = t[mask], y[mask]
                 LS = LombScargle(t, y)
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
-            power = LS.power(freq)
+            # assume_regular_frequency=True: autofrequency() always produces
+            # a regular grid, so skip the regularity check for a minor speedup
+            power = LS.power(freq, assume_regular_frequency=True)
             if freq_only:
                 return (
                     torch.as_tensor(
@@ -2521,8 +2848,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     torch.as_tensor([], dtype=torch.bool, device=self.xdata.device),
                 )
 
-            # Calculate the false alarm probability for the highest peak
-            fap_max = LS.false_alarm_probability(power.max())
+            # Calculate the false alarm probability for the highest peak.
+            # 'single' is not appropriate for fap_max (it computes the FAP
+            # for a single pre-specified frequency, not the global maximum).
+            _fap_method_max = _fap_method
+            if _fap_method_max == 'single':
+                warnings.warn(
+                    "fap_method='single' is not appropriate for the false alarm "
+                    "probability of the maximum peak (it computes the FAP for a "
+                    "single pre-specified frequency, not the global maximum). "
+                    "Using method='baluev' for fap_max instead.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                _fap_method_max = 'baluev'
+            fap_max = LS.false_alarm_probability(power.max(),
+                                                 method=_fap_method_max)
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:
@@ -2538,8 +2879,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         device=self.xdata.device,
                     ),
                 )
-            # Calculate the false alarm probability for each peak independently
-            fap_single = LS.false_alarm_probability(power[peaks], method="single")
+            # Per-peak FAP for the Benjamini-Hochberg correction.
+            # We use method='single' here: it gives the single-frequency FAP
+            # (probability that one pre-specified frequency shows at least
+            # this power by chance), which is the correct uncorrected p-value
+            # to supply to BH.  The 'davies'/'baluev' methods already account
+            # for multiple-frequency comparisons and would be too conservative.
+            fap_single = LS.false_alarm_probability(power[peaks],
+                                                    method='single')
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
             significant_mask[0] = True  # since fap_max <= single_threshold
@@ -2852,6 +3199,37 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._yerr_raw[keep_mask].clone() if hasattr(self, "_yerr_raw") else None,
         )
 
+    def _get_best_sampled_band_lc(self) -> "Lightcurve":
+        """Return a 1D Lightcurve for the band with the most observations.
+
+        For 1D lightcurves, returns ``self`` unchanged.
+
+        Returns
+        -------
+        Lightcurve
+            1D Lightcurve (xdata is the time column only) built from the
+            raw (untransformed) data of the most-sampled wavelength band.
+            If multiple bands share the same (maximum) number of observations,
+            the band with the smallest band value (as returned by
+            ``torch.unique``) is returned.
+        """
+        if self.ndim <= 1:
+            return self
+
+        bands = self._xdata_raw[:, 1]
+        unique_bands, band_counts = torch.unique(bands, return_counts=True)
+        best_band_val = unique_bands[band_counts.argmax()]
+        mask = bands == best_band_val
+
+        t = self._xdata_raw[mask, 0]
+        y = self._ydata_raw[mask]
+        yerr = (
+            self._yerr_raw[mask]
+            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
+            else None
+        )
+        return Lightcurve(t, y, yerr=yerr)
+
     def _get_variability_arrays(self):
         """Return (y, yerr) as float64 NumPy arrays, safe for CPU and GPU tensors."""
         y = self._ydata_raw.detach().cpu().numpy()
@@ -2876,10 +3254,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             - fvar_min: float (default 0.05)
             - stetson_k_min: float (default 0.95)
             - verbose: bool (default False)
-        
+
         Returns
         -------
-          Variability diagnostics from is_variable()        
+          Variability diagnostics from is_variable()
           If the lightcurve is multiband (ndim > 1). Use
           check_variability_per_band() instead.
 
@@ -2910,10 +3288,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Parameters
         ----------
         **kwargs : dict
-            Arguments passed to is_variable()                   
+            Arguments passed to is_variable()
                     'n_variable': int,
                     'variable_wavelengths': list[float]
-        
+
         Returns
         -------
             If the lightcurve is not 2-D multiband data (ndim != 2 columns
@@ -2965,9 +3343,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "variable_wavelengths": variable_bands,
         }
         return results
-        
 
-    
+
+
     def filter_variable_bands(self, **kwargs):
         """
         Create new Lightcurve with only variable bands retained.
@@ -2975,7 +3353,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Only applicable for multiband (2D) lightcurves where
         ``xdata[:, 1]`` encodes the band/wavelength.
 
-        
+
          Parameters
          ----------
             Arguments passed to is_variable()
@@ -3124,8 +3502,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self,
         model=None,
         likelihood=None,
-        num_mixtures=4,
+        num_mixtures=None,
         guess=None,
+        periods=None,
+        use_mls_init=True,
+        use_best_band_init: bool = False,
+        constraint_set=None,
         grid_size=2000,
         cuda=False,
         training_iter=300,
@@ -3140,6 +3522,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         sampling_kwargs: dict | None = None,
         check_variability: bool = False,
         variability_kwargs: dict | None = None,
+        max_samples: int | None = 3000,
+        subsample_seed: int | None = None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -3186,11 +3570,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If likelihood is passed, it will be passed along to `set_likelihood()`
             and used to set the likelihood function for the model. For details, see
             the documentation for `set_likelihood()`.
-        num_mixtures : int, optional
-            The number of mixtures to use in the spectral mixture kernel, by
-            default 4. If None, a default value will be used. This value
-            is passed to the constructor for the model if a string is passed
-            as the model argument.
+        num_mixtures : int or None, optional
+            The number of mixtures to use in the spectral mixture kernel.  By
+            default ``None``, which lets the MLS initialisation (see
+            ``use_mls_init``) choose the value automatically.  When
+            ``use_mls_init=True`` and ``periods`` is ``None``, setting
+            ``num_mixtures`` to an integer *N* overrides the automatic count:
+            the first *N* significant MLS periods are used; if *N* exceeds the
+            number of significant periods, non-significant peaks are added to
+            make up the difference.  When ``use_mls_init=False`` and
+            ``num_mixtures`` is ``None`` a fallback of 4 is used.
         guess : dict, optional
             A dictionary of the hyperparameters to use for the model and
             likelihood. The keys should be the names of the parameters, and the
@@ -3198,6 +3587,56 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If None, no hyperparameters will be set. If a hyperparameter is
             passed for a parameter that is not a model or likelihood
             parameter, it will be ignored.
+        periods : array-like or None, optional
+            Initial guesses for the periods (in the same units as the
+            lightcurve time axis).  When provided for 1D spectral-mixture
+            kernels (i.e. when ``ard_num_dims == 1``), the MLS
+            initialisation is skipped entirely: ``num_mixtures`` is set to
+            the number of supplied periods and the spectral-mixture kernel
+            frequencies are initialised from these values.  If both
+            ``periods`` and ``guess`` are supplied, entries in ``guess`` take
+            priority over the period-derived frequencies.  For multi-
+            dimensional spectral-mixture models (e.g. 2D kernels), the
+            current implementation does not use ``periods`` to seed mixture
+            means; in those cases, only explicit initial values provided via
+            ``guess`` (or the model's own defaults) will be used.
+        use_mls_init : bool, optional
+            If ``True`` (default) and ``periods`` is ``None`` and a 1D
+            spectral-mixture model string is given (``ard_num_dims == 1``),
+            the Multiband Lomb-Scargle (MLS) periodogram is run first to
+            estimate the number of significant periods and their frequencies,
+            which are used as initial guesses for the spectral-mixture kernel
+            frequencies.  Set to ``False`` to disable this behaviour and, for
+            models that call it, fall back to GPyTorch's
+            ``initialize_from_data``.  Note that several 2D spectral-mixture
+            models do not currently call ``initialize_from_data`` at all, so
+            for those models MLS-based or period-based frequency seeding is
+            not applied and the underlying GPyTorch defaults are used
+            instead.
+        use_best_band_init : bool, optional
+            If ``True`` and the lightcurve is multiband (``ndim > 1``) and
+            ``use_mls_init=True`` and ``periods`` is ``None``, a 1D
+            Lomb-Scargle fit on the most-sampled band is used to seed the
+            spectral-mixture frequency initialisation instead of the
+            standard multiband LS.  For 2D spectral-mixture models
+            (``ard_num_dims == 2``, non-SKI), the fitted temporal
+            frequencies are also used to initialise the temporal dimension
+            of the kernel mixture means, with the minimum wavelength
+            frequency (1/wavelength_span) as the default for the
+            wavelength dimension, corresponding to approximately achromatic
+            variability.  This can improve convergence for sources with a
+            large dynamic range in the number of observations across bands.
+            Has no effect for 1D lightcurves or when ``use_mls_init=False``.
+        constraint_set : str or None, optional
+            Name of a pre-defined source-type constraint set to apply via
+            :meth:`set_default_constraints`.  When provided, the period bounds
+            defined in the constraint set are also used to filter MLS peaks
+            *before* the model is constructed: peaks whose frequencies fall
+            outside the constraint-set allowed range are excluded from the
+            initialisation (with a ``RuntimeWarning``).  Currently supported
+            values are ``"LPV"`` (Long-Period Variables, minimum period 100 in
+            the native time units).  Pass ``None`` (the default) to use only
+            the data-driven bounds.
         grid_size : int, optional
             The number of points to use in the grid for the KISS-GP models,
             by default 2000.
@@ -3228,8 +3667,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             default 30.
         check_sampling : bool, default=True
             If True, verify lightcurve has adequate temporal sampling before
-            fitting. Raises ValueError if sampling is poor. Set to False to
-            force fitting.
+            fitting. For 1D lightcurves, raises ValueError if sampling is
+            poor. For 2D (multiband) lightcurves, checks each wavelength band
+            independently: bands that fail are removed from the data with a
+            printed warning, and the fit proceeds with the remaining bands.
+            Raises ValueError only if no bands pass. Set to False to force
+            fitting without any sampling quality check.
         sampling_kwargs : dict, optional
             Keyword arguments for sampling quality gates (min_points,
             max_gap_fraction, min_baseline_factor, min_snr,
@@ -3246,6 +3689,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
+        max_samples : int or None, default 3000
+            Maximum number of time-axis points used for GP fitting.  When the
+            lightcurve has more than *max_samples* observations, a random
+            subsample of *max_samples* points is drawn before model setup and
+            training.  The subsample always includes the earliest and latest
+            observations (preserving the full temporal baseline) and is
+            repaired to satisfy the *max_gap_fraction* constraint taken from
+            *sampling_kwargs* (default 0.3).  A :class:`UserWarning` is issued
+            whenever subsampling occurs.  Set to ``None`` to disable
+            subsampling entirely.
+        subsample_seed : int or None, default None
+            Random seed passed to :func:`subsample_lightcurve` when
+            subsampling is performed.  Use a fixed integer for reproducible
+            subsamples; ``None`` (default) produces a non-deterministic
+            subsample.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -3258,35 +3716,111 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Raises
         ------
         ValueError
-            If check_sampling is True and the lightcurve has poor temporal
-            sampling, or if no model is provided.
+            If check_sampling is True and the lightcurve (1D) has poor
+            temporal sampling, or all 2D bands fail sampling checks, or if
+            no model is provided.
         """
         if check_sampling:
-            from pgmuvi.preprocess.quality import assess_sampling_quality
-
             sk = sampling_kwargs or {}
-            t = self._xdata_raw.detach().cpu().numpy()
-            if t.ndim > 1:
-                t = t[:, 0]
-            y = (
-                self._ydata_raw.detach().cpu().numpy()
-                if hasattr(self, "_ydata_raw")
-                else None
-            )
-            yerr = (
-                self._yerr_raw.detach().cpu().numpy()
-                if hasattr(self, "_yerr_raw")
-                else None
-            )
-            passes, diag = assess_sampling_quality(t, y, yerr, verbose=False, **sk)
-            if not passes:
-                warnings_str = "\n".join(f"  • {w}" for w in diag["warnings"])
-                raise ValueError(
-                    f"Lightcurve has poor temporal sampling:\n{warnings_str}\n\n"
-                    f"Recommendation: {diag['recommendation']}\n"
-                    "GP fitting not recommended for poorly sampled data.\n"
-                    "To force fitting anyway, use: fit(check_sampling=False)"
+            if self.ndim > 1:
+                # 2D multiband: check each wavelength band independently and
+                # skip (filter out) any bands that fail the quality gates.
+                # Ensure xdata has the expected (N, 2) shape with wavelength
+                # in column 1 before running per-band diagnostics.
+                xdata = self._xdata_raw
+                if xdata.dim() != 2 or xdata.shape[1] != 2:
+                    raise ValueError(
+                        "For 2D/multiband light curves, xdata must have shape "
+                        "(N, 2) with wavelength values in column 1. Received "
+                        f"shape {tuple(xdata.shape)}. Please ensure "
+                        "that your input is not transposed or otherwise malformed."
+                    )
+                results = self.assess_sampling_quality_per_band(
+                    verbose=False, **sk
                 )
+                failing = results["summary"]["failing_wavelengths"]
+                passing = results["summary"]["passing_wavelengths"]
+
+                for wl in failing:
+                    diag = results[float(wl)]
+                    warnings_str = ", ".join(diag["warnings"])
+                    warnings.warn(
+                        f"Skipping band \u03bb={wl} due to poor "
+                        f"temporal sampling: {warnings_str}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+
+                if not passing:
+                    raise ValueError(
+                        "No wavelength bands passed sampling quality checks. "
+                        "GP fitting is not recommended.\n"
+                        "To force fitting anyway, use: fit(check_sampling=False)"
+                    )
+
+                if failing:
+                    n_pass = len(passing)
+                    n_total = results["summary"]["n_bands"]
+                    skipped = [round(w, 4) for w in failing]
+                    warnings.warn(
+                        f"Fitting with {n_pass}/{n_total} wavelength bands "
+                        f"(skipping \u03bb = {skipped}).",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    # Filter data in-place to only well-sampled bands.
+                    keep_mask = torch.isin(
+                        xdata[:, 1],
+                        torch.tensor(
+                            passing, dtype=xdata.dtype, device=xdata.device
+                        ),
+                    )
+                    self.xdata = xdata[keep_mask].clone()
+                    self.ydata = self._ydata_raw[keep_mask].clone()
+                    if hasattr(self, "_yerr_raw"):
+                        self.yerr = self._yerr_raw[keep_mask].clone()
+                    # Filtering bands mutates the training data; ensure any
+                    # existing GP model and likelihood bound to the old data
+                    # are discarded so that fresh instances are created with
+                    # the filtered data.
+                    if hasattr(self, "model"):
+                        self.model = None
+                    if hasattr(self, "likelihood"):
+                        self.likelihood = None
+                    self.__SET_LIKELIHOOD_CALLED = False
+                    self.__CONTRAINTS_SET = False
+                    # Priors registered on the old model are no longer valid;
+                    # ensure they are re-applied when a new model is created.
+                    self.__PRIORS_SET = False
+            else:
+                # 1D: raise ValueError if sampling is poor
+                from pgmuvi.preprocess.quality import assess_sampling_quality
+
+                t = self._xdata_raw.detach().cpu().numpy()
+                y = (
+                    self._ydata_raw.detach().cpu().numpy()
+                    if hasattr(self, "_ydata_raw")
+                    else None
+                )
+                yerr = (
+                    self._yerr_raw.detach().cpu().numpy()
+                    if hasattr(self, "_yerr_raw")
+                    else None
+                )
+                passes, diag = assess_sampling_quality(
+                    t, y, yerr, verbose=False, **sk
+                )
+                if not passes:
+                    warnings_str = "\n".join(
+                        f"  • {w}" for w in diag["warnings"]
+                    )
+                    raise ValueError(
+                        f"Lightcurve has poor temporal sampling:\n"
+                        f"{warnings_str}\n\n"
+                        f"Recommendation: {diag['recommendation']}\n"
+                        "GP fitting not recommended for poorly sampled data.\n"
+                        "To force fitting anyway, use: fit(check_sampling=False)"
+                    )
         if check_variability:
             from pgmuvi.preprocess.variability import is_variable
 
@@ -3317,78 +3851,490 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "To force fitting anyway, use: fit(check_variability=False)"
                 )
 
-        if not hasattr(self, "likelihood"):
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
-        elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
-            # if no likelihood is passed, we only want to set the likelihood
-            # if it hasn't already been set
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
-        elif likelihood is not None:
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
-        # if likelihood is None and not hasattr(self, 'likelihood'):
-        #     raise ValueError("""You must provide a likelihood function""")
-        # elif likelihood is not None:
-        #     self.set_likelihood(likelihood, **kwargs)
+        # ------------------------------------------------------------------
+        # Subsampling: if the lightcurve has more points than max_samples,
+        # temporarily replace the data buffers with a random subsample that
+        # still honours the temporal-baseline and max-gap constraints.
+        # The original buffers are restored in the finally block below so
+        # that the Lightcurve object retains its full data after fitting.
+        # ------------------------------------------------------------------
+        _orig_buffers: dict | None = None
+        n_total = self._xdata_raw.shape[0]
+        if max_samples is not None and n_total > max_samples:
+            from pgmuvi.preprocess import subsample_lightcurve
 
-        if model is None and not hasattr(self, "model"):
-            raise ValueError("""You must provide a model""")
-        elif model is not None:
-            self.set_model(
-                model,
-                self.likelihood,
-                num_mixtures=num_mixtures,
-                variance=variance,
-                **kwargs,
+            t_np = self._xdata_raw.detach().cpu().numpy()
+            if t_np.ndim > 1:
+                t_np = t_np[:, 0]
+            sk = sampling_kwargs or {}
+            mgf = sk.get("max_gap_fraction", 0.3)
+            idx = subsample_lightcurve(
+                t_np,
+                max_samples=max_samples,
+                max_gap_fraction=mgf,
+                random_seed=subsample_seed,
             )
-
-        # Validate 2D setup if we have 2D data
-        if self.ndim > 1:
-            self._validate_2d_setup()
-
-        if not self.__CONTRAINTS_SET:
-            self.set_default_constraints()
-
-        if cuda:
-            self.cuda()
-
-        if guess is not None:
-            # self.model.initialize(**guess)
-            self.set_hypers(guess)
-
-        if miniter is None:
-            miniter = training_iter
-
-        if max_cg_iterations is None:
-            max_cg_iterations = 10000
-
-        # Next we probably want to report some setup info
-        # later...
-
-        # Train the model
-        # self.model.train()
-        # self.likelihood.train()
-
-        # set training mode:
-        self._train()
-
-        # for param_name, param in self.model.named_parameters():
-        #    print(f'Parameter name: {param_name:42} value = {param.data}')
-        self.print_parameters()
-
-        # Now actually call the trainer!
-        with gpytorch.settings.max_cg_iterations(max_cg_iterations):
-            self.results = train(
-                self,
-                maxiter=training_iter,
-                miniter=miniter,
-                stop=stop,
-                lr=lr,
-                optim=optim,
-                stopavg=stopavg,
+            warnings.warn(
+                f"Lightcurve has {n_total} points, which exceeds "
+                f"max_samples={max_samples}. Fitting on a random subsample "
+                f"of {len(idx)} points. "
+                "Set max_samples=None to disable subsampling.",
+                UserWarning,
+                stacklevel=2,
             )
-        self.__FITTED_MAP = True
+            # Save original buffers (only those that exist).
+            _buffer_names = (
+                "_xdata_raw",
+                "_xdata_transformed",
+                "_ydata_raw",
+                "_ydata_transformed",
+                "_yerr_raw",
+                "_yerr_transformed",
+              )
+            _orig_buffers = {
+                name: getattr(self, name)
+                for name in _buffer_names
+                if hasattr(self, name) and getattr(self, name) is not None
+            }
+            idx_t = torch.as_tensor(idx, dtype=torch.long)
+            for name, buf in _orig_buffers.items():
+                self.register_buffer(name, buf[idx_t])
 
-        return self.results
+
+        try:
+            # Capture the caller's original num_mixtures argument before any
+            # mutation (MLS init / fallback default).  Used later to decide
+            # whether to substitute the stored _model_num_mixtures.
+            _num_mixtures_arg = num_mixtures
+
+            if not hasattr(self, "likelihood"):
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
+                # if no likelihood is passed, we only want to set the likelihood
+                # if it hasn't already been set
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            elif likelihood is not None:
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+            # if likelihood is None and not hasattr(self, 'likelihood'):
+            #     raise ValueError("""You must provide a likelihood function""")
+            # elif likelihood is not None:
+            #     self.set_likelihood(likelihood, **kwargs)
+
+            # Validate explicitly-provided num_mixtures early.
+            if num_mixtures is not None:
+                # Must be a (non-bool) integer and strictly positive.
+                if isinstance(num_mixtures, bool) or not isinstance(
+                    num_mixtures, int
+                ):
+                    raise TypeError(
+                        "`num_mixtures` must be a positive integer or None, "
+                        f"got {num_mixtures!r} of type {type(num_mixtures)!r}."
+                    )
+                if num_mixtures < 1:
+                    raise ValueError(
+                        "`num_mixtures` must be a positive integer or None, "
+                        f"got {num_mixtures}."
+                    )
+
+            # --- MLS-based initialisation ---
+            _init_freqs = None  # frequencies (raw units) to seed the SM kernel
+
+            # Minimum frequency in raw data units: the period cannot exceed the
+            # total span of the data.  Used to filter obviously unphysical MLS
+            # peaks and to generate padding frequencies when not enough peaks are
+            # available.
+            _t_raw = (
+                self._xdata_raw[:, 0] if self.ndim > 1 else self._xdata_raw
+            )
+            _t_span = float(_t_raw.max() - _t_raw.min())
+            _freq_lower = 1.0 / _t_span if _t_span > 0 else 0.0
+            _t_sorted = _t_raw.sort().values
+            _t_diffs = _t_sorted[1:] - _t_sorted[:-1]
+            _pos_diffs = _t_diffs[_t_diffs > 0]
+            _freq_upper = (
+                1.0 / (2.0 * float(_pos_diffs.min()))
+                if len(_pos_diffs) > 0
+                else float("inf")
+            )
+            
+            if periods is not None:
+                # User supplied explicit period guesses — skip MLS entirely.
+                _periods_tensor = torch.as_tensor(
+                    periods, dtype=self._xdata_raw.dtype
+                ).flatten()
+
+                # Validate user-supplied periods: must be non-empty, finite, and > 0
+                if _periods_tensor.numel() == 0:
+                    raise ValueError(
+                        "When providing explicit `periods`, the sequence must be "
+                        "non-empty."
+                    )
+                if not torch.isfinite(_periods_tensor).all():
+                    raise ValueError(
+                        "All values in `periods` must be finite (no NaN or inf)."
+                    )
+                if not (_periods_tensor > 0).all():
+                    raise ValueError(
+                        "All values in `periods` must be strictly positive."
+                    )
+                _init_freqs = 1.0 / _periods_tensor
+                num_mixtures = len(_init_freqs)
+            elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
+                # Compute constraint-set frequency bounds in raw data units.
+                # These are used in addition to the data-span bounds to exclude
+                # MLS peaks that would lie outside user-requested period limits.
+                # Note: fit_LS uses Nyquist_factor > 1, so its frequencies can
+                # exceed the standard Nyquist.  We therefore only apply an upper
+                # frequency limit when the constraint_set explicitly demands one
+                # (via a minimum-period specification); otherwise the upper bound
+                # is left unrestricted (inf).
+                _cs_freq_lower = _freq_lower  # default: data-span lower bound
+                _cs_freq_upper = float("inf")  # no upper cap unless constraint_set says so
+                if constraint_set is not None:
+                    try:
+                        cs = get_constraint_set(constraint_set)
+                        if "period" in cs:
+                            _pb = cs["period"]
+                            _p_lower_val, _p_lower_active = _pb["lower"]
+                            _p_upper_val, _p_upper_active = _pb["upper"]
+                            # Period lower limit → max allowed frequency
+                            if _p_lower_active and _p_lower_val is not None:
+                                _cs_freq_upper = min(
+                                    _cs_freq_upper, 1.0 / _p_lower_val
+                                )
+                            # Period upper limit → min allowed frequency
+                            if _p_upper_active and _p_upper_val is not None:
+                                _cs_freq_lower = max(
+                                    _cs_freq_lower, 1.0 / _p_upper_val
+                                )
+                    except (ValueError, KeyError):
+                        warnings.warn(
+                            f"constraint_set={constraint_set!r} is not recognised "
+                            "and will be ignored for MLS peak filtering. "
+                            "Only the data-span frequency bounds will be applied.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                        # Normalise invalid constraint_set so that later code does not
+                        # attempt to apply or validate an unknown set again.
+                        constraint_set = None
+
+                # Run the MLS periodogram to choose num_mixtures and seed frequencies.
+                try:
+                    _max_peaks = max(num_mixtures or 1, 10)
+                    if use_best_band_init and self.ndim > 1:
+                        # Use a 1D LS on the most-sampled band to get reliable
+                        # temporal frequency estimates instead of the multiband LS.
+                        # This is beneficial when sampling is highly heterogeneous
+                        # across bands: the best-sampled band provides the most
+                        # accurate period constraints.
+                        _best_band_lc = self._get_best_sampled_band_lc()
+                        ls_freqs, ls_sig = _best_band_lc.fit_LS(
+                            num_peaks=_max_peaks
+                        )
+                        # Compute the best-band's own Nyquist as the upper
+                        # frequency bound.  The best-band 1D LS may find alias
+                        # peaks above this Nyquist (when Nyquist_factor > 1);
+                        # cap at the Nyquist to avoid out-of-range initialisation.
+                        _bb_t = _best_band_lc._xdata_raw.sort().values
+                        _bb_diffs = _bb_t[1:] - _bb_t[:-1]
+                        _bb_pos = _bb_diffs[_bb_diffs > 0]
+                        _bb_nyquist = (
+                            float(1.0 / (2.0 * _bb_pos.min()))
+                            if len(_bb_pos) > 0
+                            else float("inf")
+                        )
+                    else:
+                        ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
+                        _bb_nyquist = float("inf")
+
+                    # Filter peaks whose period exceeds the data span or falls
+                    # outside user-specified constraint-set period bounds.
+                    # When use_best_band_init=True also cap at the best-band
+                    # Nyquist to remove alias peaks that exceed the true sampling
+                    # limit of the best-sampled band.
+                    _eff_upper = min(_cs_freq_upper, _bb_nyquist)
+                    # Ensure that any subsequent use of the frequency upper bound
+                    # (e.g. for padding when num_mixtures exceeds the number of
+                    # LS peaks) also respects the best-band Nyquist cap.
+                    if use_best_band_init and self.ndim > 1:
+                        _cs_freq_upper = _eff_upper
+                        _freq_upper = _eff_upper
+                    if len(ls_freqs) > 0 and _cs_freq_lower > 0:
+                        _valid = (ls_freqs >= _cs_freq_lower) & (
+                            ls_freqs <= _eff_upper
+                        )
+                        if not _valid.all():
+                            _n_filtered = int((~_valid).sum().item())
+                            warnings.warn(
+                                f"{_n_filtered} MLS peak(s) fell outside the "
+                                f"allowed frequency range "
+                                f"[{_cs_freq_lower:.4g}, {_eff_upper:.4g}] "
+                                "(derived from data span"
+                                + (
+                                    f" and constraint_set={constraint_set!r}"
+                                    if constraint_set is not None
+                                    else ""
+                                )
+                                + ") and were excluded from the initialisation.",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                            ls_freqs = ls_freqs[_valid]
+                            ls_sig = ls_sig[_valid]
+
+                    if len(ls_freqs) > 0:
+                        ls_sig_freqs = ls_freqs[ls_sig]
+                        ls_insig_freqs = ls_freqs[~ls_sig]
+
+                        if num_mixtures is None:
+                            # Default: use only the statistically significant peaks.
+                            if len(ls_sig_freqs) > 0:
+                                num_mixtures = len(ls_sig_freqs)
+                                _init_freqs = ls_sig_freqs
+                            else:
+                                # No significant peaks; fall back to the strongest one.
+                                num_mixtures = 1
+                                _init_freqs = ls_freqs[:1]
+                        else:
+                            # User specified num_mixtures: fill with significant peaks
+                            # first, then non-significant ones, then pad with
+                            # evenly-spaced frequencies if still not enough.
+                            n_sig = len(ls_sig_freqs)
+                            if num_mixtures <= n_sig:
+                                _init_freqs = ls_sig_freqs[:num_mixtures]
+                            else:
+                                _extra = num_mixtures - n_sig
+                                _available_insig = ls_insig_freqs[:_extra]
+                                _init_freqs = torch.cat([ls_sig_freqs, _available_insig])
+                                # Pad with additional frequencies if still short.
+                                _n_pad = num_mixtures - len(_init_freqs)
+                                if _n_pad > 0:
+                                    # Determine padding interval as the intersection of
+                                    # the data-based frequency range and any
+                                    # constraint-set bounds.
+                                    _pad_lower = _freq_lower
+                                    _pad_upper = _freq_upper
+                                    if _cs_freq_lower > 0:
+                                        _pad_lower = max(_pad_lower, _cs_freq_lower)
+                                        _pad_upper = min(_pad_upper, _cs_freq_upper)
+                                    if _pad_upper > _pad_lower:
+                                        warnings.warn(
+                                            f"Only {len(_init_freqs)} MLS peak(s) found but "
+                                            f"{num_mixtures} were requested. Padding with "
+                                            f"{_n_pad} evenly-spaced frequencies in "
+                                            f"[{_pad_lower:.4g}, {_pad_upper:.4g}].",
+                                            RuntimeWarning,
+                                            stacklevel=2,
+                                        )
+                                        _pad = torch.linspace(
+                                            _pad_lower,
+                                            _pad_upper,
+                                            _n_pad + 2,
+                                            dtype=_init_freqs.dtype,
+                                        )[1:-1]
+                                    else:
+                                        warnings.warn(
+                                            "Could not construct a valid frequency range "
+                                            "for padding MLS initialisation; repeating the "
+                                            "last available MLS frequency to reach the "
+                                            f"requested num_mixtures={num_mixtures}.",
+                                            RuntimeWarning,
+                                            stacklevel=2,
+                                        )
+                                        _last_freq = _init_freqs[-1]
+                                        _pad = _init_freqs.new_full((_n_pad,), _last_freq)
+                                    _init_freqs = torch.cat([_init_freqs, _pad])
+                    else:
+                        # MLS found no peaks at all; warn and fall back.
+
+                        if num_mixtures is None:
+                            num_mixtures = 4
+                        # This Warning has to be raised after the if, so that the user-defined number of mixtures
+                        # is used and they still see the warning if they set a value.
+                        warnings.warn(
+                            "MLS periodogram returned no peaks; falling back to "
+                            f"num_mixtures={num_mixtures} with default initialisation.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                except Exception as exc:
+                    # MLS failed for any reason; fall back gracefully but warn the user.
+
+                    if num_mixtures is None:
+                        num_mixtures = 4
+                    warnings.warn(
+                        "MLS-based initialisation failed; falling back to "
+                        f"num_mixtures={num_mixtures}. Original error was: "
+                        f"{exc}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+
+            # Final fallback when MLS init is disabled or not applicable.
+            if num_mixtures is None:
+                num_mixtures = 4
+
+            if model is None and not hasattr(self, "model"):
+                raise ValueError("""You must provide a model""")
+            elif model is None and self.model is None:
+                # The model was discarded (e.g. after band filtering). Re-create
+                # it with the updated training data.
+                _stored_instance = getattr(self, "_model_instance", None)
+                _stored_str = getattr(self, "_model_str", None)
+                # Preserve the originally configured num_mixtures when the
+                # caller did not explicitly provide a value (i.e. passed None).
+                # If the caller explicitly supplied num_mixtures, honour that
+                # value even if it happens to equal the stored one.
+                if _num_mixtures_arg is None and hasattr(self, "_model_num_mixtures"):
+                    stored_nm = self._model_num_mixtures
+                    _effective_num_mixtures = stored_nm if stored_nm is not None else num_mixtures
+                else:
+                    _effective_num_mixtures = num_mixtures
+                if _stored_instance is not None:
+                    # User originally provided a GP instance. Re-bind it to the
+                    # new (filtered) training data via set_train_data() if the
+                    # model supports it (ExactGP), otherwise recreate via
+                    # set_model() which will use the same underlying class.
+                    self.set_likelihood(likelihood, variance=variance, **kwargs)
+                    if hasattr(_stored_instance, "set_train_data"):
+                        _stored_instance.set_train_data(
+                            inputs=self._xdata_transformed,
+                            targets=self._ydata_transformed,
+                            strict=False,
+                        )
+                        self.model = _stored_instance
+                        self._make_parameter_dict()
+                    else:
+                        # Approximate GP (e.g. SparseSpectralMixtureGPModel):
+                        # cannot cheaply rebind, so fall back to raising an
+                        # informative error.
+                        raise ValueError(
+                            "The model instance does not support set_train_data(). "
+                            "Please pass model= explicitly to fit() after band "
+                            "filtering, or use a string model identifier."
+                        )
+                elif _stored_str is not None:
+                    self.set_model(
+                        _stored_str,
+                        self.likelihood,
+                        num_mixtures=_effective_num_mixtures,
+                        variance=variance,
+                        **kwargs,
+                    )
+                else:
+                    raise ValueError("""You must provide a model""")
+            elif model is not None:
+                self.set_model(
+                    model,
+                    self.likelihood,
+                    num_mixtures=num_mixtures,
+                    variance=variance,
+                    **kwargs,
+                )
+
+            # Validate 2D setup if we have 2D data
+            if self.ndim > 1:
+                self._validate_2d_setup()
+            if not self.__CONTRAINTS_SET:
+                self.set_default_constraints(constraint_set=constraint_set)
+
+            if not self.__CONTRAINTS_SET:
+                self.set_default_constraints()
+
+            if cuda:
+                self.cuda()
+            # Build the combined hyperparameter initialisation dict.
+            # MLS-derived (or user-supplied) period frequencies act as the base;
+            # any explicit `guess` entries take priority on top.
+            _hypers_to_set = {}
+            if (
+                _init_freqs is not None
+                and hasattr(self, "model")
+                and hasattr(self.model, "covar_module")
+                and hasattr(self.model.covar_module, "mixture_means")
+                and getattr(self.model.covar_module, "ard_num_dims", 1) == 1
+            ):
+                _hypers_to_set["covar_module.mixture_means"] = _init_freqs
+            elif (
+                use_best_band_init
+                and _init_freqs is not None
+                and self.ndim > 1
+                and hasattr(self, "model")
+                and hasattr(self.model, "covar_module")
+                and hasattr(self.model.covar_module, "mixture_means")
+                and getattr(self.model.covar_module, "ard_num_dims", 1) == 2
+            ):
+                # For 2D SM models: initialise the temporal dimension (dim 0)
+                # from the best-band 1D LS frequencies and use the minimum
+                # wavelength frequency (1/wavelength_span) as a placeholder for
+                # the wavelength dimension (dim 1), which encodes approximately
+                # achromatic variability.  This avoids leaving all mixture means
+                # at GPyTorch defaults while still seeding the most informative
+                # (temporal) dimension from the best-sampled band.
+                _bands_raw = self._xdata_raw[:, 1]
+                _wl_span = float(_bands_raw.max() - _bands_raw.min())
+                _default_wl_freq = 1.0 / _wl_span if _wl_span > 0 else 1e-6
+                _n_mix = len(_init_freqs)
+                # Build a [num_mixtures, 2] tensor: col 0 = temporal frequencies
+                # from the best-band LS, col 1 = default wavelength frequency.
+                # Using new_full preserves device and dtype of _init_freqs.
+                _init_freqs_2d = torch.stack(
+                    [
+                        _init_freqs,
+                        _init_freqs.new_full((_n_mix,), _default_wl_freq),
+                    ],
+                    dim=1,  # shape: [num_mixtures, 2]
+                )
+                _hypers_to_set["covar_module.mixture_means"] = _init_freqs_2d
+            if guess is not None:
+                _hypers_to_set.update(guess)
+            if _hypers_to_set:
+                self.set_hypers(_hypers_to_set)
+
+#             if guess is not None:
+#                 # self.model.initialize(**guess)
+#                 self.set_hypers(guess)
+
+            if miniter is None:
+                miniter = training_iter
+
+            if max_cg_iterations is None:
+                max_cg_iterations = 10000
+
+            # Next we probably want to report some setup info
+            # later...
+
+            # Train the model
+            # self.model.train()
+            # self.likelihood.train()
+
+            # set training mode:
+            self._train()
+
+            # for param_name, param in self.model.named_parameters():
+            #    print(f'Parameter name: {param_name:42} value = {param.data}')
+            self.print_parameters()
+
+            # Now actually call the trainer!
+            with gpytorch.settings.max_cg_iterations(max_cg_iterations):
+                self.results = train(
+                    self,
+                    maxiter=training_iter,
+                    miniter=miniter,
+                    stop=stop,
+                    lr=lr,
+                    optim=optim,
+                    stopavg=stopavg,
+                )
+            self.__FITTED_MAP = True
+
+            return self.results
+        finally:
+            # Restore original data buffers if they were replaced for subsampling.
+            if _orig_buffers is not None:
+                for name, buf in _orig_buffers.items():
+                    self.register_buffer(name, buf)
 
     def mcmc(
         self,
