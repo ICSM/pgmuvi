@@ -10,9 +10,6 @@ from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.preprocess import subsample_lightcurve
 from pgmuvi.preprocess.quality import subsample_lightcurve as subsample_from_quality
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
-from pgmuvi.preprocess.quality import subsample_lightcurve
-
-
 class TestSubsampleLightcurveSmall(unittest.TestCase):
     """When N <= max_samples the full index range should be returned."""
 
