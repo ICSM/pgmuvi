@@ -347,12 +347,12 @@ class TestMLSInitConstraintFiltering(unittest.TestCase):
 
     def test_constraint_set_filters_peaks(self):
         """MLS peaks outside constraint_set period bounds are filtered."""
-        # Use a long time span so the LPV constraint (min period=100) is
-        # testable: with t_span=1000, f_lower=0.001 and LPV f_upper=0.01.
-        # Valid range: [0.001, 0.01] (periods 100..1000 in data units).
+        # Use a long time span so the LPV constraint (min period=20) is
+        # testable: with t_span=1000, f_lower=0.001 and LPV f_upper=0.05.
+        # Valid range: [0.001, 0.05] (periods 20..1000 in data units).
         lc_lpv = make_simple_sinusoid_1d(
             n_obs=100,
-            period=200.0,  # period=200, valid for LPV (> 100)
+            period=200.0,  # period=200, valid for LPV (> 20)
             noise_level=0.1,
             noise_type="gaussian",
             irregular=False,
@@ -360,10 +360,10 @@ class TestMLSInitConstraintFiltering(unittest.TestCase):
             seed=42,
         )
         # Simulate two MLS peaks:
-        #   f=0.005 → period=200 (within LPV range [100, 1000])
-        #   f=0.02  → period=50  (below LPV min period=100 → too high freq)
+        #   f=0.005 → period=200 (within LPV range [>= 20])
+        #   f=0.1   → period=10  (below LPV min period=20 → too high freq)
         valid_freq = torch.tensor([0.005], dtype=torch.float32)   # period=200
-        invalid_freq = torch.tensor([0.02], dtype=torch.float32)  # period=50
+        invalid_freq = torch.tensor([0.1], dtype=torch.float32)   # period=10
         all_freqs = torch.cat([valid_freq, invalid_freq])
         all_mask = torch.tensor([True, True], dtype=torch.bool)
         with warnings.catch_warnings(record=True) as caught:
