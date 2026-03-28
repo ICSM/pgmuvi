@@ -10,7 +10,6 @@ from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.preprocess import subsample_lightcurve
 from pgmuvi.preprocess.quality import subsample_lightcurve as subsample_from_quality
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
-from pgmuvi.preprocess.quality import subsample_lightcurve
 
 
 class TestSubsampleLightcurveSmall(unittest.TestCase):
@@ -46,8 +45,6 @@ class TestSubsampleLightcurveLarge(unittest.TestCase):
             max_gap_fraction=self.max_gap_fraction,
             random_seed=42,
         )
-        # Allow a small buffer for gap-repair additions
-        self.assertLessEqual(len(idx), self.max_samples + 10)
         self.assertLessEqual(len(idx), self.max_samples)
 
     def test_indices_are_valid(self):
@@ -196,7 +193,7 @@ class TestSubsampleExportedFromPreprocess(unittest.TestCase):
         """Function imported from preprocess should work correctly."""
         t = np.linspace(0, 100, 500)
         idx = subsample_lightcurve(t, max_samples=100, random_seed=0)
-        self.assertLessEqual(len(idx), 100 + 5)  # allow gap-repair headroom
+        self.assertLessEqual(len(idx), 100)
         self.assertTrue(np.all(np.diff(t[idx]) >= 0))
 
 
@@ -214,7 +211,7 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         """No subsampling warning when N <= max_samples."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            self.lc.fit_LS(max_samples=10000)
+            self.lc.fit_LS(max_samples=5000)
         sub_warns = [
             w for w in caught
             if issubclass(w.category, UserWarning)
@@ -224,9 +221,9 @@ class TestFitLSSubsampling1D(unittest.TestCase):
 
     def test_warning_when_above_default_limit(self):
         """A UserWarning should be issued when N exceeds the default max_samples."""
-        # Build a lightcurve large enough to trigger the default limit (10000)
+        # Build a lightcurve large enough to trigger the default limit (3000)
         rng = np.random.default_rng(42)
-        n = 12000
+        n = 4000
         t = np.sort(rng.uniform(0, 100, n))
         y = np.sin(2 * np.pi * t / 5)
         lc_large = Lightcurve(
@@ -235,7 +232,7 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         )
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            lc_large.fit_LS()  # default max_samples=10000
+            lc_large.fit_LS()  # default max_samples=3000
         sub_warns = [
             w for w in caught
             if issubclass(w.category, UserWarning)

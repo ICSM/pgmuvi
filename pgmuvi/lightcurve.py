@@ -2457,7 +2457,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         single_threshold: float = 0.05,
         Nyquist_factor: int = 5,
         fap_method: str | None = None,
-        max_samples: int | None = 10000,
+        max_samples: int | None = 3000,
         subsample_seed: int | None = None,
         **kwargs,
     ) -> tuple:
@@ -2507,7 +2507,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             are ``'bootstrap'``, ``'phase_scramble'``, and ``'calibrated'``
             (see
             :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`).
-        - max_samples : int or None, optional, default=10000
+        - max_samples : int or None, optional, default=3000
             Maximum number of observations to use when computing the
             Lomb-Scargle periodogram.  When the lightcurve contains more
             than *max_samples* points a random subsample is drawn
@@ -2587,7 +2587,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             and self._yerr_transformed is not None
         )
         if max_samples is not None:
-            from pgmuvi.preprocess.quality import subsample_lightcurve
+            from pgmuvi.preprocess import subsample_lightcurve
 
             xdata_all = self.xdata
             t_for_sub = (
@@ -2608,8 +2608,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     max_samples=max_samples,
                     random_seed=subsample_seed,
                 )
-                idx_t = torch.as_tensor(idx, dtype=torch.long,
-                                        device=xdata_all.device)
+                idx_t = torch.as_tensor(
+                    idx,
+                    dtype=torch.long,
+                    device=xdata_all.device,
+                )
                 _xdata = xdata_all[idx_t]
                 _ydata = self.ydata[idx_t]
                 _yerr = self.yerr[idx_t] if _has_yerr else None
@@ -3714,7 +3717,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         _orig_buffers: dict | None = None
         n_total = self._xdata_raw.shape[0]
         if max_samples is not None and n_total > max_samples:
-            from pgmuvi.preprocess.quality import subsample_lightcurve
+            from pgmuvi.preprocess import subsample_lightcurve
 
             t_np = self._xdata_raw.detach().cpu().numpy()
             if t_np.ndim > 1:

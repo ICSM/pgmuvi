@@ -4,8 +4,7 @@ Sampling quality assessment utilities for lightcurve data.
 Provides metrics and validation gates to detect poorly sampled lightcurves
 before GP fitting, preventing bad fits due to sparse coverage, large gaps,
 or inadequate baseline.  Also provides :func:`subsample_lightcurve` to
-randomly draw a size-limited subset of observations. This will reduce 
-oversized datasets to a manageable size while preserving the
+randomly draw a size-limited subset of observations while preserving the
 temporal baseline, sampling structure and gap-coverage constraints.
 """
 
@@ -407,18 +406,17 @@ def subsample_lightcurve(
     indices : np.ndarray of int
         Indices into *t* that form the subsample, ordered by ascending time.
         If ``len(t) <= max_samples`` the full range ``np.arange(len(t))``
-        is returned unchanged.
-        The returned array always has length <= *max_samples*.
-        If ``len(t) <= max_samples`` the full range ``np.arange(len(t))``
-        is returned unchanged.
+        is returned unchanged.  The returned array always has length
+        <= *max_samples*.
 
     Notes
     -----
-    Gap repairs may push the returned count slightly above *max_samples*
-    when large gaps in the original data cannot be covered without exceeding
-    the budget; this is intentional and ensures the constraint is honoured
-    whenever sufficient data are available.
-        
+    When filling a gap would exceed the budget, the densest interior point
+    (i.e. the one whose removal creates the smallest new gap while still
+    satisfying the gap constraint) is swapped out.  If no such drop candidate
+    exists, the gap is left unrepaired and repair continues for other gaps.
+    A hard iteration cap (``2 * max_samples + 1``) prevents infinite loops in
+    pathological cases.
 
     Raises
     ------
@@ -467,21 +465,6 @@ def subsample_lightcurve(
     target = max(0, max_samples - 2)
     chosen_pos = rng.choice(interior_positions, size=target, replace=False)
     selected_mask[chosen_pos] = True
-    
-    # Always keep the first and last points to preserve the full baseline.
-    must_include = {int(sort_order[0]), int(sort_order[-1])}
-
-    # Fill remaining budget from interior points chosen at random.
-    interior = sort_order[1:-1]
-    target = max(0, max_samples - 2)
-    if len(interior) <= target:
-        chosen_interior = interior.tolist()
-    else:
-        chosen_interior = rng.choice(interior, size=target, replace=False).tolist()
-
-    selected_set = must_include | set(chosen_interior)
-    all_unused = set(range(n)) - selected_set
-
 
     # Iterative gap repair with strict budget enforcement.
     # Each iteration repairs at most one gap.  The cap (2 * max_samples + 1)
@@ -553,33 +536,3 @@ def subsample_lightcurve(
 
     sel_positions = np.where(selected_mask)[0]
     return sort_order[sel_positions]
-
-    
-    # Iteratively repair any gap that exceeds the allowed fraction.
-    # The loop terminates when either (a) all gaps satisfy the constraint,
-    # or (b) no unused candidate point falls inside the largest offending gap
-    # (e.g. the original data itself contains an irreducible gap).
-    while True:
-        selected = sorted(selected_set, key=lambda i: t[i])
-        t_sel = t[selected]
-        gaps = np.diff(t_sel)
-        bad = np.where(gaps > max_gap_allowed)[0]
-        if len(bad) == 0:
-            break
-
-        # Repair the largest offending gap first.
-        gap_idx = int(bad[np.argmax(gaps[bad])])
-        t_left = t_sel[gap_idx]
-        t_right = t_sel[gap_idx + 1]
-        t_mid = 0.5 * (t_left + t_right)
-
-        # Find candidates from unused points that fall inside this gap.
-        candidates = [i for i in all_unused if t_left < t[i] < t_right]
-        if not candidates:
-            break  # Gap cannot be filled - accept the constraint violation.
-
-        best = min(candidates, key=lambda i: abs(t[i] - t_mid))
-        selected_set.add(best)
-        all_unused.discard(best)
-
-    return np.array(sorted(selected_set, key=lambda i: t[i]), dtype=np.intp)
