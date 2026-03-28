@@ -2580,23 +2580,59 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return result
 
         # ------------------------------------------------------------------
-        # Optional subsampling for large lightcurves
+        # Build working arrays: apply finite-value mask first, then subsample.
+        # Masking before subsampling ensures the subsampler only sees finite
+        # times and the effective sample count is not diluted by NaN/inf rows.
         # ------------------------------------------------------------------
         _has_yerr = (
             hasattr(self, "_yerr_transformed")
             and self._yerr_transformed is not None
         )
+        xdata_all = self.xdata
+        ydata_all = self.ydata
+        yerr_all = self.yerr if _has_yerr else None
+
+        # Step 1: build a finite-value mask and discard non-finite observations.
+        if self.ndim > 1:
+            t_all = xdata_all[:, 0]
+            bands_all = xdata_all[:, 1]
+            if yerr_all is not None:
+                finite_mask = (
+                    torch.isfinite(t_all)
+                    & torch.isfinite(bands_all)
+                    & torch.isfinite(ydata_all)
+                    & torch.isfinite(yerr_all)
+                )
+            else:
+                finite_mask = (
+                    torch.isfinite(t_all)
+                    & torch.isfinite(bands_all)
+                    & torch.isfinite(ydata_all)
+                )
+        else:
+            if yerr_all is not None:
+                finite_mask = (
+                    torch.isfinite(xdata_all)
+                    & torch.isfinite(ydata_all)
+                    & torch.isfinite(yerr_all)
+                )
+            else:
+                finite_mask = (
+                    torch.isfinite(xdata_all) & torch.isfinite(ydata_all)
+                )
+        _xdata = xdata_all[finite_mask]
+        _ydata = ydata_all[finite_mask]
+        _yerr = yerr_all[finite_mask] if _has_yerr else None
+
+        # Step 2: optional subsampling on finite data only.
         if max_samples is not None:
             from pgmuvi.preprocess import subsample_lightcurve
 
-            xdata_all = self.xdata
-            t_for_sub = (
-                xdata_all[:, 0] if self.ndim > 1 else xdata_all
-            )
+            t_for_sub = _xdata[:, 0] if self.ndim > 1 else _xdata
             t_np = t_for_sub.detach().cpu().numpy()
             if len(t_np) > max_samples:
                 warnings.warn(
-                    f"Lightcurve has {len(t_np)} points, which exceeds "
+                    f"Lightcurve has {len(t_np)} finite points, which exceeds "
                     f"max_samples={max_samples}. Computing the Lomb-Scargle "
                     f"periodogram on a random subsample of {max_samples} "
                     f"points. Set max_samples=None to disable subsampling.",
@@ -2611,22 +2647,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 idx_t = torch.as_tensor(
                     idx,
                     dtype=torch.long,
-                    device=xdata_all.device,
+                    device=_xdata.device,
                 )
-                _xdata = xdata_all[idx_t]
-                _ydata = self.ydata[idx_t]
-                _yerr = self.yerr[idx_t] if _has_yerr else None
-            else:
-                _xdata = self.xdata
-                _ydata = self.ydata
-                _yerr = self.yerr if _has_yerr else None
-        else:
-            _xdata = self.xdata
-            _ydata = self.ydata
-            _yerr = self.yerr if _has_yerr else None
+                _xdata = _xdata[idx_t]
+                _ydata = _ydata[idx_t]
+                _yerr = _yerr[idx_t] if _has_yerr else None
 
         if self.ndim > 1:
-            # Multi-band case: xdata[:, 0] is time, xdata[:, 1] is band/wavelength
+            # Multi-band case: _xdata[:, 0] is time, _xdata[:, 1] is band/wavelength
             t = _xdata[:, 0]
             bands = _xdata[:, 1]
             y = _ydata
@@ -2636,17 +2664,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if _yerr is not None:
                 yerr = _yerr
-                mask = (
-                    torch.isfinite(t)
-                    & torch.isfinite(bands)
-                    & torch.isfinite(y)
-                    & torch.isfinite(yerr)
-                )
-                t, bands, y, yerr = t[mask], bands[mask], y[mask], yerr[mask]
                 LS = MultibandLSWithSignificance(t, y, bands, dy=yerr, **kwargs)
             else:
-                mask = torch.isfinite(t) & torch.isfinite(bands) & torch.isfinite(y)
-                t, bands, y = t[mask], bands[mask], y[mask]
                 LS = MultibandLSWithSignificance(t, y, bands, **kwargs)
 
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
@@ -2723,12 +2742,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if _yerr is not None:
                 yerr = _yerr
-                mask = torch.isfinite(t) & torch.isfinite(y) & torch.isfinite(yerr)
-                t, y, yerr = t[mask], y[mask], yerr[mask]
                 LS = LombScargle(t, y, yerr)
             else:
-                mask = torch.isfinite(t) & torch.isfinite(y)
-                t, y = t[mask], y[mask]
                 LS = LombScargle(t, y)
             freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
             # assume_regular_frequency=True: autofrequency() always produces
