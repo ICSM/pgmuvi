@@ -935,7 +935,9 @@ def _make_qp_kernel(period):
     return ScaleKernel(ProductKernel(periodic_k, rbf_k))
 
 
-def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_flicker=False, **kwargs):
+def _build_time_kernel(
+    time_kernel_type, period, num_mixtures=4, add_flicker=False, **kwargs
+):
     """Build a time kernel from a string name or a Kernel instance.
 
     Parameters
@@ -994,7 +996,9 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_flicker=Fal
                 UserWarning,
                 stacklevel=2,
             )
-            return SMK(num_mixtures=num_mixtures, ard_num_dims=1) + ScaleKernel(RBFKernel(ard_num_dims=1))
+            return SMK(
+                num_mixtures=num_mixtures, ard_num_dims=1
+            ) + ScaleKernel(RBFKernel(ard_num_dims=1))
         return SMK(num_mixtures=num_mixtures, ard_num_dims=1)
     raise ValueError(
         f"Unknown time_kernel_type '{time_kernel_type}'. "
@@ -1003,7 +1007,9 @@ def _build_time_kernel(time_kernel_type, period, num_mixtures=4, add_flicker=Fal
     )
 
 
-def _build_wavelength_kernel(wavelength_kernel_type, wavelength_lengthscale, scaling='constant', **kwargs):
+def _build_wavelength_kernel(
+    wavelength_kernel_type, wavelength_lengthscale, scaling="constant", **kwargs
+):
     """Build a wavelength kernel from a string name or a Kernel instance.
 
     Parameters
@@ -1604,7 +1610,9 @@ class WavelengthDependentGPModel(SeparableGPModel):
             )
 
 
-        time_kernel = _build_time_kernel(time_kernel_type, period, num_mixtures, add_flicker=add_flicker)
+        time_kernel = _build_time_kernel(
+            time_kernel_type, period, num_mixtures, add_flicker=add_flicker
+        )
         wl_kernel = _build_wavelength_kernel(
             wavelength_kernel_type, wavelength_lengthscale, scaling=wavelength_scaling
         )

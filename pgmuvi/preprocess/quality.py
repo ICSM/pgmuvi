@@ -454,7 +454,7 @@ def subsample_lightcurve(
         return sort_order[:max_samples].copy()
 
     max_gap_allowed = max_gap_fraction * baseline
-    
+
     # Boolean mask indexed by sorted position; endpoints always selected.
     selected_mask = np.zeros(n, dtype=bool)
     selected_mask[0] = True
@@ -477,7 +477,7 @@ def subsample_lightcurve(
         bad = np.where(gaps > max_gap_allowed)[0]
         if len(bad) == 0:
             break
-            
+
         # Attempt repair starting from the largest offending gap.
         bad_sorted = bad[np.argsort(gaps[bad])[::-1]]
         repaired = False
