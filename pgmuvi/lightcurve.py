@@ -477,7 +477,7 @@ class InputHelpers:
             warnings.warn(
                 f"Fewer than 10 elements remain after dropping {n_dropped} rows,"
                 " take care interpreting results!",
-                stacklevel=2,
+                stacklevel=3,
             )
         return x, y, yerr
 
