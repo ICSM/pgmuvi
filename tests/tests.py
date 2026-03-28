@@ -1322,6 +1322,7 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
 
     def test_fit_band_filter_recreates_model_and_likelihood(self):
         """fit() recreates the model and likelihood after band filtering."""
+        import gpytorch
         # Band 3.6: 50 good points (passes); band 4.5: 4 points (fails)
         t_good = np.linspace(0, 100, 50)
         t_bad = [0.0, 1.0, 2.0, 3.0]
@@ -1338,6 +1339,7 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         # Explicitly set a model before calling fit() without a model arg.
         lc.set_model('2D', likelihood=None, num_mixtures=2)
         model_before = lc.model
+        likelihood_before = lc.likelihood
         self.assertIsNotNone(model_before)
 
         # fit() without model= should filter band 4.5, then re-create the '2D'
@@ -1360,7 +1362,65 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         remaining_wls = torch.unique(lc._xdata_raw[:, 1]).tolist()
         self.assertEqual(len(remaining_wls), 1)
         self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
+        # The likelihood was rebuilt for the filtered data: its noise tensor
+        # must have length == number of remaining points (50).
+        self.assertIsNot(lc.likelihood, likelihood_before)
+        self.assertIsInstance(
+            lc.likelihood,
+            gpytorch.likelihoods.FixedNoiseGaussianLikelihood,
+        )
+        self.assertEqual(lc.likelihood.noise.numel(), 50)
         # fit() completed and returned results.
+        self.assertIsNotNone(results)
+
+    def test_fit_band_filter_rebinds_model_instance(self):
+        """fit() rebinds a GP instance to filtered data after band filtering."""
+        import gpytorch
+        from pgmuvi.gps import TwoDSpectralMixtureGPModel
+        # Band 3.6: 50 good points; band 4.5: 4 points (fails)
+        t_good = np.linspace(0, 100, 50)
+        t_bad = [0.0, 1.0, 2.0, 3.0]
+        t_all = list(t_good) + t_bad
+        wl_all = [3.6] * 50 + [4.5] * 4
+        y_all = (np.sin(2 * np.pi * np.array(t_all) / 10.0) + 1.0).tolist()
+        ye_all = [0.01] * 54
+        xdata = np.column_stack([t_all, wl_all])
+        lc = Lightcurve(
+            torch.as_tensor(xdata, dtype=torch.float32),
+            torch.as_tensor(y_all, dtype=torch.float32),
+            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+        )
+        # Build a GP instance manually and pass it to set_model().
+        lik = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
+            torch.as_tensor(ye_all, dtype=torch.float32) ** 2
+        )
+        gp_instance = TwoDSpectralMixtureGPModel(
+            lc._xdata_transformed,
+            lc._ydata_transformed,
+            lik,
+            num_mixtures=2,
+        )
+        lc.set_model(gp_instance, likelihood=None, num_mixtures=2)
+        self.assertIs(lc.model, gp_instance)
+
+        # fit() without model= should filter band 4.5, then rebind the GP
+        # instance to the filtered training data via set_train_data().
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = lc.fit(
+                check_sampling=True,
+                use_mls_init=False,
+                training_iter=5,
+                miniter=2,
+                lr=0.05,
+            )
+
+        # The same GP instance is reused but bound to the filtered data.
+        self.assertIs(lc.model, gp_instance)
+        # Training data on the model reflects only the 50 remaining points.
+        self.assertEqual(lc.model.train_inputs[0].shape[0], 50)
+        # fit() completed successfully.
         self.assertIsNotNone(results)
 
 # Import variability tests so they are discovered when this file is run
