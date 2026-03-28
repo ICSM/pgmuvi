@@ -3616,6 +3616,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         self.likelihood = None
                     self.__SET_LIKELIHOOD_CALLED = False
                     self.__CONTRAINTS_SET = False
+                    # Priors registered on the old model are no longer valid;
+                    # ensure they are re-applied when a new model is created.
+                    self.__PRIORS_SET = False
             else:
                 # 1D: raise ValueError if sampling is poor
                 from pgmuvi.preprocess.quality import assess_sampling_quality
