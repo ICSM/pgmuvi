@@ -475,7 +475,9 @@ class InputHelpers:
             )
         elif y.numel() < 10 and n_dropped > 0:
             warnings.warn(
-                f"Fewer than 10 elements remain after dropping {n_dropped} rows, take care interpreting results!"
+                f"Fewer than 10 elements remain after dropping {n_dropped} rows,"
+                " take care interpreting results!",
+                stacklevel=2,
             )
         return x, y, yerr
 
@@ -4016,7 +4018,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # (via a minimum-period specification); otherwise the upper bound
                 # is left unrestricted (inf).
                 _cs_freq_lower = _freq_lower  # default: data-span lower bound
-                _cs_freq_upper = float("inf")  # no upper cap unless constraint_set says so
+                _cs_freq_upper = float("inf")  # no upper cap unless constraint_set
                 if constraint_set is not None:
                     try:
                         cs = get_constraint_set(constraint_set)
@@ -4133,7 +4135,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             else:
                                 _extra = num_mixtures - n_sig
                                 _available_insig = ls_insig_freqs[:_extra]
-                                _init_freqs = torch.cat([ls_sig_freqs, _available_insig])
+                                _init_freqs = torch.cat(
+                                    [ls_sig_freqs, _available_insig]
+                                )
                                 # Pad with additional frequencies if still short.
                                 _n_pad = num_mixtures - len(_init_freqs)
                                 if _n_pad > 0:
@@ -4146,11 +4150,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                         _pad_lower = max(_pad_lower, _cs_freq_lower)
                                         _pad_upper = min(_pad_upper, _cs_freq_upper)
                                     if _pad_upper > _pad_lower:
+                                        _msg = (
+                                            f"Only {len(_init_freqs)} MLS peak(s)"
+                                            f" found but {num_mixtures} were"
+                                            f" requested. Padding with {_n_pad}"
+                                            " evenly-spaced frequencies in"
+                                            f" [{_pad_lower:.4g},"
+                                            f" {_pad_upper:.4g}]."
+                                        )
                                         warnings.warn(
-                                            f"Only {len(_init_freqs)} MLS peak(s) found but "
-                                            f"{num_mixtures} were requested. Padding with "
-                                            f"{_n_pad} evenly-spaced frequencies in "
-                                            f"[{_pad_lower:.4g}, {_pad_upper:.4g}].",
+                                            _msg,
                                             RuntimeWarning,
                                             stacklevel=2,
                                         )
@@ -4161,24 +4170,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                             dtype=_init_freqs.dtype,
                                         )[1:-1]
                                     else:
+                                        _msg = (
+                                            "Could not construct a valid"
+                                            " frequency range for padding MLS"
+                                            " initialisation; repeating the last"
+                                            " available MLS frequency to reach"
+                                            f" num_mixtures={num_mixtures}."
+                                        )
                                         warnings.warn(
-                                            "Could not construct a valid frequency range "
-                                            "for padding MLS initialisation; repeating the "
-                                            "last available MLS frequency to reach the "
-                                            f"requested num_mixtures={num_mixtures}.",
+                                            _msg,
                                             RuntimeWarning,
                                             stacklevel=2,
                                         )
                                         _last_freq = _init_freqs[-1]
-                                        _pad = _init_freqs.new_full((_n_pad,), _last_freq)
+                                        _pad = _init_freqs.new_full(
+                                            (_n_pad,), _last_freq
+                                        )
                                     _init_freqs = torch.cat([_init_freqs, _pad])
                     else:
                         # MLS found no peaks at all; warn and fall back.
 
                         if num_mixtures is None:
                             num_mixtures = 4
-                        # This Warning has to be raised after the if, so that the user-defined number of mixtures
-                        # is used and they still see the warning if they set a value.
+                        # This Warning has to be raised after the if, so that the
+                        # user-defined number of mixtures is used and they still see
+                        # the warning if they set a value.
                         warnings.warn(
                             "MLS periodogram returned no peaks; falling back to "
                             f"num_mixtures={num_mixtures} with default initialisation.",
@@ -4215,7 +4231,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # value even if it happens to equal the stored one.
                 if _num_mixtures_arg is None and hasattr(self, "_model_num_mixtures"):
                     stored_nm = self._model_num_mixtures
-                    _effective_num_mixtures = stored_nm if stored_nm is not None else num_mixtures
+                    _effective_num_mixtures = (
+                        stored_nm if stored_nm is not None else num_mixtures
+                    )
                 else:
                     _effective_num_mixtures = num_mixtures
                 if _stored_instance is not None:
@@ -5726,7 +5744,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lower, upper = observed_pred.confidence_region()
 
         # Plot predictive GP mean as blue line
-        ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), "b", label='Mean')
+        ax.plot(
+            x_fine_raw.cpu().numpy(),
+            observed_pred.mean.cpu().numpy(),
+            "b",
+            label="Mean",
+        )
 
         # Shade between the lower and upper confidence bounds
         ax.fill_between(
@@ -5734,14 +5757,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             lower.cpu().numpy(),
             upper.cpu().numpy(),
             alpha=0.5,
-            label='Confidence'
+            label="Confidence",
         )
 
         # Plot training data as black stars (on top of model predictions)
         if self.yerr is not None:
-            ax.errorbar(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), yerr=self.yerr.cpu().numpy(), fmt="k*", label='Observed')
+            ax.errorbar(
+                self.xdata.cpu().numpy(),
+                self.ydata.cpu().numpy(),
+                yerr=self.yerr.cpu().numpy(),
+                fmt="k*",
+                label="Observed",
+            )
         else:
-            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*", label='Observed')
+            ax.plot(
+                self.xdata.cpu().numpy(),
+                self.ydata.cpu().numpy(),
+                "k*",
+                label="Observed",
+            )
 
         # Determine y-axis scale and limits using the shared helper
         current_yscale, current_ylim = self._yscale_and_ylim(
