@@ -1,4 +1,4 @@
-"""Tests for subsample_lightcurve in pgmuvi/preprocess/quality.py."""
+"""Tests for subsample_lightcurve and fit_LS subsampling."""
 
 import unittest
 import warnings
@@ -7,7 +7,9 @@ import numpy as np
 import torch
 
 from pgmuvi.lightcurve import Lightcurve
-from pgmuvi.preprocess.quality import subsample_lightcurve
+from pgmuvi.preprocess import subsample_lightcurve
+from pgmuvi.preprocess.quality import subsample_lightcurve as subsample_from_quality
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 
 class TestSubsampleLightcurveSmall(unittest.TestCase):
@@ -180,6 +182,172 @@ class TestSubsampleLightcurveEdgeCases(unittest.TestCase):
         self.assertTrue(np.all(gaps <= 0.05 * baseline + 1e-10))
 
 
+class TestSubsampleExportedFromPreprocess(unittest.TestCase):
+    """subsample_lightcurve should be importable from pgmuvi.preprocess."""
+
+    def test_import_from_preprocess(self):
+        """Both import paths should return the same function."""
+        self.assertIs(subsample_lightcurve, subsample_from_quality)
+
+    def test_basic_functionality_via_preprocess(self):
+        """Function imported from preprocess should work correctly."""
+        t = np.linspace(0, 100, 500)
+        idx = subsample_lightcurve(t, max_samples=100, random_seed=0)
+        self.assertLessEqual(len(idx), 100)
+        self.assertTrue(np.all(np.diff(t[idx]) >= 0))
+
+
+class TestFitLSSubsampling1D(unittest.TestCase):
+    """fit_LS should auto-subsample oversized 1-D lightcurves."""
+
+    def setUp(self):
+        lc = make_simple_sinusoid_1d(
+            n_obs=200, period=5.0, amplitude=2.0, noise_level=0.1,
+            t_span=50.0, seed=42,
+        )
+        self.lc = lc
+
+    def test_no_warning_below_limit(self):
+        """No subsampling warning when N <= max_samples."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.lc.fit_LS(max_samples=5000)
+        sub_warns = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "max_samples" in str(w.message)
+        ]
+        self.assertEqual(len(sub_warns), 0)
+
+    def test_warning_when_above_default_limit(self):
+        """A UserWarning should be issued when N exceeds the default max_samples."""
+        # Build a lightcurve large enough to trigger the default limit (3000)
+        rng = np.random.default_rng(42)
+        n = 4000
+        t = np.sort(rng.uniform(0, 100, n))
+        y = np.sin(2 * np.pi * t / 5)
+        lc_large = Lightcurve(
+            xdata=torch.tensor(t, dtype=torch.float32),
+            ydata=torch.tensor(y, dtype=torch.float32),
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            lc_large.fit_LS()  # default max_samples=3000
+        sub_warns = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "max_samples" in str(w.message)
+        ]
+        self.assertGreater(len(sub_warns), 0)
+
+    def test_warning_when_above_limit(self):
+        """A UserWarning about subsampling should be issued when N > max_samples."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.lc.fit_LS(max_samples=50)
+        sub_warns = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "max_samples" in str(w.message)
+        ]
+        self.assertGreater(len(sub_warns), 0)
+        self.assertIn("max_samples", str(sub_warns[0].message))
+
+    def test_no_warning_when_disabled(self):
+        """max_samples=None should disable subsampling entirely."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.lc.fit_LS(max_samples=None)
+        sub_warns = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "max_samples" in str(w.message)
+        ]
+        self.assertEqual(len(sub_warns), 0)
+
+    def test_reproducible_with_seed(self):
+        """Same subsample_seed should produce identical periodogram peaks."""
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            freq1, mask1 = self.lc.fit_LS(max_samples=50, subsample_seed=7)
+            freq2, mask2 = self.lc.fit_LS(max_samples=50, subsample_seed=7)
+        self.assertTrue(torch.allclose(freq1, freq2))
+        self.assertTrue(torch.equal(mask1, mask2))
+
+    def test_return_shapes_unchanged(self):
+        """Subsampling should not change the shape/type of fit_LS return values."""
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            freq_sub, mask_sub = self.lc.fit_LS(max_samples=50, subsample_seed=0)
+        freq_full, mask_full = self.lc.fit_LS(max_samples=None)
+        # Both should return 1D tensors
+        self.assertEqual(freq_sub.ndim, 1)
+        self.assertEqual(mask_sub.ndim, 1)
+        self.assertEqual(freq_full.ndim, 1)
+        self.assertEqual(mask_full.ndim, 1)
+
+    def test_original_data_unaffected(self):
+        """Lightcurve data must be unchanged after fit_LS with subsampling."""
+        orig_n = self.lc.xdata.shape[0]
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            self.lc.fit_LS(max_samples=50, subsample_seed=0)
+        self.assertEqual(self.lc.xdata.shape[0], orig_n)
+        self.assertEqual(self.lc.ydata.shape[0], orig_n)
+
+    def test_freq_only_with_subsampling(self):
+        """freq_only=True should work together with max_samples."""
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            freq, power = self.lc.fit_LS(freq_only=True, max_samples=50,
+                                          subsample_seed=0)
+        self.assertEqual(freq.ndim, 1)
+        self.assertEqual(power.ndim, 1)
+        self.assertEqual(freq.shape, power.shape)
+
+
+class TestFitLSSubsampling2D(unittest.TestCase):
+    """fit_LS should auto-subsample oversized multiband lightcurves."""
+
+    def setUp(self):
+        lc_2d = make_chromatic_sinusoid_2d(
+            n_per_band=120,
+            period=2.0,
+            wavelengths=[0.5, 1.5],
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            seed=42,
+        )
+        self.lc_2d = lc_2d
+
+    def test_warning_when_above_limit(self):
+        """A UserWarning should be issued when the 2D lightcurve is too large."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.lc_2d.fit_LS(max_samples=50)
+        sub_warns = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "max_samples" in str(w.message)
+        ]
+        self.assertGreater(len(sub_warns), 0)
+
+    def test_reproducible_with_seed(self):
+        """Same seed should produce identical results for 2D lightcurves."""
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            freq1, mask1 = self.lc_2d.fit_LS(max_samples=50, subsample_seed=3)
+            freq2, mask2 = self.lc_2d.fit_LS(max_samples=50, subsample_seed=3)
+        self.assertTrue(torch.allclose(freq1, freq2))
+
+    def test_original_data_unaffected(self):
+        """Lightcurve data must be unchanged after fit_LS with subsampling."""
+        orig_n = self.lc_2d.xdata.shape[0]
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            self.lc_2d.fit_LS(max_samples=50, subsample_seed=0)
+        self.assertEqual(self.lc_2d.xdata.shape[0], orig_n)
 def _make_lightcurve(n):
     """Create a simple 1-D Lightcurve with *n* uniformly-spaced points."""
     rng = np.random.default_rng(42)
