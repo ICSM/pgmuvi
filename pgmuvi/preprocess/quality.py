@@ -4,8 +4,8 @@ Sampling quality assessment utilities for lightcurve data.
 Provides metrics and validation gates to detect poorly sampled lightcurves
 before GP fitting, preventing bad fits due to sparse coverage, large gaps,
 or inadequate baseline.  Also provides :func:`subsample_lightcurve` to
-reduce oversized datasets to a manageable size while preserving the temporal
-sampling structure.
+randomly draw a size-limited subset of observations while preserving the
+temporal baseline, sampling structure and gap-coverage constraints.
 """
 
 import numpy as np
@@ -405,9 +405,18 @@ def subsample_lightcurve(
     -------
     indices : np.ndarray of int
         Indices into *t* that form the subsample, ordered by ascending time.
-        The returned array always has length <= *max_samples*.
         If ``len(t) <= max_samples`` the full range ``np.arange(len(t))``
-        is returned unchanged.
+        is returned unchanged.  The returned array always has length
+        <= *max_samples*.
+
+    Notes
+    -----
+    When filling a gap would exceed the budget, the densest interior point
+    (i.e. the one whose removal creates the smallest new gap while still
+    satisfying the gap constraint) is swapped out.  If no such drop candidate
+    exists, the gap is left unrepaired and repair continues for other gaps.
+    A hard iteration cap (``2 * max_samples + 1``) prevents infinite loops in
+    pathological cases.
 
     Raises
     ------
@@ -445,7 +454,7 @@ def subsample_lightcurve(
         return sort_order[:max_samples].copy()
 
     max_gap_allowed = max_gap_fraction * baseline
-
+    
     # Boolean mask indexed by sorted position; endpoints always selected.
     selected_mask = np.zeros(n, dtype=bool)
     selected_mask[0] = True
@@ -468,7 +477,7 @@ def subsample_lightcurve(
         bad = np.where(gaps > max_gap_allowed)[0]
         if len(bad) == 0:
             break
-
+            
         # Attempt repair starting from the largest offending gap.
         bad_sorted = bad[np.argsort(gaps[bad])[::-1]]
         repaired = False
