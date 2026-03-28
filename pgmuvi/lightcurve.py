@@ -3983,7 +3983,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if len(_pos_diffs) > 0
                 else float("inf")
             )
-            
+
             if periods is not None:
                 # User supplied explicit period guesses — skip MLS entirely.
                 _periods_tensor = torch.as_tensor(
