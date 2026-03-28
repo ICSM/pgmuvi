@@ -252,7 +252,7 @@ class SpectralMixtureLinearMeanGPModel(ExactGP):
 
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4):
         super().__init__(train_x, train_y, likelihood)
-        self.mean_module = LinearMean()
+        self.mean_module = LinearMean(input_size=1)
         self.covar_module = SMK(num_mixtures=num_mixtures)
         self.covar_module.initialize_from_data(train_x, train_y)
 
@@ -471,7 +471,7 @@ class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=2000):
         super().__init__(train_x, train_y, likelihood)
-        self.mean_module = LinearMean()
+        self.mean_module = LinearMean(input_size=1)
         self.covar_module = GIK(SMK(num_mixtures=num_mixtures), grid_size=grid_size)
         self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 

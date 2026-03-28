@@ -2148,115 +2148,176 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     self._model_pars[key]["module"].register_constraint(
                         "raw_constant", mean_const_constraint
                     )
-        # this should correspond to the longest frequency entirely
-        # contained in the dataset:
-        if self.ndim > 1:
-            # For 2D data, calculate minimum frequency per dimension
-            # Dimension 0 (time): based on temporal data span
-            # Dimension 1 (wavelength): allow near-zero for achromatic
-            # variability
-            time_span = (
-                self._xdata_transformed[:, 0].max()
-                - self._xdata_transformed[:, 0].min()
-            )
-            min_time_frequency = 1.0 / time_span
-
-            # For wavelength dimension, we want to allow achromatic
-            # variability (same behavior across wavelengths), so we use a
-            # very small minimum. 1e-6 allows frequencies near zero,
-            # enabling the model to capture achromatic (wavelength-
-            # independent) variability patterns
-            wavelength_span = (
-                self._xdata_transformed[:, 1].max()
-                - self._xdata_transformed[:, 1].min()
-            )
-            min_wavelength_frequency = (
-                1.0 / wavelength_span if wavelength_span > 0 else 1e-6
-            )
-
-            # GPyTorch limitation: Constraints on ARD parameters apply element-wise
-            # to ALL elements (cannot set different constraints per dimension).
-            # For mixture_means with shape (num_mixtures, 1, ard_num_dims), we must
-            # use a single scalar constraint. We use the minimum to ensure both
-            # dimensions satisfy their respective physical constraints:
-            # - Time frequencies >= 1/time_span (prevent periods longer than data)
-            # - Wavelength frequencies >= ~0 (allow achromatic variability)
-            overall_min_frequency = min(min_time_frequency, min_wavelength_frequency)
-            diffs = (self._xdata_transformed[:, 0].unsqueeze(-1) -
-                     self._xdata_transformed[:, 0].unsqueeze(-1).T)
-            min_diff = diffs[diffs>0].flatten().abs().min()
-            max_freq = 1/(2*min_diff)  # Nyquist frequency based on time sampling
-            # mixture_means_constraint = GreaterThan(overall_min_frequency)
-            mixture_means_constraint = Interval(overall_min_frequency, max_freq)
-        else:
-            mixture_means_constraint = GreaterThan(1 / self._xdata_transformed.max())
-
-        # Apply any constraint_set period bounds to the mixture_means constraint
-        if constraint_set is not None:
-            cs = get_constraint_set(constraint_set)
-            if "period" in cs:
-                period_bounds = cs["period"]
-                lower_val, lower_active = period_bounds["lower"]
-                upper_val, upper_active = period_bounds["upper"]
-
-                # Compute the scale factor to convert a period in original
-                # (untransformed) units to a frequency in transformed space.
-                # For any linear rescaling transform:
-                #   freq_transformed = freq_original * (x_orig_span / x_trans_span)
-                if self.ndim > 1:
-                    x_orig_span = float(
-                        self._xdata_raw[:, 0].max() - self._xdata_raw[:, 0].min()
+        # Apply frequency constraints only for spectral-mixture models that
+        # have a mixture_means parameter.  Models using alternative kernels
+        # (e.g. Matérn, quasi-periodic, separable) do not have this parameter
+        # and must not be constrained here; they would raise KeyError otherwise.
+        if "mixture_means" in self._model_pars:
+            # this should correspond to the longest frequency entirely
+            # contained in the dataset:
+            if self.ndim > 1:
+                # For 2D spectral-mixture models the mixture_means parameter
+                # has shape (num_mixtures, 1, ard_num_dims), where ard_num_dims
+                # equals the number of input dimensions (typically 2: time and
+                # wavelength).  GPyTorch applies a *single scalar* constraint
+                # element-wise to every entry in that tensor — it is not
+                # possible to set different lower bounds for the time dimension
+                # and the wavelength dimension simultaneously via the standard
+                # register_constraint API.
+                #
+                # We therefore base the lower bound exclusively on the *time*
+                # dimension (column 0 of xdata_transformed):
+                #
+                #   lower_bound = 1 / time_span
+                #
+                # This guarantees that the time-axis frequencies are always
+                # >= 1/time_span, i.e., that the inferred periods are not
+                # longer than the observational baseline — a physically
+                # meaningful and stable lower bound.
+                #
+                # Note that this same lower bound is also applied to the
+                # wavelength-axis frequency elements of mixture_means.  In
+                # practice, wavelength frequencies represent the spatial
+                # frequency of the SED variation across bands; constraining
+                # them to be >= 1/time_span is conservative (frequencies
+                # corresponding to structures much narrower in wavelength than
+                # the observation baseline are still allowed), and is
+                # preferable to using min(time_bound, wavelength_bound) which
+                # would make the time lower bound arbitrarily permissive
+                # whenever the wavelength span is large or the wavelength
+                # range is zero.
+                #
+                # Users who need achromatic behaviour (wavelength-frequency
+                # near zero) should use the separable model classes
+                # (AchromaticGPModel, WavelengthDependentGPModel) which apply
+                # kernels to each dimension independently, avoiding this
+                # limitation entirely.
+                time_span = (
+                    self._xdata_transformed[:, 0].max()
+                    - self._xdata_transformed[:, 0].min()
+                )
+                if float(time_span) <= 0.0:
+                    raise ValueError(
+                        "set_default_constraints requires a dataset whose "
+                        "timestamps span a positive time range, but all "
+                        "timestamps in the 2D input are identical "
+                        "(time_span = 0). Ensure the training data covers "
+                        "more than one distinct observation time."
                     )
-                    x_trans_span = float(
-                        self._xdata_transformed[:, 0].max()
-                        - self._xdata_transformed[:, 0].min()
-                    )
+                lower_frequency = 1.0 / time_span
+
+                # Compute the Nyquist upper bound from the minimum positive
+                # gap between consecutive sorted timestamps (O(N log N), O(N)
+                # memory — avoids the O(N²) pairwise-difference matrix).
+                t_sorted = self._xdata_transformed[:, 0].sort().values
+                consecutive_diffs = (t_sorted[1:] - t_sorted[:-1])
+                positive_diffs = consecutive_diffs[consecutive_diffs > 0]
+                if positive_diffs.numel() > 0:
+                    min_diff = positive_diffs.min()
+                    max_freq = 1 / (2 * min_diff)  # Nyquist based on time sampling
+                    mixture_means_constraint = Interval(lower_frequency, max_freq)
                 else:
-                    x_orig_span = float(
-                        self._xdata_raw.max() - self._xdata_raw.min()
+                    # time_span > 0 guarantees at least two distinct timestamps,
+                    # so positive_diffs is always non-empty here.  This branch
+                    # is unreachable in practice.
+                    raise ValueError(  # pragma: no cover
+                        "Unexpected degenerate timestamps: time_span > 0 but "
+                        "no consecutive positive differences found."
                     )
-                    x_trans_span = float(
-                        self._xdata_transformed.max()
-                        - self._xdata_transformed.min()
+            else:
+                # 1D case: base the lower-frequency bound on the time span
+                # (max - min) rather than the absolute maximum. This prevents
+                # allowing periods longer than the observational baseline and
+                # is consistent with the 2D logic above.
+                time_span = (
+                    self._xdata_transformed.max()
+                    - self._xdata_transformed.min()
+                )
+                if float(time_span) <= 0.0:
+                    raise ValueError(
+                        "set_default_constraints requires a dataset whose "
+                        "timestamps span a positive time range, but all "
+                        "timestamps in the 1D input are identical "
+                        "(time_span = 0). Ensure the training data covers "
+                        "more than one distinct observation time."
                     )
-                freq_scale = x_orig_span / x_trans_span if x_trans_span > 0 else 1.0
+                mixture_means_constraint = GreaterThan(1 / time_span)
 
-                # Period lower limit → frequency upper limit
-                if lower_active and lower_val is not None:
-                    max_freq_from_period = freq_scale / lower_val
-                    cur_lower = float(mixture_means_constraint.lower_bound)
-                    if max_freq_from_period > cur_lower:
-                        if isinstance(mixture_means_constraint, GreaterThan):
-                            mixture_means_constraint = Interval(
-                                cur_lower, max_freq_from_period
-                            )
-                        else:
-                            # Already an Interval: tighten the upper bound
-                            cur_upper = float(mixture_means_constraint.upper_bound)
-                            mixture_means_constraint = Interval(
-                                cur_lower,
-                                min(cur_upper, max_freq_from_period),
-                            )
+            # Apply any constraint_set period bounds to the mixture_means
+            # constraint
+            if constraint_set is not None:
+                cs = get_constraint_set(constraint_set)
+                if "period" in cs:
+                    period_bounds = cs["period"]
+                    lower_val, lower_active = period_bounds["lower"]
+                    upper_val, upper_active = period_bounds["upper"]
 
-                # Period upper limit → frequency lower limit
-                if upper_active and upper_val is not None:
-                    min_freq_from_period = freq_scale / upper_val
-                    cur_lower = float(mixture_means_constraint.lower_bound)
-                    cur_upper = (
-                        float(mixture_means_constraint.upper_bound)
-                        if isinstance(mixture_means_constraint, Interval)
-                        else float("inf")
+                    # Compute the scale factor to convert a period in original
+                    # (untransformed) units to a frequency in transformed space.
+                    # For any linear rescaling transform:
+                    #   freq_transformed = freq_original * (x_orig_span /
+                    #                                       x_trans_span)
+                    if self.ndim > 1:
+                        x_orig_span = float(
+                            self._xdata_raw[:, 0].max()
+                            - self._xdata_raw[:, 0].min()
+                        )
+                        x_trans_span = float(
+                            self._xdata_transformed[:, 0].max()
+                            - self._xdata_transformed[:, 0].min()
+                        )
+                    else:
+                        x_orig_span = float(
+                            self._xdata_raw.max() - self._xdata_raw.min()
+                        )
+                        x_trans_span = float(
+                            self._xdata_transformed.max()
+                            - self._xdata_transformed.min()
+                        )
+                    freq_scale = (
+                        x_orig_span / x_trans_span if x_trans_span > 0 else 1.0
                     )
-                    new_lower = max(cur_lower, min_freq_from_period)
-                    if new_lower < cur_upper:
-                        if isinstance(mixture_means_constraint, GreaterThan):
-                            mixture_means_constraint = GreaterThan(new_lower)
-                        else:
-                            mixture_means_constraint = Interval(new_lower, cur_upper)
 
-        self._model_pars["mixture_means"]["module"].register_constraint(
-            "raw_mixture_means", mixture_means_constraint
-        )
+                    # Period lower limit → frequency upper limit
+                    if lower_active and lower_val is not None:
+                        max_freq_from_period = freq_scale / lower_val
+                        cur_lower = float(mixture_means_constraint.lower_bound)
+                        if max_freq_from_period > cur_lower:
+                            if isinstance(mixture_means_constraint, GreaterThan):
+                                mixture_means_constraint = Interval(
+                                    cur_lower, max_freq_from_period
+                                )
+                            else:
+                                # Already an Interval: tighten the upper bound
+                                cur_upper = float(
+                                    mixture_means_constraint.upper_bound
+                                )
+                                mixture_means_constraint = Interval(
+                                    cur_lower,
+                                    min(cur_upper, max_freq_from_period),
+                                )
+
+                    # Period upper limit → frequency lower limit
+                    if upper_active and upper_val is not None:
+                        min_freq_from_period = freq_scale / upper_val
+                        cur_lower = float(mixture_means_constraint.lower_bound)
+                        cur_upper = (
+                            float(mixture_means_constraint.upper_bound)
+                            if isinstance(mixture_means_constraint, Interval)
+                            else float("inf")
+                        )
+                        new_lower = max(cur_lower, min_freq_from_period)
+                        if new_lower < cur_upper:
+                            if isinstance(mixture_means_constraint, GreaterThan):
+                                mixture_means_constraint = GreaterThan(new_lower)
+                            else:
+                                mixture_means_constraint = Interval(
+                                    new_lower, cur_upper
+                                )
+
+            self._model_pars["mixture_means"]["module"].register_constraint(
+                "raw_mixture_means", mixture_means_constraint
+            )
 
         # to-do - check if constraints on mixture scales are useful!
         self.__CONTRAINTS_SET = True

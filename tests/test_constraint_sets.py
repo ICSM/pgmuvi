@@ -15,10 +15,18 @@ from gpytorch.constraints import Interval, GreaterThan
 # ---------------------------------------------------------------------------
 
 def _make_1d_lc(n=80, span_days=500.0, seed=0):
-    """Return a simple 1-D Lightcurve spanning *span_days* days."""
-    return make_simple_sinusoid_1d(
+    """Return a simple 1-D Lightcurve spanning *span_days* days.
+
+    Uses MinMax x-normalisation so that the transformed time axis lies in
+    [0, 1].  This makes the expected frequency bounds easy to reason about:
+    the lower frequency bound is 1/1 = 1.0 and the LPV-derived upper bound
+    is data_span_original / min_period_days (e.g. 500/20 = 25 for the
+    default 500-day dataset with a 20-day LPV minimum period).
+    """
+    raw = make_simple_sinusoid_1d(
         n_obs=n, period=100.0, noise_level=0.1, t_span=span_days, seed=seed
     )
+    return Lightcurve(raw.xdata, raw.ydata, xtransform="minmax")
 
 
 # ---------------------------------------------------------------------------
