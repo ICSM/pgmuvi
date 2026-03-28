@@ -1198,6 +1198,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Any other keyword arguments to be passed to the model constructor.
         """
         self.__SET_MODEL_CALLED = True
+        if isinstance(model, str):
+            self._model_str = model
+            self._model_instance = None
+        elif "GP" in [t.__name__ for t in type(model).__mro__]:
+            # GP instance provided directly — store it so it can be rebound
+            # to new training data after band filtering.
+            self._model_instance = model
+            self._model_str = None
+        else:
+            self._model_str = None
+            self._model_instance = None
+        self._model_num_mixtures = num_mixtures
         model_dic_1 = {
             "2D": TwoDSpectralMixtureGPModel,
             "1D": SpectralMixtureGPModel,
@@ -3734,10 +3746,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     if hasattr(self, "_yerr_raw"):
                         self.yerr = self._yerr_raw[keep_mask].clone()
                     # Filtering bands mutates the training data; ensure any
-                    # existing GP model bound to the old data is discarded so
-                    # that a fresh model is created with the filtered data.
+                    # existing GP model and likelihood bound to the old data
+                    # are discarded so that fresh instances are created with
+                    # the filtered data.
                     if hasattr(self, "model"):
                         self.model = None
+                    if hasattr(self, "likelihood"):
+                        self.likelihood = None
+                    self.__SET_LIKELIHOOD_CALLED = False
+                    self.__CONTRAINTS_SET = False
+                    # Priors registered on the old model are no longer valid;
+                    # ensure they are re-applied when a new model is created.
+                    self.__PRIORS_SET = False
             else:
                 # 1D: raise ValueError if sampling is poor
                 from pgmuvi.preprocess.quality import assess_sampling_quality
@@ -3848,6 +3868,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
 
         try:
+            # Capture the caller's original num_mixtures argument before any
+            # mutation (MLS init / fallback default).  Used later to decide
+            # whether to substitute the stored _model_num_mixtures.
+            _num_mixtures_arg = num_mixtures
+
             if not hasattr(self, "likelihood"):
                 self.set_likelihood(likelihood, variance=variance, **kwargs)
             elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
@@ -4118,6 +4143,53 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if model is None and not hasattr(self, "model"):
                 raise ValueError("""You must provide a model""")
+            elif model is None and self.model is None:
+                # The model was discarded (e.g. after band filtering). Re-create
+                # it with the updated training data.
+                _stored_instance = getattr(self, "_model_instance", None)
+                _stored_str = getattr(self, "_model_str", None)
+                # Preserve the originally configured num_mixtures when the
+                # caller did not explicitly provide a value (i.e. passed None).
+                # If the caller explicitly supplied num_mixtures, honour that
+                # value even if it happens to equal the stored one.
+                if _num_mixtures_arg is None and hasattr(self, "_model_num_mixtures"):
+                    stored_nm = self._model_num_mixtures
+                    _effective_num_mixtures = stored_nm if stored_nm is not None else num_mixtures
+                else:
+                    _effective_num_mixtures = num_mixtures
+                if _stored_instance is not None:
+                    # User originally provided a GP instance. Re-bind it to the
+                    # new (filtered) training data via set_train_data() if the
+                    # model supports it (ExactGP), otherwise recreate via
+                    # set_model() which will use the same underlying class.
+                    self.set_likelihood(likelihood, variance=variance, **kwargs)
+                    if hasattr(_stored_instance, "set_train_data"):
+                        _stored_instance.set_train_data(
+                            inputs=self._xdata_transformed,
+                            targets=self._ydata_transformed,
+                            strict=False,
+                        )
+                        self.model = _stored_instance
+                        self._make_parameter_dict()
+                    else:
+                        # Approximate GP (e.g. SparseSpectralMixtureGPModel):
+                        # cannot cheaply rebind, so fall back to raising an
+                        # informative error.
+                        raise ValueError(
+                            "The model instance does not support set_train_data(). "
+                            "Please pass model= explicitly to fit() after band "
+                            "filtering, or use a string model identifier."
+                        )
+                elif _stored_str is not None:
+                    self.set_model(
+                        _stored_str,
+                        self.likelihood,
+                        num_mixtures=_effective_num_mixtures,
+                        variance=variance,
+                        **kwargs,
+                    )
+                else:
+                    raise ValueError("""You must provide a model""")
             elif model is not None:
                 self.set_model(
                     model,
