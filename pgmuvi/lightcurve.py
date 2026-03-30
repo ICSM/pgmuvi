@@ -916,12 +916,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     n_pass = len(passing)
                     n_total = results["summary"]["n_bands"]
                     skipped = [round(w, 4) for w in failing]
-                    warnings.warn(
-                        f"Fitting with {n_pass}/{n_total} wavelength bands "
-                        f"(skipping \u03bb = {skipped}).",
-                        UserWarning,
-                        stacklevel=2,
+                    _msg = (
+                        f"Retaining {n_pass}/{n_total} wavelength bands after "
+                        f"sampling-quality filtering (skipping \u03bb = "
+                        f"{skipped})."
                     )
+                    warnings.warn(_msg, UserWarning, stacklevel=2)
                     keep_mask = torch.isin(
                         xdata_raw[:, 1],
                         torch.tensor(
@@ -938,6 +938,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 from pgmuvi.preprocess.quality import assess_sampling_quality
 
                 t = self._xdata_raw.detach().cpu().numpy()
+                if t.ndim > 1:
+                    t = t[:, 0]
                 y_np = (
                     self._ydata_raw.detach().cpu().numpy()
                     if hasattr(self, "_ydata_raw")
@@ -1007,6 +1009,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             from pgmuvi.preprocess import subsample_lightcurve
 
             n_total = self._xdata_raw.shape[0]
+            # Subsampling is only valid for the standard (N,) or (N,2) shapes
+            # where observations lie along dimension 0.  Non-standard
+            # multi-dimensional ydata (e.g. shape (D, N)) would subsample the
+            # wrong axis; raise a clear error rather than silently misbehaving.
+            if self._ydata_raw.dim() != 1:
+                raise ValueError(
+                    "max_samples is only supported for standard 1-D "
+                    "ydata (shape (N,)). The supplied ydata has shape "
+                    f"{tuple(self._ydata_raw.shape)}."
+                )
             if n_total > max_samples:
                 t_np = self._xdata_raw.detach().cpu().numpy()
                 if t_np.ndim > 1:
@@ -1026,7 +1038,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     UserWarning,
                     stacklevel=2,
                 )
-                idx_t = torch.as_tensor(idx, dtype=torch.long)
+                idx_t = torch.as_tensor(
+                    idx,
+                    dtype=torch.long,
+                    device=self._xdata_raw.device,
+                )
                 _buffer_names = (
                     "_xdata_raw",
                     "_xdata_transformed",
