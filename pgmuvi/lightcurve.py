@@ -486,7 +486,7 @@ class InputHelpers:
     def _drop_nan_rows(x, y, yerr):
         """Drop rows that contain NaN in any of the data arrays.
 
-        .. deprecated::
+        .. deprecated:: 0.3.0
             Use :meth:`_drop_nonfinite_rows` instead, which also handles
             infinite values.
         """
@@ -852,8 +852,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # Drop rows that contain NaN or Inf in any of the data arrays so that
         # all subsequent operations (transforms, GP training, LS) see only
-        # finite values.  Only applied when ydata is 1-D (the standard case);
-        # non-standard shapes bypass this step.
+        # finite values.  Only applied when ydata is 1-D (the standard case
+        # for all supported GP models).  Non-standard multi-dimensional ydata
+        # (e.g. legacy test fixtures with shape (D, N)) bypass this step;
+        # those cases rely on the existing per-setter NaN validation.
         if ydata.dim() == 1:
             xdata, ydata, yerr = self._drop_nonfinite_rows(xdata, ydata, yerr)
 

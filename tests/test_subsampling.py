@@ -408,6 +408,8 @@ class TestFitLSSubsampling2D(unittest.TestCase):
             )
         self.assertLess(lc_sub.xdata.shape[0], orig_n)
         self.assertLessEqual(lc_sub.xdata.shape[0], 50)
+
+
 def _make_lightcurve(n):
     """Create a simple 1-D Lightcurve with *n* uniformly-spaced points."""
     rng = np.random.default_rng(42)
