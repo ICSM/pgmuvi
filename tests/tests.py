@@ -1197,24 +1197,23 @@ class TestLightcurveSamplingMethods(unittest.TestCase):
         self.assertTrue(passes)
         self.assertEqual(diag['recommendation'], 'PROCEED')
 
-    def test_fit_check_sampling_raises(self):
-        """fit() with check_sampling=True raises for poor sampling."""
+    def test_init_check_sampling_raises(self):
+        """Lightcurve(..., check_sampling=True) raises for poor sampling."""
         t_few = torch.as_tensor([0, 1, 2, 3], dtype=torch.float32)
         y_few = torch.as_tensor([1, 1, 1, 1], dtype=torch.float32)
         yerr_few = torch.as_tensor([0.1, 0.1, 0.1, 0.1], dtype=torch.float32)
-        lc_few = Lightcurve(t_few, y_few, yerr=yerr_few)
         with self.assertRaises(ValueError):
-            lc_few.fit(model='1D', check_sampling=True)
+            Lightcurve(t_few, y_few, yerr=yerr_few, check_sampling=True)
 
-    def test_fit_check_sampling_disabled(self):
-        """fit() with check_sampling=False skips quality check (may fail on model)."""
+    def test_init_no_check_sampling_allows_fit(self):
+        """Without check_sampling, fit() raises for missing model, not sampling."""
         t_few = torch.as_tensor([0, 1, 2, 3], dtype=torch.float32)
         y_few = torch.as_tensor([1, 1, 1, 1], dtype=torch.float32)
         yerr_few = torch.as_tensor([0.1, 0.1, 0.1, 0.1], dtype=torch.float32)
         lc_few = Lightcurve(t_few, y_few, yerr=yerr_few)
         # Should raise for missing model, not for sampling quality
         with self.assertRaises(ValueError) as ctx:
-            lc_few.fit(check_sampling=False)
+            lc_few.fit()
         self.assertNotIn('temporal sampling', str(ctx.exception))
 
 
@@ -1275,8 +1274,8 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         with self.assertRaises(ValueError):
             lc1d.filter_well_sampled_bands()
 
-    def test_fit_check_sampling_2d_all_bands_fail_raises(self):
-        """fit() raises ValueError when ALL 2D bands fail sampling checks."""
+    def test_init_check_sampling_2d_all_bands_fail_raises(self):
+        """Lightcurve(..., check_sampling=True) raises when ALL 2D bands fail."""
         # 3 bands, each with only 4 points (below min_points=6 default)
         wavelengths = [3.6, 4.5, 5.8]
         t_all, wl_all, y_all, ye_all = [], [], [], []
@@ -1286,17 +1285,17 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
             y_all.extend([1.0] * 4)
             ye_all.extend([0.1] * 4)
         xdata = np.column_stack([t_all, wl_all])
-        lc2d_bad = Lightcurve(
-            torch.as_tensor(xdata, dtype=torch.float32),
-            torch.as_tensor(y_all, dtype=torch.float32),
-            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
-        )
         with self.assertRaises(ValueError) as ctx:
-            lc2d_bad.fit(check_sampling=True)
+            Lightcurve(
+                torch.as_tensor(xdata, dtype=torch.float32),
+                torch.as_tensor(y_all, dtype=torch.float32),
+                yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+                check_sampling=True,
+            )
         self.assertIn('sampling quality checks', str(ctx.exception))
 
-    def test_fit_check_sampling_2d_some_bands_fail_filters(self):
-        """fit() with check_sampling=True filters out poorly-sampled 2D bands."""
+    def test_init_check_sampling_2d_some_bands_fail_filters(self):
+        """Lightcurve(..., check_sampling=True) filters out poorly-sampled 2D bands."""
         # Band 3.6: 50 good points (passes); band 4.5: 4 points (fails)
         t_good = np.linspace(0, 100, 50)
         t_bad = [0.0, 1.0, 2.0, 3.0]
@@ -1305,23 +1304,26 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         y_all = [1.0] * 54
         ye_all = [0.01] * 54
         xdata = np.column_stack([t_all, wl_all])
-        lc2d_mixed = Lightcurve(
-            torch.as_tensor(xdata, dtype=torch.float32),
-            torch.as_tensor(y_all, dtype=torch.float32),
-            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
-        )
-        # fit() should warn about band 4.5 then fail on missing model, not on
-        # sampling.
-        with self.assertRaises(ValueError) as ctx:
-            lc2d_mixed.fit(check_sampling=True)
-        self.assertIn('must provide a model', str(ctx.exception))
-        # The poorly-sampled band should have been filtered from the data.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            lc2d_mixed = Lightcurve(
+                torch.as_tensor(xdata, dtype=torch.float32),
+                torch.as_tensor(y_all, dtype=torch.float32),
+                yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+                check_sampling=True,
+            )
+        # The poorly-sampled band should have been filtered at init time.
         remaining_wls = torch.unique(lc2d_mixed._xdata_raw[:, 1]).tolist()
         self.assertEqual(len(remaining_wls), 1)
         self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
+        # fit() should then raise for missing model, not for sampling.
+        with self.assertRaises(ValueError) as ctx:
+            lc2d_mixed.fit()
+        self.assertIn('must provide a model', str(ctx.exception))
 
-    def test_fit_band_filter_recreates_model_and_likelihood(self):
-        """fit() recreates the model and likelihood after band filtering."""
+    def test_init_band_filter_fit_works_on_filtered_data(self):
+        """fit() works correctly after band filtering at __init__ time."""
         import gpytorch
         # Band 3.6: 50 good points (passes); band 4.5: 4 points (fails)
         t_good = np.linspace(0, 100, 50)
@@ -1331,50 +1333,41 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         y_all = (np.sin(2 * np.pi * np.array(t_all) / 10.0) + 1.0).tolist()
         ye_all = [0.01] * 54
         xdata = np.column_stack([t_all, wl_all])
-        lc = Lightcurve(
-            torch.as_tensor(xdata, dtype=torch.float32),
-            torch.as_tensor(y_all, dtype=torch.float32),
-            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
-        )
-        # Explicitly set a model before calling fit() without a model arg.
-        lc.set_model('2D', likelihood=None, num_mixtures=2)
-        model_before = lc.model
-        likelihood_before = lc.likelihood
-        self.assertIsNotNone(model_before)
-
-        # fit() without model= should filter band 4.5, then re-create the '2D'
-        # model and likelihood bound to the filtered data, and train.
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            results = lc.fit(
+            lc = Lightcurve(
+                torch.as_tensor(xdata, dtype=torch.float32),
+                torch.as_tensor(y_all, dtype=torch.float32),
+                yerr=torch.as_tensor(ye_all, dtype=torch.float32),
                 check_sampling=True,
+            )
+        # Only the well-sampled band should remain after init.
+        remaining_wls = torch.unique(lc._xdata_raw[:, 1]).tolist()
+        self.assertEqual(len(remaining_wls), 1)
+        self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
+
+        # fit() on the filtered data should complete successfully.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = lc.fit(
+                model='2D',
                 use_mls_init=False,
                 training_iter=5,
                 miniter=2,
                 lr=0.05,
             )
-
-        # A new model was created (not the same object as before filtering).
+        self.assertIsNotNone(results)
         self.assertIsNotNone(lc.model)
-        self.assertIsNot(lc.model, model_before)
-        # Only the well-sampled band remains.
-        remaining_wls = torch.unique(lc._xdata_raw[:, 1]).tolist()
-        self.assertEqual(len(remaining_wls), 1)
-        self.assertAlmostEqual(remaining_wls[0], 3.6, places=4)
-        # The likelihood was rebuilt for the filtered data: its noise tensor
-        # must have length == number of remaining points (50).
-        self.assertIsNot(lc.likelihood, likelihood_before)
+        # Likelihood is built for the 50 remaining points.
         self.assertIsInstance(
             lc.likelihood,
             gpytorch.likelihoods.FixedNoiseGaussianLikelihood,
         )
         self.assertEqual(lc.likelihood.noise.numel(), 50)
-        # fit() completed and returned results.
-        self.assertIsNotNone(results)
 
-    def test_fit_band_filter_rebinds_model_instance(self):
-        """fit() rebinds a GP instance to filtered data after band filtering."""
+    def test_init_band_filter_model_instance_bound_to_filtered_data(self):
+        """fit() with a pre-set GP instance works on init-filtered data."""
         import gpytorch
         from pgmuvi.gps import TwoDSpectralMixtureGPModel
         # Band 3.6: 50 good points; band 4.5: 4 points (fails)
@@ -1385,14 +1378,22 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         y_all = (np.sin(2 * np.pi * np.array(t_all) / 10.0) + 1.0).tolist()
         ye_all = [0.01] * 54
         xdata = np.column_stack([t_all, wl_all])
-        lc = Lightcurve(
-            torch.as_tensor(xdata, dtype=torch.float32),
-            torch.as_tensor(y_all, dtype=torch.float32),
-            yerr=torch.as_tensor(ye_all, dtype=torch.float32),
-        )
-        # Build a GP instance manually and pass it to set_model().
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            lc = Lightcurve(
+                torch.as_tensor(xdata, dtype=torch.float32),
+                torch.as_tensor(y_all, dtype=torch.float32),
+                yerr=torch.as_tensor(ye_all, dtype=torch.float32),
+                check_sampling=True,
+            )
+        # After init, only 50 points from band 3.6 remain.
+        n_filtered = lc._xdata_raw.shape[0]
+        self.assertEqual(n_filtered, 50)
+
+        # Build a GP instance on the filtered data.
         lik = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
-            torch.as_tensor(ye_all, dtype=torch.float32) ** 2
+            lc.yerr ** 2
         )
         gp_instance = TwoDSpectralMixtureGPModel(
             lc._xdata_transformed,
@@ -1403,25 +1404,18 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         lc.set_model(gp_instance, likelihood=None, num_mixtures=2)
         self.assertIs(lc.model, gp_instance)
 
-        # fit() without model= should filter band 4.5, then rebind the GP
-        # instance to the filtered training data via set_train_data().
-        import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             results = lc.fit(
-                check_sampling=True,
                 use_mls_init=False,
                 training_iter=5,
                 miniter=2,
                 lr=0.05,
             )
-
-        # The same GP instance is reused but bound to the filtered data.
         self.assertIs(lc.model, gp_instance)
-        # Training data on the model reflects only the 50 remaining points.
         self.assertEqual(lc.model.train_inputs[0].shape[0], 50)
-        # fit() completed successfully.
         self.assertIsNotNone(results)
+
 
 # Import variability tests so they are discovered when this file is run
 from test_variability import (  # noqa: E402, F401
