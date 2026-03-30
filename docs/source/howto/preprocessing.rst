@@ -51,7 +51,7 @@ For multiband data::
 
 To retain only bands that pass a variability criterion::
 
-    lc.filter_variable_bands(threshold_fvar=0.1)
+    lc.filter_variable_bands(fvar_min=0.1)
 
 Sampling Quality Metrics
 -------------------------
@@ -104,18 +104,19 @@ subpackage::
 
     from pgmuvi.preprocess import subsample_lightcurve
 
-    times_sub, fluxes_sub, errors_sub = subsample_lightcurve(
-        lc.xdata.cpu().numpy(),
-        lc.ydata.cpu().numpy(),
-        lc.yerr.cpu().numpy(),
-        target_n=500,
+    times  = lc.xdata.cpu().numpy()
+    fluxes = lc.ydata.cpu().numpy()
+    errors = lc.yerr.cpu().numpy()
+
+    idx = subsample_lightcurve(times, max_samples=500)
+
+    lc_sub = pgmuvi.lightcurve.Lightcurve(
+        times[idx], fluxes[idx], errors[idx]
     )
 
-    lc_sub = pgmuvi.lightcurve.Lightcurve(times_sub, fluxes_sub, errors_sub)
-
-The ``subsample_lightcurve`` function preserves the overall time coverage (gaps are
-retained in proportion) so that long-timescale variability remains detectable after
-subsampling.
+``subsample_lightcurve`` takes only the 1-D time array and returns an index array.
+It preserves the overall time coverage (gaps are retained in proportion) so that
+long-timescale variability remains detectable after subsampling.
 
 .. seealso::
 

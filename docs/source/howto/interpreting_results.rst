@@ -45,33 +45,37 @@ For convenience::
 Predictive Distribution
 ------------------------
 
-Once fitted, the GP can predict the light curve at any set of times::
+Once fitted, the GP predictive mean and credible interval can be visualised
+directly using :meth:`~pgmuvi.lightcurve.Lightcurve.plot`::
 
-    import numpy as np
+    fig = lc.plot()
 
-    t_pred = np.linspace(lc.xdata.cpu().numpy().min(),
-                         lc.xdata.cpu().numpy().max(), 1000)
-    mean, lower, upper = lc.predict(t_pred)
-
-The predictive mean is the GP's best estimate; the interval ``[lower, upper]``
-represents the 95 % credible interval.
+:meth:`~pgmuvi.lightcurve.Lightcurve.plot` shows the data alongside the GP
+predictive mean and shaded credible region when the model has been fitted.
+When the model has not yet been fitted, only the raw data are shown.
 
 Visualisation
 --------------
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot`
-    Raw data only.
+    Raw data if the model is unfitted; after MAP fitting, also plots the GP
+    predictive mean and credible interval.  Returns a
+    ``matplotlib.pyplot.Figure`` (or a list of ``Figure`` objects for 2D
+    multiband data).
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_results`
-    Data with GP predictive mean and credible band overlaid.  Use this to check
-    whether the model describes the data well.
+    Training-history diagnostics (parameter values vs.\ optimisation
+    iteration).  Use this to check convergence behaviour rather than
+    predictive fit quality.  Returns ``None``.
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd`
     Inferred power spectral density.  Peaks correspond to inferred periods.
     Broad, low-frequency power indicates stochastic variability.
+    Returns ``(fig, ax)`` when ``show=False``.
 
-All three methods accept standard Matplotlib keyword arguments and return a
-``(fig, ax)`` tuple so that you can customise the plots further.
+:meth:`~pgmuvi.lightcurve.Lightcurve.plot` and
+:meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` accept standard Matplotlib
+keyword arguments.
 
 MCMC Results
 -------------

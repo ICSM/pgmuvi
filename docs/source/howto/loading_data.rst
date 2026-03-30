@@ -64,12 +64,20 @@ Example using ``numpy``::
     data = np.loadtxt("my_lightcurve.csv", delimiter=",")
     lc = pgmuvi.lightcurve.Lightcurve(data[:, 0], data[:, 1], data[:, 2])
 
-Appending Additional Data
+Adding More Observations
 --------------------------
 
-You can add observations from another epoch or band after construction::
+To combine observations from multiple files or epochs, concatenate the arrays
+before constructing the ``Lightcurve``::
 
-    lc.append_data(new_times, new_fluxes, new_errors)
+    import numpy as np
+    import pgmuvi
+
+    all_times  = np.concatenate([times,  new_times])
+    all_fluxes = np.concatenate([fluxes, new_fluxes])
+    all_errors = np.concatenate([errors, new_errors])
+
+    lc = pgmuvi.lightcurve.Lightcurve(all_times, all_fluxes, all_errors)
 
 .. note::
 

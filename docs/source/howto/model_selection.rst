@@ -28,20 +28,30 @@ The ``model`` parameter of the :class:`~pgmuvi.lightcurve.Lightcurve` constructo
 
    * - Model identifier
      - Description
-   * - ``'spectral_mixture'``
-     - Default.  Pure spectral mixture kernel; highly flexible.
-   * - ``'spectral_mixture_rbf'``
-     - Spectral mixture + RBF (squared-exponential) component.  Useful when a
-       smooth long-term trend is expected alongside quasi-periodic variability.
-   * - ``'spectral_mixture_flicker'``
-     - Spectral mixture + :math:`1/f` noise.  Suitable for AGN and other sources
-       with red-noise dominated PSDs.
-   * - ``'periodic'``
-     - Exact periodic (cosine) kernel.  Use only when the signal is strictly
-       periodic.
-   * - ``'quasi_periodic'``
-     - Periodic × RBF: the standard quasi-periodic kernel.  Captures a single
+   * - ``'1D'``
+     - Default.  Pure spectral mixture kernel for single-band data;
+       highly flexible.
+   * - ``'2D'``
+     - Spectral mixture kernel for 2D (multiband) data with a time and
+       wavelength/band dimension.
+   * - ``'1DLinear'``
+     - Spectral mixture with a linear mean function; useful when a
+       long-term linear trend is expected.
+   * - ``'1DQuasiPeriodic'``
+     - Quasi-periodic (Periodic × RBF) kernel.  Captures a single
        periodic signal that decays in coherence over time.
+   * - ``'1DPeriodicStochastic'``
+     - Periodic kernel plus a stochastic (noise) component.
+   * - ``'1DMatern'``
+     - Matérn kernel.  Suitable for smooth but aperiodic variability.
+   * - ``'2DSeparable'``
+     - Separable 2D kernel (time × wavelength) for multiband data.
+   * - ``'2DAchromatic'``
+     - 2D model with achromatic (wavelength-independent) variability.
+   * - ``'2DWavelengthDependent'``
+     - 2D model where variability amplitude depends on wavelength.
+
+For a complete list see :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`.
 
 Number of Mixture Components
 -----------------------------
@@ -82,7 +92,7 @@ Manual Model Selection
 If you have domain knowledge about the expected variability type, you can set the
 model directly::
 
-    lc.set_model('spectral_mixture_flicker', num_mixtures=3)
+    lc.set_model('1DQuasiPeriodic')
     lc.fit_LS()
 
 Alternative Kernel Configurations

@@ -43,77 +43,79 @@ Setting a Period Prior
 The most commonly adjusted prior is the prior on the mixture means (frequencies),
 which corresponds to placing a prior on the variability period.  Use
 :meth:`~pgmuvi.lightcurve.Lightcurve.set_period_prior` to set a log-normal or
-uniform prior on the period::
+normal prior on the period::
 
-    # Log-normal prior: mode 100 days, width factor ~2
-    lc.set_period_prior(period=100.0, period_sigma=0.5)
+    # Log-normal prior: log-mean 5.0 (median ≈ 148 days), log-standard-deviation 0.5
+    lc.set_period_prior(
+        prior_type="lognormal",
+        mu=5.0,
+        sigma=0.5,
+    )
 
     # Inspect the resulting prior
     print(lc.get_period_prior())
 
-The ``period_sigma`` argument controls the width of the log-normal prior in
-log-frequency space.
+For a log-normal prior, ``mu`` and ``sigma`` are defined in log-period space
+(natural units).  A ``sigma`` of 1.0 corresponds to a broad prior spanning
+roughly an order of magnitude; reduce it to tighten the prior around a known
+period.
 
 Setting Constraints
 --------------------
 
 Constraints are hard bounds applied as GPyTorch ``Interval`` constraints.
-The most common use case is restricting the period search range::
+:meth:`~pgmuvi.lightcurve.Lightcurve.set_constraint` accepts a dictionary mapping
+parameter names to GPyTorch constraint objects.  The most common use case is
+restricting the period search range::
 
-    # Restrict periods to [10, 1000] days
-    lc.set_constraint(
-        parameter="mixture_means",
-        lower=1.0 / 1000.0,   # lower frequency = longer period
-        upper=1.0 / 10.0,     # upper frequency = shorter period
-    )
+    from gpytorch.constraints import Interval
+
+    # Restrict mixture_means (frequencies) to [1/1000, 1/10] per day
+    lc.set_constraint({
+        "mixture_means": Interval(
+            lower_bound=1.0 / 1000.0,   # lower frequency = longer period
+            upper_bound=1.0 / 10.0,     # upper frequency = shorter period
+        ),
+    })
 
 For the noise variance::
 
-    lc.set_constraint(
-        parameter="likelihood.noise",
-        lower=1e-6,
-        upper=1.0,
-    )
+    from gpytorch.constraints import Interval
+
+    lc.set_constraint({
+        "noise": Interval(lower_bound=1e-6, upper_bound=1.0),
+    })
 
 .. note::
 
    For 2D (multiband) models, constraints on ``mixture_means`` apply to the
    temporal dimension.  Wavelength-dimension constraints can be set separately.
 
-Setting Arbitrary Priors
--------------------------
+Using Pre-defined Constraint Sets
+-----------------------------------
 
-You can attach any GPyTorch-compatible prior distribution using
-:meth:`~pgmuvi.lightcurve.Lightcurve.set_prior`::
+For common astrophysical source classes, ``pgmuvi`` ships pre-defined constraint
+sets (e.g. ``"LPV"`` for Long Period Variables).  Retrieve one with
+:func:`~pgmuvi.constraints.get_constraint_set` and inspect or modify the bounds
+before applying them::
 
-    import torch
-    from gpytorch.priors import LogNormalPrior
+    from pgmuvi.constraints import get_constraint_set
 
-    lc.set_prior(
-        parameter="covar_module.mixture_weights",
-        prior=LogNormalPrior(loc=torch.tensor(0.0), scale=torch.tensor(1.0)),
-    )
+    # Get the predefined LPV constraint set
+    cs = get_constraint_set("LPV")
+    print(cs)
 
-Refer to the `GPyTorch priors documentation
-<https://docs.gpytorch.ai/en/stable/priors.html>`_ for available prior classes.
+You can also use the helper functions in :mod:`pgmuvi.constraints` to build
+individual constraints that are appropriate for your data span::
 
-pgmuvi also defines additional prior classes in :mod:`pgmuvi.priors`, including
-period-aware priors and priors adapted for multiband models.
+    from pgmuvi.constraints import period_constraint, lengthscale_constraint
 
-Using the ConstraintSet Helper
---------------------------------
+    data_span = float(lc.xdata.max() - lc.xdata.min())
 
-For complex multiparameter scenarios, ``pgmuvi`` provides the
-:class:`~pgmuvi.constraints.ConstraintSet` helper class that allows you to define
-a collection of constraints and apply them all at once::
-
-    from pgmuvi.constraints import ConstraintSet
-
-    cs = ConstraintSet(
-        mixture_means=(1e-3, 0.5),
-        noise=(1e-6, 0.1),
-    )
-    cs.apply(lc)
+    lc.set_constraint({
+        "mixture_means": period_constraint(data_span=data_span),
+        "mixture_scales": lengthscale_constraint(span=data_span),
+    })
 
 See :mod:`pgmuvi.constraints` for the full API.
 
