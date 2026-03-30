@@ -89,7 +89,7 @@ For multiband data::
 
 To retain only well-sampled bands::
 
-    lc.filter_well_sampled_bands(min_points=20)
+    lc = lc.filter_well_sampled_bands(min_points=20)
 
 Subsampling Dense Datasets
 ---------------------------

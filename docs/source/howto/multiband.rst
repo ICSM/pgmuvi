@@ -76,7 +76,7 @@ per band before fitting::
 
 You can then filter out bands that have insufficient coverage::
 
-    lc.filter_well_sampled_bands(min_points=20)
+    lc = lc.filter_well_sampled_bands(min_points=20)
 
 Visualising 2D Results
 -----------------------

@@ -123,7 +123,7 @@ Poor MCMC mixing
       starting points.
     * Strong parameter correlations — use tighter priors or a different
       parameterisation.
-    * Insufficient warmup — increase ``num_warmup``.
+    * Insufficient warmup — increase ``warmup_steps``.
 
 Spurious periods
     The PSD shows peaks at aliases (multiples or sub-multiples of the observing

@@ -33,12 +33,12 @@ Modified Julian Date (MJD).
 
 **Q: Can I use pgmuvi with data in magnitudes rather than flux?**
 
-Yes.  Pass ``magnitudes=True`` to the
-:class:`~pgmuvi.lightcurve.Lightcurve` constructor::
-
-    lc = pgmuvi.lightcurve.Lightcurve(times, mags, mag_errors, magnitudes=True)
-
-The sign convention is handled internally.
+Not yet natively.  The ``magnitudes`` option of
+:class:`~pgmuvi.lightcurve.Lightcurve` is not currently implemented.
+For now, convert magnitudes and their uncertainties to (relative) fluxes
+before constructing the :class:`~pgmuvi.lightcurve.Lightcurve`.  A standard
+conversion is :math:`f \propto 10^{-0.4\,m}`; see
+:ref:`loading-data:Working with Magnitudes` for a code example.
 
 **Q: My data have irregular gaps.  Is that a problem?**
 
@@ -63,7 +63,7 @@ Fitting and Convergence
 
 * Subsample dense datasets (see :doc:`howto/preprocessing`).
 * Reduce ``num_mixtures`` (fewer parameters → faster optimisation).
-* Use the ``device='cuda'`` option if a GPU is available.
+* Move the light curve to a GPU before fitting: ``lc = lc.cuda()``.
 
 **Q: The fit converges to a period that makes no physical sense.**
 
@@ -94,7 +94,7 @@ MCMC is inherently more expensive than MAP estimation.  Suggestions:
 
 * Run MAP first (``fit_LS()``) and use the MAP solution as the starting point for
   MCMC.
-* Reduce ``num_samples`` and ``num_warmup`` for a quick initial run to check
+* Reduce ``num_samples`` and ``warmup_steps`` for a quick initial run to check
   convergence behaviour.
 * Use a GPU if available.
 

@@ -40,23 +40,29 @@ arrays via ``lc.xdata.cpu().numpy()``, etc.
 Loading from a File
 --------------------
 
-``pgmuvi`` does not currently provide a dedicated file reader, so you can use standard
-Python libraries such as ``numpy``, ``astropy``, or ``pandas`` to read your data and
-then pass the arrays to the constructor.
+``pgmuvi`` provides a convenience constructor
+:meth:`~pgmuvi.lightcurve.Lightcurve.from_table` that can build a light curve
+from an :class:`astropy.table.Table` instance or directly from a filename.
+Under the hood it calls :func:`astropy.table.Table.read`, so any format
+supported by Astropy (FITS, VOTable, many ASCII dialects) is accepted.
 
-Example using ``astropy``::
+Example loading from a filename::
+
+    import pgmuvi
+
+    lc = pgmuvi.lightcurve.Lightcurve.from_table("my_lightcurve.vot")
+
+Example from an in-memory table::
 
     from astropy.table import Table
     import pgmuvi
 
     t = Table.read("my_lightcurve.fits")
-    lc = pgmuvi.lightcurve.Lightcurve(
-        t["time"].data,
-        t["flux"].data,
-        t["flux_err"].data,
-    )
+    lc = pgmuvi.lightcurve.Lightcurve.from_table(t)
 
-Example using ``numpy``::
+For formats that require column names different from the defaults, or to read
+plain-text files, you can also read the data manually and pass arrays to the
+constructor::
 
     import numpy as np
     import pgmuvi
@@ -112,19 +118,34 @@ keyword arguments::
         ytransform="zscore",
     )
 
-Or call :meth:`~pgmuvi.lightcurve.Lightcurve.transform_x` and
-:meth:`~pgmuvi.lightcurve.Lightcurve.transform_y` after construction.  All results
-and plots are automatically inverse-transformed back to the original units.
+The GP is trained in the transformed space, but all results and plots are
+automatically inverse-transformed back to the original units.
 
 Working with Magnitudes
 ------------------------
 
-By default, ``pgmuvi`` treats ``ydata`` as flux (higher values = brighter).
-If your data are in magnitudes (higher values = fainter), set ``magnitudes=True``::
+Native magnitude support is planned for a future release but is not currently
+available.  If your data are in magnitudes, convert them to (relative) flux
+before constructing the :class:`~pgmuvi.lightcurve.Lightcurve`.  A common
+choice is:
 
-    lc = pgmuvi.lightcurve.Lightcurve(times, mags, mag_errors, magnitudes=True)
+.. math::
 
-The sign convention is handled internally.
+   f \propto 10^{-0.4\,m}
+
+In code::
+
+    import numpy as np
+    import pgmuvi
+
+    # mags and mag_errors are your input magnitudes and uncertainties
+    fluxes = 10 ** (-0.4 * mags)
+    errors = fluxes * np.log(10) * 0.4 * mag_errors
+
+    lc = pgmuvi.lightcurve.Lightcurve(times, fluxes, errors)
+
+Only relative variations matter for most ``pgmuvi`` analyses, so the overall
+flux normalisation is arbitrary.
 
 Checking Data Quality
 ----------------------
