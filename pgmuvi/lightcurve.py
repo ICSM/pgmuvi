@@ -684,7 +684,7 @@ class InputHelpers:
         yerr = torch.as_tensor(clean[yerrcol], dtype=torch.float32) if yerrcol else None
 
 
-        return cls(xdata=x, ydata=y, yerr=yerr)
+        return cls(xdata=x, ydata=y, yerr=yerr, **kwargs)
 
 
 # Spectral-mixture model names that support MLS-based initialisation in fit().
