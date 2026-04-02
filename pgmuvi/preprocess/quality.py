@@ -267,7 +267,7 @@ def assess_sampling_quality(
 
     # Gate 3: Minimum baseline coverage
     median_cadence = metrics["median_cadence"]
-    if median_cadence <= 0:
+    if median_cadence < 0:
         # Non-positive median cadence indicates duplicate or invalid timestamps.
         baseline_factor = 0.0
         gates["min_baseline"] = False
@@ -275,6 +275,19 @@ def assess_sampling_quality(
             "Non-positive median cadence; baseline coverage cannot be reliably "
             "assessed and the baseline gate has been failed."
         )
+    elif median_cadence == 0:
+        baseline_factor = metrics["baseline"] / metrics["mean_cadence"]
+        warnings.append(
+            "Lightcurve contains large numbers of points with identical timestamps."
+            "Determining sampling quality using mean cadence instead of median,"
+            "result may not be robust."
+        )
+        gates["min_baseline"] = baseline_factor >= min_baseline_factor
+        if not gates["min_baseline"]:
+            warnings.append(
+                f"Insufficient baseline: {baseline_factor:.1f} median cadences "
+                f"< {min_baseline_factor} required"
+            )
     else:
         baseline_factor = metrics["baseline"] / median_cadence
         gates["min_baseline"] = baseline_factor >= min_baseline_factor
