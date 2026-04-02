@@ -4876,6 +4876,497 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             torch.as_tensor(scales),
         )
 
+    def _extract_sm_params(self):
+        """Extract raw spectral-mixture parameters in physical (data) units.
+
+        Helper for :meth:`get_period_summary`.  Extracts per-component
+        means, scales, and weights from ``self.model.sci_kernel`` and
+        converts them from the transformed (normalised) frequency space back
+        to the original data units, following the same convention as
+        :meth:`get_periods`.
+
+        The conversions performed here are scientifically important:
+
+        * If ``self.xtransform is None`` the model operates directly in the
+          raw time units, so ``mixture_mean`` is already the raw frequency
+          and ``mixture_scale`` is already the raw frequency scale.
+        * If ``self.xtransform is not None`` the model was trained in a
+          normalised time coordinate.  Frequencies and scales must be
+          inverse-transformed to recover quantities in the original time
+          units.
+
+        For both 1-D and 2-D spectral-mixture models the *time* dimension
+        (index 0 of the last axis of ``mixture_means``) is used, consistent
+        with :meth:`get_periods`.
+
+        Returns
+        -------
+        params : dict
+            Keys and values (all 1-D :class:`numpy.ndarray` of length
+            ``num_mixtures``):
+
+            * ``component_frequencies``    - raw centre frequencies
+            * ``component_periods``        - raw centre periods
+            * ``component_frequency_scales`` - Gaussian sigma in frequency
+            * ``component_period_scales``  - Gaussian sigma in period units
+            * ``component_weights``        - kernel component weights
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been initialised.
+        ValueError
+            If the model is not a spectral-mixture model (i.e. its
+            ``sci_kernel`` does not expose ``mixture_means``).
+        """
+        if not hasattr(self, "model") or self.model is None:
+            raise RuntimeError(
+                "Model not initialised.  Call set_model() first."
+            )
+        if not hasattr(self.model.sci_kernel, "mixture_means"):
+            raise ValueError(
+                "get_period_summary() is only implemented for "
+                "spectral-mixture models.  The current model's "
+                "sci_kernel does not have a mixture_means attribute."
+            )
+
+        sk = self.model.sci_kernel
+        n_mix = len(sk.mixture_means)
+
+        freqs = []
+        periods = []
+        freq_scales = []
+        period_scales = []
+        wts = []
+
+        for i in range(n_mix):
+            # -- extract the time-dimension mean and scale ------------------
+            # mixture_means has shape [n_mix, 1, ard_num_dims].
+            # Index [i, 0, 0] selects mixture i, the redundant size-1
+            # dimension, and dimension 0 (time axis).  This is consistent
+            # with the [i, 0] indexing used in get_periods() for 2-D models.
+            mu_t = sk.mixture_means[i, 0, 0]
+            sig_t = sk.mixture_scales[i, 0, 0]
+
+            if self.xtransform is None:
+                # No coordinate transform: mixture_mean IS the raw frequency,
+                # and mixture_scale IS the raw frequency-domain half-width.
+                raw_freq = float(mu_t.detach().cpu())
+                raw_period = 1.0 / raw_freq
+                # Convert frequency-domain scale to period-domain scale.
+                raw_freq_scale = float(sig_t.detach().cpu())
+                raw_period_scale = (
+                    1.0 / (2.0 * np.pi * raw_freq_scale)
+                )
+            else:
+                # The model was trained in normalised time units.
+                # Inverse-transform to recover physical (raw) period,
+                # then compute the raw frequency from it.
+                raw_period = float(
+                    self.xtransform.inverse(
+                        1.0 / mu_t, shift=False
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .ravel()[0]
+                )
+                raw_freq = 1.0 / raw_period
+                # Same inverse transform for the scale parameter,
+                # converting normalised frequency scale to raw period scale.
+                raw_period_scale = float(
+                    self.xtransform.inverse(
+                        1.0 / (2.0 * torch.pi * sig_t),
+                        shift=False,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .ravel()[0]
+                )
+                raw_freq_scale = (
+                    1.0 / (2.0 * np.pi * raw_period_scale)
+                )
+
+            freqs.append(raw_freq)
+            periods.append(raw_period)
+            freq_scales.append(raw_freq_scale)
+            period_scales.append(raw_period_scale)
+            wts.append(float(sk.mixture_weights[i].detach().cpu()))
+
+        return {
+            "component_frequencies": np.array(freqs),
+            "component_periods": np.array(periods),
+            "component_frequency_scales": np.array(freq_scales),
+            "component_period_scales": np.array(period_scales),
+            "component_weights": np.array(wts),
+        }
+
+    @staticmethod
+    def _sm_psd_on_grid(freq_grid, params):
+        """Evaluate the total spectral-mixture PSD on a frequency grid.
+
+        The PSD is the (non-normalised) sum of weighted Gaussians in
+        frequency space::
+
+            PSD(f) = sum_k  w_k * exp(-0.5 * ((f - mu_k) / sigma_k)^2)
+
+        where ``mu_k``, ``sigma_k`` and ``w_k`` are the raw (physical-unit)
+        component frequencies, frequency scales, and weights returned by
+        :meth:`_extract_sm_params`.  Overall normalisation is not enforced
+        because only the peak *location* matters for period identification.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            1-D positive-frequency evaluation grid in physical units.
+        params : dict
+            Output of :meth:`_extract_sm_params`.
+
+        Returns
+        -------
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``, same shape as ``freq_grid``.
+        """
+        psd = np.zeros_like(freq_grid, dtype=float)
+        mus = params["component_frequencies"]
+        sigs = params["component_frequency_scales"]
+        wts = params["component_weights"]
+        for mu_k, sig_k, w_k in zip(mus, sigs, wts, strict=False):
+            psd += w_k * np.exp(
+                -0.5 * ((freq_grid - mu_k) / sig_k) ** 2
+            )
+        return psd
+
+    def get_period_summary(
+        self,
+        n_grid=5000,
+        min_freq=None,
+        max_freq=None,
+        peak_threshold_rel=0.2,
+        uncertainty="peak_width",
+    ):
+        """Return a literature-comparable period summary for the fitted model.
+
+        Unlike :meth:`get_periods`, which returns the raw kernel-basis
+        parameters of each spectral-mixture component (component centres,
+        scales, and weights), this method:
+
+        1. Constructs the total positive-frequency PSD implied by all
+           spectral-mixture components.
+        2. Identifies the dominant (highest) PSD peak.
+        3. Returns the dominant period together with practical uncertainty
+           proxies and diagnostics.
+
+        The result is directly comparable to periods reported in the
+        literature because it corresponds to the *peak* of the combined
+        power spectrum rather than to an individual kernel component.
+
+        .. note::
+            The uncertainty returned here is a *PSD-width proxy*, not a
+            posterior credible interval.  MCMC-based credible intervals are
+            not yet implemented.  The half-maximum interval reflects the
+            coherence width of the dominant feature: a sharp, coherent
+            oscillation produces a narrow interval (high Q-factor), while
+            broad or blended components produce a wider one.
+
+        Parameters
+        ----------
+        n_grid : int, optional
+            Number of points in the positive-frequency evaluation grid.
+            Default 5000.
+        min_freq : float or None, optional
+            Minimum frequency for the evaluation grid.  If ``None``,
+            defaults to ``1 / time_span`` of the observations.
+        max_freq : float or None, optional
+            Maximum frequency for the evaluation grid.  If ``None``, set
+            to cover the highest component centre plus five sigma.
+        peak_threshold_rel : float, optional
+            Fraction of the dominant peak height below which secondary
+            peaks are considered insignificant.  Default 0.2.
+        uncertainty : str, optional
+            Uncertainty method.  Currently only ``"peak_width"`` (the
+            half-maximum interval) is implemented.
+
+        Returns
+        -------
+        summary : dict
+            Dictionary containing:
+
+            * ``component_periods``          - raw kernel component periods
+            * ``component_weights``          - raw kernel component weights
+            * ``component_period_scales``    - raw kernel period widths
+            * ``component_frequencies``      - raw kernel component freqs
+            * ``component_frequency_scales`` - raw kernel frequency widths
+            * ``freq_grid``              - evaluation frequency grid
+            * ``psd``                    - PSD values on the grid
+            * ``dominant_frequency``     - frequency of the highest peak
+            * ``dominant_period``        - ``1 / dominant_frequency``
+            * ``period_interval_fwhm_like`` - ``(period_lo, period_hi)``
+              from the half-maximum frequency interval
+            * ``q_factor``      - coherence Q = f_peak / FWHM_freq
+            * ``peak_fraction`` - dominant peak height / total weight
+            * ``n_significant_peaks`` - peaks above threshold
+            * ``significant_periods`` - periods of significant peaks
+            * ``method``  - description of the method used
+            * ``notes``   - additional diagnostic notes
+
+        Raises
+        ------
+        ValueError
+            If the model is not a spectral-mixture model, or if an
+            unsupported ``uncertainty`` method is requested.
+        RuntimeError
+            If the model has not been initialised.
+        """
+        if uncertainty != "peak_width":
+            raise NotImplementedError(
+                f"uncertainty='{uncertainty}' is not yet implemented. "
+                "Use uncertainty='peak_width'."
+            )
+
+        params = self._extract_sm_params()
+
+        # -- build the positive-frequency evaluation grid ------------------
+        comp_freqs = params["component_frequencies"]
+        comp_scales = params["component_frequency_scales"]
+
+        if min_freq is None:
+            # lowest meaningful frequency = 1 / total time baseline
+            if self.ndim == 1:
+                t_span = (
+                    self._xdata_raw.max() - self._xdata_raw.min()
+                ).item()
+            else:
+                t_col = self._xdata_raw[:, 0]
+                t_span = (t_col.max() - t_col.min()).item()
+            # guard against zero or near-zero span
+            t_span = max(float(t_span), 1e-10)
+            min_freq = 1.0 / t_span
+
+        if max_freq is None:
+            # cover each component out to 5 sigma above its centre
+            max_freq = float(
+                np.max(comp_freqs + 5.0 * comp_scales)
+            )
+
+        # ensure positive and ordered
+        min_freq = max(float(min_freq), 1e-12)
+        max_freq = max(float(max_freq), min_freq * 2.0)
+
+        freq_grid = np.linspace(min_freq, max_freq, int(n_grid))
+        psd = self._sm_psd_on_grid(freq_grid, params)
+
+        # -- identify the dominant (highest) PSD peak ----------------------
+        from scipy.signal import find_peaks
+
+        peaks, _ = find_peaks(psd)
+        if len(peaks) == 0:
+            # no local maximum found; fall back to the global maximum
+            dominant_idx = int(np.argmax(psd))
+        else:
+            dominant_idx = int(peaks[np.argmax(psd[peaks])])
+
+        dominant_freq = float(freq_grid[dominant_idx])
+        dominant_period = 1.0 / dominant_freq
+        peak_height = float(psd[dominant_idx])
+
+        # -- half-maximum interval (FWHM-like uncertainty proxy) -----------
+        half_max = 0.5 * peak_height
+
+        # walk left from the peak to find the half-maximum crossing
+        left_idx = dominant_idx
+        while left_idx > 0 and psd[left_idx] >= half_max:
+            left_idx -= 1
+
+        # walk right from the peak to find the half-maximum crossing
+        right_idx = dominant_idx
+        while right_idx < len(psd) - 1 and psd[right_idx] >= half_max:
+            right_idx += 1
+
+        f_left = float(freq_grid[left_idx])
+        f_right = float(freq_grid[right_idx])
+        fwhm_freq = f_right - f_left
+
+        # convert from frequency interval to period interval;
+        # note the inversion: higher frequency → shorter period
+        period_lo = 1.0 / f_right
+        period_hi = 1.0 / f_left
+
+        # -- Q-factor (coherence metric) -----------------------------------
+        q_factor = dominant_freq / fwhm_freq if fwhm_freq > 0 else np.inf
+
+        # -- multimodality diagnostic --------------------------------------
+        threshold = peak_threshold_rel * peak_height
+        if len(peaks) > 0:
+            sig_mask = psd[peaks] >= threshold
+            sig_peaks = peaks[sig_mask]
+        else:
+            sig_peaks = np.array([dominant_idx])
+
+        sig_freqs = freq_grid[sig_peaks]
+        sig_periods = 1.0 / sig_freqs
+        n_sig_peaks = len(sig_peaks)
+
+        # -- peak fraction (dominant peak height vs sum of weights) --------
+        total_weight = float(np.sum(params["component_weights"]))
+        if total_weight > 0:
+            peak_fraction = peak_height / total_weight
+        else:
+            peak_fraction = np.nan
+
+        # -- notes ---------------------------------------------------------
+        notes = (
+            "Uncertainty is a half-maximum PSD-width proxy, "
+            "not a posterior credible interval."
+        )
+
+        return {
+            "component_periods": params["component_periods"],
+            "component_weights": params["component_weights"],
+            "component_period_scales": params["component_period_scales"],
+            "component_frequencies": params["component_frequencies"],
+            "component_frequency_scales": (
+                params["component_frequency_scales"]
+            ),
+            "freq_grid": freq_grid,
+            "psd": psd,
+            "dominant_frequency": dominant_freq,
+            "dominant_period": dominant_period,
+            "period_interval_fwhm_like": (period_lo, period_hi),
+            "q_factor": q_factor,
+            "peak_fraction": peak_fraction,
+            "n_significant_peaks": n_sig_peaks,
+            "significant_periods": sig_periods,
+            "method": "spectral_mixture_psd_peak",
+            "notes": notes,
+        }
+
+    def plot_period_summary(
+        self,
+        summary=None,
+        show=True,
+        log_freq=True,
+        **kwargs,
+    ):
+        """Plot the PSD and dominant period from :meth:`get_period_summary`.
+
+        Creates a matplotlib figure showing:
+
+        * The total positive-frequency PSD.
+        * A vertical line at the dominant frequency.
+        * A shaded band for the half-maximum frequency interval.
+        * Dotted lines for any other significant peaks.
+        * A text annotation with the dominant period, interval, Q-factor,
+          and number of significant peaks.
+
+        Parameters
+        ----------
+        summary : dict or None, optional
+            Output of :meth:`get_period_summary`.  If ``None``, it is
+            computed automatically with default parameters.  Any extra
+            keyword arguments (``**kwargs``) are forwarded to
+            :meth:`get_period_summary`.
+        show : bool, optional
+            If ``True`` (default), call ``plt.show()``.  If ``False``,
+            return ``(fig, ax)`` for further customisation.
+        log_freq : bool, optional
+            If ``True`` (default), plot the frequency axis on a log scale.
+        **kwargs : dict
+            Additional keyword arguments passed to
+            :meth:`get_period_summary` when ``summary`` is ``None``.
+
+        Returns
+        -------
+        fig, ax : matplotlib.figure.Figure, matplotlib.axes.Axes
+            Returned when ``show=False``; otherwise ``None``.
+        """
+        if summary is None:
+            summary = self.get_period_summary(**kwargs)
+
+        freq_grid = summary["freq_grid"]
+        psd = summary["psd"]
+        f_peak = summary["dominant_frequency"]
+        p_dom = summary["dominant_period"]
+        period_lo, period_hi = summary["period_interval_fwhm_like"]
+        q = summary["q_factor"]
+        n_sig = summary["n_significant_peaks"]
+        sig_periods = summary["significant_periods"]
+
+        # half-maximum frequency bounds (inverse of period bounds)
+        f_left = 1.0 / period_hi
+        f_right = 1.0 / period_lo
+
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+
+        ax.plot(freq_grid, psd, color="steelblue", lw=1.5, label="PSD")
+
+        # -- dominant peak -------------------------------------------------
+        ax.axvline(
+            f_peak,
+            color="crimson",
+            lw=1.5,
+            ls="--",
+            label=f"Dominant peak  P = {p_dom:.4g}",
+        )
+
+        # -- half-maximum shaded band --------------------------------------
+        ax.axvspan(
+            f_left,
+            f_right,
+            alpha=0.25,
+            color="crimson",
+            label=(
+                f"FWHM interval  [{period_lo:.4g}, {period_hi:.4g}]"
+            ),
+        )
+
+        # -- other significant peaks ---------------------------------------
+        for sp in sig_periods:
+            sf = 1.0 / sp
+            if abs(sf - f_peak) > 1e-12 * f_peak:
+                ax.axvline(
+                    sf,
+                    color="darkorange",
+                    lw=1.0,
+                    ls=":",
+                    alpha=0.8,
+                )
+
+        # -- text annotation -----------------------------------------------
+        q_str = f"{q:.2f}" if np.isfinite(q) else "inf"
+        ann_lines = [
+            f"Dominant period:   {p_dom:.6g}",
+            f"Interval:          [{period_lo:.4g}, {period_hi:.4g}]",
+            f"Q-factor:          {q_str}",
+            f"Significant peaks: {n_sig}",
+        ]
+        ax.text(
+            0.97,
+            0.97,
+            "\n".join(ann_lines),
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
+            family="monospace",
+            bbox=dict(
+                boxstyle="round,pad=0.3", fc="white", alpha=0.8
+            ),
+        )
+
+        if log_freq:
+            ax.set_xscale("log")
+        ax.set_xlabel("Frequency")
+        ax.set_ylabel("PSD")
+        ax.set_title("Spectral-mixture PSD \u2013 period summary")
+        ax.legend(fontsize=8, loc="upper left")
+
+        if show:
+            plt.show()
+            return None
+        return fig, ax
+
     def get_parameters(self, raw=False, transform=True):
         """
         Returns a dictionary of the parameters of the model, with the keys
