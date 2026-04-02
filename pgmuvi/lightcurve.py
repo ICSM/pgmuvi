@@ -5032,7 +5032,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         mus = params["component_frequencies"]
         sigs = params["component_frequency_scales"]
         wts = params["component_weights"]
-        for mu_k, sig_k, w_k in zip(mus, sigs, wts, strict=False):
+        for mu_k, sig_k, w_k in zip(mus, sigs, wts, strict=True):
             psd += w_k * np.exp(
                 -0.5 * ((freq_grid - mu_k) / sig_k) ** 2
             )

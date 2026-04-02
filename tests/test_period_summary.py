@@ -95,10 +95,7 @@ class TestGetPeriodSummary1D(unittest.TestCase):
         self.assertIsInstance(self.summary, dict)
 
     def test_all_required_keys_present(self):
-        missing = _REQUIRED_KEYS - set(self.summary.keys())
-        self.assertEqual(
-            missing, set(), msg=f"Missing keys: {missing}"
-        )
+        self.assertSetEqual(_REQUIRED_KEYS, set(self.summary.keys()))
 
     def test_dominant_period_positive(self):
         self.assertGreater(self.summary["dominant_period"], 0.0)
@@ -112,7 +109,7 @@ class TestGetPeriodSummary1D(unittest.TestCase):
 
     def test_q_factor_positive(self):
         q = self.summary["q_factor"]
-        self.assertTrue(np.isfinite(q) and q > 0 or np.isinf(q))
+        self.assertTrue((np.isfinite(q) and q > 0) or np.isinf(q))
 
     def test_n_significant_peaks_at_least_one(self):
         self.assertGreaterEqual(self.summary["n_significant_peaks"], 1)
@@ -160,10 +157,7 @@ class TestGetPeriodSummary2D(unittest.TestCase):
         self.assertIsInstance(self.summary, dict)
 
     def test_all_required_keys_present(self):
-        missing = _REQUIRED_KEYS - set(self.summary.keys())
-        self.assertEqual(
-            missing, set(), msg=f"Missing keys: {missing}"
-        )
+        self.assertSetEqual(_REQUIRED_KEYS, set(self.summary.keys()))
 
     def test_dominant_period_positive(self):
         self.assertGreater(self.summary["dominant_period"], 0.0)
