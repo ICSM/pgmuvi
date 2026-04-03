@@ -1214,5 +1214,114 @@ class TestInferNumMixturesFromModel(unittest.TestCase):
         plt.close(fig)
 
 
+# ---------------------------------------------------------------------------
+# 16. Single-peak plot centering
+# ---------------------------------------------------------------------------
+
+
+class TestSinglePeakPlotCentering(unittest.TestCase):
+    """Tests for single-peak plot centering in plot_period_summary()."""
+
+    def _make_single_peak_lc(self):
+        """Light curve with num_mixtures=1 so only one peak is analyzed."""
+        lc = make_simple_sinusoid_1d(
+            n_obs=40, period=100.0, noise_level=0.05,
+            t_span=500.0, seed=0,
+        )
+        lc.xtransform = None
+        lc.xdata = lc._xdata_raw
+        lc.set_model("1D", num_mixtures=1)
+        return lc
+
+    def _make_two_peak_lc(self):
+        return _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+
+    # ------------------------------------------------------------------
+
+    def test_single_peak_returns_fig_ax(self):
+        """single-peak summary produces a (fig, ax) result."""
+        import matplotlib
+        matplotlib.use("Agg")
+        lc = self._make_single_peak_lc()
+        result = lc.plot_period_summary(show=False)
+        self.assertIsNotNone(result)
+        fig, ax = result
+        import matplotlib.pyplot as plt
+        self.assertIsInstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_single_peak_figure_has_one_panel(self):
+        """Single-peak figure has exactly one axes (no full-PSD top panel)."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_single_peak_lc()
+        summary = lc.get_period_summary(n_peaks=1)
+        self.assertEqual(summary.n_peaks_analyzed, 1)
+        fig, ax = lc.plot_period_summary(summary=summary, show=False)
+        self.assertEqual(len(fig.axes), 1)
+        plt.close(fig)
+
+    def test_single_peak_dominant_freq_inside_xlim(self):
+        """Dominant frequency lies strictly inside the main panel x-limits."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_single_peak_lc()
+        summary = lc.get_period_summary(n_peaks=1)
+        f_dom = summary["dominant_frequency"]
+        fig, ax = lc.plot_period_summary(summary=summary, show=False)
+        x_lo, x_hi = ax.get_xlim()
+        self.assertGreater(f_dom, x_lo,
+                           msg=f"f_dom={f_dom} not > x_lo={x_lo}")
+        self.assertLess(f_dom, x_hi,
+                        msg=f"f_dom={f_dom} not < x_hi={x_hi}")
+        plt.close(fig)
+
+    def test_single_peak_title_mentions_dominant_peak(self):
+        """Main panel title says 'dominant peak' not 'full PSD'."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_single_peak_lc()
+        summary = lc.get_period_summary(n_peaks=1)
+        fig, ax = lc.plot_period_summary(summary=summary, show=False)
+        title = ax.get_title().lower()
+        self.assertIn("dominant peak", title)
+        self.assertNotIn("full psd", title)
+        plt.close(fig)
+
+    def test_single_peak_show_full_psd_true_adds_second_panel(self):
+        """show_full_psd=True adds a second full-range panel."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_single_peak_lc()
+        summary = lc.get_period_summary(n_peaks=1)
+        fig, ax = lc.plot_period_summary(
+            summary=summary, show=False, show_full_psd=True
+        )
+        self.assertEqual(len(fig.axes), 2)
+        plt.close(fig)
+
+    def test_multi_peak_still_has_full_psd_top_panel(self):
+        """Multi-peak summary still uses full PSD as top panel."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_two_peak_lc()
+        summary = lc.get_period_summary()
+        # num_mixtures=2, so 2 peaks => 3 panels (full + 2 zoom)
+        if summary.n_peaks_analyzed < 2:
+            self.skipTest("Not enough peaks for multi-peak test")
+        fig, ax = lc.plot_period_summary(summary=summary, show=False)
+        n_axes = len(fig.axes)
+        self.assertGreater(n_axes, 1,
+                           msg="Multi-peak should have >1 panel")
+        title = ax.get_title().lower()
+        self.assertIn("full psd", title)
+        plt.close(fig)
+
+
 if __name__ == "__main__":
     unittest.main()

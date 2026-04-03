@@ -6867,6 +6867,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         summary=None,
         show=True,
         log_freq=True,
+        show_full_psd=None,
         **kwargs,
     ):
         """Plot the period summary from :meth:`get_period_summary`.
@@ -6874,10 +6875,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Produces a matplotlib figure appropriate for the type of period
         summary:
 
+        * **Spectral-mixture PSD summary with a single analyzed peak**
+          (``PeriodSummaryResult``, ``n_peaks_analyzed == 1``): generates a
+          **single peak-centered panel** zoomed in on the dominant peak.
+          Pass ``show_full_psd=True`` to add a second full-range PSD panel.
         * **Spectral-mixture PSD summary with structured peaks**
-          (``PeriodSummaryResult``): generates a **multi-panel figure** with
-          the full PSD in the top panel and one zoomed panel per analyzed
-          peak below.  Each peak is labeled P1, P2, … with a distinct color.
+          (``PeriodSummaryResult``, ``n_peaks_analyzed > 1``): generates a
+          **multi-panel figure** with the full PSD in the top panel and one
+          zoomed panel per analyzed peak below.  Each peak is labeled
+          P1, P2, … with a distinct color.
         * **Spectral-mixture PSD summary (plain dict)**: plots the PSD curve
           with the dominant peak and dotted lines for other significant peaks.
         * **Explicit-period summary** (e.g. quasi-periodic): plots a single
@@ -6902,6 +6908,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         log_freq : bool, optional
             If ``True`` (default), plot the x-axis (frequency) on a log
             scale.  Ignored for non-periodic summaries.
+        show_full_psd : bool or None, optional
+            Controls whether a full-range PSD panel is included in the
+            single-peak case.  When ``None`` (default), a full-range panel
+            is *not* added in single-peak mode (the main panel is already
+            peak-centered) but *is* included in multi-peak mode.  Set to
+            ``True`` to force a full-range panel even in single-peak mode;
+            set to ``False`` to suppress it even in multi-peak mode.
         **kwargs
             Additional keyword arguments forwarded to
             :meth:`get_period_summary` when ``summary`` is ``None``.
@@ -6910,7 +6923,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         -------
         fig, ax : matplotlib.figure.Figure, matplotlib.axes.Axes
             Returned when ``show=False``; otherwise ``None``.
-            For the multi-panel case ``ax`` is the top (full-PSD) axes.
+            For the multi-panel case ``ax`` is the top axes.
         """
         if summary is None:
             summary = self.get_period_summary(**kwargs)
@@ -6989,134 +7002,226 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return _peak_colors[idx % len(_peak_colors)]
 
         # ------------------------------------------------------------------
-        # Multi-panel layout for structured PeriodSummaryResult
+        # Helpers shared by both structured-peak plot paths
         # ------------------------------------------------------------------
-        if has_structured_peaks and has_psd:
-            n_panels = 1 + len(structured_peaks)
-            fig, axes = plt.subplots(
-                n_panels, 1,
-                figsize=(9, 3.5 + 2.5 * len(structured_peaks)),
-                squeeze=False,
-            )
-            axes = axes[:, 0]
-            ax = axes[0]  # top panel = full PSD
+        def _zoom_window(pk, freq_grid):
+            """Return (f_win_lo, f_hi, f_zoom, p_zoom) for one peak.
 
-            freq_grid = summary["freq_grid"]
-            psd = summary["psd"]
-
-            # Top panel: full PSD ------------------------------------------
-            ax.plot(
-                freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
-            )
-            for pk in structured_peaks:
-                col = _peak_color(pk.rank)
-                ax.axvline(
-                    pk.frequency,
-                    color=col,
-                    lw=1.5,
-                    ls="--",
-                    label=(
-                        f"P{pk.rank}  period={pk.period:.4g}"
-                    ),
-                )
-                p_lo, p_hi = pk.interval_period
-                if (
-                    np.isfinite(p_lo) and np.isfinite(p_hi)
-                    and p_lo > 0 and p_hi > 0
-                ):
-                    f_lo_int = 1.0 / p_hi
-                    f_hi_int = 1.0 / p_lo
-                    if f_lo_int < f_hi_int:
-                        # Only add a legend entry for the dominant peak
-                        # so the legend shows the interval type label.
-                        _span_label = (
-                            f"{interval_label}  [{p_lo:.4g}, {p_hi:.4g}]"
-                            if pk.rank == 1
-                            else None
-                        )
-                        ax.axvspan(
-                            f_lo_int, f_hi_int,
-                            alpha=0.15, color=col,
-                            label=_span_label,
-                        )
-            if log_freq:
-                ax.set_xscale("log")
-            ax.set_ylabel("PSD")
-            ax.set_title(f"Period summary - full PSD ({method})")
-            ax.legend(fontsize=7, loc="upper left", ncol=2)
-
-            # Per-peak zoom panels ----------------------------------------
-            for pk in structured_peaks:
-                panel_ax = axes[pk.rank]  # rank is 1-indexed; axes[0]=top
-                col = _peak_color(pk.rank)
-                p_lo, p_hi = pk.interval_period
-                # Determine x-window in frequency space
-                if np.isfinite(p_lo) and np.isfinite(p_hi) and p_lo > 0:
-                    f_win_hi = 1.0 / p_lo
-                    f_win_lo = 1.0 / p_hi
-                    # Expand window by 50% on each side
-                    f_ctr = pk.frequency
-                    half = max(
-                        0.5 * (f_win_hi - f_win_lo), 0.1 * f_ctr
-                    )
-                    f_win_lo = max(f_ctr - 1.5 * half, freq_grid[0])
-                    f_win_hi = min(f_ctr + 1.5 * half, freq_grid[-1])
-                else:
-                    f_ctr = pk.frequency
-                    half = 0.2 * f_ctr
-                    f_win_lo = max(f_ctr - half, freq_grid[0])
-                    f_win_hi = min(f_ctr + half, freq_grid[-1])
-
-                # Mask frequency grid to window
+            The window is centered on the peak and expanded symmetrically
+            around it.  If the interval bounds are finite and sensible the
+            interval half-width is used as the core; otherwise a ±25%
+            fallback is applied.  A ±10% emergency fallback is used when
+            the resulting slice is too narrow.
+            """
+            f_ctr = pk.frequency
+            p_lo, p_hi = pk.interval_period
+            if (
+                np.isfinite(p_lo) and np.isfinite(p_hi)
+                and p_lo > 0 and p_hi > 0
+            ):
+                f_int_lo = 1.0 / p_hi
+                f_int_hi = 1.0 / p_lo
+                # Half-width of the interval, but at least 10% of peak freq
+                half = max(0.5 * (f_int_hi - f_int_lo), 0.1 * f_ctr)
+                # Expand by 50% symmetrically around the peak
+                f_win_lo = max(f_ctr - 1.5 * half, freq_grid[0])
+                f_win_hi = min(f_ctr + 1.5 * half, freq_grid[-1])
+            else:
+                # Fallback: ±25% symmetric window
+                half = 0.25 * f_ctr
+                f_win_lo = max(f_ctr - half, freq_grid[0])
+                f_win_hi = min(f_ctr + half, freq_grid[-1])
+            mask = (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
+            f_zoom = freq_grid[mask]
+            p_zoom = psd[mask]
+            if len(f_zoom) < 2:
+                # Emergency: ±10% around peak
+                f_win_lo = f_ctr * 0.9
+                f_win_hi = f_ctr * 1.1
                 mask = (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
                 f_zoom = freq_grid[mask]
                 p_zoom = psd[mask]
-                if len(f_zoom) < 2:
-                    # Window too narrow; use ±10% around peak
-                    f_win_lo = pk.frequency * 0.9
-                    f_win_hi = pk.frequency * 1.1
-                    mask = (
-                        (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
-                    )
-                    f_zoom = freq_grid[mask]
-                    p_zoom = psd[mask]
+            return f_win_lo, f_win_hi, f_zoom, p_zoom
 
-                panel_ax.plot(
-                    f_zoom, p_zoom, color="steelblue", lw=1.5
+        def _draw_peak_zoom(panel_ax, pk, f_win_lo, f_win_hi,
+                            f_zoom, p_zoom):
+            """Populate a zoom panel for one peak."""
+            col = _peak_color(pk.rank)
+            panel_ax.plot(f_zoom, p_zoom, color="steelblue", lw=1.5)
+            panel_ax.axvline(pk.frequency, color=col, lw=1.5, ls="--")
+            p_lo, p_hi = pk.interval_period
+            if (
+                np.isfinite(p_lo) and np.isfinite(p_hi) and p_lo > 0
+            ):
+                f_lo_int = 1.0 / p_hi
+                f_hi_int = 1.0 / p_lo
+                if (
+                    f_lo_int < f_hi_int
+                    and f_lo_int >= f_win_lo
+                    and f_hi_int <= f_win_hi
+                ):
+                    panel_ax.axvspan(
+                        f_lo_int, f_hi_int,
+                        alpha=0.25, color=col,
+                        label=(
+                            f"{interval_label}  "
+                            f"[{p_lo:.4g}, {p_hi:.4g}]"
+                        ),
+                    )
+            _ratio_str = (
+                f"  ratio={pk.period_ratio_to_primary:.3g}"
+                if pk.rank > 1
+                else ""
+            )
+            panel_ax.set_title(
+                f"P{pk.rank}  period = {pk.period:.6g}{_ratio_str}"
+            )
+            if log_freq:
+                panel_ax.set_xscale("log")
+            panel_ax.set_xlabel("Frequency")
+            panel_ax.set_ylabel("PSD")
+            panel_ax.legend(fontsize=7, loc="upper left")
+
+        # ------------------------------------------------------------------
+        # Structured PeriodSummaryResult with PSD available
+        # ------------------------------------------------------------------
+        if has_structured_peaks and has_psd:
+            freq_grid = summary["freq_grid"]
+            psd = summary["psd"]
+            _n_peaks = len(structured_peaks)
+            # Determine whether we are in single-peak mode.
+            # show_full_psd=None means: auto (False for 1 peak, True for >1).
+            _single_peak = _n_peaks == 1
+            _include_full = (
+                show_full_psd
+                if show_full_psd is not None
+                else not _single_peak
+            )
+
+            if _single_peak:
+                # -------------------------------------------------------
+                # Single-peak mode: one peak-centered panel (+ optional
+                # full-PSD panel if show_full_psd=True was requested).
+                # -------------------------------------------------------
+                pk = structured_peaks[0]
+                col = _peak_color(pk.rank)
+                f_win_lo, f_win_hi, f_zoom, p_zoom = _zoom_window(
+                    pk, freq_grid
                 )
-                panel_ax.axvline(
-                    pk.frequency, color=col, lw=1.5, ls="--"
+
+                if _include_full:
+                    fig, axes = plt.subplots(
+                        2, 1, figsize=(9, 7), squeeze=False
+                    )
+                    axes = axes[:, 0]
+                    ax = axes[0]  # main = peak-centered
+                    ax_full = axes[1]
+                else:
+                    fig, ax = plt.subplots(1, 1, figsize=(9, 4.5))
+                    ax_full = None
+
+                # Main panel: peak-centered zoom
+                _draw_peak_zoom(ax, pk, f_win_lo, f_win_hi, f_zoom, p_zoom)
+                ax.set_title(
+                    f"Period summary - dominant peak  "
+                    f"(P = {pk.period:.6g})"
                 )
-                if np.isfinite(p_lo) and np.isfinite(p_hi) and p_lo > 0:
-                    f_lo_int = 1.0 / p_hi
-                    f_hi_int = 1.0 / p_lo
+
+                if ax_full is not None:
+                    # Optional full-range panel below
+                    ax_full.plot(
+                        freq_grid, psd,
+                        color="steelblue", lw=1.5, label="PSD"
+                    )
+                    ax_full.axvline(
+                        pk.frequency, color=col, lw=1.5, ls="--",
+                        label=f"P1  period={pk.period:.4g}",
+                    )
+                    p_lo_fp, p_hi_fp = pk.interval_period
                     if (
-                        f_lo_int < f_hi_int
-                        and f_lo_int >= f_win_lo
-                        and f_hi_int <= f_win_hi
+                        np.isfinite(p_lo_fp) and np.isfinite(p_hi_fp)
+                        and p_lo_fp > 0 and p_hi_fp > 0
                     ):
-                        panel_ax.axvspan(
-                            f_lo_int, f_hi_int,
-                            alpha=0.25, color=col,
-                            label=(
+                        f_lo_int = 1.0 / p_hi_fp
+                        f_hi_int = 1.0 / p_lo_fp
+                        if f_lo_int < f_hi_int:
+                            ax_full.axvspan(
+                                f_lo_int, f_hi_int,
+                                alpha=0.15, color=col,
+                                label=(
+                                    f"{interval_label}  "
+                                    f"[{p_lo_fp:.4g}, {p_hi_fp:.4g}]"
+                                ),
+                            )
+                    if log_freq:
+                        ax_full.set_xscale("log")
+                    ax_full.set_ylabel("PSD")
+                    ax_full.set_title(
+                        f"Period summary - full PSD ({method})"
+                    )
+                    ax_full.legend(fontsize=7, loc="upper left", ncol=2)
+
+            else:
+                # -------------------------------------------------------
+                # Multi-peak mode: full PSD top + one zoom panel per peak
+                # (same as before, _include_full is True by default)
+                # -------------------------------------------------------
+                n_panels = 1 + _n_peaks
+                fig, axes = plt.subplots(
+                    n_panels, 1,
+                    figsize=(9, 3.5 + 2.5 * _n_peaks),
+                    squeeze=False,
+                )
+                axes = axes[:, 0]
+                ax = axes[0]  # top panel = full PSD
+
+                # Top panel: full PSD
+                ax.plot(
+                    freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
+                )
+                for pk in structured_peaks:
+                    col = _peak_color(pk.rank)
+                    ax.axvline(
+                        pk.frequency,
+                        color=col,
+                        lw=1.5,
+                        ls="--",
+                        label=f"P{pk.rank}  period={pk.period:.4g}",
+                    )
+                    p_lo, p_hi = pk.interval_period
+                    if (
+                        np.isfinite(p_lo) and np.isfinite(p_hi)
+                        and p_lo > 0 and p_hi > 0
+                    ):
+                        f_lo_int = 1.0 / p_hi
+                        f_hi_int = 1.0 / p_lo
+                        if f_lo_int < f_hi_int:
+                            _span_label = (
                                 f"{interval_label}  "
                                 f"[{p_lo:.4g}, {p_hi:.4g}]"
-                            ),
-                        )
-                _ratio_str = (
-                    f"  ratio={pk.period_ratio_to_primary:.3g}"
-                    if pk.rank > 1
-                    else ""
-                )
-                panel_ax.set_title(
-                    f"P{pk.rank}  period = {pk.period:.6g}"
-                    f"{_ratio_str}"
-                )
+                                if pk.rank == 1
+                                else None
+                            )
+                            ax.axvspan(
+                                f_lo_int, f_hi_int,
+                                alpha=0.15, color=col,
+                                label=_span_label,
+                            )
                 if log_freq:
-                    panel_ax.set_xscale("log")
-                panel_ax.set_xlabel("Frequency")
-                panel_ax.set_ylabel("PSD")
-                panel_ax.legend(fontsize=7, loc="upper left")
+                    ax.set_xscale("log")
+                ax.set_ylabel("PSD")
+                ax.set_title(f"Period summary - full PSD ({method})")
+                ax.legend(fontsize=7, loc="upper left", ncol=2)
+
+                # Per-peak zoom panels
+                for pk in structured_peaks:
+                    panel_ax = axes[pk.rank]  # rank 1-indexed; axes[0]=top
+                    f_win_lo, f_win_hi, f_zoom, p_zoom = _zoom_window(
+                        pk, freq_grid
+                    )
+                    _draw_peak_zoom(
+                        panel_ax, pk, f_win_lo, f_win_hi, f_zoom, p_zoom
+                    )
 
             fig.tight_layout()
             if show:
