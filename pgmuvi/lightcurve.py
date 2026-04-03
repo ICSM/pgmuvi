@@ -6383,7 +6383,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         dominant_period = 1.0 / dominant_freq
 
         peak_objects = []
-        for rank_0, (pidx, prom) in enumerate(
+        for rank_idx, (pidx, prom) in enumerate(
             zip(selected_indices, selected_proms, strict=True)
         ):
             info = self._characterize_peak_basin(
@@ -6398,7 +6398,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ratio = p_pk / dominant_period if dominant_period > 0 else 1.0
             peak_objects.append(
                 PeriodPeakResult(
-                    rank=rank_0 + 1,
+                    rank=rank_idx + 1,
                     frequency=f_pk,
                     period=p_pk,
                     height=info["height"],
@@ -6567,13 +6567,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Relative height threshold for significant peaks (SM backend).
             Default 0.2.
         uncertainty : str, optional
-            Uncertainty method.  ``"peak_width"`` (default, legacy) uses the
+            Uncertainty method.  ``"peak_width"`` (legacy) uses the
             half-maximum interval of the dominant PSD peak.  ``"peak_mass"``
-            (recommended for spectral-mixture models) uses an equal-tail
-            68% mass interval within the dominant peak basin, which is more
-            robust for asymmetric or slowly decaying peaks.  Only the SM
-            backend and separable-2D SM backends honour this parameter;
-            other backends always use their native interval method.
+            (default, recommended for spectral-mixture models) uses an
+            equal-tail 68% mass interval within the dominant peak basin,
+            which is more robust for asymmetric or slowly decaying peaks.
+            Only the SM backend and separable-2D SM backends honour this
+            parameter; other backends always use their native interval method.
+        n_peaks : int or None, optional
+            Number of peaks to analyze and return in ``peaks``.  If ``None``
+            (default), defaults to ``_fit_num_mixtures_effective`` when that
+            attribute is available (i.e. after a call to :meth:`fit` or
+            :meth:`set_model`), otherwise all detected peaks are returned.
+            Pass an explicit integer to override.
+        mass_level : float, optional
+            Fraction of basin mass to enclose in the equal-tail interval
+            (``"peak_mass"`` mode only).  Default 0.68 (~1 sigma).
+        classify_lsp : bool, optional
+            If ``True``, flag peaks whose period ratio to the dominant peak
+            falls within the Long Secondary Period range (5-15) and whose
+            basin area fraction exceeds 0.05.  Default ``False``.
 
         Returns
         -------

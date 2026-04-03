@@ -1116,16 +1116,19 @@ class TestMultiPeakPSDAnalysis(unittest.TestCase):
     def test_write_json_method(self):
         """write_json writes valid JSON that round-trips."""
         import json
-        import os
-        path = "test_write_json_output.json"
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
         try:
             self.summary.write_json(path)
-            self.assertTrue(os.path.exists(path))
             with open(path) as fh:
                 data = json.load(fh)
             self.assertIn("dominant_period", data)
             self.assertIn("method", data)
         finally:
+            import os
             if os.path.exists(path):
                 os.remove(path)
 
