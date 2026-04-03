@@ -5924,7 +5924,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         min_freq=None,
         max_freq=None,
         peak_threshold_rel=0.2,
-        uncertainty="peak_width",
+        uncertainty="peak_mass",
     ):
         """Return the PSD-based period summary for a spectral-mixture model.
 
@@ -6252,7 +6252,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         min_freq=None,
         max_freq=None,
         peak_threshold_rel=0.2,
-        uncertainty="peak_width",
+        uncertainty="peak_mass",
     ):
         """Return a literature-comparable period summary for the fitted model.
 
