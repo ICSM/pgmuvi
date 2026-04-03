@@ -5506,6 +5506,132 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return summary
 
     @staticmethod
+    def _build_frequency_grid(min_freq, max_freq, n_grid, spacing="log"):
+        """Build a 1-D positive-frequency evaluation grid.
+
+        Parameters
+        ----------
+        min_freq : float
+            Lowest frequency.  Must be strictly positive.
+        max_freq : float
+            Highest frequency.  Must be greater than ``min_freq``.
+        n_grid : int
+            Number of grid points.
+        spacing : str, optional
+            ``"log"`` (default) for logarithmically spaced points;
+            ``"linear"`` for linearly spaced points.  The spectral-mixture
+            summary uses ``"log"`` to ensure adequate low-frequency
+            resolution across wide dynamic ranges.
+
+        Returns
+        -------
+        freq_grid : numpy.ndarray
+            1-D array of ``n_grid`` frequencies in ``[min_freq, max_freq]``.
+
+        Raises
+        ------
+        ValueError
+            If ``min_freq <= 0`` when ``spacing="log"``.
+        """
+        min_freq = float(min_freq)
+        max_freq = float(max_freq)
+        n_grid = int(n_grid)
+
+        if max_freq <= min_freq:
+            max_freq = min_freq * 2.0
+
+        if spacing == "log":
+            if min_freq <= 0:
+                raise ValueError(
+                    f"min_freq must be > 0 for log spacing, "
+                    f"got {min_freq!r}"
+                )
+            return np.logspace(
+                np.log10(min_freq), np.log10(max_freq), n_grid
+            )
+        return np.linspace(min_freq, max_freq, n_grid)
+
+    @staticmethod
+    def _refine_peak_region(
+        freq_grid, psd, params, dominant_idx,
+        f_left_approx, f_right_approx,
+        pad_log_factor=0.2, n_refine=None,
+    ):
+        """Refine the half-max crossing estimate with a denser local grid.
+
+        Builds a fine log-spaced grid over a padded window around the
+        approximate half-max interval ``[f_left_approx, f_right_approx]``,
+        recomputes the PSD, re-finds the dominant peak, and walks the new
+        PSD to locate the bracketing indices for both crossings.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Global log-spaced frequency grid (used for fallback bounds).
+        psd : numpy.ndarray
+            PSD on ``freq_grid``.
+        params : dict
+            Output of :meth:`_extract_sm_params`.
+        dominant_idx : int
+            Index of the dominant peak on ``freq_grid``.
+        f_left_approx, f_right_approx : float
+            Approximate left and right half-max crossing frequencies from
+            the global grid.
+        pad_log_factor : float, optional
+            Fractional padding in log space on each side.  Default 0.2
+            (i.e. widen the local window by 20 % in log units on each side).
+        n_refine : int or None, optional
+            Number of points in the local grid.  Defaults to
+            ``max(4 * len(freq_grid), 2000)``.
+
+        Returns
+        -------
+        freq_fine : numpy.ndarray
+            Dense local frequency grid.
+        psd_fine : numpy.ndarray
+            PSD on ``freq_fine``.
+        dominant_idx_fine : int
+            Index of the dominant peak on ``freq_fine``.
+        """
+        from scipy.signal import find_peaks
+
+        if n_refine is None:
+            n_refine = max(4 * len(freq_grid), 2000)
+        n_refine = int(n_refine)
+
+        dom_freq = float(freq_grid[dominant_idx])
+
+        # Pad in log space on both sides
+        log_lo = np.log10(f_left_approx) - pad_log_factor
+        log_hi = np.log10(f_right_approx) + pad_log_factor
+
+        # Clamp within the global grid bounds
+        log_lo = max(log_lo, np.log10(float(freq_grid[0])))
+        log_hi = min(log_hi, np.log10(float(freq_grid[-1])))
+
+        # Ensure the dominant frequency is bracketed
+        if np.log10(dom_freq) < log_lo:
+            log_lo = np.log10(dom_freq) - pad_log_factor
+        if np.log10(dom_freq) > log_hi:
+            log_hi = np.log10(dom_freq) + pad_log_factor
+
+        if log_hi <= log_lo:
+            log_hi = log_lo + 0.1
+
+        freq_fine = np.logspace(log_lo, log_hi, n_refine)
+        psd_fine = Lightcurve._sm_psd_on_grid(freq_fine, params)
+
+        peaks_fine, _ = find_peaks(psd_fine)
+        if len(peaks_fine) == 0:
+            dominant_idx_fine = int(np.argmax(psd_fine))
+        else:
+            dominant_idx_fine = int(
+                peaks_fine[np.argmax(psd_fine[peaks_fine])]
+            )
+
+        return freq_fine, psd_fine, dominant_idx_fine
+
+    @staticmethod
     def _interpolate_halfmax_crossing(freq_grid, psd, idx, direction, half_max):
         """Linearly interpolate the frequency where PSD crosses ``half_max``.
 
@@ -5581,6 +5707,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         multiplying ``max_freq`` by ``expansion_factor``.  The dominant peak
         position is re-evaluated after each expansion to remain consistent.
 
+        The grid is always rebuilt as a **log-spaced** grid via
+        :meth:`_build_frequency_grid` to ensure adequate low-frequency
+        resolution across wide dynamic ranges.
+
         Parameters
         ----------
         freq_grid : numpy.ndarray
@@ -5636,7 +5766,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if right_truncated:
                 max_freq = max_freq * expansion_factor
 
-            freq_grid = np.linspace(min_freq, max_freq, n_grid)
+            freq_grid = Lightcurve._build_frequency_grid(
+                min_freq, max_freq, n_grid, spacing="log"
+            )
             psd = Lightcurve._sm_psd_on_grid(freq_grid, params)
 
             # Re-find dominant peak on the new grid
@@ -5672,16 +5804,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         The half-maximum interval is computed robustly:
 
-        1. An initial frequency grid is built from heuristic bounds
-           (``min_freq = 1/T_span``, ``max_freq = max(f_k + 5*sigma_k)``).
+        1. An initial **log-spaced** frequency grid is built from heuristic
+           bounds (``min_freq = 1/T_span``,
+           ``max_freq = max(f_k + 5*sigma_k)``) via
+           :meth:`_build_frequency_grid`.  Log spacing ensures adequate
+           resolution at low frequencies when the range spans many decades.
         2. If either half-maximum crossing lies outside the grid,
            the grid is expanded adaptively (up to 10 iterations, doubling
            the relevant edge each time) via
-           :meth:`_expand_psd_grid_until_contained`.
+           :meth:`_expand_psd_grid_until_contained`.  Each rebuilt grid is
+           also log-spaced.
         3. The crossing frequencies are estimated by linear interpolation
            between the two bracketing grid points via
            :meth:`_interpolate_halfmax_crossing`, rather than being
            snapped to the nearest grid point.
+        4. A local refinement pass (:meth:`_refine_peak_region`) builds a
+           denser log-spaced grid around the approximate half-max interval
+           and recomputes the crossings, improving accuracy further.
 
         If expansion fails to contain both crossings, the summary still
         returns the best available estimate and records a warning in
@@ -5729,7 +5868,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         min_freq = max(float(min_freq), 1e-12)
         max_freq = max(float(max_freq), min_freq * 2.0)
 
-        freq_grid = np.linspace(min_freq, max_freq, n_grid)
+        freq_grid = self._build_frequency_grid(
+            min_freq, max_freq, n_grid, spacing="log"
+        )
         psd = self._sm_psd_on_grid(freq_grid, params)
 
         from scipy.signal import find_peaks
@@ -5769,13 +5910,62 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         while right_idx < len(psd) - 1 and psd[right_idx] >= half_max:
             right_idx += 1
 
-        # -- interpolate to get accurate crossing frequencies ---------------
-        f_left, left_interpolated = self._interpolate_halfmax_crossing(
+        # -- interpolate to get accurate crossing frequencies on global grid -
+        f_left_global, left_interpolated = self._interpolate_halfmax_crossing(
             freq_grid, psd, left_idx, "left", half_max
         )
-        f_right, right_interpolated = self._interpolate_halfmax_crossing(
+        f_right_global, right_interpolated = self._interpolate_halfmax_crossing(
             freq_grid, psd, right_idx, "right", half_max
         )
+
+        # -- local refinement: build a denser log grid around the interval --
+        refined = False
+        f_left = f_left_global
+        f_right = f_right_global
+        if (
+            not left_truncated
+            and not right_truncated
+            and f_left_global > 0
+            and f_right_global > f_left_global
+        ):
+            try:
+                freq_fine, psd_fine, dom_idx_fine = self._refine_peak_region(
+                    freq_grid, psd, params, dominant_idx,
+                    f_left_global, f_right_global,
+                )
+                peak_height_fine = float(psd_fine[dom_idx_fine])
+                half_max_fine = 0.5 * peak_height_fine
+
+                left_idx_fine = dom_idx_fine
+                while left_idx_fine > 0 and psd_fine[left_idx_fine] >= half_max_fine:
+                    left_idx_fine -= 1
+                right_idx_fine = dom_idx_fine
+                while (
+                    right_idx_fine < len(psd_fine) - 1
+                    and psd_fine[right_idx_fine] >= half_max_fine
+                ):
+                    right_idx_fine += 1
+
+                f_left_fine, li_fine = self._interpolate_halfmax_crossing(
+                    freq_fine, psd_fine, left_idx_fine, "left", half_max_fine
+                )
+                f_right_fine, ri_fine = self._interpolate_halfmax_crossing(
+                    freq_fine, psd_fine, right_idx_fine, "right", half_max_fine
+                )
+                # Accept the refined result only if both sides interpolated
+                # properly and the refined peak is still inside the window
+                if (
+                    li_fine and ri_fine
+                    and f_left_fine > 0
+                    and f_right_fine > f_left_fine
+                ):
+                    f_left = f_left_fine
+                    f_right = f_right_fine
+                    dominant_freq = float(freq_fine[dom_idx_fine])
+                    dominant_period = 1.0 / dominant_freq
+                    refined = True
+            except Exception:  # fallback: use global grid result
+                pass  # Fall back to global-grid result
 
         fwhm_freq = f_right - f_left
 
@@ -5805,7 +5995,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # -- build notes string (collect fragments then join) ---------------
         _note_parts = [
             "Uncertainty is a half-maximum PSD-width proxy, "
-            "not a posterior credible interval."
+            "not a posterior credible interval.  "
+            "PSD evaluated on a log-spaced frequency grid."
         ]
         if n_expansions > 0:
             _note_parts.append(
@@ -5822,6 +6013,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"  WARNING: half-maximum crossing on the "
                 f"{' and '.join(_sides)} side(s) may still be "
                 "truncated; width estimate is a lower bound."
+            )
+        if refined:
+            _note_parts.append(
+                "  Local log-spaced refinement applied around the peak."
             )
         if not left_interpolated or not right_interpolated:
             _interp_sides = []

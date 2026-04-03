@@ -697,5 +697,183 @@ class TestSmPsdGridExpansion(unittest.TestCase):
         self.assertIn("truncat", summary["notes"].lower())
 
 
+# ---------------------------------------------------------------------------
+# 12. Log-spaced frequency grid and local refinement
+# ---------------------------------------------------------------------------
+
+
+class TestSmPsdLogGrid(unittest.TestCase):
+    """Tests that the SM backend uses a log-spaced grid and local refinement."""
+
+    def _make_sm_lc(self):
+        return _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+
+    # ------------------------------------------------------------------
+    # Helper: build an _extract_sm_params-compatible dict with one broad
+    # low-frequency component (spanning multiple decades).
+    # ------------------------------------------------------------------
+
+    def _broad_low_freq_params(self, center_freq=1e-3, scale_freq=3e-4):
+        return {
+            "component_frequencies": np.array([center_freq]),
+            "component_periods": np.array([1.0 / center_freq]),
+            "component_frequency_scales": np.array([scale_freq]),
+            "component_period_scales": np.array([np.nan]),
+            "component_weights": np.array([1.0]),
+        }
+
+    # ------------------------------------------------------------------
+
+    def test_build_frequency_grid_log(self):
+        """_build_frequency_grid returns a log-spaced grid."""
+        lc = self._make_sm_lc()
+        grid = lc._build_frequency_grid(1e-4, 1.0, 200, spacing="log")
+        self.assertEqual(len(grid), 200)
+        self.assertAlmostEqual(float(grid[0]), 1e-4, places=15)
+        self.assertAlmostEqual(float(grid[-1]), 1.0, places=15)
+        # Check approximately constant ratio between consecutive points
+        ratios = grid[1:] / grid[:-1]
+        self.assertAlmostEqual(float(ratios.max()), float(ratios.min()),
+                               places=8)
+
+    def test_build_frequency_grid_linear(self):
+        """_build_frequency_grid returns a linear-spaced grid when asked."""
+        lc = self._make_sm_lc()
+        grid = lc._build_frequency_grid(0.001, 1.0, 100, spacing="linear")
+        self.assertEqual(len(grid), 100)
+        diffs = np.diff(grid)
+        self.assertAlmostEqual(float(diffs.max()), float(diffs.min()),
+                               places=8)
+
+    def test_build_frequency_grid_raises_on_nonpositive_min_log(self):
+        """_build_frequency_grid raises ValueError for min_freq <= 0 with log."""
+        lc = self._make_sm_lc()
+        with self.assertRaises(ValueError):
+            lc._build_frequency_grid(0.0, 1.0, 100, spacing="log")
+
+    def test_sm_summary_freq_grid_is_log_spaced(self):
+        """The returned freq_grid from get_period_summary is log-spaced."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary()
+        freq_grid = summary["freq_grid"]
+        self.assertGreater(len(freq_grid), 1)
+        # All values must be strictly positive
+        self.assertTrue(np.all(freq_grid > 0))
+        # Check ratio of consecutive points is approximately constant
+        # (log spacing), NOT linearly spaced.
+        ratios = freq_grid[1:] / freq_grid[:-1]
+        # For log spacing the ratio should be nearly constant; std/mean < 1e-3
+        ratio_cv = float(ratios.std() / ratios.mean())
+        self.assertLess(ratio_cv, 1e-3)
+
+    def test_sm_notes_mention_log_grid(self):
+        """Summary notes mention log-spaced grid."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary()
+        self.assertIn("log", summary["notes"].lower())
+
+    def test_sm_notes_mention_refinement(self):
+        """Summary notes mention local refinement when it was applied.
+
+        Refinement is only applied when both half-max crossings are contained.
+        We verify that on a well-contained summary the notes mention refinement,
+        OR that the notes always mention the log-spaced grid (which is always
+        present even if refinement was skipped due to truncation).
+        """
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary()
+        notes = summary["notes"].lower()
+        # The notes must always mention log-spacing
+        self.assertIn("log", notes)
+        # If no truncation the notes should also mention refinement
+        period_lo, period_hi = summary["period_interval_fwhm_like"]
+        if "truncat" not in notes and period_lo is not None:
+            self.assertIn("refine", notes)
+
+    def test_log_grid_better_than_linear_for_broad_peak(self):
+        """Log-spaced grid resolves broad low-freq peak; linear cannot.
+
+        We build a broad single-component SM PSD with center at 1e-3 and
+        scale 3e-4 (peak spans ~1e-4 to ~2e-3, i.e. one decade).
+        We then compare FWHM estimates from a log grid vs a linear grid of
+        the same size.  The log grid should give a finite, non-trivial FWHM;
+        the linear grid's estimate should be less accurate or potentially
+        zero/infinite due to poor low-freq sampling.
+        """
+        lc = self._make_sm_lc()
+        params = self._broad_low_freq_params(center_freq=1e-3, scale_freq=3e-4)
+
+        # Build a wide-range grid in both spacings
+        min_f = 1e-5
+        max_f = 1e-1
+        n = 500
+
+        log_grid = lc._build_frequency_grid(min_f, max_f, n, spacing="log")
+        lin_grid = lc._build_frequency_grid(min_f, max_f, n, spacing="linear")
+
+        psd_log = lc._sm_psd_on_grid(log_grid, params)
+        psd_lin = lc._sm_psd_on_grid(lin_grid, params)
+
+        peak_log = int(np.argmax(psd_log))
+        peak_lin = int(np.argmax(psd_lin))
+
+        half_max_log = 0.5 * float(psd_log[peak_log])
+        half_max_lin = 0.5 * float(psd_lin[peak_lin])
+
+        # Count samples above half_max for each grid
+        n_above_log = int(np.sum(psd_log >= half_max_log))
+        n_above_lin = int(np.sum(psd_lin >= half_max_lin))
+
+        # The log grid should resolve the peak with many points;
+        # the linear grid undersamples it on the low-freq side.
+        self.assertGreater(n_above_log, n_above_lin,
+                           "log grid should resolve the peak with more points")
+
+    def test_refine_peak_region_returns_denser_grid(self):
+        """_refine_peak_region returns a local grid denser than the global."""
+        lc = self._make_sm_lc()
+        params = self._broad_low_freq_params()
+        n_global = 200
+        global_grid = lc._build_frequency_grid(1e-5, 0.1, n_global,
+                                               spacing="log")
+        global_psd = lc._sm_psd_on_grid(global_grid, params)
+        peak_idx = int(np.argmax(global_psd))
+
+        freq_fine, psd_fine, _ = lc._refine_peak_region(
+            global_grid, global_psd, params, peak_idx,
+            f_left_approx=5e-4, f_right_approx=2e-3,
+        )
+        self.assertGreater(len(freq_fine), n_global)
+        # Fine grid must also be strictly positive and log-spaced
+        self.assertTrue(np.all(freq_fine > 0))
+        ratios = freq_fine[1:] / freq_fine[:-1]
+        self.assertLess(float(ratios.std() / ratios.mean()), 1e-3)
+
+    def test_log_grid_expansion_does_not_crash(self):
+        """Adaptive expansion with log grid completes without error."""
+        lc = self._make_sm_lc()
+        params = self._broad_low_freq_params(center_freq=1e-3, scale_freq=3e-4)
+        # Very narrow initial grid => forces expansion
+        narrow_grid = lc._build_frequency_grid(9e-4, 1.1e-3, 100,
+                                               spacing="log")
+        psd_init = lc._sm_psd_on_grid(narrow_grid, params)
+        dom_idx = int(np.argmax(psd_init))
+        half_max = 0.5 * float(psd_init[dom_idx])
+
+        (
+            freq_out, psd_out, dom_out,
+            left_trunc, right_trunc, n_exp,
+        ) = lc._expand_psd_grid_until_contained(
+            narrow_grid, psd_init, params, dom_idx, half_max,
+            max_expansions=10, expansion_factor=2.0, n_grid=200,
+        )
+        # Grid must still be log-spaced after expansion
+        self.assertTrue(np.all(freq_out > 0))
+        ratios = freq_out[1:] / freq_out[:-1]
+        self.assertLess(float(ratios.std() / ratios.mean()), 1e-3)
+        # At least some expansions should have occurred
+        self.assertGreater(n_exp, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
