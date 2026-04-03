@@ -7005,7 +7005,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # Helpers shared by both structured-peak plot paths
         # ------------------------------------------------------------------
         def _zoom_window(pk, freq_grid):
-            """Return (f_win_lo, f_hi, f_zoom, p_zoom) for one peak.
+            """Return (f_win_lo, f_win_hi, f_zoom, p_zoom) for one peak.
 
             The window is centered on the peak and expanded symmetrically
             around it.  If the interval bounds are finite and sensible the
