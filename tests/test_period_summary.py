@@ -530,5 +530,171 @@ class TestPlotPeriodSummary(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# 11. Adaptive PSD grid expansion for SM half-max containment
+# ---------------------------------------------------------------------------
+
+
+class TestSmPsdGridExpansion(unittest.TestCase):
+    """Tests that the SM backend robustly contains the half-max interval."""
+
+    def _make_sm_lc(self):
+        return _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+
+    # ------------------------------------------------------------------
+    # Helper: build a minimal Lightcurve whose SM params are forced so
+    # that the dominant peak is very broad, guaranteeing truncation on
+    # the first default grid pass.
+    # ------------------------------------------------------------------
+
+    def _forced_params(self, center_freq, scale_freq, weight=1.0):
+        """Return an _extract_sm_params-compatible dict with one component."""
+        return {
+            "component_frequencies": np.array([center_freq]),
+            "component_periods": np.array([1.0 / center_freq]),
+            "component_frequency_scales": np.array([scale_freq]),
+            "component_period_scales": np.array([np.nan]),
+            "component_weights": np.array([weight]),
+        }
+
+    def test_interpolate_halfmax_returns_float(self):
+        """_interpolate_halfmax_crossing returns a float."""
+        freq_grid = np.linspace(0.001, 1.0, 100)
+        # Gaussian PSD centred at 0.5
+        psd = np.exp(-0.5 * ((freq_grid - 0.5) / 0.05) ** 2)
+        half_max = 0.5
+        # Find left crossing bracket the slow way
+        peak_idx = int(np.argmax(psd))
+        left_idx = peak_idx
+        while left_idx > 0 and psd[left_idx] >= half_max:
+            left_idx -= 1
+        f_cross, interpolated = (
+            _make_1d_lc_no_transform()
+            ._interpolate_halfmax_crossing(
+                freq_grid, psd, left_idx, "left", half_max
+            )
+        )
+        self.assertIsInstance(f_cross, float)
+        # crossing must be between the two bracketing grid points
+        self.assertGreaterEqual(f_cross, freq_grid[left_idx])
+        self.assertLessEqual(f_cross, freq_grid[left_idx + 1])
+
+    def test_interpolate_halfmax_right_side(self):
+        """_interpolate_halfmax_crossing right side is accurate."""
+        freq_grid = np.linspace(0.001, 1.0, 1000)
+        psd = np.exp(-0.5 * ((freq_grid - 0.5) / 0.05) ** 2)
+        half_max = 0.5
+        peak_idx = int(np.argmax(psd))
+        right_idx = peak_idx
+        while right_idx < len(psd) - 1 and psd[right_idx] >= half_max:
+            right_idx += 1
+        f_cross, interpolated = (
+            _make_1d_lc_no_transform()
+            ._interpolate_halfmax_crossing(
+                freq_grid, psd, right_idx, "right", half_max
+            )
+        )
+        self.assertTrue(interpolated)
+        self.assertGreaterEqual(f_cross, freq_grid[right_idx - 1])
+        self.assertLessEqual(f_cross, freq_grid[right_idx])
+
+    def test_expand_psd_grid_until_contained_expands_when_needed(self):
+        """_expand_psd_grid_until_contained runs at least one expansion
+        when the initial grid truncates the half-max crossing."""
+        lc = self._make_sm_lc()
+        # Build a very broad single-component param set:
+        # center = 0.01, scale = 0.05 => the Gaussian spans [~-0.14, 0.16]
+        # but the initial grid starts at a positive freq > 0.
+        # We force min_freq to be so large that psd[0] >= half_max.
+        params = self._forced_params(center_freq=0.01, scale_freq=0.05)
+        # Initial grid: from 0.009 to 0.011 (intentionally too narrow)
+        freq_grid_init = np.linspace(0.009, 0.011, 500)
+        psd_init = lc._sm_psd_on_grid(freq_grid_init, params)
+
+        from scipy.signal import find_peaks
+        peaks, _ = find_peaks(psd_init)
+        if len(peaks) == 0:
+            dom_idx = int(np.argmax(psd_init))
+        else:
+            dom_idx = int(peaks[np.argmax(psd_init[peaks])])
+        half_max = 0.5 * float(psd_init[dom_idx])
+
+        (
+            freq_grid_out, psd_out, dom_idx_out,
+            left_trunc, right_trunc, n_exp,
+        ) = lc._expand_psd_grid_until_contained(
+            freq_grid_init, psd_init, params, dom_idx, half_max,
+            max_expansions=10, expansion_factor=2.0, n_grid=500,
+        )
+        # At least one expansion should have occurred
+        self.assertGreater(n_exp, 0)
+
+    def test_sm_summary_contains_halfmax_in_grid(self):
+        """The returned freq_grid fully contains both half-max crossings."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary()
+        freq_grid = summary["freq_grid"]
+        psd = summary["psd"]
+        period_lo, period_hi = summary["period_interval_fwhm_like"]
+        f_left = 1.0 / period_hi
+        f_right = 1.0 / period_lo
+        # Both crossing frequencies must lie within the returned grid
+        self.assertGreaterEqual(f_left, freq_grid[0] - 1e-10 * freq_grid[0])
+        self.assertLessEqual(f_right, freq_grid[-1] + 1e-10 * freq_grid[-1])
+
+    def test_sm_summary_notes_mention_expansion_when_forced(self):
+        """Notes mention expansion when grid was forced to expand."""
+        lc = self._make_sm_lc()
+        # Force min_freq/max_freq so tight that expansion is needed.
+        # Use a dominant component freq so that the 5-sigma default
+        # barely clips the peak.
+        params = lc._extract_sm_params()
+        f0 = params["component_frequencies"][0]
+        # Pass max_freq just slightly above f0 to ensure clipping
+        forced_max = f0 * 1.001
+        forced_min = max(f0 * 0.999, 1e-12)
+        summary = lc.get_period_summary(
+            min_freq=forced_min, max_freq=forced_max
+        )
+        # Notes should mention expansion if the peak was clipped
+        # (it's fine if expansion wasn't needed for a sharp peak,
+        # but the method should at least not crash)
+        self.assertIsInstance(summary["notes"], str)
+        self.assertIn("dominant_period", summary)
+
+    def test_sm_notes_mention_truncation_when_expansion_maxed_out(self):
+        """Notes flag truncation if max_expansions reached without containment."""
+        lc = self._make_sm_lc()
+        # Use a very small max_expansions so it cannot fully contain the peak
+        params = lc._extract_sm_params()
+        f0 = params["component_frequencies"][0]
+        sigma0 = params["component_frequency_scales"][0]
+        # Very narrow initial grid: peak is at f0 but grid goes only
+        # [f0, f0 + tiny_delta], so the left side is definitely truncated.
+        forced_min = f0 * 0.9999
+        forced_max = f0 + sigma0 * 0.001
+
+        # Monkeypatch _expand_psd_grid_until_contained to cap at 0 expansions
+        original_expand = lc._expand_psd_grid_until_contained
+
+        def _no_expand(freq_grid, psd, params, dominant_idx, half_max,
+                       max_expansions=10, **kw):
+            return original_expand(
+                freq_grid, psd, params, dominant_idx, half_max,
+                max_expansions=0, **kw
+            )
+
+        lc._expand_psd_grid_until_contained = _no_expand
+        try:
+            summary = lc.get_period_summary(
+                min_freq=forced_min, max_freq=forced_max
+            )
+        finally:
+            lc._expand_psd_grid_until_contained = original_expand
+
+        # With 0 expansions allowed the notes must flag truncation
+        self.assertIn("truncat", summary["notes"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()

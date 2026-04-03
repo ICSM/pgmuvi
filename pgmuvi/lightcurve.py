@@ -5505,6 +5505,157 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         return summary
 
+    @staticmethod
+    def _interpolate_halfmax_crossing(freq_grid, psd, idx, direction, half_max):
+        """Linearly interpolate the frequency where PSD crosses ``half_max``.
+
+        Given that ``psd[idx]`` is the last point **above** (or at) the
+        half-maximum on one side of the dominant peak, and ``psd[idx ±1]``
+        is the first point **below** it, return the linearly interpolated
+        crossing frequency.
+
+        If the neighbouring index is out of range (the crossing was at the
+        very boundary of the grid), the exact grid frequency at ``idx`` is
+        returned as a fallback.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            1-D frequency evaluation grid.
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        idx : int
+            Index of the last point whose PSD is still at or above
+            ``half_max`` on the side being interpolated.
+        direction : str
+            ``"left"`` or ``"right"``.  Determines which neighbour to use
+            for interpolation (``idx - 1`` for left, ``idx + 1`` for right).
+        half_max : float
+            The half-maximum level, i.e. ``0.5 * peak_height``.
+
+        Returns
+        -------
+        f_crossing : float
+            Interpolated crossing frequency.
+        interpolated : bool
+            ``True`` if a proper bracketed interpolation was performed;
+            ``False`` if the boundary fallback was used.
+        """
+        if direction == "left":
+            neighbor = idx - 1
+        else:
+            neighbor = idx + 1
+
+        if neighbor < 0 or neighbor >= len(freq_grid):
+            # Boundary fallback: can't interpolate, return the grid point
+            return float(freq_grid[idx]), False
+
+        f_a = float(freq_grid[idx])
+        f_b = float(freq_grid[neighbor])
+        psd_a = float(psd[idx])
+        psd_b = float(psd[neighbor])
+
+        # Safeguard: if psd values don't bracket half_max (shouldn't happen
+        # given how idx was found, but guard against numerical edge cases)
+        if psd_a == psd_b:
+            return f_a, False
+
+        # Linear interpolation: half_max = psd_a + t * (psd_b - psd_a)
+        t = (half_max - psd_a) / (psd_b - psd_a)
+        f_crossing = f_a + t * (f_b - f_a)
+        return float(f_crossing), True
+
+    @staticmethod
+    def _expand_psd_grid_until_contained(
+        freq_grid, psd, params, dominant_idx, half_max,
+        max_expansions=10, expansion_factor=2.0, n_grid=5000,
+    ):
+        """Expand the frequency grid until both half-max crossings are inside.
+
+        Starting from the already-computed ``freq_grid`` / ``psd``, test
+        whether the half-maximum crossings of the dominant PSD peak are
+        contained within the grid.  If the left crossing is at the first
+        grid point (``psd[0] >= half_max``) the low end of the grid is
+        extended by dividing ``min_freq`` by ``expansion_factor``.  If the
+        right crossing is at the last grid point the high end is extended by
+        multiplying ``max_freq`` by ``expansion_factor``.  The dominant peak
+        position is re-evaluated after each expansion to remain consistent.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Initial evaluation grid.
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        params : dict
+            Output of :meth:`_extract_sm_params`, passed to
+            :meth:`_sm_psd_on_grid` for PSD recomputation.
+        dominant_idx : int
+            Index of the dominant PSD peak on the *current* grid.
+        half_max : float
+            ``0.5 * psd[dominant_idx]``.
+        max_expansions : int, optional
+            Maximum number of expansion iterations.  Default 10.
+        expansion_factor : float, optional
+            Multiplicative factor for grid edge expansion.  Default 2.0.
+        n_grid : int, optional
+            Number of grid points to use when rebuilding.  Default 5000.
+
+        Returns
+        -------
+        freq_grid : numpy.ndarray
+            Possibly expanded frequency grid.
+        psd : numpy.ndarray
+            PSD values on the returned ``freq_grid``.
+        dominant_idx : int
+            Index of the dominant peak on the returned grid.
+        left_truncated : bool
+            ``True`` if the left half-max crossing is still at the boundary
+            after all expansion attempts.
+        right_truncated : bool
+            ``True`` if the right half-max crossing is still at the boundary.
+        n_expansions : int
+            Number of expansions that were performed.
+        """
+        from scipy.signal import find_peaks
+
+        min_freq = float(freq_grid[0])
+        max_freq = float(freq_grid[-1])
+        n_expansions = 0
+
+        for _ in range(max_expansions):
+            left_truncated = psd[0] >= half_max
+            right_truncated = psd[-1] >= half_max
+
+            if not left_truncated and not right_truncated:
+                break  # Both crossings are inside the grid
+
+            if left_truncated:
+                min_freq = max(min_freq / expansion_factor, 1e-12)
+            if right_truncated:
+                max_freq = max_freq * expansion_factor
+
+            freq_grid = np.linspace(min_freq, max_freq, int(n_grid))
+            psd = Lightcurve._sm_psd_on_grid(freq_grid, params)
+
+            # Re-find dominant peak on the new grid
+            peaks, _ = find_peaks(psd)
+            if len(peaks) == 0:
+                dominant_idx = int(np.argmax(psd))
+            else:
+                dominant_idx = int(peaks[np.argmax(psd[peaks])])
+            half_max = 0.5 * float(psd[dominant_idx])
+
+            n_expansions += 1
+
+        left_truncated = bool(psd[0] >= half_max)
+        right_truncated = bool(psd[-1] >= half_max)
+
+        return (
+            freq_grid, psd, dominant_idx,
+            left_truncated, right_truncated, n_expansions,
+        )
+
     def _get_sm_period_summary(
         self,
         n_grid=5000,
@@ -5518,13 +5669,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         (or the time sub-kernel of a separable 2D model) is a
         :class:`~gpytorch.kernels.SpectralMixtureKernel`.
 
+        The half-maximum interval is computed robustly:
+
+        1. An initial frequency grid is built from heuristic bounds
+           (``min_freq = 1/T_span``, ``max_freq = max(f_k + 5*sigma_k)``).
+        2. If either half-maximum crossing lies outside the grid,
+           the grid is expanded adaptively (up to 10 iterations, doubling
+           the relevant edge each time) via
+           :meth:`_expand_psd_grid_until_contained`.
+        3. The crossing frequencies are estimated by linear interpolation
+           between the two bracketing grid points via
+           :meth:`_interpolate_halfmax_crossing`, rather than being
+           snapped to the nearest grid point.
+
+        If expansion fails to contain both crossings, the summary still
+        returns the best available estimate and records a warning in
+        ``notes``.
+
         Parameters
         ----------
         n_grid : int, optional
             Number of points in the positive-frequency evaluation grid.
         min_freq, max_freq : float or None, optional
-            Grid limits.  Defaults are derived from the data time span and
-            the component centres + five sigma.
+            Initial grid limits.  If ``None``, defaults are derived from
+            the data time span and the component centres + five sigma.
+            These are treated as *starting* bounds only; the grid may be
+            expanded automatically.
         peak_threshold_rel : float, optional
             Relative height threshold for significant peak detection.
 
@@ -5571,24 +5741,49 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         dominant_freq = float(freq_grid[dominant_idx])
         dominant_period = 1.0 / dominant_freq
         peak_height = float(psd[dominant_idx])
-
         half_max = 0.5 * peak_height
+
+        # -- adaptive grid expansion to contain both half-max crossings ----
+        (
+            freq_grid, psd, dominant_idx,
+            left_truncated, right_truncated, n_expansions,
+        ) = self._expand_psd_grid_until_contained(
+            freq_grid, psd, params, dominant_idx, half_max,
+            max_expansions=10, expansion_factor=2.0, n_grid=int(n_grid),
+        )
+
+        # Re-read dominant peak statistics from the (possibly expanded) grid
+        dominant_freq = float(freq_grid[dominant_idx])
+        dominant_period = 1.0 / dominant_freq
+        peak_height = float(psd[dominant_idx])
+        half_max = 0.5 * peak_height
+
+        # -- walk to find the bracketing indices for the half-max crossings -
         left_idx = dominant_idx
         while left_idx > 0 and psd[left_idx] >= half_max:
             left_idx -= 1
+
         right_idx = dominant_idx
         while right_idx < len(psd) - 1 and psd[right_idx] >= half_max:
             right_idx += 1
 
-        f_left = float(freq_grid[left_idx])
-        f_right = float(freq_grid[right_idx])
+        # -- interpolate to get accurate crossing frequencies ---------------
+        f_left, left_interpolated = self._interpolate_halfmax_crossing(
+            freq_grid, psd, left_idx, "left", half_max
+        )
+        f_right, right_interpolated = self._interpolate_halfmax_crossing(
+            freq_grid, psd, right_idx, "right", half_max
+        )
+
         fwhm_freq = f_right - f_left
 
-        period_lo = 1.0 / f_right
-        period_hi = 1.0 / f_left
+        period_lo = 1.0 / f_right if f_right > 0 else np.nan
+        period_hi = 1.0 / f_left if f_left > 0 else np.nan
 
         q_factor = dominant_freq / fwhm_freq if fwhm_freq > 0 else np.inf
 
+        # -- re-identify significant peaks on the (possibly expanded) grid -
+        peaks, _ = find_peaks(psd)
         threshold = peak_threshold_rel * peak_height
         if len(peaks) > 0:
             sig_mask = psd[peaks] >= threshold
@@ -5605,10 +5800,40 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             peak_height / total_weight if total_weight > 0 else np.nan
         )
 
+        # -- build notes string --------------------------------------------
         notes = (
             "Uncertainty is a half-maximum PSD-width proxy, "
             "not a posterior credible interval."
         )
+        if n_expansions > 0:
+            _exp_msg = (
+                f"  Grid expanded {n_expansions} time(s) to contain "
+                "the half-maximum interval."
+            )
+            notes += _exp_msg
+        if left_truncated or right_truncated:
+            _sides = []
+            if left_truncated:
+                _sides.append("left")
+            if right_truncated:
+                _sides.append("right")
+            _trunc_msg = (
+                f"  WARNING: half-maximum crossing on the "
+                f"{' and '.join(_sides)} side(s) may still be "
+                "truncated; width estimate is a lower bound."
+            )
+            notes += _trunc_msg
+        if not left_interpolated or not right_interpolated:
+            _interp_sides = []
+            if not left_interpolated:
+                _interp_sides.append("left")
+            if not right_interpolated:
+                _interp_sides.append("right")
+            _fb_msg = (
+                f"  Nearest-grid fallback used for "
+                f"{' and '.join(_interp_sides)} crossing(s)."
+            )
+            notes += _fb_msg
 
         return {
             "component_periods": params["component_periods"],
