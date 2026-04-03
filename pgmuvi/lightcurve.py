@@ -5528,6 +5528,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         freq_grid : numpy.ndarray
             1-D array of ``n_grid`` frequencies in ``[min_freq, max_freq]``.
 
+        Notes
+        -----
+        If ``max_freq <= min_freq`` on entry, ``max_freq`` is automatically
+        adjusted to ``min_freq * 2.0`` so that the grid is always valid.
+
         Raises
         ------
         ValueError
@@ -5582,7 +5587,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (i.e. widen the local window by 20 % in log units on each side).
         n_refine : int or None, optional
             Number of points in the local grid.  Defaults to
-            ``max(4 * len(freq_grid), 2000)``.
+            ``max(4 * len(freq_grid), 2000)``.  The factor of 4 ensures
+            the local grid is at least 4x denser than the global grid;
+            the minimum of 2000 avoids a coarse local grid when the
+            global grid is small.
 
         Returns
         -------
@@ -5964,7 +5972,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     dominant_freq = float(freq_fine[dom_idx_fine])
                     dominant_period = 1.0 / dominant_freq
                     refined = True
-            except Exception:  # fallback: use global grid result
+            except (ValueError, IndexError, RuntimeError, FloatingPointError):
                 pass  # Fall back to global-grid result
 
         fwhm_freq = f_right - f_left

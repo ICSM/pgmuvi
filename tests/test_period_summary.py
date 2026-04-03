@@ -724,6 +724,16 @@ class TestSmPsdLogGrid(unittest.TestCase):
 
     # ------------------------------------------------------------------
 
+    def _assertIsLogSpaced(self, grid, tol=1e-3):
+        """Assert that ``grid`` is strictly positive and approximately log-spaced."""
+        self.assertTrue(np.all(grid > 0), "all grid values must be positive")
+        ratios = grid[1:] / grid[:-1]
+        ratio_cv = float(ratios.std() / ratios.mean())
+        self.assertLess(
+            ratio_cv, tol,
+            f"ratio CV {ratio_cv:.2e} >= {tol}: grid is not log-spaced",
+        )
+
     def test_build_frequency_grid_log(self):
         """_build_frequency_grid returns a log-spaced grid."""
         lc = self._make_sm_lc()
@@ -731,10 +741,7 @@ class TestSmPsdLogGrid(unittest.TestCase):
         self.assertEqual(len(grid), 200)
         self.assertAlmostEqual(float(grid[0]), 1e-4, places=15)
         self.assertAlmostEqual(float(grid[-1]), 1.0, places=15)
-        # Check approximately constant ratio between consecutive points
-        ratios = grid[1:] / grid[:-1]
-        self.assertAlmostEqual(float(ratios.max()), float(ratios.min()),
-                               places=8)
+        self._assertIsLogSpaced(grid)
 
     def test_build_frequency_grid_linear(self):
         """_build_frequency_grid returns a linear-spaced grid when asked."""
@@ -757,14 +764,7 @@ class TestSmPsdLogGrid(unittest.TestCase):
         summary = lc.get_period_summary()
         freq_grid = summary["freq_grid"]
         self.assertGreater(len(freq_grid), 1)
-        # All values must be strictly positive
-        self.assertTrue(np.all(freq_grid > 0))
-        # Check ratio of consecutive points is approximately constant
-        # (log spacing), NOT linearly spaced.
-        ratios = freq_grid[1:] / freq_grid[:-1]
-        # For log spacing the ratio should be nearly constant; std/mean < 1e-3
-        ratio_cv = float(ratios.std() / ratios.mean())
-        self.assertLess(ratio_cv, 1e-3)
+        self._assertIsLogSpaced(freq_grid)
 
     def test_sm_notes_mention_log_grid(self):
         """Summary notes mention log-spaced grid."""
@@ -844,10 +844,7 @@ class TestSmPsdLogGrid(unittest.TestCase):
             f_left_approx=5e-4, f_right_approx=2e-3,
         )
         self.assertGreater(len(freq_fine), n_global)
-        # Fine grid must also be strictly positive and log-spaced
-        self.assertTrue(np.all(freq_fine > 0))
-        ratios = freq_fine[1:] / freq_fine[:-1]
-        self.assertLess(float(ratios.std() / ratios.mean()), 1e-3)
+        self._assertIsLogSpaced(freq_fine)
 
     def test_log_grid_expansion_does_not_crash(self):
         """Adaptive expansion with log grid completes without error."""
@@ -868,9 +865,7 @@ class TestSmPsdLogGrid(unittest.TestCase):
             max_expansions=10, expansion_factor=2.0, n_grid=200,
         )
         # Grid must still be log-spaced after expansion
-        self.assertTrue(np.all(freq_out > 0))
-        ratios = freq_out[1:] / freq_out[:-1]
-        self.assertLess(float(ratios.std() / ratios.mean()), 1e-3)
+        self._assertIsLogSpaced(freq_out)
         # At least some expansions should have occurred
         self.assertGreater(n_exp, 0)
 
