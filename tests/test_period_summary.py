@@ -621,13 +621,13 @@ class TestSmPsdGridExpansion(unittest.TestCase):
 
         (
             freq_grid_out, psd_out, dom_idx_out,
-            left_trunc, right_trunc, n_exp,
+            left_truncated, right_truncated, n_expansions,
         ) = lc._expand_psd_grid_until_contained(
             freq_grid_init, psd_init, params, dom_idx, half_max,
             max_expansions=10, expansion_factor=2.0, n_grid=500,
         )
         # At least one expansion should have occurred
-        self.assertGreater(n_exp, 0)
+        self.assertGreater(n_expansions, 0)
 
     def test_sm_summary_contains_halfmax_in_grid(self):
         """The returned freq_grid fully contains both half-max crossings."""
@@ -678,7 +678,8 @@ class TestSmPsdGridExpansion(unittest.TestCase):
         original_expand = lc._expand_psd_grid_until_contained
 
         def _no_expand(freq_grid, psd, params, dominant_idx, half_max,
-                       max_expansions=10, **kw):
+                       **kw):
+            kw.pop("max_expansions", None)
             return original_expand(
                 freq_grid, psd, params, dominant_idx, half_max,
                 max_expansions=0, **kw

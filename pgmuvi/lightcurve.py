@@ -5621,6 +5621,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         min_freq = float(freq_grid[0])
         max_freq = float(freq_grid[-1])
+        n_grid = int(n_grid)
         n_expansions = 0
 
         for _ in range(max_expansions):
@@ -5635,7 +5636,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if right_truncated:
                 max_freq = max_freq * expansion_factor
 
-            freq_grid = np.linspace(min_freq, max_freq, int(n_grid))
+            freq_grid = np.linspace(min_freq, max_freq, n_grid)
             psd = Lightcurve._sm_psd_on_grid(freq_grid, params)
 
             # Re-find dominant peak on the new grid
@@ -5703,6 +5704,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         summary : dict
             Same keys as :meth:`get_period_summary`.
         """
+        n_grid = int(n_grid)
         params = self._extract_sm_params()
 
         comp_freqs = params["component_frequencies"]
@@ -5727,7 +5729,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         min_freq = max(float(min_freq), 1e-12)
         max_freq = max(float(max_freq), min_freq * 2.0)
 
-        freq_grid = np.linspace(min_freq, max_freq, int(n_grid))
+        freq_grid = np.linspace(min_freq, max_freq, n_grid)
         psd = self._sm_psd_on_grid(freq_grid, params)
 
         from scipy.signal import find_peaks
@@ -5749,7 +5751,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             left_truncated, right_truncated, n_expansions,
         ) = self._expand_psd_grid_until_contained(
             freq_grid, psd, params, dominant_idx, half_max,
-            max_expansions=10, expansion_factor=2.0, n_grid=int(n_grid),
+            max_expansions=10, expansion_factor=2.0, n_grid=n_grid,
         )
 
         # Re-read dominant peak statistics from the (possibly expanded) grid
@@ -5800,40 +5802,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             peak_height / total_weight if total_weight > 0 else np.nan
         )
 
-        # -- build notes string --------------------------------------------
-        notes = (
+        # -- build notes string (collect fragments then join) ---------------
+        _note_parts = [
             "Uncertainty is a half-maximum PSD-width proxy, "
             "not a posterior credible interval."
-        )
+        ]
         if n_expansions > 0:
-            _exp_msg = (
+            _note_parts.append(
                 f"  Grid expanded {n_expansions} time(s) to contain "
                 "the half-maximum interval."
             )
-            notes += _exp_msg
         if left_truncated or right_truncated:
             _sides = []
             if left_truncated:
                 _sides.append("left")
             if right_truncated:
                 _sides.append("right")
-            _trunc_msg = (
+            _note_parts.append(
                 f"  WARNING: half-maximum crossing on the "
                 f"{' and '.join(_sides)} side(s) may still be "
                 "truncated; width estimate is a lower bound."
             )
-            notes += _trunc_msg
         if not left_interpolated or not right_interpolated:
             _interp_sides = []
             if not left_interpolated:
                 _interp_sides.append("left")
             if not right_interpolated:
                 _interp_sides.append("right")
-            _fb_msg = (
+            _note_parts.append(
                 f"  Nearest-grid fallback used for "
                 f"{' and '.join(_interp_sides)} crossing(s)."
             )
-            notes += _fb_msg
+        notes = "".join(_note_parts)
 
         return {
             "component_periods": params["component_periods"],
