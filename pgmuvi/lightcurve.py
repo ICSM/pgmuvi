@@ -4412,10 +4412,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # _fit_num_mixtures_effective reflects the true model structure
             # rather than the generic default of 4.
             if num_mixtures is None:
-                _inferred = None
+                inferred_count = None
                 if hasattr(self, "model") and self.model is not None:
-                    _inferred = self._infer_num_mixtures_from_model()
-                num_mixtures = _inferred if _inferred is not None else 4
+                    inferred_count = self._infer_num_mixtures_from_model()
+                num_mixtures = (
+                    inferred_count if inferred_count is not None else 4
+                )
 
             # Store the authoritative mixture counts for get_period_summary().
             self._fit_num_mixtures_requested = _num_mixtures_arg

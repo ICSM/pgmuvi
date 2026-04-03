@@ -1151,10 +1151,6 @@ class TestMultiPeakPSDAnalysis(unittest.TestCase):
         self.assertFalse(summary.peaks[0].is_candidate_lsp)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ---------------------------------------------------------------------------
 # 14. _infer_num_mixtures_from_model and fit() inference
 # ---------------------------------------------------------------------------
@@ -1163,12 +1159,12 @@ if __name__ == "__main__":
 class TestInferNumMixturesFromModel(unittest.TestCase):
     """Tests for Part 1 fix: inferring num_mixtures from existing model."""
 
-    def _make_sm_lc(self, n_mix=2):
+    def _make_sm_lc(self):
         return _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
 
     def test_infer_returns_correct_count_1d(self):
         """_infer_num_mixtures_from_model returns num_mixtures for 1D SM."""
-        lc = self._make_sm_lc(n_mix=2)
+        lc = self._make_sm_lc()
         result = lc._infer_num_mixtures_from_model()
         self.assertEqual(result, 2)
 
@@ -1196,3 +1192,7 @@ class TestInferNumMixturesFromModel(unittest.TestCase):
         fig, ax = result
         self.assertIsInstance(fig, plt.Figure)
         plt.close(fig)
+
+
+if __name__ == "__main__":
+    unittest.main()
