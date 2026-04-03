@@ -4899,10 +4899,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         For both 1-D and 2-D spectral-mixture models the *time* dimension
         (index 0 of the last axis of ``mixture_means``) is used, consistent
-        with :meth:`get_periods`.  The indexing ``[i, 0, 0]`` is robust for
-        the shapes actually produced by GPyTorch's
-        :class:`~gpytorch.kernels.SpectralMixtureKernel`:
-        ``(n_mix, 1, 1)`` for 1-D and ``(n_mix, 1, 2)`` for 2-D.
+        with :meth:`get_periods`.  The indexing ``[i, 0, 0]`` selects
+        mixture component ``i``, collapses the redundant size-1 middle
+        dimension, and picks time-dimension index 0 from the last axis.
+        For a 1-D kernel the shape is ``(n_mix, 1, 1)``; for a 2-D kernel
+        the shape is ``(n_mix, 1, 2)``, and index 0 of the last axis is
+        always the time dimension.
 
         Returns
         -------
@@ -5043,6 +5045,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         mus = params["component_frequencies"]
         sigs = params["component_frequency_scales"]
         wts = params["component_weights"]
+        if not (len(mus) == len(sigs) == len(wts)):
+            raise ValueError(
+                f"Spectral-mixture parameter arrays have inconsistent "
+                f"lengths: component_frequencies={len(mus)}, "
+                f"component_frequency_scales={len(sigs)}, "
+                f"component_weights={len(wts)}.  This indicates an "
+                f"internal error in _extract_sm_params()."
+            )
         for mu_k, sig_k, w_k in zip(mus, sigs, wts, strict=True):
             psd += w_k * np.exp(
                 -0.5 * ((freq_grid - mu_k) / sig_k) ** 2
