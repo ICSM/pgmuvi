@@ -4407,8 +4407,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     )
 
             # Final fallback when MLS init is disabled or not applicable.
+            # If a model is already instantiated, try to infer the actual
+            # number of mixture components from its kernel so that
+            # _fit_num_mixtures_effective reflects the true model structure
+            # rather than the generic default of 4.
             if num_mixtures is None:
-                num_mixtures = 4
+                _inferred = None
+                if hasattr(self, "model") and self.model is not None:
+                    _inferred = self._infer_num_mixtures_from_model()
+                num_mixtures = _inferred if _inferred is not None else 4
 
             # Store the authoritative mixture counts for get_period_summary().
             self._fit_num_mixtures_requested = _num_mixtures_arg
@@ -5071,6 +5078,48 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             torch.as_tensor(weights),
             torch.as_tensor(scales),
         )
+
+    def _infer_num_mixtures_from_model(self):
+        """Infer the number of spectral-mixture components from the current model.
+
+        Walks the kernel tree of ``self.model.sci_kernel`` (including SKI
+        and separable-2D wrappers) looking for a ``mixture_means`` attribute
+        and returns ``len(mixture_means)``.  Falls back to inspecting
+        ``mixture_scales`` or ``mixture_weights`` if ``mixture_means`` is
+        unavailable.
+
+        Returns ``None`` if the model does not expose mixture parameters or if
+        ``self.model`` has not been initialised.
+
+        Returns
+        -------
+        n_mix : int or None
+        """
+        if not hasattr(self, "model") or self.model is None:
+            return None
+        if not hasattr(self.model, "sci_kernel"):
+            return None
+        sk = self.model.sci_kernel
+        # Unwrap GridInterpolationKernel (SKI)
+        actual_sk = getattr(sk, "base_kernel", sk)
+        # For separable 2D, look for the time sub-kernel
+        if not hasattr(actual_sk, "mixture_means"):
+            from gpytorch.kernels import ProductKernel
+
+            if isinstance(actual_sk, ProductKernel):
+                for k in actual_sk.kernels:
+                    inner = getattr(k, "base_kernel", k)
+                    if hasattr(inner, "mixture_means"):
+                        actual_sk = inner
+                        break
+        # Try mixture_means first, then fallbacks
+        for attr in ("mixture_means", "mixture_scales", "mixture_weights"):
+            if hasattr(actual_sk, attr):
+                try:
+                    return len(getattr(actual_sk, attr))
+                except (TypeError, RuntimeError):
+                    pass
+        return None
 
     def _extract_sm_params(self):
         """Extract raw spectral-mixture parameters in physical (data) units.
@@ -6683,9 +6732,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Produces a matplotlib figure appropriate for the type of period
         summary:
 
-        * **Spectral-mixture PSD summary**: plots the PSD curve, a vertical
-          line at the dominant frequency, a shaded half-maximum band, and
-          dotted lines for other significant peaks.
+        * **Spectral-mixture PSD summary with structured peaks**
+          (``PeriodSummaryResult``): generates a **multi-panel figure** with
+          the full PSD in the top panel and one zoomed panel per analyzed
+          peak below.  Each peak is labeled P1, P2, … with a distinct color.
+        * **Spectral-mixture PSD summary (plain dict)**: plots the PSD curve
+          with the dominant peak and dotted lines for other significant peaks.
         * **Explicit-period summary** (e.g. quasi-periodic): plots a single
           vertical line at the dominant frequency with an annotated period,
           interval, and Q-factor.  No PSD curve is drawn because none is
@@ -6716,6 +6768,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         -------
         fig, ax : matplotlib.figure.Figure, matplotlib.axes.Axes
             Returned when ``show=False``; otherwise ``None``.
+            For the multi-panel case ``ax`` is the top (full-PSD) axes.
         """
         if summary is None:
             summary = self.get_period_summary(**kwargs)
@@ -6723,12 +6776,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         method = summary.get("method", "")
         has_psd = summary["freq_grid"] is not None
 
-        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
-
         # -- non-periodic: informational plot only -------------------------
         if method == "non_periodic_kernel" or (
             summary["dominant_period"] is None
         ):
+            fig, ax = plt.subplots(1, 1, figsize=(8, 5))
             ax.text(
                 0.5,
                 0.5,
@@ -6759,7 +6811,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         interval_definition = summary.get("interval_definition", "")
         q = summary["q_factor"]
         n_sig = summary["n_significant_peaks"]
-        sig_periods = summary.get("significant_periods", np.array([]))
 
         # Build a human-readable interval type label for annotations
         _interval_labels = {
@@ -6770,6 +6821,170 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         interval_label = _interval_labels.get(
             interval_definition, interval_definition or "interval"
         )
+
+        # Decide whether we have a structured PeriodSummaryResult with peaks.
+        # Plain-dict summaries (non-SM backends) do not have a .peaks attr.
+        structured_peaks = getattr(summary, "peaks", None)
+        has_structured_peaks = (
+            structured_peaks is not None and len(structured_peaks) > 0
+        )
+
+        # -- colour palette for per-peak markers ---------------------------
+        # crimson = P1 (dominant), then cycling through a friendly palette
+        _peak_colors = [
+            "crimson",
+            "darkorange",
+            "forestgreen",
+            "mediumpurple",
+            "saddlebrown",
+            "deepskyblue",
+        ]
+
+        def _peak_color(rank):
+            """Return the color for a peak by rank (1-indexed)."""
+            idx = max(rank - 1, 0)
+            return _peak_colors[idx % len(_peak_colors)]
+
+        # ------------------------------------------------------------------
+        # Multi-panel layout for structured PeriodSummaryResult
+        # ------------------------------------------------------------------
+        if has_structured_peaks and has_psd:
+            n_panels = 1 + len(structured_peaks)
+            fig, axes = plt.subplots(
+                n_panels, 1,
+                figsize=(9, 3.5 + 2.5 * len(structured_peaks)),
+                squeeze=False,
+            )
+            axes = axes[:, 0]
+            ax = axes[0]  # top panel = full PSD
+
+            freq_grid = summary["freq_grid"]
+            psd = summary["psd"]
+
+            # Top panel: full PSD ------------------------------------------
+            ax.plot(
+                freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
+            )
+            for pk in structured_peaks:
+                col = _peak_color(pk.rank)
+                ax.axvline(
+                    pk.frequency,
+                    color=col,
+                    lw=1.5,
+                    ls="--",
+                    label=(
+                        f"P{pk.rank}  period={pk.period:.4g}"
+                    ),
+                )
+                p_lo, p_hi = pk.interval_period
+                if (
+                    np.isfinite(p_lo) and np.isfinite(p_hi)
+                    and p_lo > 0 and p_hi > 0
+                ):
+                    f_lo_int = 1.0 / p_hi
+                    f_hi_int = 1.0 / p_lo
+                    if f_lo_int < f_hi_int:
+                        # Only add a legend entry for the dominant peak
+                        # so the legend shows the interval type label.
+                        _span_label = (
+                            f"{interval_label}  [{p_lo:.4g}, {p_hi:.4g}]"
+                            if pk.rank == 1
+                            else None
+                        )
+                        ax.axvspan(
+                            f_lo_int, f_hi_int,
+                            alpha=0.15, color=col,
+                            label=_span_label,
+                        )
+            if log_freq:
+                ax.set_xscale("log")
+            ax.set_ylabel("PSD")
+            ax.set_title(f"Period summary - full PSD ({method})")
+            ax.legend(fontsize=7, loc="upper left", ncol=2)
+
+            # Per-peak zoom panels ----------------------------------------
+            for pk in structured_peaks:
+                panel_ax = axes[pk.rank]  # rank is 1-indexed; axes[0]=top
+                col = _peak_color(pk.rank)
+                p_lo, p_hi = pk.interval_period
+                # Determine x-window in frequency space
+                if np.isfinite(p_lo) and np.isfinite(p_hi) and p_lo > 0:
+                    f_win_hi = 1.0 / p_lo
+                    f_win_lo = 1.0 / p_hi
+                    # Expand window by 50% on each side
+                    f_ctr = pk.frequency
+                    half = max(
+                        0.5 * (f_win_hi - f_win_lo), 0.1 * f_ctr
+                    )
+                    f_win_lo = max(f_ctr - 1.5 * half, freq_grid[0])
+                    f_win_hi = min(f_ctr + 1.5 * half, freq_grid[-1])
+                else:
+                    f_ctr = pk.frequency
+                    half = 0.2 * f_ctr
+                    f_win_lo = max(f_ctr - half, freq_grid[0])
+                    f_win_hi = min(f_ctr + half, freq_grid[-1])
+
+                # Mask frequency grid to window
+                mask = (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
+                f_zoom = freq_grid[mask]
+                p_zoom = psd[mask]
+                if len(f_zoom) < 2:
+                    # Window too narrow; use ±10% around peak
+                    f_win_lo = pk.frequency * 0.9
+                    f_win_hi = pk.frequency * 1.1
+                    mask = (
+                        (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
+                    )
+                    f_zoom = freq_grid[mask]
+                    p_zoom = psd[mask]
+
+                panel_ax.plot(
+                    f_zoom, p_zoom, color="steelblue", lw=1.5
+                )
+                panel_ax.axvline(
+                    pk.frequency, color=col, lw=1.5, ls="--"
+                )
+                if np.isfinite(p_lo) and np.isfinite(p_hi) and p_lo > 0:
+                    f_lo_int = 1.0 / p_hi
+                    f_hi_int = 1.0 / p_lo
+                    if (
+                        f_lo_int < f_hi_int
+                        and f_lo_int >= f_win_lo
+                        and f_hi_int <= f_win_hi
+                    ):
+                        panel_ax.axvspan(
+                            f_lo_int, f_hi_int,
+                            alpha=0.25, color=col,
+                            label=(
+                                f"{interval_label}  "
+                                f"[{p_lo:.4g}, {p_hi:.4g}]"
+                            ),
+                        )
+                _ratio_str = (
+                    f"  ratio={pk.period_ratio_to_primary:.3g}"
+                    if pk.rank > 1
+                    else ""
+                )
+                panel_ax.set_title(
+                    f"P{pk.rank}  period = {pk.period:.6g}"
+                    f"{_ratio_str}"
+                )
+                if log_freq:
+                    panel_ax.set_xscale("log")
+                panel_ax.set_xlabel("Frequency")
+                panel_ax.set_ylabel("PSD")
+                panel_ax.legend(fontsize=7, loc="upper left")
+
+            fig.tight_layout()
+            if show:
+                plt.show()
+                return None
+            return fig, ax
+
+        # ------------------------------------------------------------------
+        # Single-panel fallback (non-structured or no PSD)
+        # ------------------------------------------------------------------
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
         # -- PSD curve (spectral-mixture only) -----------------------------
         if has_psd:
@@ -6791,8 +7006,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # -- period interval shaded band (if finite interval) --------------
         if interval is not None:
             period_lo, period_hi = interval
-            f_left = 1.0 / period_hi if period_hi and period_hi > 0 else None
-            f_right = 1.0 / period_lo if period_lo and period_lo > 0 else None
+            f_left = (
+                1.0 / period_hi if period_hi and period_hi > 0 else None
+            )
+            f_right = (
+                1.0 / period_lo if period_lo and period_lo > 0 else None
+            )
             if (
                 f_left is not None and f_right is not None
                 and np.isfinite(f_left) and np.isfinite(f_right)
@@ -6809,17 +7028,30 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                 )
 
-        # -- other significant peaks ---------------------------------------
-        for sp in sig_periods:
-            sf = 1.0 / sp
-            if abs(sf - f_peak) > 1e-12 * max(f_peak, 1e-12):
+        # -- other significant peaks from structured summary ---------------
+        if has_structured_peaks:
+            for pk in structured_peaks[1:]:
+                col = _peak_color(pk.rank)
                 ax.axvline(
-                    sf,
-                    color="darkorange",
+                    pk.frequency,
+                    color=col,
                     lw=1.0,
                     ls=":",
-                    alpha=0.8,
+                    alpha=0.9,
+                    label=f"P{pk.rank}  period={pk.period:.4g}",
                 )
+        else:
+            sig_periods = summary.get("significant_periods", np.array([]))
+            for sp in sig_periods:
+                sf = 1.0 / sp
+                if abs(sf - f_peak) > 1e-12 * max(f_peak, 1e-12):
+                    ax.axvline(
+                        sf,
+                        color="darkorange",
+                        lw=1.0,
+                        ls=":",
+                        alpha=0.8,
+                    )
 
         # -- text annotation -----------------------------------------------
         if q is not None and np.isfinite(q):

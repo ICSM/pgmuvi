@@ -1153,3 +1153,46 @@ class TestMultiPeakPSDAnalysis(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# 14. _infer_num_mixtures_from_model and fit() inference
+# ---------------------------------------------------------------------------
+
+
+class TestInferNumMixturesFromModel(unittest.TestCase):
+    """Tests for Part 1 fix: inferring num_mixtures from existing model."""
+
+    def _make_sm_lc(self, n_mix=2):
+        return _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+
+    def test_infer_returns_correct_count_1d(self):
+        """_infer_num_mixtures_from_model returns num_mixtures for 1D SM."""
+        lc = self._make_sm_lc(n_mix=2)
+        result = lc._infer_num_mixtures_from_model()
+        self.assertEqual(result, 2)
+
+    def test_infer_returns_none_without_model(self):
+        """_infer_num_mixtures_from_model returns None when model is unset."""
+        lc = make_simple_sinusoid_1d(
+            n_obs=20, period=100.0, noise_level=0.05,
+            t_span=500.0, seed=0,
+        )
+        result = lc._infer_num_mixtures_from_model()
+        self.assertIsNone(result)
+
+    def test_fit_num_mixtures_effective_matches_set_model(self):
+        """_fit_num_mixtures_effective matches set_model num_mixtures."""
+        lc = self._make_sm_lc()
+        # set_model stores the count; verify it was stored correctly
+        self.assertEqual(lc._fit_num_mixtures_effective, 2)
+
+    def test_multi_panel_plot_returns_fig_ax(self):
+        """plot_period_summary returns (fig, ax) for multi-panel case."""
+        import matplotlib.pyplot as plt
+        lc = self._make_sm_lc()
+        result = lc.plot_period_summary(show=False)
+        self.assertIsNotNone(result)
+        fig, ax = result
+        self.assertIsInstance(fig, plt.Figure)
+        plt.close(fig)
