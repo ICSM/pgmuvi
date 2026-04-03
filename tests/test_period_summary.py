@@ -111,7 +111,8 @@ class TestGetPeriodSummary1D(unittest.TestCase):
         self.summary = self.lc.get_period_summary()
 
     def test_returns_dict(self):
-        self.assertIsInstance(self.summary, dict)
+        from pgmuvi.lightcurve import PeriodSummaryResult
+        self.assertIsInstance(self.summary, (dict, PeriodSummaryResult))
 
     def test_all_required_keys_present(self):
         self.assertSetEqual(_REQUIRED_KEYS, set(self.summary.keys()))
@@ -173,7 +174,8 @@ class TestGetPeriodSummary2D(unittest.TestCase):
         self.summary = self.lc.get_period_summary()
 
     def test_returns_dict(self):
-        self.assertIsInstance(self.summary, dict)
+        from pgmuvi.lightcurve import PeriodSummaryResult
+        self.assertIsInstance(self.summary, (dict, PeriodSummaryResult))
 
     def test_all_required_keys_present(self):
         self.assertSetEqual(_REQUIRED_KEYS, set(self.summary.keys()))
@@ -707,7 +709,7 @@ class TestSmPsdGridExpansion(unittest.TestCase):
 
 
 class TestSmPsdLogGrid(unittest.TestCase):
-    """Tests that the SM backend uses a log-spaced grid and local refinement."""
+    """Tests that the SM backend uses a log-spaced frequency grid."""
 
     def _make_sm_lc(self):
         return _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
@@ -777,22 +779,16 @@ class TestSmPsdLogGrid(unittest.TestCase):
         self.assertIn("log", summary["notes"].lower())
 
     def test_sm_notes_mention_refinement(self):
-        """Summary notes mention local refinement when it was applied.
+        """Summary notes always mention the log-spaced grid.
 
-        Refinement is only applied when both half-max crossings are contained.
-        We verify that on a well-contained summary the notes mention refinement,
-        OR that the notes always mention the log-spaced grid (which is always
-        present even if refinement was skipped due to truncation).
+        The new multi-peak implementation no longer performs a separate
+        local refinement pass, but the notes always describe the method.
         """
         lc = self._make_sm_lc()
         summary = lc.get_period_summary()
         notes = summary["notes"].lower()
         # The notes must always mention log-spacing
         self.assertIn("log", notes)
-        # If no truncation the notes should also mention refinement
-        period_lo, period_hi = summary["period_interval_fwhm_like"]
-        if "truncat" not in notes and period_lo is not None:
-            self.assertIn("refine", notes)
 
     def test_log_grid_better_than_linear_for_broad_peak(self):
         """Log-spaced grid resolves broad low-freq peak; linear cannot.
@@ -1059,6 +1055,97 @@ class TestPeakMassInterval(unittest.TestCase):
         self.assertIn("period_interval", summary)
         self.assertIsNone(summary["period_interval"])
         self.assertIn("interval_definition", summary)
+
+
+class TestMultiPeakPSDAnalysis(unittest.TestCase):
+    """Tests for the multi-peak PSD analysis refactoring."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Create a shared LC with SM model (num_mixtures=2)."""
+        cls.lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        # _make_1d_lc_no_transform calls set_model("1D", num_mixtures=2)
+        cls.summary = cls.lc.get_period_summary()
+
+    def test_period_summary_result_is_object(self):
+        from pgmuvi.lightcurve import PeriodSummaryResult
+        self.assertIsInstance(self.summary, PeriodSummaryResult)
+
+    def test_period_summary_dict_compat(self):
+        """Old dict keys must still be accessible via []."""
+        for key in _REQUIRED_KEYS:
+            self.assertIn(key, self.summary)
+            _ = self.summary[key]  # must not raise
+
+    def test_n_peaks_defaults_to_fit_num_mixtures(self):
+        """Default n_peaks matches fit effective num_mixtures."""
+        self.assertEqual(
+            self.lc._fit_num_mixtures_effective, 2
+        )
+        summary = self.lc.get_period_summary()
+        expected = min(2, summary.n_peaks_detected)
+        self.assertEqual(summary.n_peaks_analyzed, expected)
+
+    def test_n_peaks_override(self):
+        """n_peaks=1 returns exactly 1 peak."""
+        summary = self.lc.get_period_summary(n_peaks=1)
+        self.assertEqual(len(summary.peaks), 1)
+
+    def test_as_dict_method(self):
+        """as_dict() returns a dict with all required keys."""
+        d = self.summary.as_dict()
+        self.assertIsInstance(d, dict)
+        for key in _REQUIRED_KEYS:
+            self.assertIn(key, d)
+
+    def test_to_table_method(self):
+        """to_table() returns one row per peak."""
+        table = self.summary.to_table()
+        self.assertIsInstance(table, list)
+        self.assertEqual(len(table), len(self.summary.peaks))
+        if table:
+            row = table[0]
+            for col in (
+                "peak_rank", "period", "frequency", "height",
+                "prominence", "area_fraction",
+                "period_interval_lo", "period_interval_hi",
+                "period_ratio_to_primary", "is_candidate_lsp", "notes",
+            ):
+                self.assertIn(col, row)
+
+    def test_write_json_method(self):
+        """write_json writes valid JSON that round-trips."""
+        import json
+        import os
+        path = "test_write_json_output.json"
+        try:
+            self.summary.write_json(path)
+            self.assertTrue(os.path.exists(path))
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIn("dominant_period", data)
+            self.assertIn("method", data)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_peak_rank_1_is_dominant(self):
+        """The first peak always has rank == 1."""
+        self.assertGreater(len(self.summary.peaks), 0)
+        self.assertEqual(self.summary.peaks[0].rank, 1)
+
+    def test_peak_ratio_to_primary(self):
+        """The primary peak has period_ratio_to_primary == 1.0."""
+        self.assertGreater(len(self.summary.peaks), 0)
+        self.assertAlmostEqual(
+            self.summary.peaks[0].period_ratio_to_primary, 1.0
+        )
+
+    def test_lsp_classification_flag(self):
+        """classify_lsp=True runs without error; primary never flagged."""
+        summary = self.lc.get_period_summary(classify_lsp=True)
+        self.assertGreater(len(summary.peaks), 0)
+        self.assertFalse(summary.peaks[0].is_candidate_lsp)
 
 
 if __name__ == "__main__":
