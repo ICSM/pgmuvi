@@ -6384,7 +6384,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         peak_objects = []
         for rank_0, (pidx, prom) in enumerate(
-            zip(selected_indices, selected_proms, strict=False)
+            zip(selected_indices, selected_proms, strict=True)
         ):
             info = self._characterize_peak_basin(
                 freq_grid, psd, pidx, mass_level=mass_level
