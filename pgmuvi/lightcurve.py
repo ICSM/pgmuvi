@@ -4880,9 +4880,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Extract raw spectral-mixture parameters in physical (data) units.
 
         Helper for :meth:`get_period_summary`.  Extracts per-component
-        means, scales, and weights from ``self.model.sci_kernel`` and
-        converts them from the transformed (normalised) frequency space back
-        to the original data units, following the same convention as
+        means, scales, and weights from ``self.model.sci_kernel`` (or its
+        ``base_kernel`` if the sci_kernel is a
+        :class:`~gpytorch.kernels.GridInterpolationKernel`) and converts
+        them from the transformed (normalised) frequency space back to the
+        original data units, following the same convention as
         :meth:`get_periods`.
 
         The conversions performed here are scientifically important:
@@ -4892,12 +4894,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
           and ``mixture_scale`` is already the raw frequency scale.
         * If ``self.xtransform is not None`` the model was trained in a
           normalised time coordinate.  Frequencies and scales must be
-          inverse-transformed to recover quantities in the original time
-          units.
+          inverse-transformed (with ``shift=False``, i.e. scaling only)
+          to recover quantities in the original time units.
 
         For both 1-D and 2-D spectral-mixture models the *time* dimension
         (index 0 of the last axis of ``mixture_means``) is used, consistent
-        with :meth:`get_periods`.
+        with :meth:`get_periods`.  The indexing ``[i, 0, 0]`` is robust for
+        the shapes actually produced by GPyTorch's
+        :class:`~gpytorch.kernels.SpectralMixtureKernel`:
+        ``(n_mix, 1, 1)`` for 1-D and ``(n_mix, 1, 2)`` for 2-D.
 
         Returns
         -------
@@ -4916,21 +4921,27 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         RuntimeError
             If the model has not been initialised.
         ValueError
-            If the model is not a spectral-mixture model (i.e. its
-            ``sci_kernel`` does not expose ``mixture_means``).
+            If neither the ``sci_kernel`` nor its ``base_kernel`` expose
+            ``mixture_means`` (i.e. the model is not spectral-mixture).
         """
         if not hasattr(self, "model") or self.model is None:
             raise RuntimeError(
                 "Model not initialised.  Call set_model() first."
             )
-        if not hasattr(self.model.sci_kernel, "mixture_means"):
+        # Some SKI variants set sci_kernel to the GridInterpolationKernel
+        # wrapper rather than the SpectralMixtureKernel itself.  Unwrap it.
+        sk = self.model.sci_kernel
+        if not hasattr(sk, "mixture_means") and hasattr(
+            sk, "base_kernel"
+        ):
+            sk = sk.base_kernel
+
+        if not hasattr(sk, "mixture_means"):
             raise ValueError(
-                "get_period_summary() is only implemented for "
-                "spectral-mixture models.  The current model's "
-                "sci_kernel does not have a mixture_means attribute."
+                "_extract_sm_params() requires a spectral-mixture kernel.  "
+                "The current sci_kernel does not expose mixture_means."
             )
 
-        sk = self.model.sci_kernel
         n_mix = len(sk.mixture_means)
 
         freqs = []
@@ -4941,7 +4952,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         for i in range(n_mix):
             # -- extract the time-dimension mean and scale ------------------
-            # mixture_means has shape [n_mix, 1, ard_num_dims].
+            # mixture_means shape is [n_mix, 1, ard_num_dims].
             # Index [i, 0, 0] selects mixture i, the redundant size-1
             # dimension, and dimension 0 (time axis).  This is consistent
             # with the [i, 0] indexing used in get_periods() for 2-D models.
@@ -4960,8 +4971,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             else:
                 # The model was trained in normalised time units.
-                # Inverse-transform to recover physical (raw) period,
-                # then compute the raw frequency from it.
+                # Inverse-transform (shift=False = scale only) to recover
+                # physical (raw) period, then compute frequency from it.
                 raw_period = float(
                     self.xtransform.inverse(
                         1.0 / mu_t, shift=False
@@ -5038,101 +5049,486 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
         return psd
 
-    def get_period_summary(
+    def _detect_period_summary_backend(self):
+        """Classify the fitted model into a period-summary backend family.
+
+        Inspects the actual kernel objects attached to the model and returns
+        a string label that :meth:`get_period_summary` uses to dispatch to
+        the appropriate extraction routine.
+
+        Returns
+        -------
+        backend : str
+            One of:
+
+            * ``"spectral_mixture"`` - SpectralMixture kernel (or SKI
+              wrapper around one) - use PSD-peak extraction.
+            * ``"explicit_period"`` - kernel tree contains a
+              :class:`~gpytorch.kernels.PeriodicKernel` with a fitted
+              ``period_length`` parameter (e.g. quasi-periodic models).
+            * ``"periodic_plus_stochastic"`` - AdditiveKernel combining a
+              quasi-periodic term with a stochastic (RBF) term.
+            * ``"separable_2d"`` - ProductKernel with per-dimension
+              ``active_dims`` (separable 2D models); the time sub-kernel
+              is inspected independently.
+            * ``"non_periodic"`` - no periodic structure found (e.g.
+              Matérn-only model).
+        """
+        from gpytorch.kernels import AdditiveKernel, ProductKernel
+
+        sk = self.model.sci_kernel
+        # Unwrap GridInterpolationKernel if present
+        actual_sk = getattr(sk, "base_kernel", sk)
+
+        # 1. Spectral-mixture family (includes SKI wrappers)
+        if hasattr(actual_sk, "mixture_means"):
+            return "spectral_mixture"
+
+        # 2. Additive kernel - periodic + stochastic decomposition
+        if isinstance(sk, AdditiveKernel):
+            return "periodic_plus_stochastic"
+
+        # 3. Product kernel with active_dims on sub-kernels - separable 2D
+        if isinstance(sk, ProductKernel):
+            has_active_dims = any(
+                hasattr(k, "active_dims") and k.active_dims is not None
+                for k in sk.kernels
+            )
+            if has_active_dims:
+                return "separable_2d"
+
+        # 4. Any kernel that contains a PeriodicKernel with period_length
+        if self._find_period_length_in_kernel(sk) is not None:
+            return "explicit_period"
+
+        # 5. Non-periodic fallback
+        return "non_periodic"
+
+    @staticmethod
+    def _find_period_length_in_kernel(kernel):
+        """Recursively search a kernel tree for a PeriodicKernel.
+
+        Walks the kernel tree depth-first via ``base_kernel`` and
+        ``kernels`` attributes and returns the first kernel instance that
+        has a ``period_length`` attribute (i.e. a
+        :class:`~gpytorch.kernels.PeriodicKernel`).
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel
+            Root kernel to search.
+
+        Returns
+        -------
+        periodic_kernel : gpytorch.kernels.Kernel or None
+            The first kernel with ``period_length``, or ``None`` if none
+            is found.
+        """
+        if hasattr(kernel, "period_length"):
+            return kernel
+        # Unwrap ScaleKernel / GridInterpolationKernel wrappers
+        if hasattr(kernel, "base_kernel"):
+            result = Lightcurve._find_period_length_in_kernel(
+                kernel.base_kernel
+            )
+            if result is not None:
+                return result
+        # Recurse into ProductKernel / AdditiveKernel sub-kernels
+        if hasattr(kernel, "kernels"):
+            for k in kernel.kernels:
+                result = Lightcurve._find_period_length_in_kernel(k)
+                if result is not None:
+                    return result
+        return None
+
+    def _extract_explicit_period_params(self, kernel):
+        """Extract the dominant period from a kernel containing a PeriodicKernel.
+
+        Finds the first :class:`~gpytorch.kernels.PeriodicKernel` in the
+        kernel tree (via :meth:`_find_period_length_in_kernel`), reads its
+        ``period_length``, and inverse-transforms it back to raw data units
+        using ``self.xtransform`` (with ``shift=False`` - scaling only,
+        since a period is a duration, not an absolute coordinate).
+
+        If an RBF sub-kernel is found alongside the PeriodicKernel (as in
+        the quasi-periodic product), its lengthscale is used to derive a
+        practical coherence-based period interval and Q-factor.
+
+        The scientifically important transforms are:
+
+        * If ``self.xtransform is None``: period is stored in raw units
+          already.
+        * If ``self.xtransform is not None``: ``period_length`` is in the
+          normalised time coordinate; ``xtransform.inverse(..., shift=False)``
+          recovers the raw-unit period (``shift=False`` because a period is a
+          *duration*, not an absolute time, so only the scale factor matters).
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel
+            Kernel tree to search (typically ``self.model.sci_kernel`` or a
+            sub-kernel thereof).
+
+        Returns
+        -------
+        params : dict or None
+            Dictionary with:
+
+            * ``raw_period`` - dominant period in raw data units
+            * ``raw_freq`` - ``1 / raw_period``
+            * ``raw_rbf_lengthscale`` - coherence timescale in raw units, or
+              ``None`` if no RBF kernel was found alongside the periodic one
+            * ``period_lo``, ``period_hi`` - coherence-based interval (or
+              equal to ``raw_period`` when no RBF lengthscale is available)
+            * ``q_factor`` - coherence Q (RBF-based), or ``None``
+
+            Returns ``None`` if no PeriodicKernel is found.
+        """
+        pk = self._find_period_length_in_kernel(kernel)
+        if pk is None:
+            return None
+
+        period_norm = float(
+            pk.period_length.detach().cpu().numpy().ravel()[0]
+        )
+
+        if self.xtransform is None:
+            # period_length is in raw data units already
+            raw_period = period_norm
+        else:
+            # Inverse-transform: shift=False because a period is a duration
+            # (only the scale factor matters, not the origin shift).
+            raw_period = float(
+                self.xtransform.inverse(
+                    torch.as_tensor([period_norm]), shift=False
+                )
+                .detach()
+                .cpu()
+                .numpy()
+                .ravel()[0]
+            )
+
+        raw_period = abs(raw_period)
+        raw_freq = 1.0 / raw_period if raw_period > 0 else np.nan
+
+        # -- RBF lengthscale for coherence estimate (optional) --------------
+        # In a quasi-periodic kernel the RBF lengthscale sets the coherence
+        # time.  We search the same kernel tree for an RBF lengthscale that
+        # lives alongside the PeriodicKernel.
+        raw_rbf_ls = None
+        if hasattr(kernel, "kernels"):
+            # ProductKernel or AdditiveKernel at top level
+            _kernels_to_search = list(kernel.kernels)
+        elif hasattr(kernel, "base_kernel") and hasattr(
+            kernel.base_kernel, "kernels"
+        ):
+            # ScaleKernel wrapping a ProductKernel
+            _kernels_to_search = list(kernel.base_kernel.kernels)
+        else:
+            _kernels_to_search = []
+
+        for k in _kernels_to_search:
+            # Unwrap ScaleKernel wrappers
+            inner = getattr(k, "base_kernel", k)
+            if hasattr(inner, "lengthscale") and not hasattr(
+                inner, "period_length"
+            ):
+                ls_norm = float(
+                    inner.lengthscale.detach().cpu().numpy().ravel()[0]
+                )
+                if self.xtransform is None:
+                    raw_rbf_ls = ls_norm
+                else:
+                    raw_rbf_ls = float(
+                        self.xtransform.inverse(
+                            torch.as_tensor([ls_norm]), shift=False
+                        )
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .ravel()[0]
+                    )
+                break
+
+        # -- period interval and Q from RBF coherence time -----------------
+        if raw_rbf_ls is not None and raw_rbf_ls > 0:
+            # Bandwidth from Gaussian (RBF) envelope: delta_f ~ 1/(2pi*L)
+            # Linearised period uncertainty: delta_p ~ P^2 * delta_f
+            delta_p = raw_period**2 / (2.0 * np.pi * raw_rbf_ls)
+            period_lo = max(raw_period - delta_p / 2.0, 1e-12)
+            period_hi = raw_period + delta_p / 2.0
+            # Q = f_peak / FWHM_f ~ (2*pi * L) / P
+            q_factor = 2.0 * np.pi * raw_rbf_ls / raw_period
+        else:
+            period_lo = raw_period
+            period_hi = raw_period
+            q_factor = None
+
+        return {
+            "raw_period": raw_period,
+            "raw_freq": raw_freq,
+            "raw_rbf_lengthscale": raw_rbf_ls,
+            "period_lo": period_lo,
+            "period_hi": period_hi,
+            "q_factor": q_factor,
+        }
+
+    def _get_non_periodic_summary(self):
+        """Return a graceful period summary for a non-periodic kernel.
+
+        Used when the model has no periodic structure (e.g.
+        :class:`~pgmuvi.gps.MaternGPModel`).  All period-related fields
+        are set to ``None`` or empty arrays, and the ``method`` field is
+        set to ``"non_periodic_kernel"`` so that downstream code can
+        distinguish this from a genuine period summary.
+
+        Returns
+        -------
+        summary : dict
+            Consistent dictionary with the same keys as
+            :meth:`get_period_summary` but with no period information.
+        """
+        return {
+            "component_periods": np.array([]),
+            "component_weights": np.array([]),
+            "component_period_scales": np.array([]),
+            "component_frequencies": np.array([]),
+            "component_frequency_scales": np.array([]),
+            "freq_grid": None,
+            "psd": None,
+            "dominant_frequency": None,
+            "dominant_period": None,
+            "period_interval_fwhm_like": None,
+            "q_factor": None,
+            "peak_fraction": np.nan,
+            "n_significant_peaks": 0,
+            "significant_periods": np.array([]),
+            "method": "non_periodic_kernel",
+            "notes": (
+                "This model does not encode a periodic timescale, "
+                "so no dominant period is defined."
+            ),
+        }
+
+    def _get_explicit_period_summary(self, kernel=None):
+        """Return a period summary for an explicit-period kernel (e.g. QP).
+
+        Extracts the dominant period directly from a
+        :class:`~gpytorch.kernels.PeriodicKernel` embedded in the model's
+        ``sci_kernel``.  This is appropriate for quasi-periodic models
+        (:class:`~pgmuvi.gps.QuasiPeriodicGPModel`,
+        :class:`~pgmuvi.gps.LinearMeanQuasiPeriodicGPModel`) where the
+        period is a directly fitted parameter.
+
+        The uncertainty is a coherence-based proxy derived from the RBF
+        lengthscale that accompanies the PeriodicKernel in the product
+        ``k_periodic * k_rbf``.  It is **not** a posterior credible
+        interval; MCMC-based intervals are not yet implemented.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None, optional
+            Kernel to search.  Defaults to ``self.model.sci_kernel``.
+
+        Returns
+        -------
+        summary : dict
+            Same keys as :meth:`get_period_summary`.  ``freq_grid`` and
+            ``psd`` are ``None`` (no PSD is computed for this backend).
+        """
+        if kernel is None:
+            kernel = self.model.sci_kernel
+
+        ep = self._extract_explicit_period_params(kernel)
+        if ep is None:
+            return self._get_non_periodic_summary()
+
+        raw_period = ep["raw_period"]
+        raw_freq = ep["raw_freq"]
+        period_lo = ep["period_lo"]
+        period_hi = ep["period_hi"]
+        q_factor = ep["q_factor"]
+        raw_rbf_ls = ep["raw_rbf_lengthscale"]
+
+        if raw_rbf_ls is not None:
+            notes = (
+                "Period extracted from the fitted period_length parameter "
+                "of the PeriodicKernel.  The uncertainty interval and "
+                "Q-factor are coherence proxies derived from the RBF "
+                "lengthscale; they are not posterior credible intervals."
+            )
+        else:
+            notes = (
+                "Period extracted from the fitted period_length parameter "
+                "of the PeriodicKernel.  No coherence timescale found; "
+                "period interval set to a point estimate."
+            )
+
+        return {
+            "component_periods": np.array([raw_period]),
+            "component_weights": np.array([np.nan]),
+            "component_period_scales": np.array([np.nan]),
+            "component_frequencies": np.array([raw_freq]),
+            "component_frequency_scales": np.array([np.nan]),
+            "freq_grid": None,
+            "psd": None,
+            "dominant_frequency": raw_freq,
+            "dominant_period": raw_period,
+            "period_interval_fwhm_like": (period_lo, period_hi),
+            "q_factor": q_factor,
+            "peak_fraction": np.nan,
+            "n_significant_peaks": 1,
+            "significant_periods": np.array([raw_period]),
+            "method": "explicit_period_parameter",
+            "notes": notes,
+        }
+
+    def _get_periodic_plus_stochastic_summary(self):
+        """Return a period summary for a periodic-plus-stochastic kernel.
+
+        Used for :class:`~pgmuvi.gps.PeriodicPlusStochasticGPModel`, whose
+        ``sci_kernel`` is an :class:`~gpytorch.kernels.AdditiveKernel`
+        combining a quasi-periodic part (``k_periodic * k_rbf``) with a
+        purely stochastic RBF part.
+
+        The dominant period is extracted from the quasi-periodic sub-kernel
+        using the same logic as :meth:`_get_explicit_period_summary`.  A
+        note is included to flag the mixed periodic/stochastic nature of the
+        model.
+
+        Returns
+        -------
+        summary : dict
+            Same keys as :meth:`get_period_summary`.
+        """
+        # The first sub-kernel of the AdditiveKernel is the QP part.
+        qp_kernel = self.model.sci_kernel.kernels[0]
+        summary = self._get_explicit_period_summary(kernel=qp_kernel)
+        # Update method and notes to reflect the mixed structure
+        summary["method"] = "periodic_plus_stochastic"
+        summary["notes"] = (
+            "This model combines a quasi-periodic term with a stochastic "
+            "(RBF) term.  The dominant period is extracted from the "
+            "quasi-periodic component only.  "
+            + summary["notes"]
+        )
+        return summary
+
+    def _get_separable_2d_period_summary(self, **kwargs):
+        """Return a period summary for a separable-product 2D kernel.
+
+        For separable 2D models (e.g. :class:`~pgmuvi.gps.SeparableGPModel`,
+        :class:`~pgmuvi.gps.AchromaticGPModel`,
+        :class:`~pgmuvi.gps.WavelengthDependentGPModel`,
+        :class:`~pgmuvi.gps.DustMeanGPModel`,
+        :class:`~pgmuvi.gps.PowerLawMeanGPModel`) the ``sci_kernel`` is a
+        :class:`~gpytorch.kernels.ProductKernel` whose sub-kernels each
+        carry an ``active_dims`` attribute that identifies which input
+        dimension (time = 0, wavelength = 1) they act on.
+
+        This method:
+
+        1. Identifies the time sub-kernel (``active_dims`` contains 0).
+        2. Classifies the time kernel into a period-summary backend.
+        3. Delegates to the appropriate backend method.
+
+        Parameters
+        ----------
+        **kwargs
+            Forwarded to :meth:`_get_sm_period_summary` when the time
+            kernel is spectral-mixture.
+
+        Returns
+        -------
+        summary : dict
+            Same keys as :meth:`get_period_summary`.
+        """
+
+        sk = self.model.sci_kernel
+        # Identify the time sub-kernel (active_dims contains 0)
+        time_kernel = None
+        for k in sk.kernels:
+            ad = getattr(k, "active_dims", None)
+            if ad is not None and 0 in ad.tolist():
+                time_kernel = k
+                break
+
+        if time_kernel is None:
+            # Cannot identify time kernel; fall back to non-periodic
+            return self._get_non_periodic_summary()
+
+        # Classify the time kernel
+        actual_tk = getattr(time_kernel, "base_kernel", time_kernel)
+
+        if hasattr(actual_tk, "mixture_means"):
+            # Spectral-mixture time kernel - use PSD method
+            # Temporarily swap sci_kernel to expose the time kernel
+            # as a stand-alone SM kernel for _extract_sm_params.
+            _orig_sk = self.model.sci_kernel
+            self.model.sci_kernel = actual_tk
+            try:
+                summary = self._get_sm_period_summary(**kwargs)
+            finally:
+                self.model.sci_kernel = _orig_sk
+            summary["notes"] = (
+                "Separable 2D model: period summary derived from the "
+                "time kernel only.  " + summary["notes"]
+            )
+            return summary
+
+        if self._find_period_length_in_kernel(time_kernel) is not None:
+            # Explicit-period time kernel (e.g. quasi-periodic)
+            summary = self._get_explicit_period_summary(
+                kernel=time_kernel
+            )
+            summary["notes"] = (
+                "Separable 2D model: period summary derived from the "
+                "time kernel only.  " + summary["notes"]
+            )
+            return summary
+
+        # Non-periodic time kernel
+        summary = self._get_non_periodic_summary()
+        summary["notes"] = (
+            "Separable 2D model: the time kernel is non-periodic, "
+            "so no dominant period is defined."
+        )
+        return summary
+
+    def _get_sm_period_summary(
         self,
         n_grid=5000,
         min_freq=None,
         max_freq=None,
         peak_threshold_rel=0.2,
-        uncertainty="peak_width",
     ):
-        """Return a literature-comparable period summary for the fitted model.
+        """Return the PSD-based period summary for a spectral-mixture model.
 
-        Unlike :meth:`get_periods`, which returns the raw kernel-basis
-        parameters of each spectral-mixture component (component centres,
-        scales, and weights), this method:
-
-        1. Constructs the total positive-frequency PSD implied by all
-           spectral-mixture components.
-        2. Identifies the dominant (highest) PSD peak.
-        3. Returns the dominant period together with practical uncertainty
-           proxies and diagnostics.
-
-        The result is directly comparable to periods reported in the
-        literature because it corresponds to the *peak* of the combined
-        power spectrum rather than to an individual kernel component.
-
-        .. note::
-            The uncertainty returned here is a *PSD-width proxy*, not a
-            posterior credible interval.  MCMC-based credible intervals are
-            not yet implemented.  The half-maximum interval reflects the
-            coherence width of the dominant feature: a sharp, coherent
-            oscillation produces a narrow interval (high Q-factor), while
-            broad or blended components produce a wider one.
+        Implements the core PSD-peak extraction logic used when the model
+        (or the time sub-kernel of a separable 2D model) is a
+        :class:`~gpytorch.kernels.SpectralMixtureKernel`.
 
         Parameters
         ----------
         n_grid : int, optional
             Number of points in the positive-frequency evaluation grid.
-            Default 5000.
-        min_freq : float or None, optional
-            Minimum frequency for the evaluation grid.  If ``None``,
-            defaults to ``1 / time_span`` of the observations.
-        max_freq : float or None, optional
-            Maximum frequency for the evaluation grid.  If ``None``, set
-            to cover the highest component centre plus five sigma.
+        min_freq, max_freq : float or None, optional
+            Grid limits.  Defaults are derived from the data time span and
+            the component centres + five sigma.
         peak_threshold_rel : float, optional
-            Fraction of the dominant peak height below which secondary
-            peaks are considered insignificant.  Default 0.2.
-        uncertainty : str, optional
-            Uncertainty method.  Currently only ``"peak_width"`` (the
-            half-maximum interval) is implemented.
+            Relative height threshold for significant peak detection.
 
         Returns
         -------
         summary : dict
-            Dictionary containing:
-
-            * ``component_periods``          - raw kernel component periods
-            * ``component_weights``          - raw kernel component weights
-            * ``component_period_scales``    - raw kernel period widths
-            * ``component_frequencies``      - raw kernel component freqs
-            * ``component_frequency_scales`` - raw kernel frequency widths
-            * ``freq_grid``              - evaluation frequency grid
-            * ``psd``                    - PSD values on the grid
-            * ``dominant_frequency``     - frequency of the highest peak
-            * ``dominant_period``        - ``1 / dominant_frequency``
-            * ``period_interval_fwhm_like`` - ``(period_lo, period_hi)``
-              from the half-maximum frequency interval
-            * ``q_factor``      - coherence Q = f_peak / FWHM_freq
-            * ``peak_fraction`` - dominant peak height / total weight
-            * ``n_significant_peaks`` - peaks above threshold
-            * ``significant_periods`` - periods of significant peaks
-            * ``method``  - description of the method used
-            * ``notes``   - additional diagnostic notes
-
-        Raises
-        ------
-        ValueError
-            If the model is not a spectral-mixture model, or if an
-            unsupported ``uncertainty`` method is requested.
-        RuntimeError
-            If the model has not been initialised.
+            Same keys as :meth:`get_period_summary`.
         """
-        if uncertainty != "peak_width":
-            raise NotImplementedError(
-                f"uncertainty='{uncertainty}' is not yet implemented. "
-                "Use uncertainty='peak_width'."
-            )
-
         params = self._extract_sm_params()
 
-        # -- build the positive-frequency evaluation grid ------------------
         comp_freqs = params["component_frequencies"]
         comp_scales = params["component_frequency_scales"]
 
         if min_freq is None:
-            # lowest meaningful frequency = 1 / total time baseline
             if self.ndim == 1:
                 t_span = (
                     self._xdata_raw.max() - self._xdata_raw.min()
@@ -5140,29 +5536,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else:
                 t_col = self._xdata_raw[:, 0]
                 t_span = (t_col.max() - t_col.min()).item()
-            # guard against zero or near-zero span
             t_span = max(float(t_span), 1e-10)
             min_freq = 1.0 / t_span
 
         if max_freq is None:
-            # cover each component out to 5 sigma above its centre
             max_freq = float(
                 np.max(comp_freqs + 5.0 * comp_scales)
             )
 
-        # ensure positive and ordered
         min_freq = max(float(min_freq), 1e-12)
         max_freq = max(float(max_freq), min_freq * 2.0)
 
         freq_grid = np.linspace(min_freq, max_freq, int(n_grid))
         psd = self._sm_psd_on_grid(freq_grid, params)
 
-        # -- identify the dominant (highest) PSD peak ----------------------
         from scipy.signal import find_peaks
 
         peaks, _ = find_peaks(psd)
         if len(peaks) == 0:
-            # no local maximum found; fall back to the global maximum
             dominant_idx = int(np.argmax(psd))
         else:
             dominant_idx = int(peaks[np.argmax(psd[peaks])])
@@ -5171,15 +5562,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         dominant_period = 1.0 / dominant_freq
         peak_height = float(psd[dominant_idx])
 
-        # -- half-maximum interval (FWHM-like uncertainty proxy) -----------
         half_max = 0.5 * peak_height
-
-        # walk left from the peak to find the half-maximum crossing
         left_idx = dominant_idx
         while left_idx > 0 and psd[left_idx] >= half_max:
             left_idx -= 1
-
-        # walk right from the peak to find the half-maximum crossing
         right_idx = dominant_idx
         while right_idx < len(psd) - 1 and psd[right_idx] >= half_max:
             right_idx += 1
@@ -5188,15 +5574,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         f_right = float(freq_grid[right_idx])
         fwhm_freq = f_right - f_left
 
-        # convert from frequency interval to period interval;
-        # note the inversion: higher frequency → shorter period
         period_lo = 1.0 / f_right
         period_hi = 1.0 / f_left
 
-        # -- Q-factor (coherence metric) -----------------------------------
         q_factor = dominant_freq / fwhm_freq if fwhm_freq > 0 else np.inf
 
-        # -- multimodality diagnostic --------------------------------------
         threshold = peak_threshold_rel * peak_height
         if len(peaks) > 0:
             sig_mask = psd[peaks] >= threshold
@@ -5208,14 +5590,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         sig_periods = 1.0 / sig_freqs
         n_sig_peaks = len(sig_peaks)
 
-        # -- peak fraction (dominant peak height vs sum of weights) --------
         total_weight = float(np.sum(params["component_weights"]))
-        if total_weight > 0:
-            peak_fraction = peak_height / total_weight
-        else:
-            peak_fraction = np.nan
+        peak_fraction = (
+            peak_height / total_weight if total_weight > 0 else np.nan
+        )
 
-        # -- notes ---------------------------------------------------------
         notes = (
             "Uncertainty is a half-maximum PSD-width proxy, "
             "not a posterior credible interval."
@@ -5242,6 +5621,147 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "notes": notes,
         }
 
+    def get_period_summary(
+        self,
+        n_grid=5000,
+        min_freq=None,
+        max_freq=None,
+        peak_threshold_rel=0.2,
+        uncertainty="peak_width",
+    ):
+        """Return a literature-comparable period summary for the fitted model.
+
+        Unlike :meth:`get_periods`, which returns the raw kernel-basis
+        parameters of each spectral-mixture component (component centres,
+        scales, and weights), this method aims to produce a *single dominant
+        period* that can be directly compared to published values.
+
+        The method dispatches to the appropriate backend based on the type of
+        kernel used by the model:
+
+        **Spectral-mixture models** (all ``"1D"``, ``"2D"``, ``"SKI"``,
+        ``"PowerLaw"``, ``"Dust"`` variants):
+            Constructs the total positive-frequency PSD as a sum of weighted
+            Gaussians, identifies the highest PSD peak, and returns its
+            location as the dominant period.  The half-maximum width of the
+            peak provides a practical uncertainty interval.
+
+        **Explicit-period models** (``"1DQuasiPeriodic"``,
+        ``"1DLinearQuasiPeriodic"``):
+            Reads the fitted ``period_length`` parameter directly from the
+            :class:`~gpytorch.kernels.PeriodicKernel`.  The RBF lengthscale
+            is used as a coherence proxy to derive a period interval and
+            Q-factor.
+
+        **Periodic-plus-stochastic** (``"1DPeriodicStochastic"``):
+            Extracts the period from the quasi-periodic sub-kernel.  The
+            summary notes flag the mixed periodic/stochastic nature of the
+            model.
+
+        **Separable 2D models** (``"2DSeparable"``, ``"2DAchromatic"``,
+        ``"2DWavelengthDependent"``, ``"2DDustMean"``,
+        ``"2DPowerLawMean"``):
+            Identifies the time sub-kernel (``active_dims = [0]``) and
+            applies the appropriate backend to that sub-kernel only.
+
+        **Non-periodic models** (``"1DMatern"``):
+            Returns a consistent summary dictionary with ``None`` values for
+            all period-related fields rather than raising an exception, so
+            that automated scripts can handle all model types gracefully.
+
+        .. note::
+            All uncertainty estimates are *practical proxies*, not posterior
+            credible intervals.  MCMC-based credible intervals are not yet
+            implemented.
+
+        Parameters
+        ----------
+        n_grid : int, optional
+            Number of points in the positive-frequency evaluation grid
+            (spectral-mixture backend only).  Default 5000.
+        min_freq : float or None, optional
+            Minimum frequency for the evaluation grid (SM backend only).
+            Defaults to ``1 / time_span``.
+        max_freq : float or None, optional
+            Maximum frequency for the evaluation grid (SM backend only).
+            Defaults to the highest component centre plus five sigma.
+        peak_threshold_rel : float, optional
+            Relative height threshold for significant peaks (SM backend).
+            Default 0.2.
+        uncertainty : str, optional
+            Uncertainty method.  Currently only ``"peak_width"``
+            is implemented.
+
+        Returns
+        -------
+        summary : dict
+            Dictionary with keys:
+
+            * ``component_periods``          - raw kernel component periods
+            * ``component_weights``          - raw kernel component weights
+            * ``component_period_scales``    - raw kernel period widths
+            * ``component_frequencies``      - raw kernel component freqs
+            * ``component_frequency_scales`` - raw kernel frequency widths
+            * ``freq_grid``  - evaluation grid (``None`` for non-PSD backends)
+            * ``psd``        - PSD values (``None`` for non-PSD backends)
+            * ``dominant_frequency`` - frequency of the dominant peak
+              (``None`` for non-periodic models)
+            * ``dominant_period``    - ``1 / dominant_frequency``
+              (``None`` for non-periodic models)
+            * ``period_interval_fwhm_like`` - ``(period_lo, period_hi)``
+              uncertainty interval (``None`` for non-periodic models)
+            * ``q_factor``        - coherence Q (``None`` if not defined)
+            * ``peak_fraction``   - dominant peak height / total weight
+            * ``n_significant_peaks`` - peaks above threshold
+            * ``significant_periods`` - periods of significant peaks
+            * ``method``  - string identifying the backend used
+            * ``notes``   - additional diagnostic notes
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been initialised.
+        NotImplementedError
+            If an unsupported ``uncertainty`` method is requested.
+        """
+        if uncertainty != "peak_width":
+            raise NotImplementedError(
+                f"uncertainty='{uncertainty}' is not yet implemented. "
+                "Use uncertainty='peak_width'."
+            )
+
+        if not hasattr(self, "model") or self.model is None:
+            raise RuntimeError(
+                "Model not initialised.  Call set_model() first."
+            )
+
+        backend = self._detect_period_summary_backend()
+
+        if backend == "spectral_mixture":
+            return self._get_sm_period_summary(
+                n_grid=n_grid,
+                min_freq=min_freq,
+                max_freq=max_freq,
+                peak_threshold_rel=peak_threshold_rel,
+            )
+
+        if backend == "explicit_period":
+            return self._get_explicit_period_summary()
+
+        if backend == "periodic_plus_stochastic":
+            return self._get_periodic_plus_stochastic_summary()
+
+        if backend == "separable_2d":
+            return self._get_separable_2d_period_summary(
+                n_grid=n_grid,
+                min_freq=min_freq,
+                max_freq=max_freq,
+                peak_threshold_rel=peak_threshold_rel,
+            )
+
+        # backend == "non_periodic"
+        return self._get_non_periodic_summary()
+
     def plot_period_summary(
         self,
         summary=None,
@@ -5249,31 +5769,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         log_freq=True,
         **kwargs,
     ):
-        """Plot the PSD and dominant period from :meth:`get_period_summary`.
+        """Plot the period summary from :meth:`get_period_summary`.
 
-        Creates a matplotlib figure showing:
+        Produces a matplotlib figure appropriate for the type of period
+        summary:
 
-        * The total positive-frequency PSD.
-        * A vertical line at the dominant frequency.
-        * A shaded band for the half-maximum frequency interval.
-        * Dotted lines for any other significant peaks.
-        * A text annotation with the dominant period, interval, Q-factor,
-          and number of significant peaks.
+        * **Spectral-mixture PSD summary**: plots the PSD curve, a vertical
+          line at the dominant frequency, a shaded half-maximum band, and
+          dotted lines for other significant peaks.
+        * **Explicit-period summary** (e.g. quasi-periodic): plots a single
+          vertical line at the dominant frequency with an annotated period,
+          interval, and Q-factor.  No PSD curve is drawn because none is
+          computed for this backend.
+        * **Non-periodic summary**: produces a simple figure with explanatory
+          text stating that no dominant period is defined for this kernel.
+
+        The figure type is determined by ``summary["method"]`` and by whether
+        ``summary["freq_grid"]`` is ``None``.
 
         Parameters
         ----------
         summary : dict or None, optional
             Output of :meth:`get_period_summary`.  If ``None``, it is
-            computed automatically with default parameters.  Any extra
-            keyword arguments (``**kwargs``) are forwarded to
-            :meth:`get_period_summary`.
+            computed automatically.  Extra keyword arguments (``**kwargs``)
+            are forwarded to :meth:`get_period_summary`.
         show : bool, optional
             If ``True`` (default), call ``plt.show()``.  If ``False``,
             return ``(fig, ax)`` for further customisation.
         log_freq : bool, optional
-            If ``True`` (default), plot the frequency axis on a log scale.
-        **kwargs : dict
-            Additional keyword arguments passed to
+            If ``True`` (default), plot the x-axis (frequency) on a log
+            scale.  Ignored for non-periodic summaries.
+        **kwargs
+            Additional keyword arguments forwarded to
             :meth:`get_period_summary` when ``summary`` is ``None``.
 
         Returns
@@ -5284,24 +5811,52 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if summary is None:
             summary = self.get_period_summary(**kwargs)
 
-        freq_grid = summary["freq_grid"]
-        psd = summary["psd"]
-        f_peak = summary["dominant_frequency"]
-        p_dom = summary["dominant_period"]
-        period_lo, period_hi = summary["period_interval_fwhm_like"]
-        q = summary["q_factor"]
-        n_sig = summary["n_significant_peaks"]
-        sig_periods = summary["significant_periods"]
-
-        # half-maximum frequency bounds (inverse of period bounds)
-        f_left = 1.0 / period_hi
-        f_right = 1.0 / period_lo
+        method = summary.get("method", "")
+        has_psd = summary["freq_grid"] is not None
 
         fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
-        ax.plot(freq_grid, psd, color="steelblue", lw=1.5, label="PSD")
+        # -- non-periodic: informational plot only -------------------------
+        if method == "non_periodic_kernel" or (
+            summary["dominant_period"] is None
+        ):
+            ax.text(
+                0.5,
+                0.5,
+                summary.get(
+                    "notes",
+                    "No dominant period defined for this kernel.",
+                ),
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=11,
+                wrap=True,
+            )
+            ax.set_axis_off()
+            ax.set_title("Period summary")
+            if show:
+                plt.show()
+                return None
+            return fig, ax
 
-        # -- dominant peak -------------------------------------------------
+        # -- common fields -------------------------------------------------
+        f_peak = summary["dominant_frequency"]
+        p_dom = summary["dominant_period"]
+        interval = summary["period_interval_fwhm_like"]
+        q = summary["q_factor"]
+        n_sig = summary["n_significant_peaks"]
+        sig_periods = summary.get("significant_periods", np.array([]))
+
+        # -- PSD curve (spectral-mixture only) -----------------------------
+        if has_psd:
+            freq_grid = summary["freq_grid"]
+            psd = summary["psd"]
+            ax.plot(
+                freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
+            )
+
+        # -- dominant peak marker -----------------------------------------
         ax.axvline(
             f_peak,
             color="crimson",
@@ -5310,21 +5865,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             label=f"Dominant peak  P = {p_dom:.4g}",
         )
 
-        # -- half-maximum shaded band --------------------------------------
-        ax.axvspan(
-            f_left,
-            f_right,
-            alpha=0.25,
-            color="crimson",
-            label=(
-                f"FWHM interval  [{period_lo:.4g}, {period_hi:.4g}]"
-            ),
-        )
+        # -- period interval shaded band (if finite interval) --------------
+        if interval is not None:
+            period_lo, period_hi = interval
+            f_left = 1.0 / period_hi
+            f_right = 1.0 / period_lo
+            if f_left < f_right:
+                ax.axvspan(
+                    f_left,
+                    f_right,
+                    alpha=0.25,
+                    color="crimson",
+                    label=(
+                        f"Interval  [{period_lo:.4g}, {period_hi:.4g}]"
+                    ),
+                )
 
         # -- other significant peaks ---------------------------------------
         for sp in sig_periods:
             sf = 1.0 / sp
-            if abs(sf - f_peak) > 1e-12 * f_peak:
+            if abs(sf - f_peak) > 1e-12 * max(f_peak, 1e-12):
                 ax.axvline(
                     sf,
                     color="darkorange",
@@ -5334,10 +5894,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
         # -- text annotation -----------------------------------------------
-        q_str = f"{q:.2f}" if np.isfinite(q) else "inf"
+        if q is not None and np.isfinite(q):
+            q_str = f"{q:.2f}"
+        elif q is not None and np.isinf(q):
+            q_str = "inf"
+        else:
+            q_str = "N/A"
+
+        if interval is not None:
+            p_lo, p_hi = interval
+            int_str = f"[{p_lo:.4g}, {p_hi:.4g}]"
+        else:
+            int_str = "N/A"
+
         ann_lines = [
             f"Dominant period:   {p_dom:.6g}",
-            f"Interval:          [{period_lo:.4g}, {period_hi:.4g}]",
+            f"Interval:          {int_str}",
             f"Q-factor:          {q_str}",
             f"Significant peaks: {n_sig}",
         ]
@@ -5358,8 +5930,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if log_freq:
             ax.set_xscale("log")
         ax.set_xlabel("Frequency")
-        ax.set_ylabel("PSD")
-        ax.set_title("Spectral-mixture PSD \u2013 period summary")
+        ax.set_ylabel("PSD" if has_psd else "")
+        ax.set_title(f"Period summary ({method})")
         ax.legend(fontsize=8, loc="upper left")
 
         if show:
