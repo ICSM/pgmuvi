@@ -5600,7 +5600,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return float(f_basin[0]), float(f_basin[0]), False
 
         # Trapezoidal integration for total mass
-        total_mass = float(np.trapezoid(p_basin, f_basin))
+        # np.trapezoid was added in NumPy 2.0; fall back to np.trapz for
+        # older installations.
+        try:
+            total_mass = float(np.trapezoid(p_basin, f_basin))
+        except AttributeError:
+            total_mass = float(np.trapz(p_basin, f_basin))
         if total_mass <= 0:
             return float(f_basin[0]), float(f_basin[-1]), False
 
