@@ -6151,10 +6151,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if uncertainty == "peak_mass":
             _note_parts = [
                 "Interval is based on the integrated PSD mass within the "
-                "dominant peak basin (equal-tail 68% interval).  "
-                "It is not a posterior credible interval.  "
+                "dominant peak basin (equal-tail 68% interval). "
+                "It is not a posterior credible interval. "
                 "This is more robust than a half-maximum interval for "
-                "asymmetric or slowly decaying peaks.  "
+                "asymmetric or slowly decaying peaks. "
                 "PSD evaluated on a log-spaced frequency grid."
             ]
             if _basin_left_at_bdy:
@@ -6167,7 +6167,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "  Basin reached the right grid boundary; "
                     "right edge of the basin may be underestimated."
                 )
-            if uncertainty == "peak_mass" and not _mass_ok:
+            if not _mass_ok:
                 _note_parts.append(
                     "  WARNING: peak-mass interval could not be computed "
                     "(basin too narrow); falling back to basin edges."
@@ -6486,7 +6486,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # Build a human-readable interval type label for annotations
         _interval_labels = {
-            "equal_tail_68pct_peak_mass": "68% peak-mass interval",
+            "equal_tail_68pct_peak_mass": "68% peak mass interval",
             "half_maximum_fwhm_like": "half-max interval",
             "coherence_proxy": "coherence-proxy interval",
         }
