@@ -910,11 +910,12 @@ class TestPeakMassInterval(unittest.TestCase):
         self.assertIsNone(summary["q_factor"])
 
     def test_peak_mass_interval_definition_key(self):
-        """interval_definition is 'equal_tail_68pct_peak_mass' for peak_mass."""
+        """interval_definition is 'peak_centered_68pct_mass_interval' for peak_mass."""
         lc = self._make_sm_lc()
         summary = lc.get_period_summary(uncertainty="peak_mass")
         self.assertEqual(
-            summary["interval_definition"], "equal_tail_68pct_peak_mass"
+            summary["interval_definition"],
+            "peak_centered_68pct_mass_interval",
         )
 
     def test_peak_width_interval_definition_key(self):
@@ -939,12 +940,31 @@ class TestPeakMassInterval(unittest.TestCase):
             lc.get_period_summary(uncertainty="unsupported_mode")
 
     def test_peak_mass_notes_describe_method(self):
-        """Notes for peak_mass mention mass interval, not half-maximum proxy."""
+        """Notes for peak_mass mention peak-centered mass, not equal-tail."""
         lc = self._make_sm_lc()
         summary = lc.get_period_summary(uncertainty="peak_mass")
         notes = summary["notes"].lower()
         self.assertIn("mass", notes)
+        self.assertIn("peak", notes)
         self.assertNotIn("half-maximum psd-width proxy", notes)
+
+    def test_peak_mass_interval_contains_dominant_frequency(self):
+        """The peak-mass interval must contain the dominant frequency."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary(uncertainty="peak_mass")
+        f_dom = summary["dominant_frequency"]
+        p_lo, p_hi = summary["period_interval"]
+        # Convert period interval to frequency (inverted)
+        f_hi_from_p = 1.0 / p_lo if p_lo > 0 else float("inf")
+        f_lo_from_p = 1.0 / p_hi if p_hi > 0 else 0.0
+        self.assertGreaterEqual(
+            f_dom, f_lo_from_p,
+            msg=f"Dominant freq {f_dom} should be >= interval lower {f_lo_from_p}",
+        )
+        self.assertLessEqual(
+            f_dom, f_hi_from_p,
+            msg=f"Dominant freq {f_dom} should be <= interval upper {f_hi_from_p}",
+        )
 
     def test_peak_mass_dominant_period_is_mode(self):
         """The dominant period is the PSD mode, not mean/median."""

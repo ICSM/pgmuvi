@@ -761,7 +761,7 @@ class PeriodSummaryResult:
         component_period_scales=None,
         component_frequencies=None,
         component_frequency_scales=None,
-        interval_definition="equal_tail_68pct_peak_mass",
+        interval_definition="peak_centered_68pct_mass_interval",
     ):
         self.method = method
         self.model_name = model_name
@@ -5813,19 +5813,63 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return left, right, left_at_boundary, right_at_boundary
 
     @staticmethod
+    def _integrate_logspace(psd, freq_grid):
+        """Integrate a PSD over a log-spaced frequency grid.
+
+        Computes the integral of ``psd * freq`` with respect to
+        ``log(freq)``, which equals the linear integral of ``psd`` over
+        ``freq`` when the grid is logarithmically spaced.  Using this
+        formulation on a log-spaced grid avoids the strong bias towards
+        high frequencies that arises from naively applying the trapezoidal
+        rule in linear frequency space.
+
+        Formally this implements::
+
+            integral of psd(f) df  ~  integral of (f * psd(f)) d(log f)
+                                   ~  trapz(psd * freq, log(freq))
+
+        Parameters
+        ----------
+        psd : numpy.ndarray
+            1-D PSD values on ``freq_grid``.
+        freq_grid : numpy.ndarray
+            Positive, log-spaced frequency values with the same length as
+            ``psd``.
+
+        Returns
+        -------
+        integral : float
+            Estimated integral value.  Always ≥ 0.
+        """
+        if len(freq_grid) < 2:
+            return 0.0
+        log_f = np.log(freq_grid)
+        weights = psd * freq_grid
+        try:
+            return float(np.trapezoid(weights, log_f))
+        except AttributeError:
+            return float(np.trapz(weights, log_f))
+
+    @staticmethod
     def _compute_equal_tail_mass_interval(
         freq_grid, psd, basin_left, basin_right, mass_level=0.68
     ):
         """Compute an equal-tail mass interval within the dominant peak basin.
+
+        .. deprecated::
+            This method is retained as a legacy helper.  The default
+            ``uncertainty="peak_mass"`` path now uses
+            :meth:`_compute_peak_centered_mass_interval`, which guarantees
+            that the returned interval contains the peak frequency.
 
         Integrates the PSD (as a proxy for a probability density) over the
         basin region and returns the frequency interval that contains a
         centred fraction ``mass_level`` of the total basin mass, using an
         equal-tail (symmetric quantile) approach.
 
-        Integration is performed using the trapezoidal rule over the actual
-        (non-uniform, log-spaced) ``freq_grid`` values so that the result is
-        correct regardless of grid spacing.
+        Integration is performed in log-frequency space (``trapz(psd *
+        freq, log_freq)``) to avoid the bias towards high frequencies that
+        arises from naive linear-space integration on a log-spaced grid.
 
         Parameters
         ----------
@@ -5858,22 +5902,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if len(f_basin) < 2:
             return float(f_basin[0]), float(f_basin[0]), False
 
-        # Trapezoidal integration for total mass
-        # np.trapezoid was added in NumPy 2.0; fall back to np.trapz for
-        # older installations.
+        # Log-space integration: integrate psd*freq w.r.t. log(freq)
+        log_f = np.log(f_basin)
+        weights = p_basin * f_basin
         try:
-            total_mass = float(np.trapezoid(p_basin, f_basin))
+            total_mass = float(np.trapezoid(weights, log_f))
         except AttributeError:
-            total_mass = float(np.trapz(p_basin, f_basin))
+            total_mass = float(np.trapz(weights, log_f))
         if total_mass <= 0:
             return float(f_basin[0]), float(f_basin[-1]), False
 
-        # Build cumulative mass
+        # Build cumulative mass in log-space
         cum = np.zeros(len(f_basin))
         for i in range(1, len(f_basin)):
+            dlogf = log_f[i] - log_f[i - 1]
             cum[i] = cum[i - 1] + 0.5 * (
-                p_basin[i - 1] + p_basin[i]
-            ) * (f_basin[i] - f_basin[i - 1])
+                weights[i - 1] + weights[i]
+            ) * dlogf
         cum /= total_mass  # normalise to [0, 1]
 
         tail = (1.0 - mass_level) / 2.0
@@ -5883,6 +5928,112 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # Interpolate upper quantile
         f_hi = float(np.interp(1.0 - tail, cum, f_basin))
 
+        return f_lo, f_hi, True
+
+    @staticmethod
+    def _compute_peak_centered_mass_interval(
+        freq_grid, psd, basin_left, basin_right, peak_idx, mass_level=0.68
+    ):
+        """Compute a peak-centered mass interval within a PSD basin.
+
+        This is the preferred method for ``uncertainty="peak_mass"``.
+
+        Unlike the equal-tail approach, this method **guarantees that the
+        returned interval contains the peak frequency** by growing the
+        interval outward from the peak, always expanding toward the side
+        that contributes more mass per log-frequency unit.  This greedy
+        "grow from the peak" strategy is equivalent to finding the shortest
+        interval (in log-frequency space) that encloses the requested mass
+        fraction and still contains the peak.
+
+        Integration is performed in log-frequency space to avoid the
+        high-frequency bias of naive linear-space trapezoidal integration
+        on a log-spaced grid.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Full frequency evaluation grid (positive, log-spaced).
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        basin_left : int
+            Left edge index of the basin (inclusive).
+        basin_right : int
+            Right edge index of the basin (inclusive).
+        peak_idx : int
+            Index of the peak in the full ``freq_grid``.  Must satisfy
+            ``basin_left <= peak_idx <= basin_right``.
+        mass_level : float, optional
+            Target fraction of basin mass to enclose.  Default 0.68.
+
+        Returns
+        -------
+        f_lo : float
+            Lower frequency bound of the peak-centered interval.
+        f_hi : float
+            Upper frequency bound of the peak-centered interval.
+        success : bool
+            ``True`` if the interval was computed successfully.  ``False``
+            if the basin has fewer than 2 grid points or the total mass is
+            numerically zero.
+        """
+        f_basin = freq_grid[basin_left : basin_right + 1]
+        p_basin = psd[basin_left : basin_right + 1]
+        pk_rel = int(peak_idx) - int(basin_left)
+
+        if len(f_basin) < 2:
+            return float(f_basin[0]), float(f_basin[0]), False
+
+        # Log-space integration weights
+        log_f = np.log(f_basin)
+        weights = p_basin * f_basin
+
+        # Total basin mass in log-space
+        try:
+            total_mass = float(np.trapezoid(weights, log_f))
+        except AttributeError:
+            total_mass = float(np.trapz(weights, log_f))
+        if total_mass <= 0:
+            return float(f_basin[0]), float(f_basin[-1]), False
+
+        # Per-segment mass in log-space
+        # seg_mass[i] = mass of segment [i, i+1]
+        n = len(f_basin)
+        seg_mass = np.zeros(n - 1)
+        for i in range(n - 1):
+            dlogf = log_f[i + 1] - log_f[i]
+            seg_mass[i] = 0.5 * (weights[i] + weights[i + 1]) * dlogf
+
+        # Greedy grow from the peak: always expand into the denser side
+        left_ptr = pk_rel
+        right_ptr = pk_rel
+        accumulated = 0.0
+
+        while accumulated / total_mass < mass_level:
+            can_go_left = left_ptr > 0
+            can_go_right = right_ptr < n - 1
+
+            if not can_go_left and not can_go_right:
+                break
+
+            if can_go_left and can_go_right:
+                left_seg = seg_mass[left_ptr - 1]
+                right_seg = seg_mass[right_ptr]
+                if left_seg >= right_seg:
+                    accumulated += left_seg
+                    left_ptr -= 1
+                else:
+                    accumulated += right_seg
+                    right_ptr += 1
+            elif can_go_left:
+                accumulated += seg_mass[left_ptr - 1]
+                left_ptr -= 1
+            else:
+                accumulated += seg_mass[right_ptr]
+                right_ptr += 1
+
+        f_lo = float(f_basin[left_ptr])
+        f_hi = float(f_basin[right_ptr])
         return f_lo, f_hi, True
 
     @staticmethod
@@ -6218,8 +6369,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Characterize a single PSD peak basin.
 
         Finds the basin boundaries by walking left/right from the peak
-        until the PSD stops decreasing, computes the equal-tail mass
-        interval, and returns a summary dict.
+        until the PSD stops decreasing, computes the peak-centered mass
+        interval (which always contains the peak), and returns a summary
+        dict.
 
         Parameters
         ----------
@@ -6249,20 +6401,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         while right < n - 1 and psd[right + 1] < psd[right]:
             right += 1
 
-        f_lo, f_hi, mass_ok = Lightcurve._compute_equal_tail_mass_interval(
-            freq_grid, psd, left, right, mass_level=mass_level
+        f_lo, f_hi, mass_ok = Lightcurve._compute_peak_centered_mass_interval(
+            freq_grid, psd, left, right, peak_idx, mass_level=mass_level
         )
 
         f_basin = freq_grid[left : right + 1]
         p_basin = psd[left : right + 1]
-        try:
-            basin_mass = float(np.trapezoid(p_basin, f_basin))
-        except AttributeError:
-            basin_mass = float(np.trapz(p_basin, f_basin))
-        try:
-            total_mass = float(np.trapezoid(psd, freq_grid))
-        except AttributeError:
-            total_mass = float(np.trapz(psd, freq_grid))
+        basin_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
+        total_mass = Lightcurve._integrate_logspace(psd, freq_grid)
         area_fraction = (
             basin_mass / total_mass if total_mass > 0 else float("nan")
         )
@@ -6481,10 +6627,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         _note_parts = [
             "Interval is based on the integrated PSD mass within the "
-            "dominant peak basin (equal-tail 68% interval). "
-            "It is not a posterior credible interval. "
-            "This is more robust than a half-maximum interval for "
-            "asymmetric or slowly decaying peaks. "
+            "dominant peak basin (peak-centered shortest-mass interval). "
+            "The interval is guaranteed to contain the peak frequency. "
+            "Integration is performed in log-frequency space to avoid "
+            "high-frequency bias on a log-spaced grid. "
             "PSD evaluated on a log-spaced frequency grid."
         ]
         if _basin_left_at_bdy:
@@ -6523,7 +6669,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if uncertainty == "peak_width":
             _interval_def = "half_maximum_fwhm_like"
         else:
-            _interval_def = "equal_tail_68pct_peak_mass"
+            _interval_def = "peak_centered_68pct_mass_interval"
 
         return PeriodSummaryResult(
             method="spectral_mixture_psd_peak",
@@ -6817,6 +6963,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # Build a human-readable interval type label for annotations
         _interval_labels = {
             "equal_tail_68pct_peak_mass": "68% peak mass interval",
+            "peak_centered_68pct_mass_interval": "68% peak-centered mass interval",
             "half_maximum_fwhm_like": "half-max interval",
             "coherence_proxy": "coherence-proxy interval",
         }
