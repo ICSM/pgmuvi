@@ -5309,6 +5309,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "dominant_frequency": None,
             "dominant_period": None,
             "period_interval_fwhm_like": None,
+            "period_interval": None,
+            "interval_definition": "none",
             "q_factor": None,
             "peak_fraction": np.nan,
             "n_significant_peaks": 0,
@@ -5385,6 +5387,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "dominant_frequency": raw_freq,
             "dominant_period": raw_period,
             "period_interval_fwhm_like": (period_lo, period_hi),
+            "period_interval": (period_lo, period_hi),
+            "interval_definition": "coherence_proxy",
             "q_factor": q_factor,
             "peak_fraction": np.nan,
             "n_significant_peaks": 1,
@@ -5504,6 +5508,118 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "so no dominant period is defined."
         )
         return summary
+
+    @staticmethod
+    def _find_dominant_peak_basin(psd, dominant_idx):
+        """Identify the basin of the dominant PSD peak.
+
+        Starting from the dominant peak index, walk left and right until a
+        local minimum is found or the edge of the array is reached.  The
+        basin is the contiguous region associated with the dominant mode.
+
+        Parameters
+        ----------
+        psd : numpy.ndarray
+            1-D PSD values on a frequency grid.
+        dominant_idx : int
+            Index of the dominant PSD peak in ``psd``.
+
+        Returns
+        -------
+        basin_left : int
+            Index of the left edge of the basin (inclusive).
+        basin_right : int
+            Index of the right edge of the basin (inclusive).
+        left_at_boundary : bool
+            ``True`` if the left edge reached the array boundary without
+            finding a local minimum.
+        right_at_boundary : bool
+            ``True`` if the right edge reached the array boundary without
+            finding a local minimum.
+        """
+        n = len(psd)
+
+        # Walk left: stop at local minimum (psd starts rising)
+        left = dominant_idx
+        while left > 0 and psd[left - 1] < psd[left]:
+            left -= 1
+        left_at_boundary = left == 0
+
+        # Walk right: stop at local minimum (psd starts rising)
+        right = dominant_idx
+        while right < n - 1 and psd[right + 1] < psd[right]:
+            right += 1
+        right_at_boundary = right == n - 1
+
+        return left, right, left_at_boundary, right_at_boundary
+
+    @staticmethod
+    def _compute_equal_tail_mass_interval(
+        freq_grid, psd, basin_left, basin_right, mass_level=0.68
+    ):
+        """Compute an equal-tail mass interval within the dominant peak basin.
+
+        Integrates the PSD (as a proxy for a probability density) over the
+        basin region and returns the frequency interval that contains a
+        centred fraction ``mass_level`` of the total basin mass, using an
+        equal-tail (symmetric quantile) approach.
+
+        Integration is performed using the trapezoidal rule over the actual
+        (non-uniform, log-spaced) ``freq_grid`` values so that the result is
+        correct regardless of grid spacing.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Full frequency evaluation grid (positive, log-spaced).
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        basin_left : int
+            Left edge index of the dominant-peak basin (inclusive).
+        basin_right : int
+            Right edge index of the dominant-peak basin (inclusive).
+        mass_level : float, optional
+            Fraction of the basin mass to enclose (default 0.68 for
+            approximately ``1 sigma`` coverage).  Must be in ``(0, 1)``.
+
+        Returns
+        -------
+        f_lo : float
+            Lower frequency bound of the equal-tail interval.
+        f_hi : float
+            Upper frequency bound of the equal-tail interval.
+        success : bool
+            ``True`` if the interval could be computed; ``False`` if the
+            basin was too narrow (< 2 grid points) or the total mass was
+            numerically zero.
+        """
+        f_basin = freq_grid[basin_left : basin_right + 1]
+        p_basin = psd[basin_left : basin_right + 1]
+
+        if len(f_basin) < 2:
+            return float(f_basin[0]), float(f_basin[0]), False
+
+        # Trapezoidal integration for total mass
+        total_mass = float(np.trapezoid(p_basin, f_basin))
+        if total_mass <= 0:
+            return float(f_basin[0]), float(f_basin[-1]), False
+
+        # Build cumulative mass
+        cum = np.zeros(len(f_basin))
+        for i in range(1, len(f_basin)):
+            cum[i] = cum[i - 1] + 0.5 * (
+                p_basin[i - 1] + p_basin[i]
+            ) * (f_basin[i] - f_basin[i - 1])
+        cum /= total_mass  # normalise to [0, 1]
+
+        tail = (1.0 - mass_level) / 2.0
+
+        # Interpolate lower quantile
+        f_lo = float(np.interp(tail, cum, f_basin))
+        # Interpolate upper quantile
+        f_hi = float(np.interp(1.0 - tail, cum, f_basin))
+
+        return f_lo, f_hi, True
 
     @staticmethod
     def _build_frequency_grid(min_freq, max_freq, n_grid, spacing="log"):
@@ -5803,6 +5919,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         min_freq=None,
         max_freq=None,
         peak_threshold_rel=0.2,
+        uncertainty="peak_width",
     ):
         """Return the PSD-based period summary for a spectral-mixture model.
 
@@ -5810,29 +5927,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         (or the time sub-kernel of a separable 2D model) is a
         :class:`~gpytorch.kernels.SpectralMixtureKernel`.
 
-        The half-maximum interval is computed robustly:
+        Two uncertainty modes are supported:
 
-        1. An initial **log-spaced** frequency grid is built from heuristic
-           bounds (``min_freq = 1/T_span``,
-           ``max_freq = max(f_k + 5*sigma_k)``) via
-           :meth:`_build_frequency_grid`.  Log spacing ensures adequate
-           resolution at low frequencies when the range spans many decades.
-        2. If either half-maximum crossing lies outside the grid,
-           the grid is expanded adaptively (up to 10 iterations, doubling
-           the relevant edge each time) via
-           :meth:`_expand_psd_grid_until_contained`.  Each rebuilt grid is
-           also log-spaced.
-        3. The crossing frequencies are estimated by linear interpolation
-           between the two bracketing grid points via
-           :meth:`_interpolate_halfmax_crossing`, rather than being
-           snapped to the nearest grid point.
-        4. A local refinement pass (:meth:`_refine_peak_region`) builds a
-           denser log-spaced grid around the approximate half-max interval
-           and recomputes the crossings, improving accuracy further.
+        ``uncertainty="peak_width"`` (legacy):
+            1. An initial **log-spaced** frequency grid is built from heuristic
+               bounds (``min_freq = 1/T_span``,
+               ``max_freq = max(f_k + 5*sigma_k)``) via
+               :meth:`_build_frequency_grid`.  Log spacing ensures adequate
+               resolution at low frequencies when the range spans many decades.
+            2. If either half-maximum crossing lies outside the grid,
+               the grid is expanded adaptively (up to 10 iterations, doubling
+               the relevant edge each time) via
+               :meth:`_expand_psd_grid_until_contained`.
+            3. The crossing frequencies are estimated by linear interpolation
+               between the two bracketing grid points via
+               :meth:`_interpolate_halfmax_crossing`.
+            4. A local refinement pass (:meth:`_refine_peak_region`) builds a
+               denser log-spaced grid around the approximate half-max interval
+               and recomputes the crossings.
 
-        If expansion fails to contain both crossings, the summary still
-        returns the best available estimate and records a warning in
-        ``notes``.
+        ``uncertainty="peak_mass"`` (recommended):
+            Uses the same log-spaced grid and local refinement to find the
+            dominant peak location, then computes the interval using
+            integrated PSD mass within the dominant peak basin via
+            :meth:`_find_dominant_peak_basin` and
+            :meth:`_compute_equal_tail_mass_interval`.  This is more robust
+            than the half-maximum interval for asymmetric or slowly decaying
+            peaks.  An equal-tail 16%-84% interval of the basin cumulative
+            mass is used.
+
+        If expansion fails to contain both crossings (``peak_width`` mode),
+        the summary still returns the best available estimate and records a
+        warning in ``notes``.
 
         Parameters
         ----------
@@ -5845,11 +5971,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             expanded automatically.
         peak_threshold_rel : float, optional
             Relative height threshold for significant peak detection.
+        uncertainty : str, optional
+            ``"peak_width"`` (default, legacy) or ``"peak_mass"``
+            (recommended for asymmetric peaks).
 
         Returns
         -------
         summary : dict
-            Same keys as :meth:`get_period_summary`.
+            Same keys as :meth:`get_period_summary`, plus ``period_interval``
+            and ``interval_definition``.
         """
         n_grid = int(n_grid)
         params = self._extract_sm_params()
@@ -5982,6 +6112,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         q_factor = dominant_freq / fwhm_freq if fwhm_freq > 0 else np.inf
 
+        # -- compute peak-mass interval if requested -------------------------
+        # Always compute the basin for use in notes; use it for the returned
+        # interval only when uncertainty="peak_mass".
+        _basin_l, _basin_r, _basin_left_at_bdy, _basin_right_at_bdy = (
+            self._find_dominant_peak_basin(psd, dominant_idx)
+        )
+
+        if uncertainty == "peak_mass":
+            _f_lo, _f_hi, _mass_ok = self._compute_equal_tail_mass_interval(
+                freq_grid, psd, _basin_l, _basin_r, mass_level=0.68
+            )
+            if _mass_ok:
+                period_lo = 1.0 / _f_hi if _f_hi > 0 else np.nan
+                period_hi = 1.0 / _f_lo if _f_lo > 0 else np.nan
+            # q_factor is not defined for the mass-based interval
+            q_factor = None
+
         # -- re-identify significant peaks on the (possibly expanded) grid -
         peaks, _ = find_peaks(psd)
         threshold = peak_threshold_rel * peak_height
@@ -6001,11 +6148,36 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
 
         # -- build notes string (collect fragments then join) ---------------
-        _note_parts = [
-            "Uncertainty is a half-maximum PSD-width proxy, "
-            "not a posterior credible interval.  "
-            "PSD evaluated on a log-spaced frequency grid."
-        ]
+        if uncertainty == "peak_mass":
+            _note_parts = [
+                "Interval is based on the integrated PSD mass within the "
+                "dominant peak basin (equal-tail 68% interval).  "
+                "It is not a posterior credible interval.  "
+                "This is more robust than a half-maximum interval for "
+                "asymmetric or slowly decaying peaks.  "
+                "PSD evaluated on a log-spaced frequency grid."
+            ]
+            if _basin_left_at_bdy:
+                _note_parts.append(
+                    "  Basin reached the left grid boundary; "
+                    "left edge of the basin may be underestimated."
+                )
+            if _basin_right_at_bdy:
+                _note_parts.append(
+                    "  Basin reached the right grid boundary; "
+                    "right edge of the basin may be underestimated."
+                )
+            if uncertainty == "peak_mass" and not _mass_ok:
+                _note_parts.append(
+                    "  WARNING: peak-mass interval could not be computed "
+                    "(basin too narrow); falling back to basin edges."
+                )
+        else:
+            _note_parts = [
+                "Uncertainty is a half-maximum PSD-width proxy, "
+                "not a posterior credible interval.  "
+                "PSD evaluated on a log-spaced frequency grid."
+            ]
         if n_expansions > 0:
             _note_parts.append(
                 f"  Grid expanded {n_expansions} time(s) to contain "
@@ -6026,7 +6198,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _note_parts.append(
                 "  Local log-spaced refinement applied around the peak."
             )
-        if not left_interpolated or not right_interpolated:
+        if uncertainty == "peak_width" and (
+            not left_interpolated or not right_interpolated
+        ):
             _interp_sides = []
             if not left_interpolated:
                 _interp_sides.append("left")
@@ -6037,6 +6211,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"{' and '.join(_interp_sides)} crossing(s)."
             )
         notes = "".join(_note_parts)
+
+        # Determine interval_definition label
+        if uncertainty == "peak_mass":
+            interval_definition = "equal_tail_68pct_peak_mass"
+        else:
+            interval_definition = "half_maximum_fwhm_like"
 
         return {
             "component_periods": params["component_periods"],
@@ -6051,6 +6231,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "dominant_frequency": dominant_freq,
             "dominant_period": dominant_period,
             "period_interval_fwhm_like": (period_lo, period_hi),
+            "period_interval": (period_lo, period_hi),
+            "interval_definition": interval_definition,
             "q_factor": q_factor,
             "peak_fraction": peak_fraction,
             "n_significant_peaks": n_sig_peaks,
@@ -6127,8 +6309,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Relative height threshold for significant peaks (SM backend).
             Default 0.2.
         uncertainty : str, optional
-            Uncertainty method.  Currently only ``"peak_width"``
-            is implemented.
+            Uncertainty method.  ``"peak_width"`` (default, legacy) uses the
+            half-maximum interval of the dominant PSD peak.  ``"peak_mass"``
+            (recommended for spectral-mixture models) uses an equal-tail
+            68% mass interval within the dominant peak basin, which is more
+            robust for asymmetric or slowly decaying peaks.  Only the SM
+            backend and separable-2D SM backends honour this parameter;
+            other backends always use their native interval method.
 
         Returns
         -------
@@ -6147,7 +6334,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             * ``dominant_period``    - ``1 / dominant_frequency``
               (``None`` for non-periodic models)
             * ``period_interval_fwhm_like`` - ``(period_lo, period_hi)``
-              uncertainty interval (``None`` for non-periodic models)
+              uncertainty interval (``None`` for non-periodic models;
+              kept for backward compatibility)
+            * ``period_interval`` - same as ``period_interval_fwhm_like``
+              (generic key independent of uncertainty method)
+            * ``interval_definition`` - string describing the interval type
             * ``q_factor``        - coherence Q (``None`` if not defined)
             * ``peak_fraction``   - dominant peak height / total weight
             * ``n_significant_peaks`` - peaks above threshold
@@ -6162,10 +6353,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         NotImplementedError
             If an unsupported ``uncertainty`` method is requested.
         """
-        if uncertainty != "peak_width":
+        _sm_uncertainties = {"peak_width", "peak_mass"}
+        if uncertainty not in _sm_uncertainties:
             raise NotImplementedError(
                 f"uncertainty='{uncertainty}' is not yet implemented. "
-                "Use uncertainty='peak_width'."
+                f"Supported values: {sorted(_sm_uncertainties)!r}."
             )
 
         if not hasattr(self, "model") or self.model is None:
@@ -6181,6 +6373,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 min_freq=min_freq,
                 max_freq=max_freq,
                 peak_threshold_rel=peak_threshold_rel,
+                uncertainty=uncertainty,
             )
 
         if backend == "explicit_period":
@@ -6195,6 +6388,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 min_freq=min_freq,
                 max_freq=max_freq,
                 peak_threshold_rel=peak_threshold_rel,
+                uncertainty=uncertainty,
             )
 
         # backend == "non_periodic"
@@ -6281,10 +6475,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # -- common fields -------------------------------------------------
         f_peak = summary["dominant_frequency"]
         p_dom = summary["dominant_period"]
-        interval = summary["period_interval_fwhm_like"]
+        # Prefer the generic key; fall back to the legacy key for old summaries
+        interval = summary.get(
+            "period_interval", summary.get("period_interval_fwhm_like")
+        )
+        interval_definition = summary.get("interval_definition", "")
         q = summary["q_factor"]
         n_sig = summary["n_significant_peaks"]
         sig_periods = summary.get("significant_periods", np.array([]))
+
+        # Build a human-readable interval type label for annotations
+        _interval_labels = {
+            "equal_tail_68pct_peak_mass": "68% peak-mass interval",
+            "half_maximum_fwhm_like": "half-max interval",
+            "coherence_proxy": "coherence-proxy interval",
+        }
+        interval_label = _interval_labels.get(
+            interval_definition, interval_definition or "interval"
+        )
 
         # -- PSD curve (spectral-mixture only) -----------------------------
         if has_psd:
@@ -6306,16 +6514,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # -- period interval shaded band (if finite interval) --------------
         if interval is not None:
             period_lo, period_hi = interval
-            f_left = 1.0 / period_hi
-            f_right = 1.0 / period_lo
-            if f_left < f_right:
+            f_left = 1.0 / period_hi if period_hi and period_hi > 0 else None
+            f_right = 1.0 / period_lo if period_lo and period_lo > 0 else None
+            if (
+                f_left is not None and f_right is not None
+                and np.isfinite(f_left) and np.isfinite(f_right)
+                and f_left < f_right
+            ):
                 ax.axvspan(
                     f_left,
                     f_right,
                     alpha=0.25,
                     color="crimson",
                     label=(
-                        f"Interval  [{period_lo:.4g}, {period_hi:.4g}]"
+                        f"{interval_label}  "
+                        f"[{period_lo:.4g}, {period_hi:.4g}]"
                     ),
                 )
 
@@ -6347,7 +6560,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         ann_lines = [
             f"Dominant period:   {p_dom:.6g}",
-            f"Interval:          {int_str}",
+            f"Interval ({interval_label}): {int_str}",
             f"Q-factor:          {q_str}",
             f"Significant peaks: {n_sig}",
         ]

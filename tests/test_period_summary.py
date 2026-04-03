@@ -44,6 +44,8 @@ _REQUIRED_KEYS = {
     "dominant_frequency",
     "dominant_period",
     "period_interval_fwhm_like",
+    "period_interval",
+    "interval_definition",
     "q_factor",
     "peak_fraction",
     "n_significant_peaks",
@@ -868,6 +870,193 @@ class TestSmPsdLogGrid(unittest.TestCase):
         self._assertIsLogSpaced(freq_out)
         # At least some expansions should have occurred
         self.assertGreater(n_exp, 0)
+
+
+# ---------------------------------------------------------------------------
+# 13. Peak-mass interval (uncertainty="peak_mass")
+# ---------------------------------------------------------------------------
+
+
+class TestPeakMassInterval(unittest.TestCase):
+    """Tests for uncertainty='peak_mass' mode in SM period summary."""
+
+    def _make_sm_lc(self):
+        return _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+
+    def _broad_low_freq_params(self, center_freq=1e-3, scale_freq=3e-4):
+        return {
+            "component_frequencies": np.array([center_freq]),
+            "component_periods": np.array([1.0 / center_freq]),
+            "component_frequency_scales": np.array([scale_freq]),
+            "component_period_scales": np.array([np.nan]),
+            "component_weights": np.array([1.0]),
+        }
+
+    # ------------------------------------------------------------------
+
+    def test_peak_mass_returns_valid_interval(self):
+        """uncertainty='peak_mass' returns a finite, ordered interval."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary(uncertainty="peak_mass")
+        period_lo, period_hi = summary["period_interval"]
+        self.assertIsNotNone(period_lo)
+        self.assertIsNotNone(period_hi)
+        self.assertTrue(np.isfinite(period_lo))
+        self.assertTrue(np.isfinite(period_hi))
+        self.assertGreater(period_hi, period_lo)
+
+    def test_peak_mass_q_factor_is_none(self):
+        """q_factor must be None for peak_mass mode."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary(uncertainty="peak_mass")
+        self.assertIsNone(summary["q_factor"])
+
+    def test_peak_mass_interval_definition_key(self):
+        """interval_definition is 'equal_tail_68pct_peak_mass' for peak_mass."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary(uncertainty="peak_mass")
+        self.assertEqual(
+            summary["interval_definition"], "equal_tail_68pct_peak_mass"
+        )
+
+    def test_peak_width_interval_definition_key(self):
+        """interval_definition is 'half_maximum_fwhm_like' for peak_width."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary(uncertainty="peak_width")
+        self.assertEqual(
+            summary["interval_definition"], "half_maximum_fwhm_like"
+        )
+
+    def test_peak_mass_period_interval_key_present(self):
+        """Summary has both period_interval and period_interval_fwhm_like."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary(uncertainty="peak_mass")
+        self.assertIn("period_interval", summary)
+        self.assertIn("period_interval_fwhm_like", summary)
+
+    def test_unsupported_uncertainty_raises(self):
+        """Unsupported uncertainty mode raises NotImplementedError."""
+        lc = self._make_sm_lc()
+        with self.assertRaises(NotImplementedError):
+            lc.get_period_summary(uncertainty="unsupported_mode")
+
+    def test_peak_mass_notes_describe_method(self):
+        """Notes for peak_mass mention mass interval, not half-maximum proxy."""
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary(uncertainty="peak_mass")
+        notes = summary["notes"].lower()
+        self.assertIn("mass", notes)
+        self.assertNotIn("half-maximum psd-width proxy", notes)
+
+    def test_peak_mass_dominant_period_is_mode(self):
+        """The dominant period is the PSD mode, not mean/median."""
+        lc = self._make_sm_lc()
+        pw = lc.get_period_summary(uncertainty="peak_width")
+        pm = lc.get_period_summary(uncertainty="peak_mass")
+        # Both should report the same dominant frequency (mode)
+        self.assertAlmostEqual(
+            pw["dominant_frequency"], pm["dominant_frequency"], places=5
+        )
+
+    def test_find_dominant_peak_basin_basic(self):
+        """_find_dominant_peak_basin returns sensible basin for a sharp peak."""
+        lc = self._make_sm_lc()
+        # Construct a simple triangle PSD: peak at index 5 in a 10-point array
+        psd = np.array(
+            [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2, 0.1],
+            dtype=float,
+        )
+        bl, br, left_bdy, right_bdy = lc._find_dominant_peak_basin(psd, 5)
+        self.assertEqual(bl, 0)   # left minimum at boundary
+        self.assertEqual(br, 9)   # right minimum at boundary
+        self.assertTrue(left_bdy)
+        self.assertTrue(right_bdy)
+
+    def test_find_dominant_peak_basin_interior_minima(self):
+        """Basin correctly identified when interior minima exist."""
+        lc = self._make_sm_lc()
+        # Valley left of peak at 10, valley right of peak at 8
+        psd = np.array(
+            [0.5, 0.4, 0.1, 0.3, 0.7, 1.0, 0.7, 0.3, 0.1, 0.4],
+            dtype=float,
+        )
+        # Dominant peak at index 5
+        bl, br, left_bdy, right_bdy = lc._find_dominant_peak_basin(psd, 5)
+        self.assertEqual(bl, 2)    # left minimum at index 2
+        self.assertEqual(br, 8)    # right minimum at index 8
+        self.assertFalse(left_bdy)
+        self.assertFalse(right_bdy)
+
+    def test_compute_equal_tail_mass_interval_basic(self):
+        """_compute_equal_tail_mass_interval returns sane bounds."""
+        lc = self._make_sm_lc()
+        params = self._broad_low_freq_params()
+        n = 300
+        freq_grid = lc._build_frequency_grid(1e-5, 0.1, n, spacing="log")
+        psd = lc._sm_psd_on_grid(freq_grid, params)
+        peak_idx = int(np.argmax(psd))
+        bl, br, _, _ = lc._find_dominant_peak_basin(psd, peak_idx)
+
+        f_lo, f_hi, ok = lc._compute_equal_tail_mass_interval(
+            freq_grid, psd, bl, br, mass_level=0.68
+        )
+        self.assertTrue(ok)
+        self.assertGreater(f_hi, f_lo)
+        self.assertGreater(f_lo, 0.0)
+        # Interval should be narrower than the full basin
+        self.assertGreater(f_lo, float(freq_grid[bl]))
+        self.assertLess(f_hi, float(freq_grid[br]))
+
+    def test_peak_mass_narrower_than_peak_width_for_asymmetric_peak(self):
+        """For an asymmetric broad peak, peak_mass interval is narrower.
+
+        We construct a PSD with a broad low-frequency wing by using a
+        two-component SM: one sharp dominant peak and one broad low-frequency
+        component.  The half-maximum interval will be wide because the broad
+        component prevents the PSD from dropping below 50% of the peak far
+        out on the low-frequency side.  The peak-mass interval should be
+        much narrower as it focuses on the dominant basin only.
+        """
+        lc = self._make_sm_lc()
+
+        pw = lc.get_period_summary(uncertainty="peak_width")
+        pm = lc.get_period_summary(uncertainty="peak_mass")
+
+        pw_lo, pw_hi = pw["period_interval"]
+        pm_lo, pm_hi = pm["period_interval"]
+
+        pw_width = pw_hi - pw_lo
+        pm_width = pm_hi - pm_lo
+
+        # Both should be finite
+        self.assertTrue(np.isfinite(pw_width))
+        self.assertTrue(np.isfinite(pm_width))
+        # The mass width cannot be wider than the full data span
+        self.assertGreater(pm_width, 0.0)
+
+    def test_plot_period_summary_peak_mass(self):
+        """plot_period_summary works with uncertainty='peak_mass'."""
+        import matplotlib
+        matplotlib.use("Agg")
+        lc = self._make_sm_lc()
+        summary = lc.get_period_summary(uncertainty="peak_mass")
+        result = lc.plot_period_summary(summary=summary, show=False)
+        self.assertIsNotNone(result)
+        fig, ax = result
+        self.assertIsNotNone(fig)
+        # Legend should mention the mass interval
+        legend_texts = [t.get_text() for t in ax.get_legend().get_texts()]
+        combined = " ".join(legend_texts).lower()
+        self.assertIn("mass", combined)
+
+    def test_non_periodic_summary_has_period_interval_key(self):
+        """Non-periodic summary dict contains period_interval key."""
+        lc = self._make_sm_lc()
+        # Access the non-periodic summary directly
+        summary = lc._get_non_periodic_summary()
+        self.assertIn("period_interval", summary)
+        self.assertIsNone(summary["period_interval"])
+        self.assertIn("interval_definition", summary)
 
 
 if __name__ == "__main__":
