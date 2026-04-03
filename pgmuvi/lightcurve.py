@@ -5902,17 +5902,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if len(f_basin) < 2:
             return float(f_basin[0]), float(f_basin[0]), False
 
-        # Log-space integration: integrate psd*freq w.r.t. log(freq)
-        log_f = np.log(f_basin)
-        weights = p_basin * f_basin
-        try:
-            total_mass = float(np.trapezoid(weights, log_f))
-        except AttributeError:
-            total_mass = float(np.trapz(weights, log_f))
+        # Log-space integration via shared helper
+        total_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
         if total_mass <= 0:
             return float(f_basin[0]), float(f_basin[-1]), False
 
         # Build cumulative mass in log-space
+        log_f = np.log(f_basin)
+        weights = p_basin * f_basin
         cum = np.zeros(len(f_basin))
         for i in range(1, len(f_basin)):
             dlogf = log_f[i] - log_f[i - 1]
@@ -5988,11 +5985,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         log_f = np.log(f_basin)
         weights = p_basin * f_basin
 
-        # Total basin mass in log-space
-        try:
-            total_mass = float(np.trapezoid(weights, log_f))
-        except AttributeError:
-            total_mass = float(np.trapz(weights, log_f))
+        # Total basin mass via shared helper (avoids duplicating try/except)
+        total_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
         if total_mass <= 0:
             return float(f_basin[0]), float(f_basin[-1]), False
 
