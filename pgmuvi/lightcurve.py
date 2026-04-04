@@ -971,7 +971,7 @@ class PeriodSummaryResult:
             lines.append("=" * 47)
             for pk in self.peaks:
                 lines.append(f"  Peak P{pk.rank}")
-                lines.append(f"  {'─' * 30}")
+                lines.append(f"  {'-' * 30}")
                 lines.append(f"    Rank                       : {pk.rank}")
                 lines.append(
                     f"    Period                     : {_fmt(pk.period)}"
@@ -1024,7 +1024,7 @@ class PeriodSummaryResult:
             if _has_comp:
                 lines.append(
                     "KERNEL COMPONENT DIAGNOSTICS  "
-                    "(internal quantities — not final periods)"
+                    "(internal quantities -- not final periods)"
                 )
                 lines.append("=" * 60)
                 lines.append(
