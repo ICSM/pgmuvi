@@ -1,0 +1,17 @@
+\section{Bayesian generalized Lomb--Scargle analysis}
+\label{sec:bgls_method}
+
+For comparison with the Gaussian-process-based variability analysis, we computed Bayesian generalized Lomb--Scargle (BGLS) periodograms on a shared logarithmic frequency grid.  For a single band, we adopted the weighted floating-mean sinusoid model of \citet{zechmeister2009} and the Bayesian GLS formalism of \citet{mortier2015}.  At each trial frequency \(f\), the data were modeled as
+\begin{equation}
+y(t_i) = a \cos(2\pi f t_i) + b \sin(2\pi f t_i) + c + \epsilon_i,
+\end{equation}
+with independent Gaussian errors \(\epsilon_i \sim \mathcal{N}(0,\sigma_i^2)\).  The linear coefficients \((a,b,c)\) were marginalized analytically under flat priors, yielding a frequency-dependent marginal likelihood.
+
+For multiband light curves, we computed a separate per-band BGLS curve while enforcing a shared trial frequency across bands.  This follows the shared-period logic commonly used in multiband period analysis \citep{vanderplas2015}, while allowing the sinusoid amplitudes, phases, and offsets to vary by band.  We then combined the per-band log marginal likelihoods using a tempered composite likelihood
+\begin{equation}
+\log p(f \mid D_{1:K}) =
+\log p(f) + T \sum_{k=1}^{K} w_k \log p(D_k \mid f) + C,
+\end{equation}
+where \(p(f)\) is the frequency prior, \(w_k\) are band-specific weights, \(T\) is a global temperature, and \(C\) is a normalization constant.  This approximation is motivated by the composite-likelihood framework of \citet{lindsay1988}, the review of \citet{varin2011}, and Bayesian adjustment arguments for composite likelihoods discussed by \citet{ribatet2012}.  In our implementation, the default per-band weights were chosen from a fast inverse-variance/effective-sample-size heuristic, and the default global temperature was calibrated using a leave-one-band-out curvature comparison.  This calibration was included to mitigate overconfidence caused by duplicated or correlated evidence across bands.
+
+We stress that the multiband BGLS combination is not a full joint hierarchical Bayesian time-series model with explicit cross-band covariance.  Rather, it provides a computationally efficient approximation for comparing dominant frequencies, alias structure, and posterior concentration against both multiband Lomb--Scargle and Gaussian-process-derived frequency diagnostics.
