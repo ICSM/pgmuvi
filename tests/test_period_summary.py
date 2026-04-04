@@ -1880,5 +1880,234 @@ class TestPeriodSummaryTextExportSynthetic(unittest.TestCase):
             tmp_path.unlink(missing_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# 19. Tests for Lightcurve.write_period_summary_outputs()
+# ---------------------------------------------------------------------------
+
+
+class TestWritePeriodSummaryOutputs(unittest.TestCase):
+    """Tests for the write_period_summary_outputs() convenience wrapper.
+
+    Fast tests (text/JSON, pre-computed summary) use directly-constructed
+    synthetic summaries and run without GP fitting.  PNG export tests use a
+    real fitted LC and are therefore slower.
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _synthetic_summary(self):
+        return _make_synthetic_summary(n_peaks=1, with_components=True)
+
+    def _fitted_lc(self):
+        return _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+
+    # ------------------------------------------------------------------
+    # A. Text-only export via the wrapper
+    # ------------------------------------------------------------------
+
+    def test_text_file_is_created(self):
+        """write_period_summary_outputs(text_file=...) creates the file."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._synthetic_summary()
+        lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            txt_path = Path(tmp.name)
+        try:
+            returned = lc.write_period_summary_outputs(
+                text_file=txt_path, summary=s
+            )
+            self.assertTrue(txt_path.exists())
+            self.assertGreater(txt_path.stat().st_size, 0)
+            self.assertIs(returned, s)
+        finally:
+            txt_path.unlink(missing_ok=True)
+
+    def test_text_content_matches_to_text(self):
+        """Text file content matches summary.to_text()."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._synthetic_summary()
+        lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            txt_path = Path(tmp.name)
+        try:
+            lc.write_period_summary_outputs(
+                text_file=txt_path, summary=s
+            )
+            content = txt_path.read_text(encoding="utf-8")
+            self.assertEqual(content, s.to_text())
+        finally:
+            txt_path.unlink(missing_ok=True)
+
+    def test_text_kwargs_forwarded(self):
+        """include_peaks/include_components are forwarded to write_text."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._synthetic_summary()
+        lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            txt_path = Path(tmp.name)
+        try:
+            lc.write_period_summary_outputs(
+                text_file=txt_path,
+                summary=s,
+                include_peaks=False,
+                include_components=False,
+            )
+            content = txt_path.read_text(encoding="utf-8")
+            self.assertNotIn("ANALYZED PEAKS", content)
+            self.assertNotIn("KERNEL COMPONENT DIAGNOSTICS", content)
+        finally:
+            txt_path.unlink(missing_ok=True)
+
+    # ------------------------------------------------------------------
+    # B. JSON-only export via the wrapper
+    # ------------------------------------------------------------------
+
+    def test_json_file_is_created(self):
+        """write_period_summary_outputs(json_file=...) creates the file."""
+        import tempfile
+        import json
+        from pathlib import Path
+
+        s = self._synthetic_summary()
+        lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            json_path = Path(tmp.name)
+        try:
+            lc.write_period_summary_outputs(
+                json_file=json_path, summary=s
+            )
+            self.assertTrue(json_path.exists())
+            with open(json_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertIn("method", data)
+            self.assertIn("dominant_period", data)
+        finally:
+            json_path.unlink(missing_ok=True)
+
+    # ------------------------------------------------------------------
+    # C. Reusing a pre-computed summary
+    # ------------------------------------------------------------------
+
+    def test_precomputed_summary_is_not_recomputed(self):
+        """Supplying summary= avoids calling get_period_summary again."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        s = self._synthetic_summary()
+        lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            txt_path = Path(tmp.name)
+        try:
+            with patch.object(
+                lc, "get_period_summary", wraps=lc.get_period_summary
+            ) as mock_gps:
+                lc.write_period_summary_outputs(
+                    text_file=txt_path, summary=s
+                )
+            mock_gps.assert_not_called()
+        finally:
+            txt_path.unlink(missing_ok=True)
+
+    def test_returns_summary_object(self):
+        """The wrapper returns the summary object."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._synthetic_summary()
+        lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            txt_path = Path(tmp.name)
+        try:
+            result = lc.write_period_summary_outputs(
+                text_file=txt_path, summary=s
+            )
+            self.assertIs(result, s)
+        finally:
+            txt_path.unlink(missing_ok=True)
+
+    # ------------------------------------------------------------------
+    # D. No files written when no paths are given
+    # ------------------------------------------------------------------
+
+    def test_no_files_written_when_no_paths(self):
+        """Calling wrapper with no file paths writes nothing but returns summary."""
+        s = self._synthetic_summary()
+        lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        result = lc.write_period_summary_outputs(summary=s)
+        self.assertIs(result, s)
+
+    # ------------------------------------------------------------------
+    # E. PNG export via the wrapper (requires a fitted LC)
+    # ------------------------------------------------------------------
+
+    def test_png_file_is_created(self):
+        """write_period_summary_outputs(png_file=...) creates a PNG file."""
+        import tempfile
+        from pathlib import Path
+
+        lc = self._fitted_lc()
+        summary = lc.get_period_summary()
+        with tempfile.NamedTemporaryFile(
+            suffix=".png", delete=False
+        ) as tmp:
+            png_path = Path(tmp.name)
+        try:
+            lc.write_period_summary_outputs(
+                png_file=png_path, summary=summary
+            )
+            self.assertTrue(png_path.exists())
+            self.assertGreater(png_path.stat().st_size, 0)
+        finally:
+            png_path.unlink(missing_ok=True)
+
+    def test_text_and_png_together(self):
+        """Both text and PNG files are created in one call."""
+        import tempfile
+        from pathlib import Path
+
+        lc = self._fitted_lc()
+        summary = lc.get_period_summary()
+        with (
+            tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as t,
+            tempfile.NamedTemporaryFile(suffix=".png", delete=False) as p,
+        ):
+            txt_path = Path(t.name)
+            png_path = Path(p.name)
+        try:
+            lc.write_period_summary_outputs(
+                text_file=txt_path,
+                png_file=png_path,
+                summary=summary,
+            )
+            self.assertTrue(txt_path.exists())
+            self.assertTrue(png_path.exists())
+            self.assertGreater(txt_path.stat().st_size, 0)
+            self.assertGreater(png_path.stat().st_size, 0)
+        finally:
+            txt_path.unlink(missing_ok=True)
+            png_path.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()

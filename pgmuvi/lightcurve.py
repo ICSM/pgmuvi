@@ -7619,6 +7619,198 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return None
         return fig, ax
 
+    # ------------------------------------------------------------------
+    # High-level output-writing convenience
+    # ------------------------------------------------------------------
+
+    def _save_period_summary_figure(
+        self,
+        summary,
+        filename,
+        plot_kwargs=None,
+        close_figure=True,
+        dpi=150,
+    ):
+        """Internal helper for write_period_summary_outputs().
+
+        Calls :meth:`plot_period_summary` with ``show=False``, saves the
+        resulting figure, and optionally closes it.
+
+        Parameters
+        ----------
+        summary : dict or PeriodSummaryResult
+            Pre-computed period summary (passed straight through to
+            :meth:`plot_period_summary`).
+        filename : str or Path-like
+            Destination path for the PNG (or any format supported by
+            matplotlib's ``savefig``).
+        plot_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`plot_period_summary`.
+        close_figure : bool, optional
+            If ``True`` (default), call ``plt.close(fig)`` after saving.
+        dpi : int, optional
+            Resolution in dots per inch, default ``150``.
+
+        Returns
+        -------
+        pathlib.Path
+            Absolute path to the saved figure file.
+        """
+        from pathlib import Path
+
+        if plot_kwargs is None:
+            plot_kwargs = {}
+        path = Path(filename)
+        result = self.plot_period_summary(
+            summary=summary, show=False, **plot_kwargs
+        )
+        # plot_period_summary returns None when show=True; that should not
+        # happen here (we always pass show=False), but guard defensively.
+        if result is None:
+            return path
+        fig, _ax = result
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        if close_figure:
+            plt.close(fig)
+        return path
+
+    def write_period_summary_outputs(
+        self,
+        text_file=None,
+        png_file=None,
+        json_file=None,
+        summary=None,
+        show=False,
+        close_figure=True,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+        include_psd_in_json=False,
+        summary_kwargs=None,
+        plot_kwargs=None,
+    ):
+        """Write period-summary outputs (text, PNG, JSON) to disk.
+
+        This is a high-level **convenience wrapper** around:
+
+        * :meth:`get_period_summary` — computes the summary if not supplied
+        * :meth:`PeriodSummaryResult.write_text` — human-readable text report
+        * :meth:`_save_period_summary_figure` — period-summary figure (PNG)
+        * :meth:`PeriodSummaryResult.write_json` — machine-readable JSON export
+
+        The method writes only the files whose paths are provided. Pass
+        ``text_file``, ``png_file``, and/or ``json_file`` in any combination.
+
+        Parameters
+        ----------
+        text_file : str, Path-like, or None, optional
+            If given, the human-readable period-summary text is written here.
+            The output is intended for direct reading by a researcher: it
+            includes the dominant period, peak table, kernel-component
+            diagnostics, and (optionally) PSD grid information.
+        png_file : str, Path-like, or None, optional
+            If given, the period-summary figure is saved here.  The PNG is a
+            visualisation of the analyzed peak structure produced by
+            :meth:`plot_period_summary`.
+        json_file : str, Path-like, or None, optional
+            If given, a machine-readable JSON export is written here.  The
+            JSON contains the same information as the text report plus the
+            raw array data (unless *include_psd_in_json* is ``False``).
+        summary : dict or PeriodSummaryResult or None, optional
+            A pre-computed period summary returned by
+            :meth:`get_period_summary`.  If ``None`` (default) the summary is
+            computed by calling ``get_period_summary(**summary_kwargs)``.
+            Supplying a pre-computed summary avoids redundant computation when
+            multiple output files are requested.
+        show : bool, optional
+            Passed through to :meth:`plot_period_summary`.  Ignored when
+            *png_file* is ``None``.  Default is ``False``.
+        close_figure : bool, optional
+            If ``True`` (default), close the matplotlib figure after saving.
+            Set to ``False`` to keep the figure in memory for further
+            inspection.
+        include_components : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether the kernel-component diagnostics block appears in the text
+            output.  Default is ``True``.
+        include_peaks : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether the analyzed-peaks block appears in the text output.
+            Default is ``True``.
+        include_psd_info : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether PSD grid statistics appear in the text output.  Default is
+            ``False``.
+        include_psd_in_json : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_json`.  When
+            ``True`` the full frequency grid and PSD arrays are embedded in
+            the JSON file.  Default is ``False`` (arrays are omitted to keep
+            the file small).
+        summary_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`get_period_summary`
+            when *summary* is ``None``.  Ignored if *summary* is supplied.
+        plot_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`plot_period_summary`
+            (and thus to :meth:`_save_period_summary_figure`).  Ignored when
+            *png_file* is ``None``.
+
+        Returns
+        -------
+        PeriodSummaryResult or dict
+            The period summary (computed or passed in).
+
+        Examples
+        --------
+        Write all three output types in one call::
+
+            lc.write_period_summary_outputs(
+                text_file="results/summary.txt",
+                png_file="results/summary.png",
+                json_file="results/summary.json",
+            )
+
+        Reuse an existing summary to avoid recomputation::
+
+            s = lc.get_period_summary()
+            lc.write_period_summary_outputs(
+                summary=s,
+                text_file="results/summary.txt",
+                png_file="results/summary.png",
+            )
+        """
+        if summary_kwargs is None:
+            summary_kwargs = {}
+        if summary is None:
+            summary = self.get_period_summary(**summary_kwargs)
+        elif summary_kwargs:
+            warnings.warn(
+                "summary_kwargs are ignored because a pre-computed summary "
+                "was supplied via the summary= argument.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        if text_file is not None:
+            summary.write_text(
+                text_file,
+                include_components=include_components,
+                include_peaks=include_peaks,
+                include_psd_info=include_psd_info,
+            )
+
+        if json_file is not None:
+            summary.write_json(json_file, include_psd=include_psd_in_json)
+
+        if png_file is not None:
+            self._save_period_summary_figure(
+                summary,
+                png_file,
+                plot_kwargs=plot_kwargs,
+                close_figure=close_figure,
+            )
+
+        return summary
+
     def get_parameters(self, raw=False, transform=True):
         """
         Returns a dictionary of the parameters of the model, with the keys
