@@ -871,6 +871,278 @@ class PeriodSummaryResult:
             for p in self.peaks
         ]
 
+    def to_text(
+        self,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+    ) -> str:
+        """Return a human-readable text summary of this period result.
+
+        The text is plain ASCII, suitable for writing to a ``.txt`` file,
+        reading in a terminal, or storing alongside analysis outputs.  It
+        clearly separates **analyzed peak results** (the literature-comparable
+        outputs) from **kernel component diagnostics** (internal quantities
+        derived directly from GP hyperparameters).
+
+        Parameters
+        ----------
+        include_components : bool, optional
+            If ``True`` (default), include a section listing the kernel
+            component periods, frequencies, and weights.  These are
+            **diagnostic quantities** and should not be cited as final
+            period determinations.
+        include_peaks : bool, optional
+            If ``True`` (default), include one block per analyzed peak.
+        include_psd_info : bool, optional
+            If ``True``, include a short summary of the PSD grid
+            (existence, length, frequency range, PSD range).  The full
+            arrays are never dumped.  Default is ``False``.
+
+        Returns
+        -------
+        str
+            Formatted text summary.
+        """
+
+        def _fmt(v, precision=6):
+            """Format a scalar value for display."""
+            if v is None:
+                return "N/A"
+            try:
+                if np.isnan(v):
+                    return "nan"
+                if np.isinf(v):
+                    return "inf" if v > 0 else "-inf"
+            except (TypeError, ValueError):
+                pass
+            try:
+                return f"{v:.{precision}g}"
+            except (TypeError, ValueError):
+                return str(v)
+
+        def _fmt_interval(pair, precision=6):
+            """Format a (lo, hi) interval pair."""
+            if pair is None:
+                return "N/A"
+            lo, hi = pair
+            return f"[{_fmt(lo, precision)}, {_fmt(hi, precision)}]"
+
+        def _arr_summary(arr, label, precision=6):
+            """One-line summary of a 1-D array."""
+            if arr is None or len(arr) == 0:
+                return f"  {label}: (none)"
+            vals = ", ".join(_fmt(v, precision) for v in arr)
+            return f"  {label}: {vals}"
+
+        lines = []
+
+        # ------------------------------------------------------------------
+        # Header
+        # ------------------------------------------------------------------
+        lines.append("PERIOD SUMMARY")
+        lines.append("==============")
+        lines.append(f"  Model name          : {self.model_name or 'N/A'}")
+        lines.append(f"  Method              : {self.method or 'N/A'}")
+        lines.append(
+            f"  Interval definition : {self.interval_definition or 'N/A'}"
+        )
+        lines.append(f"  Dominant period     : {_fmt(self.dominant_period)}")
+        lines.append(
+            f"  Dominant frequency  : {_fmt(self.dominant_frequency)}"
+        )
+        lines.append(f"  Peaks detected      : {self.n_peaks_detected}")
+        lines.append(f"  Peaks analyzed      : {self.n_peaks_analyzed}")
+        _req = (
+            str(self.n_peaks_requested)
+            if self.n_peaks_requested is not None
+            else "N/A"
+        )
+        lines.append(f"  Peaks requested     : {_req}")
+        if self.notes:
+            lines.append(f"  Notes               : {self.notes}")
+        lines.append("")
+
+        # ------------------------------------------------------------------
+        # Analyzed peaks (literature-comparable outputs)
+        # ------------------------------------------------------------------
+        if include_peaks and self.peaks:
+            lines.append("ANALYZED PEAKS  (literature-comparable outputs)")
+            lines.append("=" * 47)
+            for pk in self.peaks:
+                lines.append(f"  Peak P{pk.rank}")
+                lines.append(f"  {'─' * 30}")
+                lines.append(f"    Rank                       : {pk.rank}")
+                lines.append(
+                    f"    Period                     : {_fmt(pk.period)}"
+                )
+                lines.append(
+                    f"    Frequency                  : {_fmt(pk.frequency)}"
+                )
+                lines.append(
+                    f"    Height                     : {_fmt(pk.height)}"
+                )
+                lines.append(
+                    f"    Prominence                 : {_fmt(pk.prominence)}"
+                )
+                lines.append(
+                    f"    Area fraction              : {_fmt(pk.area_fraction)}"
+                )
+                lines.append(
+                    f"    Interval (frequency)       : "
+                    f"{_fmt_interval(pk.interval_frequency)}"
+                )
+                lines.append(
+                    f"    Interval (period)          : "
+                    f"{_fmt_interval(pk.interval_period)}"
+                )
+                lines.append(
+                    f"    Period ratio to primary    : "
+                    f"{_fmt(pk.period_ratio_to_primary)}"
+                )
+                lines.append(
+                    f"    LSP candidate              : {pk.is_candidate_lsp}"
+                )
+                if pk.notes:
+                    lines.append(f"    Notes                      : {pk.notes}")
+                lines.append("")
+
+        # ------------------------------------------------------------------
+        # Kernel component diagnostics (NOT final periods)
+        # ------------------------------------------------------------------
+        if include_components:
+            _has_comp = any(
+                len(arr) > 0
+                for arr in (
+                    self.component_periods,
+                    self.component_frequencies,
+                    self.component_weights,
+                    self.component_period_scales,
+                    self.component_frequency_scales,
+                )
+            )
+            if _has_comp:
+                lines.append(
+                    "KERNEL COMPONENT DIAGNOSTICS  "
+                    "(internal quantities — not final periods)"
+                )
+                lines.append("=" * 60)
+                lines.append(
+                    "  These values are derived directly from GP kernel"
+                    " hyperparameters."
+                )
+                lines.append(
+                    "  They are provided for diagnostics only and should not"
+                    " be cited"
+                )
+                lines.append(
+                    "  as literature-comparable period determinations."
+                )
+                lines.append("")
+                lines.append(
+                    _arr_summary(self.component_periods, "Component periods")
+                )
+                lines.append(
+                    _arr_summary(
+                        self.component_frequencies,
+                        "Component frequencies",
+                    )
+                )
+                lines.append(
+                    _arr_summary(self.component_weights, "Component weights")
+                )
+                lines.append(
+                    _arr_summary(
+                        self.component_period_scales,
+                        "Component period scales",
+                    )
+                )
+                lines.append(
+                    _arr_summary(
+                        self.component_frequency_scales,
+                        "Component frequency scales",
+                    )
+                )
+                lines.append("")
+
+        # ------------------------------------------------------------------
+        # Optional PSD grid summary (never dumps full arrays)
+        # ------------------------------------------------------------------
+        if include_psd_info:
+            lines.append("PSD GRID INFORMATION")
+            lines.append("====================")
+            has_freq = self.freq_grid is not None
+            has_psd = self.psd is not None
+            lines.append(
+                f"  Frequency grid present : {has_freq}"
+            )
+            lines.append(f"  PSD array present      : {has_psd}")
+            if has_freq:
+                try:
+                    lines.append(
+                        f"  Grid length            : {len(self.freq_grid)}"
+                    )
+                    lines.append(
+                        f"  Frequency min          : "
+                        f"{_fmt(float(self.freq_grid[0]))}"
+                    )
+                    lines.append(
+                        f"  Frequency max          : "
+                        f"{_fmt(float(self.freq_grid[-1]))}"
+                    )
+                except Exception:
+                    pass
+            if has_psd:
+                try:
+                    _psd_min = float(np.min(self.psd))
+                    _psd_max = float(np.max(self.psd))
+                    lines.append(f"  PSD min                : {_fmt(_psd_min)}")
+                    lines.append(f"  PSD max                : {_fmt(_psd_max)}")
+                except Exception:
+                    pass
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def write_text(
+        self,
+        filename,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+    ):
+        """Write a human-readable text summary to *filename*.
+
+        Calls :meth:`to_text` and writes the result to disk.
+
+        Parameters
+        ----------
+        filename : str or Path-like
+            Destination file path.  The file is created or overwritten.
+        include_components : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``True``.
+        include_peaks : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``True``.
+        include_psd_info : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``False``.
+
+        Returns
+        -------
+        pathlib.Path
+            Absolute path to the file that was written.
+        """
+        from pathlib import Path
+
+        path = Path(filename)
+        text = self.to_text(
+            include_components=include_components,
+            include_peaks=include_peaks,
+            include_psd_info=include_psd_info,
+        )
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
     def write_json(self, filename, include_psd=False):
         d = self.as_dict()
         out = {}

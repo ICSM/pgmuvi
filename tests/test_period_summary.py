@@ -1323,5 +1323,173 @@ class TestSinglePeakPlotCentering(unittest.TestCase):
         plt.close(fig)
 
 
+# ---------------------------------------------------------------------------
+# 17. PeriodSummaryResult text export (to_text / write_text)
+# ---------------------------------------------------------------------------
+
+
+class TestPeriodSummaryTextExport(unittest.TestCase):
+    """Tests for PeriodSummaryResult.to_text() and write_text()."""
+
+    def _make_summary(self):
+        """Return a realistic PeriodSummaryResult from a fitted 1-D SM lc."""
+        return _make_1d_lc_no_transform(
+            n_obs=40, period=100.0, seed=0
+        ).get_period_summary()
+
+    # ------------------------------------------------------------------
+
+    def test_to_text_returns_nonempty_string(self):
+        """to_text() returns a non-empty string."""
+        summary = self._make_summary()
+        text = summary.to_text()
+        self.assertIsInstance(text, str)
+        self.assertGreater(len(text), 0)
+
+    def test_to_text_contains_method(self):
+        """to_text() includes the method string."""
+        summary = self._make_summary()
+        text = summary.to_text()
+        self.assertIn(summary.method, text)
+
+    def test_to_text_contains_dominant_period(self):
+        """to_text() includes the dominant period."""
+        summary = self._make_summary()
+        text = summary.to_text()
+        self.assertIn("Dominant period", text)
+
+    def test_to_text_contains_dominant_frequency(self):
+        """to_text() includes the dominant frequency."""
+        summary = self._make_summary()
+        text = summary.to_text()
+        self.assertIn("Dominant frequency", text)
+
+    def test_to_text_contains_peaks_section(self):
+        """to_text() includes an analyzed-peaks section when peaks exist."""
+        summary = self._make_summary()
+        if not summary.peaks:
+            self.skipTest("No peaks in summary")
+        text = summary.to_text(include_peaks=True)
+        self.assertIn("ANALYZED PEAKS", text)
+        self.assertIn("P1", text)
+
+    def test_to_text_omits_peaks_when_flag_false(self):
+        """to_text(include_peaks=False) omits the peak section."""
+        summary = self._make_summary()
+        if not summary.peaks:
+            self.skipTest("No peaks in summary")
+        text = summary.to_text(include_peaks=False)
+        self.assertNotIn("ANALYZED PEAKS", text)
+
+    def test_to_text_contains_component_section(self):
+        """to_text() includes component diagnostics when present."""
+        summary = self._make_summary()
+        has_comp = len(summary.component_periods) > 0
+        text = summary.to_text(include_components=True)
+        if has_comp:
+            self.assertIn("KERNEL COMPONENT DIAGNOSTICS", text)
+            self.assertIn("Component periods", text)
+            self.assertIn("not final periods", text)
+
+    def test_to_text_omits_components_when_flag_false(self):
+        """to_text(include_components=False) omits the component section."""
+        summary = self._make_summary()
+        text = summary.to_text(include_components=False)
+        self.assertNotIn("KERNEL COMPONENT DIAGNOSTICS", text)
+
+    def test_to_text_psd_info_off_by_default(self):
+        """to_text() omits PSD info by default."""
+        summary = self._make_summary()
+        text = summary.to_text()
+        self.assertNotIn("PSD GRID INFORMATION", text)
+
+    def test_to_text_psd_info_when_requested(self):
+        """to_text(include_psd_info=True) includes PSD grid summary."""
+        summary = self._make_summary()
+        if summary.freq_grid is None:
+            self.skipTest("No freq_grid in summary")
+        text = summary.to_text(include_psd_info=True)
+        self.assertIn("PSD GRID INFORMATION", text)
+        self.assertIn("Frequency grid present", text)
+
+    def test_to_text_multiple_peaks(self):
+        """to_text() includes a block for each analyzed peak."""
+        summary = self._make_summary()
+        n = summary.n_peaks_analyzed
+        if n < 2:
+            self.skipTest("Need >= 2 peaks for this test")
+        text = summary.to_text(include_peaks=True)
+        self.assertIn("P1", text)
+        self.assertIn("P2", text)
+
+    def test_write_text_creates_file(self):
+        """write_text() writes a file that exists and is non-empty."""
+        import tempfile
+        from pathlib import Path
+        summary = self._make_summary()
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            returned = summary.write_text(tmp_path)
+            self.assertTrue(tmp_path.exists())
+            self.assertGreater(tmp_path.stat().st_size, 0)
+            self.assertEqual(returned, tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_write_text_content_matches_to_text(self):
+        """write_text() file content matches to_text()."""
+        import tempfile
+        from pathlib import Path
+        summary = self._make_summary()
+        expected = summary.to_text()
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            summary.write_text(tmp_path)
+            content = tmp_path.read_text(encoding="utf-8")
+            self.assertEqual(content, expected)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_to_text_separates_peaks_from_components(self):
+        """Peaks section appears before component diagnostics section."""
+        summary = self._make_summary()
+        if not summary.peaks or len(summary.component_periods) == 0:
+            self.skipTest("Need peaks and components for ordering test")
+        text = summary.to_text(include_peaks=True, include_components=True)
+        peaks_pos = text.find("ANALYZED PEAKS")
+        comp_pos = text.find("KERNEL COMPONENT DIAGNOSTICS")
+        self.assertNotEqual(peaks_pos, -1)
+        self.assertNotEqual(comp_pos, -1)
+        self.assertLess(
+            peaks_pos, comp_pos,
+            msg="Peak section should come before component section",
+        )
+
+    def test_write_json_still_works(self):
+        """Existing write_json() still works after adding text export."""
+        import tempfile
+        import json
+        from pathlib import Path
+        summary = self._make_summary()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            summary.write_json(tmp_path)
+            with open(tmp_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertIn("method", data)
+            self.assertIn("dominant_period", data)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()
