@@ -25,7 +25,7 @@ import torch
 
 matplotlib.use("Agg")  # non-interactive backend for tests
 
-from pgmuvi.lightcurve import Lightcurve, MinMax
+from pgmuvi.lightcurve import Lightcurve, MinMax, PeriodPeakResult, PeriodSummaryResult
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 
@@ -1487,6 +1487,395 @@ class TestPeriodSummaryTextExport(unittest.TestCase):
                 data = json.load(fh)
             self.assertIn("method", data)
             self.assertIn("dominant_period", data)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# 18. Fast synthetic tests for to_text() and write_text()
+#     These tests construct PeriodSummaryResult directly — no GP fitting,
+#     no LS, no randomness — so they run in well under 1 second.
+# ---------------------------------------------------------------------------
+
+
+def _make_peak(
+    rank=1,
+    period=100.0,
+    frequency=0.01,
+    height=0.9,
+    prominence=0.7,
+    area_fraction=0.5,
+    interval_frequency=(0.009, 0.011),
+    interval_period=(90.0, 110.0),
+    period_ratio_to_primary=1.0,
+    is_candidate_lsp=True,
+    notes="",
+):
+    """Construct a frozen PeriodPeakResult with explicit values."""
+    import dataclasses
+    return dataclasses.replace(
+        PeriodPeakResult(),
+        rank=rank,
+        period=period,
+        frequency=frequency,
+        height=height,
+        prominence=prominence,
+        area_fraction=area_fraction,
+        interval_frequency=interval_frequency,
+        interval_period=interval_period,
+        period_ratio_to_primary=period_ratio_to_primary,
+        is_candidate_lsp=is_candidate_lsp,
+        notes=notes,
+    )
+
+
+def _make_synthetic_summary(n_peaks=1, with_components=True, with_psd=False):
+    """Return a PeriodSummaryResult built from scratch, no fitting needed."""
+    peaks = [
+        _make_peak(
+            rank=i + 1,
+            period=100.0 / (i + 1),
+            frequency=0.01 * (i + 1),
+            period_ratio_to_primary=1.0 / (i + 1) if i else 1.0,
+        )
+        for i in range(n_peaks)
+    ]
+    freq_grid = np.linspace(0.001, 0.1, 200) if with_psd else None
+    psd = np.random.default_rng(0).random(200) if with_psd else None
+    return PeriodSummaryResult(
+        method="psd_peak",
+        model_name="SM-2",
+        n_peaks_detected=n_peaks,
+        n_peaks_analyzed=n_peaks,
+        n_peaks_requested=n_peaks,
+        dominant_period=peaks[0].period,
+        dominant_frequency=peaks[0].frequency,
+        peaks=peaks,
+        notes="synthetic test",
+        component_periods=(
+            np.array([100.0, 50.0, 33.0]) if with_components else np.array([])
+        ),
+        component_frequencies=(
+            np.array([0.01, 0.02, 0.03]) if with_components else np.array([])
+        ),
+        component_weights=(
+            np.array([0.6, 0.3, 0.1]) if with_components else np.array([])
+        ),
+        component_period_scales=(
+            np.array([5.0, 3.0, 2.0]) if with_components else np.array([])
+        ),
+        component_frequency_scales=(
+            np.array([0.001, 0.002, 0.003]) if with_components else np.array([])
+        ),
+        freq_grid=freq_grid,
+        psd=psd,
+    )
+
+
+class TestPeriodSummaryTextExportSynthetic(unittest.TestCase):
+    """Fast synthetic tests for to_text() and write_text().
+
+    These tests construct PeriodSummaryResult directly and run in
+    well under 1 second — no GP fitting, no LS computation.
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _summary(self, **kwargs):
+        return _make_synthetic_summary(**kwargs)
+
+    # ------------------------------------------------------------------
+    # 1. Basic functionality
+    # ------------------------------------------------------------------
+
+    def test_returns_str(self):
+        """to_text() returns a str instance."""
+        self.assertIsInstance(self._summary().to_text(), str)
+
+    def test_nonempty(self):
+        """to_text() returns a non-empty string."""
+        self.assertGreater(len(self._summary().to_text()), 0)
+
+    def test_header_section_present(self):
+        """to_text() always includes the PERIOD SUMMARY header."""
+        self.assertIn("PERIOD SUMMARY", self._summary().to_text())
+
+    def test_model_name_in_output(self):
+        """to_text() includes the model name."""
+        self.assertIn("SM-2", self._summary().to_text())
+
+    def test_method_in_output(self):
+        """to_text() includes the method string."""
+        self.assertIn("psd_peak", self._summary().to_text())
+
+    def test_dominant_period_label_present(self):
+        """to_text() includes a 'Dominant period' label."""
+        self.assertIn("Dominant period", self._summary().to_text())
+
+    def test_dominant_frequency_label_present(self):
+        """to_text() includes a 'Dominant frequency' label."""
+        self.assertIn("Dominant frequency", self._summary().to_text())
+
+    def test_peaks_detected_label_present(self):
+        """to_text() includes a peaks-detected count."""
+        self.assertIn("Peaks detected", self._summary().to_text())
+
+    def test_interval_definition_present(self):
+        """to_text() includes the interval definition string."""
+        s = self._summary()
+        text = s.to_text()
+        self.assertIn(s.interval_definition, text)
+
+    # ------------------------------------------------------------------
+    # 2. Toggle behavior
+    # ------------------------------------------------------------------
+
+    def test_peaks_section_present_by_default(self):
+        """ANALYZED PEAKS section appears by default."""
+        self.assertIn("ANALYZED PEAKS", self._summary().to_text())
+
+    def test_peaks_section_omitted_when_flag_false(self):
+        """include_peaks=False omits the peak section."""
+        self.assertNotIn(
+            "ANALYZED PEAKS",
+            self._summary().to_text(include_peaks=False),
+        )
+
+    def test_components_section_present_by_default(self):
+        """KERNEL COMPONENT DIAGNOSTICS section appears by default."""
+        self.assertIn(
+            "KERNEL COMPONENT DIAGNOSTICS",
+            self._summary(with_components=True).to_text(),
+        )
+
+    def test_components_section_omitted_when_flag_false(self):
+        """include_components=False omits the component section."""
+        self.assertNotIn(
+            "KERNEL COMPONENT DIAGNOSTICS",
+            self._summary().to_text(include_components=False),
+        )
+
+    def test_psd_section_absent_by_default(self):
+        """PSD GRID INFORMATION is absent by default."""
+        self.assertNotIn(
+            "PSD GRID INFORMATION",
+            self._summary(with_psd=True).to_text(),
+        )
+
+    def test_psd_section_present_when_requested(self):
+        """include_psd_info=True adds PSD GRID INFORMATION section."""
+        self.assertIn(
+            "PSD GRID INFORMATION",
+            self._summary(with_psd=True).to_text(include_psd_info=True),
+        )
+
+    def test_psd_section_shows_grid_length(self):
+        """PSD section includes grid length when freq_grid is present."""
+        text = self._summary(with_psd=True).to_text(include_psd_info=True)
+        self.assertIn("Grid length", text)
+        self.assertIn("200", text)
+
+    # ------------------------------------------------------------------
+    # 3. Edge cases
+    # ------------------------------------------------------------------
+
+    def test_no_peaks_no_exception(self):
+        """to_text() works when there are no analyzed peaks."""
+        s = PeriodSummaryResult(
+            method="psd_peak",
+            model_name="SM-2",
+            n_peaks_detected=0,
+            n_peaks_analyzed=0,
+            dominant_period=None,
+            dominant_frequency=None,
+        )
+        text = s.to_text()
+        self.assertIsInstance(text, str)
+        self.assertIn("PERIOD SUMMARY", text)
+
+    def test_no_components_no_exception(self):
+        """to_text() works when there are no component arrays."""
+        s = self._summary(with_components=False)
+        text = s.to_text(include_components=True)
+        self.assertIsInstance(text, str)
+        self.assertNotIn("KERNEL COMPONENT DIAGNOSTICS", text)
+
+    def test_no_freq_grid_no_exception(self):
+        """to_text(include_psd_info=True) works when freq_grid is None."""
+        s = self._summary(with_psd=False)
+        text = s.to_text(include_psd_info=True)
+        self.assertIn("PSD GRID INFORMATION", text)
+        self.assertIn("Frequency grid present : False", text)
+
+    def test_notes_empty_no_exception(self):
+        """to_text() works when notes is an empty string."""
+        s = PeriodSummaryResult(method="psd_peak", model_name="M")
+        text = s.to_text()
+        self.assertIsInstance(text, str)
+
+    # ------------------------------------------------------------------
+    # 4. Deterministic / exact substring checks
+    # ------------------------------------------------------------------
+
+    def test_exact_model_name_line(self):
+        """Model name line has expected format."""
+        text = self._summary().to_text()
+        self.assertIn("Model name          : SM-2", text)
+
+    def test_exact_method_line(self):
+        """Method line has expected format."""
+        text = self._summary().to_text()
+        self.assertIn("Method              : psd_peak", text)
+
+    def test_exact_dominant_period_value(self):
+        """Dominant period value 100 appears in output."""
+        text = self._summary().to_text()
+        self.assertIn("Dominant period     : 100", text)
+
+    def test_peak_rank_label(self):
+        """Each peak block includes its rank label."""
+        text = self._summary(n_peaks=2).to_text(include_peaks=True)
+        self.assertIn("Rank                       : 1", text)
+        self.assertIn("Rank                       : 2", text)
+
+    def test_two_peaks_both_blocks_present(self):
+        """Two-peak summary contains blocks P1 and P2."""
+        text = self._summary(n_peaks=2).to_text(include_peaks=True)
+        self.assertIn("Peak P1", text)
+        self.assertIn("Peak P2", text)
+
+    def test_component_diagnostic_disclaimer(self):
+        """Component section contains the 'not final periods' disclaimer."""
+        text = self._summary(with_components=True).to_text(
+            include_components=True
+        )
+        self.assertIn("not final periods", text)
+
+    def test_component_periods_values(self):
+        """Component periods appear in the component section."""
+        text = self._summary(with_components=True).to_text(
+            include_components=True
+        )
+        self.assertIn("Component periods", text)
+        self.assertIn("100", text)
+
+    def test_peaks_section_before_components_section(self):
+        """ANALYZED PEAKS section precedes KERNEL COMPONENT DIAGNOSTICS."""
+        text = self._summary(n_peaks=1, with_components=True).to_text()
+        peak_pos = text.find("ANALYZED PEAKS")
+        comp_pos = text.find("KERNEL COMPONENT DIAGNOSTICS")
+        self.assertGreater(peak_pos, -1)
+        self.assertGreater(comp_pos, -1)
+        self.assertLess(peak_pos, comp_pos)
+
+    def test_lsp_candidate_flag_in_peak_block(self):
+        """Peak block shows the LSP candidate flag."""
+        text = self._summary().to_text(include_peaks=True)
+        self.assertIn("LSP candidate", text)
+        self.assertIn("True", text)
+
+    def test_interval_frequency_in_peak_block(self):
+        """Peak block shows the frequency interval."""
+        text = self._summary().to_text(include_peaks=True)
+        self.assertIn("Interval (frequency)", text)
+
+    def test_interval_period_in_peak_block(self):
+        """Peak block shows the period interval."""
+        text = self._summary().to_text(include_peaks=True)
+        self.assertIn("Interval (period)", text)
+
+    def test_period_ratio_in_peak_block(self):
+        """Peak block shows the period ratio to primary."""
+        text = self._summary().to_text(include_peaks=True)
+        self.assertIn("Period ratio to primary", text)
+
+    # ------------------------------------------------------------------
+    # 5. write_text() behavior
+    # ------------------------------------------------------------------
+
+    def test_write_text_creates_file(self):
+        """write_text() creates a non-empty file."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._summary()
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            s.write_text(tmp_path)
+            self.assertTrue(tmp_path.exists())
+            self.assertGreater(tmp_path.stat().st_size, 0)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_write_text_returns_path(self):
+        """write_text() returns the output Path."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._summary()
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            returned = s.write_text(tmp_path)
+            self.assertEqual(returned, tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_write_text_content_matches_to_text(self):
+        """File written by write_text() matches to_text() exactly."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._summary()
+        expected = s.to_text()
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            s.write_text(tmp_path)
+            content = tmp_path.read_text(encoding="utf-8")
+            self.assertEqual(content, expected)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_write_text_accepts_str_path(self):
+        """write_text() accepts a plain string filename."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._summary()
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            tmp_str = tmp.name
+        try:
+            s.write_text(tmp_str)
+            self.assertTrue(Path(tmp_str).exists())
+        finally:
+            Path(tmp_str).unlink(missing_ok=True)
+
+    def test_write_text_utf8_encoding(self):
+        """File written by write_text() is valid UTF-8."""
+        import tempfile
+        from pathlib import Path
+
+        s = self._summary()
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            s.write_text(tmp_path)
+            raw = tmp_path.read_bytes()
+            raw.decode("utf-8")  # must not raise
         finally:
             tmp_path.unlink(missing_ok=True)
 
