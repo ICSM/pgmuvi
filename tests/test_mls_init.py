@@ -17,7 +17,6 @@ def _make_fit_kwargs(**overrides):
     """Shared keyword arguments for LightCurve.fit() in tests."""
     defaults = {
         "model": "1D",
-        "check_sampling": False,
         "training_iter": 1,
     }
     defaults.update(overrides)
@@ -374,7 +373,6 @@ class TestMLSInitConstraintFiltering(unittest.TestCase):
                         with patch.object(lc_lpv, "print_parameters"):
                             lc_lpv.fit(
                                 model="1D",
-                                check_sampling=False,
                                 training_iter=1,
                                 constraint_set="LPV",
                             )
@@ -423,8 +421,6 @@ class TestMLSInit2D(unittest.TestCase):
     def _fit_2d_without_training(self, **kwargs):
         defaults = {
             "model": "2D",
-            "check_sampling": False,
-            "check_variability": False,
             "training_iter": 1,
         }
         defaults.update(kwargs)
