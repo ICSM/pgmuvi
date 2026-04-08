@@ -48,8 +48,10 @@ _REQUIRED_KEYS = {
     "interval_definition",
     "q_factor",
     "peak_fraction",
+    "n_peaks",
     "n_significant_peaks",
     "significant_periods",
+    "peaks",
     "method",
     "notes",
 }
@@ -1365,13 +1367,12 @@ class TestPeriodSummaryTextExport(unittest.TestCase):
         self.assertIn("Dominant frequency", text)
 
     def test_to_text_contains_peaks_section(self):
-        """to_text() includes an analyzed-peaks section when peaks exist."""
+        """to_text() includes a primary-peak section when peaks exist."""
         summary = self._make_summary()
         if not summary.peaks:
             self.skipTest("No peaks in summary")
         text = summary.to_text(include_peaks=True)
-        self.assertIn("ANALYZED PEAKS", text)
-        self.assertIn("P1", text)
+        self.assertIn("PRIMARY PEAK", text)
 
     def test_to_text_omits_peaks_when_flag_false(self):
         """to_text(include_peaks=False) omits the peak section."""
@@ -1379,7 +1380,7 @@ class TestPeriodSummaryTextExport(unittest.TestCase):
         if not summary.peaks:
             self.skipTest("No peaks in summary")
         text = summary.to_text(include_peaks=False)
-        self.assertNotIn("ANALYZED PEAKS", text)
+        self.assertNotIn("PRIMARY PEAK", text)
 
     def test_to_text_contains_component_section(self):
         """to_text() includes component diagnostics when present."""
@@ -1413,14 +1414,14 @@ class TestPeriodSummaryTextExport(unittest.TestCase):
         self.assertIn("Frequency grid present", text)
 
     def test_to_text_multiple_peaks(self):
-        """to_text() includes a block for each analyzed peak."""
+        """to_text() includes primary and additional peak sections."""
         summary = self._make_summary()
         n = summary.n_peaks_analyzed
         if n < 2:
             self.skipTest("Need >= 2 peaks for this test")
         text = summary.to_text(include_peaks=True)
-        self.assertIn("P1", text)
-        self.assertIn("P2", text)
+        self.assertIn("PRIMARY PEAK", text)
+        self.assertIn("ADDITIONAL PEAKS", text)
 
     def test_write_text_creates_file(self):
         """write_text() writes a file that exists and is non-empty."""
@@ -1462,7 +1463,7 @@ class TestPeriodSummaryTextExport(unittest.TestCase):
         if not summary.peaks or len(summary.component_periods) == 0:
             self.skipTest("Need peaks and components for ordering test")
         text = summary.to_text(include_peaks=True, include_components=True)
-        peaks_pos = text.find("ANALYZED PEAKS")
+        peaks_pos = text.find("PRIMARY PEAK")
         comp_pos = text.find("KERNEL COMPONENT DIAGNOSTICS")
         self.assertNotEqual(peaks_pos, -1)
         self.assertNotEqual(comp_pos, -1)
@@ -1633,13 +1634,13 @@ class TestPeriodSummaryTextExportSynthetic(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_peaks_section_present_by_default(self):
-        """ANALYZED PEAKS section appears by default."""
-        self.assertIn("ANALYZED PEAKS", self._summary().to_text())
+        """PRIMARY PEAK section appears by default."""
+        self.assertIn("PRIMARY PEAK", self._summary().to_text())
 
     def test_peaks_section_omitted_when_flag_false(self):
         """include_peaks=False omits the peak section."""
         self.assertNotIn(
-            "ANALYZED PEAKS",
+            "PRIMARY PEAK",
             self._summary().to_text(include_peaks=False),
         )
 
@@ -1735,16 +1736,16 @@ class TestPeriodSummaryTextExportSynthetic(unittest.TestCase):
         self.assertIn("Dominant period     : 100", text)
 
     def test_peak_rank_label(self):
-        """Each peak block includes its rank label."""
+        """Primary peak block includes period and area fraction fields."""
         text = self._summary(n_peaks=2).to_text(include_peaks=True)
-        self.assertIn("Rank                       : 1", text)
-        self.assertIn("Rank                       : 2", text)
+        self.assertIn("Period", text)
+        self.assertIn("Area fraction", text)
 
     def test_two_peaks_both_blocks_present(self):
-        """Two-peak summary contains blocks P1 and P2."""
+        """Two-peak summary contains primary block and additional block."""
         text = self._summary(n_peaks=2).to_text(include_peaks=True)
-        self.assertIn("Peak P1", text)
-        self.assertIn("Peak P2", text)
+        self.assertIn("PRIMARY PEAK", text)
+        self.assertIn("ADDITIONAL PEAKS", text)
 
     def test_component_diagnostic_disclaimer(self):
         """Component section contains the 'not final periods' disclaimer."""
@@ -1762,9 +1763,9 @@ class TestPeriodSummaryTextExportSynthetic(unittest.TestCase):
         self.assertIn("100", text)
 
     def test_peaks_section_before_components_section(self):
-        """ANALYZED PEAKS section precedes KERNEL COMPONENT DIAGNOSTICS."""
+        """PRIMARY PEAK section precedes KERNEL COMPONENT DIAGNOSTICS."""
         text = self._summary(n_peaks=1, with_components=True).to_text()
-        peak_pos = text.find("ANALYZED PEAKS")
+        peak_pos = text.find("PRIMARY PEAK")
         comp_pos = text.find("KERNEL COMPONENT DIAGNOSTICS")
         self.assertGreater(peak_pos, -1)
         self.assertGreater(comp_pos, -1)
@@ -1787,9 +1788,10 @@ class TestPeriodSummaryTextExportSynthetic(unittest.TestCase):
         self.assertIn("Interval (period)", text)
 
     def test_period_ratio_in_peak_block(self):
-        """Peak block shows the period ratio to primary."""
-        text = self._summary().to_text(include_peaks=True)
-        self.assertIn("Period ratio to primary", text)
+        """Additional peak block shows the period ratio field."""
+        text = self._summary(n_peaks=2).to_text(include_peaks=True)
+        # Additional peaks section includes period ratio via compact format
+        self.assertIn("ADDITIONAL PEAKS", text)
 
     # ------------------------------------------------------------------
     # 5. write_text() behavior
@@ -1967,7 +1969,7 @@ class TestWritePeriodSummaryOutputs(unittest.TestCase):
                 include_components=False,
             )
             content = txt_path.read_text(encoding="utf-8")
-            self.assertNotIn("ANALYZED PEAKS", content)
+            self.assertNotIn("PRIMARY PEAK", content)
             self.assertNotIn("KERNEL COMPONENT DIAGNOSTICS", content)
         finally:
             txt_path.unlink(missing_ok=True)

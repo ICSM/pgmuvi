@@ -781,7 +781,11 @@ class PeriodSummaryResult:
         self.n_peaks_requested = n_peaks_requested
         self.dominant_period = dominant_period
         self.dominant_frequency = dominant_frequency
-        self.peaks = peaks if peaks is not None else []
+        # Sort peaks once by rank (ascending) so that peaks[0] is always
+        # the primary (rank-1) peak.  Ranks are assigned by the backend;
+        # this sort is a safety net for peaks passed in out of order.
+        _raw_peaks = peaks if peaks is not None else []
+        self.peaks = sorted(_raw_peaks, key=lambda p: p.rank)
         self.freq_grid = freq_grid
         self.psd = psd
         self.notes = notes
@@ -815,7 +819,7 @@ class PeriodSummaryResult:
     def as_dict(self) -> dict:
         # Derive primary-peak quantities once so they can be reused for
         # the backward-compatible alias keys without repeating the logic.
-        primary = self.peaks[0] if self.peaks else None
+        primary = self.get_primary_peak()
         primary_interval = primary.interval_period if primary is not None else None
         primary_area = (
             primary.area_fraction if primary is not None else float("nan")
@@ -838,8 +842,10 @@ class PeriodSummaryResult:
             "interval_definition": self.interval_definition,
             "q_factor": None,
             "peak_fraction": primary_area,
+            "n_peaks": len(self.peaks),
             "n_significant_peaks": self.n_peaks_detected,
             "significant_periods": significant_periods,
+            "peaks": [p.as_dict() for p in self.peaks],
             "method": self.method,
             "notes": self.notes,
         }
@@ -861,6 +867,58 @@ class PeriodSummaryResult:
 
     def values(self):
         return self.as_dict().values()
+
+    # ------------------------------------------------------------------
+    # Multi-peak accessors
+    # ------------------------------------------------------------------
+
+    def get_primary_peak(self):
+        """Return the primary (rank-1) peak, or ``None`` if none exist.
+
+        Returns
+        -------
+        PeriodPeakResult or None
+            The first entry in :attr:`peaks` (sorted by ascending rank,
+            so rank 1 is always first), or ``None`` when :attr:`peaks`
+            is empty.
+        """
+        return self.peaks[0] if self.peaks else None
+
+    def get_top_n_peaks(self, n):
+        """Return up to *n* peaks in ascending rank order.
+
+        Parameters
+        ----------
+        n : int
+            Maximum number of peaks to return.
+
+        Returns
+        -------
+        list of PeriodPeakResult
+            A slice of :attr:`peaks` of length ``min(n, len(peaks))``.
+        """
+        return self.peaks[:n]
+
+    def get_significant_peaks(self, threshold=0.68):
+        """Return peaks whose area fraction meets or exceeds *threshold*.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Minimum ``area_fraction`` to qualify as significant.
+            Default is ``0.68`` (~1 sigma).
+
+        Returns
+        -------
+        list of PeriodPeakResult
+            Peaks from :attr:`peaks` (in rank order) for which
+            ``peak.area_fraction >= threshold``.  Peaks with NaN area
+            fraction are excluded.
+        """
+        return [
+            p for p in self.peaks
+            if np.isfinite(p.area_fraction) and p.area_fraction >= threshold
+        ]
 
     def to_table(self) -> list:
         return [
@@ -885,6 +943,7 @@ class PeriodSummaryResult:
         include_components=True,
         include_peaks=True,
         include_psd_info=False,
+        max_peaks_to_show=3,
     ) -> str:
         """Return a human-readable text summary of this period result.
 
@@ -907,6 +966,11 @@ class PeriodSummaryResult:
             If ``True``, include a short summary of the PSD grid
             (existence, length, frequency range, PSD range).  The full
             arrays are never dumped.  Default is ``False``.
+        max_peaks_to_show : int, optional
+            Maximum number of peaks to show in detail.  The primary peak
+            is always shown first; up to ``max_peaks_to_show - 1``
+            additional peaks follow.  If more peaks exist, a count line
+            is appended.  Default is ``3``.
 
         Returns
         -------
@@ -976,45 +1040,67 @@ class PeriodSummaryResult:
         # Analyzed peaks (literature-comparable outputs)
         # ------------------------------------------------------------------
         if include_peaks and self.peaks:
-            lines.append("ANALYZED PEAKS  (literature-comparable outputs)")
-            lines.append("=" * 47)
-            for pk in self.peaks:
-                lines.append(f"  Peak P{pk.rank}")
-                lines.append(f"  {'-' * 30}")
-                lines.append(f"    Rank                       : {pk.rank}")
+            primary = self.peaks[0]
+
+            # ---- Primary peak (full detail) ------------------------------
+            lines.append("PRIMARY PEAK  (literature-comparable output)")
+            lines.append("=" * 44)
+            lines.append(
+                f"    Period                     : {_fmt(primary.period)}"
+            )
+            lines.append(
+                f"    Frequency                  : {_fmt(primary.frequency)}"
+            )
+            lines.append(
+                f"    Height                     : {_fmt(primary.height)}"
+            )
+            lines.append(
+                f"    Prominence                 : {_fmt(primary.prominence)}"
+            )
+            lines.append(
+                f"    Area fraction              : {_fmt(primary.area_fraction)}"
+            )
+            lines.append(
+                f"    Interval (frequency)       : "
+                f"{_fmt_interval(primary.interval_frequency)}"
+            )
+            lines.append(
+                f"    Interval (period)          : "
+                f"{_fmt_interval(primary.interval_period)}"
+            )
+            lines.append(
+                f"    LSP candidate              : {primary.is_candidate_lsp}"
+            )
+            if primary.notes:
                 lines.append(
-                    f"    Period                     : {_fmt(pk.period)}"
+                    f"    Notes                      : {primary.notes}"
                 )
-                lines.append(
-                    f"    Frequency                  : {_fmt(pk.frequency)}"
-                )
-                lines.append(
-                    f"    Height                     : {_fmt(pk.height)}"
-                )
-                lines.append(
-                    f"    Prominence                 : {_fmt(pk.prominence)}"
-                )
-                lines.append(
-                    f"    Area fraction              : {_fmt(pk.area_fraction)}"
-                )
-                lines.append(
-                    f"    Interval (frequency)       : "
-                    f"{_fmt_interval(pk.interval_frequency)}"
-                )
-                lines.append(
-                    f"    Interval (period)          : "
-                    f"{_fmt_interval(pk.interval_period)}"
-                )
-                lines.append(
-                    f"    Period ratio to primary    : "
-                    f"{_fmt(pk.period_ratio_to_primary)}"
-                )
-                lines.append(
-                    f"    LSP candidate              : {pk.is_candidate_lsp}"
-                )
-                if pk.notes:
-                    lines.append(f"    Notes                      : {pk.notes}")
-                lines.append("")
+            lines.append("")
+
+            # ---- Additional peaks (compact) ------------------------------
+            extra_peaks = self.peaks[1:]
+            if extra_peaks:
+                n_to_show = max(0, max_peaks_to_show - 1)
+                shown = extra_peaks[:n_to_show]
+                n_hidden = len(extra_peaks) - len(shown)
+
+                if shown:
+                    lines.append("ADDITIONAL PEAKS")
+                    lines.append("=" * 16)
+                    for pk in shown:
+                        _int_str = _fmt_interval(pk.interval_period)
+                        lines.append(
+                            f"  #{pk.rank}  period={_fmt(pk.period)}"
+                            f"  freq={_fmt(pk.frequency)}"
+                            f"  area={_fmt(pk.area_fraction)}"
+                            f"  interval={_int_str}"
+                        )
+                    if n_hidden > 0:
+                        lines.append(
+                            f"  (+{n_hidden} additional peak"
+                            f"{'s' if n_hidden != 1 else ''} not shown)"
+                        )
+                    lines.append("")
 
         # ------------------------------------------------------------------
         # Kernel component diagnostics (NOT final periods)
@@ -5755,8 +5841,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "interval_definition": "none",
             "q_factor": None,
             "peak_fraction": np.nan,
+            "n_peaks": 0,
             "n_significant_peaks": 0,
             "significant_periods": np.array([]),
+            "peaks": [],
             "method": "non_periodic_kernel",
             "notes": (
                 "This model does not encode a periodic timescale, "
@@ -5833,8 +5921,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "interval_definition": "coherence_proxy",
             "q_factor": q_factor,
             "peak_fraction": np.nan,
+            "n_peaks": 1,
             "n_significant_peaks": 1,
             "significant_periods": np.array([raw_period]),
+            "peaks": [],
             "method": "explicit_period_parameter",
             "notes": notes,
         }
@@ -7063,6 +7153,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         show=True,
         log_freq=True,
         show_full_psd=None,
+        max_peaks_to_mark=3,
         **kwargs,
     ):
         """Plot the period summary from :meth:`get_period_summary`.
@@ -7110,6 +7201,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             peak-centered) but *is* included in multi-peak mode.  Set to
             ``True`` to force a full-range panel even in single-peak mode;
             set to ``False`` to suppress it even in multi-peak mode.
+        max_peaks_to_mark : int, optional
+            Maximum number of peaks to mark on the plot.  In multi-peak
+            mode this also limits the number of zoom panels created.
+            Default is ``3``.
         **kwargs
             Additional keyword arguments forwarded to
             :meth:`get_period_summary` when ``summary`` is ``None``.
@@ -7283,7 +7378,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if has_structured_peaks and has_psd:
             freq_grid = summary["freq_grid"]
             psd = summary["psd"]
-            _n_peaks = len(structured_peaks)
+            # Limit to max_peaks_to_mark peaks
+            _peaks_to_plot = structured_peaks[:max_peaks_to_mark]
+            _n_peaks = len(_peaks_to_plot)
             # Determine whether we are in single-peak mode.
             # show_full_psd=None means: auto (False for 1 peak, True for >1).
             _single_peak = _n_peaks == 1
@@ -7298,7 +7395,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # Single-peak mode: one peak-centered panel (+ optional
                 # full-PSD panel if show_full_psd=True was requested).
                 # -------------------------------------------------------
-                pk = structured_peaks[0]
+                pk = _peaks_to_plot[0]
                 col = _peak_color(pk.rank)
                 f_win_lo, f_win_hi, f_zoom, p_zoom = _zoom_window(
                     pk, freq_grid
@@ -7359,7 +7456,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else:
                 # -------------------------------------------------------
                 # Multi-peak mode: full PSD top + one zoom panel per peak
-                # (same as before, _include_full is True by default)
+                # (limited to max_peaks_to_mark peaks)
                 # -------------------------------------------------------
                 n_panels = 1 + _n_peaks
                 fig, axes = plt.subplots(
@@ -7374,7 +7471,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 ax.plot(
                     freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
                 )
-                for pk in structured_peaks:
+                for pk in _peaks_to_plot:
                     col = _peak_color(pk.rank)
                     ax.axvline(
                         pk.frequency,
@@ -7408,9 +7505,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 ax.set_title(f"Period summary - full PSD ({method})")
                 ax.legend(fontsize=7, loc="upper left", ncol=2)
 
-                # Per-peak zoom panels
-                for pk in structured_peaks:
-                    panel_ax = axes[pk.rank]  # rank 1-indexed; axes[0]=top
+                # Per-peak zoom panels (one per plotted peak)
+                for i, pk in enumerate(_peaks_to_plot):
+                    panel_ax = axes[i + 1]
                     f_win_lo, f_win_hi, f_zoom, p_zoom = _zoom_window(
                         pk, freq_grid
                     )
@@ -7473,7 +7570,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # -- other significant peaks from structured summary ---------------
         if has_structured_peaks:
-            for pk in structured_peaks[1:]:
+            for pk in structured_peaks[1:max_peaks_to_mark]:
                 col = _peak_color(pk.rank)
                 ax.axvline(
                     pk.frequency,
