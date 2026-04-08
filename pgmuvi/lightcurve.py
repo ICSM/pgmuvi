@@ -4573,6 +4573,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ------
         ValueError
             If no model is provided.
+        
+        Notes
+        -----
+        Data validation, quality checks, and subsampling are performed at
+        object construction time (see :meth:`__init__`).  Use the
+        ``check_sampling``, ``check_variability``, and ``max_samples``
+        parameters of :meth:`__init__` to control pre-processing.
         """
         # Capture the caller's original num_mixtures argument before any
         # mutation (MLS init / fallback default).  Used later to decide
