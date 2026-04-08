@@ -3476,8 +3476,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Nyquist_factor: int = 5,
         fap_method: str | None = None,
         use_best_band_init: bool = False,
-        max_samples: int | None = None,
-        subsample_seed: int | None = None,
         **kwargs,
     ) -> tuple:
         """
@@ -3534,16 +3532,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             informative band, which can speed up and improve the
             periodogram search when sampling is highly heterogeneous
             across bands.  Has no effect for 1D lightcurves.
-        - max_samples: int or None, optional, default=None
-            If not None, the periodogram is computed on a gap-preserving
-            random subsample of at most *max_samples* observations.  The
-            stored lightcurve data are not modified; subsampling is applied
-            only for this LS call.  A :class:`UserWarning` is issued when
-            subsampling occurs.
-        - subsample_seed: int or None, optional, default=None
-            Random seed for the subsampler used when *max_samples* is set.
-            Provide an integer for reproducible results; ``None`` gives a
-            non-deterministic subsample.
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
@@ -3614,35 +3602,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         _xdata = self.xdata
         _ydata = self.ydata
         _yerr = self.yerr if _has_yerr else None
-
-        # Apply transient subsampling for LS only (does not modify stored data).
-        if max_samples is not None:
-            from pgmuvi.preprocess import subsample_lightcurve
-
-            _t_np = _xdata.detach().cpu().numpy()
-            if _t_np.ndim > 1:
-                _t_np = _t_np[:, 0]
-            n_total = len(_t_np)
-            if n_total > max_samples:
-                _idx = subsample_lightcurve(
-                    _t_np,
-                    max_samples=max_samples,
-                    random_seed=subsample_seed,
-                )
-                warnings.warn(
-                    f"fit_LS: lightcurve has {n_total} points, which exceeds "
-                    f"max_samples={max_samples}. Using a random subsample of "
-                    f"{len(_idx)} points for the periodogram.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                _idx_t = torch.as_tensor(
-                    _idx, dtype=torch.long, device=_xdata.device
-                )
-                _xdata = _xdata[_idx_t]
-                _ydata = _ydata[_idx_t]
-                if _yerr is not None:
-                    _yerr = _yerr[_idx_t]
 
         if self.ndim > 1:
             # Multi-band case: _xdata[:, 0] is time, _xdata[:, 1] is band/wavelength
