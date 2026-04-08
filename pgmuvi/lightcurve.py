@@ -802,35 +802,33 @@ class PeriodSummaryResult:
         )
 
     def as_dict(self) -> dict:
+        # Derive primary-peak quantities once so they can be reused for
+        # the backward-compatible alias keys without repeating the logic.
+        primary = self.peaks[0] if self.peaks else None
+        primary_interval = primary.interval_period if primary is not None else None
+        primary_area = (
+            primary.area_fraction if primary is not None else float("nan")
+        )
+        significant_periods = np.array([p.period for p in self.peaks])
+
         return {
             "component_periods": self.component_periods,
             "component_weights": self.component_weights,
             "component_period_scales": self.component_period_scales,
             "component_frequencies": self.component_frequencies,
-            "component_frequency_scales": (
-                self.component_frequency_scales
-            ),
+            "component_frequency_scales": self.component_frequency_scales,
             "freq_grid": self.freq_grid,
             "psd": self.psd,
             "dominant_frequency": self.dominant_frequency,
             "dominant_period": self.dominant_period,
-            "period_interval_fwhm_like": (
-                self.peaks[0].interval_period if self.peaks else None
-            ),
-            "period_interval": (
-                self.peaks[0].interval_period if self.peaks else None
-            ),
+            # Backward-compatible interval keys (both alias the same value).
+            "period_interval_fwhm_like": primary_interval,
+            "period_interval": primary_interval,
             "interval_definition": self.interval_definition,
             "q_factor": None,
-            "peak_fraction": (
-                self.peaks[0].area_fraction
-                if self.peaks
-                else float("nan")
-            ),
+            "peak_fraction": primary_area,
             "n_significant_peaks": self.n_peaks_detected,
-            "significant_periods": np.array(
-                [p.period for p in self.peaks]
-            ),
+            "significant_periods": significant_periods,
             "method": self.method,
             "notes": self.notes,
         }
@@ -879,11 +877,11 @@ class PeriodSummaryResult:
     ) -> str:
         """Return a human-readable text summary of this period result.
 
-        The text is plain ASCII, suitable for writing to a ``.txt`` file,
-        reading in a terminal, or storing alongside analysis outputs.  It
-        clearly separates **analyzed peak results** (the literature-comparable
-        outputs) from **kernel component diagnostics** (internal quantities
-        derived directly from GP hyperparameters).
+        The text is plain UTF-8 text, suitable for writing to a ``.txt``
+        file, reading in a terminal, or storing alongside analysis outputs.
+        It clearly separates **analyzed peak results** (the
+        literature-comparable outputs) from **kernel component diagnostics**
+        (internal quantities derived directly from GP hyperparameters).
 
         Parameters
         ----------
@@ -1129,7 +1127,9 @@ class PeriodSummaryResult:
         Returns
         -------
         pathlib.Path
-            Absolute path to the file that was written.
+            The path to the file that was written, constructed from
+            *filename* via :class:`pathlib.Path`.  If *filename* is a
+            relative path, the returned value is also relative.
         """
         from pathlib import Path
 
@@ -4973,26 +4973,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 gpytorch.settings.fast_computations(False, False, False),
                 gpytorch.settings.max_cg_iterations(max_cg_iterations),
             ):
-                for key in self.state_dict().keys():
-                    print(key)
-                    with contextlib.suppress(AttributeError):
-                        print(self.state_dict()[key].device)
-                        # self.state_dict()[key] = self.state_dict()[key].cuda()
-                for param_name, param in self.model.named_parameters():
-                    print(
-                        f"Parameter name: {param_name:42} value = {param.data}, "
-                        f"device = {param.data.device}"
-                    )
-                print(self.model.covar_module.mixture_means)
-                print(self.model.covar_module.mixture_scales)
-                print(self.model.covar_module.mixture_weights)
-                print(self.model.covar_module.mixture_means_prior)
-                print("----")
-                print("Lookup dict:")
-                for param_name, param in self._model_pars.items():
-                    print(param)
-                    print("----")
-                    # print(f'Parameter name: {param_name:42} value = {param["module"].value}, device = {param["module"].value.device}')  # noqa: E501
                 sampled_model = model.pyro_sample_from_prior()  # .detatch()
                 output = sampled_model.likelihood(sampled_model(x))  # .detatch()
                 pyro.sample("obs", output, obs=y)
@@ -5009,17 +4989,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             disable_progbar=disable_progbar,
         )
         import linear_operator.utils.errors as linear
-
-        for key in self.state_dict().keys():
-            print(key)
-            with contextlib.suppress(AttributeError):
-                print(self.state_dict()[key].device)
-                # self.state_dict()[key] = self.state_dict()[key].cuda()
-        for param_name, param in self.model.named_parameters():
-            print(
-                f"Parameter name: {param_name:42} value = {param.data}, "
-                f"device = {param.data.device}"
-            )
 
         try:
             if cuda:
@@ -8022,7 +7991,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         - self._xdata_raw.sort().values[:-1]
                     )
                     mindelta = (diffs[diffs > 0]).min().item()
-                    print(step, mindelta, 1 / (mindelta / 2))
 
                     # we want to sample a set of frequencies that are spaced
                     # in the range covered by the gaussian mixture, but we
@@ -8034,7 +8002,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         1 / (mindelta / 2),
                         step.item(),
                     )
-                    print(freq.shape)
 
             elif self.ndim == 2:
                 raise NotImplementedError(
@@ -8502,8 +8469,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(
             self.num_samples, 1, 1
         )  # .unsqueeze(0)
-        print(self.x_fine_transformed.shape)
-        print(self.expanded_test_x.shape)
         output = self.model(self.expanded_test_x)
         with torch.no_grad():
             f, ax = plt.subplots(1, 1, figsize=(8, 6))
