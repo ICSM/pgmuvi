@@ -17,8 +17,6 @@ def _fit_2d_without_training(lc, **kwargs):
     """Call lc.fit() with the training loop patched out (2D defaults)."""
     defaults = {
         "model": "2D",
-        "check_sampling": False,
-        "check_variability": False,
         "training_iter": 1,
     }
     defaults.update(kwargs)
@@ -242,7 +240,6 @@ class TestFitBestBandInit2D(unittest.TestCase):
         )
         defaults = {
             "model": "1D",
-            "check_sampling": False,
             "training_iter": 1,
             "use_best_band_init": True,
         }
