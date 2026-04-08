@@ -773,9 +773,17 @@ class PeriodSummaryResult:
         component_frequencies=None,
         component_frequency_scales=None,
         interval_definition="peak_centered_68pct_mass_interval",
+        backend="",
+        kernel_family="",
+        time_kernel_family="",
+        has_stochastic_background=False,
     ):
         self.method = method
         self.model_name = model_name
+        self.backend = backend
+        self.kernel_family = kernel_family
+        self.time_kernel_family = time_kernel_family
+        self.has_stochastic_background = has_stochastic_background
         self.n_peaks_detected = n_peaks_detected
         self.n_peaks_analyzed = n_peaks_analyzed
         self.n_peaks_requested = n_peaks_requested
@@ -886,6 +894,11 @@ class PeriodSummaryResult:
             "peaks": [p.as_dict() for p in self.peaks],
             "method": self.method,
             "notes": self.notes,
+            # Kernel-dispatch metadata
+            "backend": self.backend,
+            "kernel_family": self.kernel_family,
+            "time_kernel_family": self.time_kernel_family,
+            "has_stochastic_background": self.has_stochastic_background,
         }
 
     def __getitem__(self, key):
@@ -1068,6 +1081,14 @@ class PeriodSummaryResult:
         lines.append("==============")
         lines.append(f"  Model name          : {self.model_name or 'N/A'}")
         lines.append(f"  Method              : {self.method or 'N/A'}")
+        lines.append(f"  Backend             : {self.backend or 'N/A'}")
+        lines.append(
+            f"  Kernel family       : {self.kernel_family or 'N/A'}"
+        )
+        _tkf = self.time_kernel_family or "N/A"
+        lines.append(f"  Time-kernel family  : {_tkf}")
+        _hsb = str(self.has_stochastic_background)
+        lines.append(f"  Stochastic bg       : {_hsb}")
         lines.append(
             f"  Interval definition : {self.interval_definition or 'N/A'}"
         )
@@ -5667,47 +5688,71 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "q_factor": q_factor,
         }
 
-    def _get_non_periodic_summary(self):
+    @staticmethod
+    def _kernel_family_name(kernel):
+        """Return the class name of *kernel*, or ``""`` if not available.
+
+        Used to populate ``kernel_family`` and ``time_kernel_family`` on
+        :class:`PeriodSummaryResult` objects.  If *kernel* is ``None`` an
+        empty string is returned so that callers can fall back gracefully.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None
+            The kernel whose class name should be returned.
+
+        Returns
+        -------
+        str
+            ``type(kernel).__name__`` or ``""``.
+        """
+        if kernel is None:
+            return ""
+        return type(kernel).__name__
+
+    def _get_non_periodic_summary(self, kernel=None):
         """Return a graceful period summary for a non-periodic kernel.
 
         Used when the model has no periodic structure (e.g.
         :class:`~pgmuvi.gps.MaternGPModel`).  All period-related fields
-        are set to ``None`` or empty arrays, and the ``method`` field is
-        set to ``"non_periodic_kernel"`` so that downstream code can
+        are set to ``None`` or empty arrays, and the ``backend`` field is
+        set to ``"non_periodic"`` so that downstream code can
         distinguish this from a genuine period summary.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None, optional
+            Kernel to report as the family name.  Defaults to
+            ``self.model.sci_kernel`` when available.
 
         Returns
         -------
-        summary : dict
-            Consistent dictionary with the same keys as
-            :meth:`get_period_summary` but with no period information.
+        summary : PeriodSummaryResult
+            Consistent structured result with no period information.
         """
-        return {
-            "component_periods": np.array([]),
-            "component_weights": np.array([]),
-            "component_period_scales": np.array([]),
-            "component_frequencies": np.array([]),
-            "component_frequency_scales": np.array([]),
-            "freq_grid": None,
-            "psd": None,
-            "dominant_frequency": None,
-            "dominant_period": None,
-            "period_interval_fwhm_like": None,
-            "period_interval": None,
-            "interval_definition": "none",
-            "q_factor": None,
-            "peak_fraction": np.nan,
-            "n_peaks": 0,
-            "n_peaks_detected": 0,
-            "n_significant_peaks": 0,
-            "significant_periods": np.array([]),
-            "peaks": [],
-            "method": "non_periodic_kernel",
-            "notes": (
-                "This model does not encode a periodic timescale, "
-                "so no dominant period is defined."
+        _k = (
+            kernel if kernel is not None
+            else getattr(getattr(self, "model", None), "sci_kernel", None)
+        )
+        kf = self._kernel_family_name(_k)
+        return PeriodSummaryResult(
+            method="non_periodic_kernel",
+            backend="non_periodic",
+            kernel_family=kf,
+            time_kernel_family=kf,
+            has_stochastic_background=False,
+            dominant_period=None,
+            dominant_frequency=None,
+            peaks=[],
+            freq_grid=None,
+            psd=None,
+            interval_definition="none",
+            notes=(
+                "This kernel family does not encode a periodic timescale, "
+                "so no dominant period is defined. "
+                f"Kernel: {kf}."
             ),
-        }
+        )
 
     def _get_explicit_period_summary(self, kernel=None):
         """Return a period summary for an explicit-period kernel (e.g. QP).
@@ -5731,61 +5776,94 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Returns
         -------
-        summary : dict
-            Same keys as :meth:`get_period_summary`.  ``freq_grid`` and
-            ``psd`` are ``None`` (no PSD is computed for this backend).
+        summary : PeriodSummaryResult
+            Structured result.  ``freq_grid`` and ``psd`` are ``None``
+            (no PSD is computed for this backend).  The dominant period
+            comes from the kernel's fitted period parameter, not a PSD
+            peak search.  The uncertainty interval, when present, is a
+            coherence proxy from the RBF lengthscale, labelled
+            ``"coherence_proxy_from_rbf_lengthscale"``.
         """
         if kernel is None:
             kernel = self.model.sci_kernel
 
+        kf = self._kernel_family_name(kernel)
         ep = self._extract_explicit_period_params(kernel)
         if ep is None:
-            return self._get_non_periodic_summary()
+            return self._get_non_periodic_summary(kernel=kernel)
 
         raw_period = ep["raw_period"]
         raw_freq = ep["raw_freq"]
         period_lo = ep["period_lo"]
         period_hi = ep["period_hi"]
-        q_factor = ep["q_factor"]
         raw_rbf_ls = ep["raw_rbf_lengthscale"]
 
         if raw_rbf_ls is not None:
+            interval_def = "coherence_proxy_from_rbf_lengthscale"
             notes = (
-                "Period extracted from the fitted period_length parameter "
-                "of the PeriodicKernel.  The uncertainty interval and "
-                "Q-factor are coherence proxies derived from the RBF "
-                "lengthscale; they are not posterior credible intervals."
+                "Dominant period extracted from the fitted period_length "
+                "parameter of the PeriodicKernel (explicit_period backend). "
+                "The uncertainty interval is a coherence proxy derived from "
+                "the RBF lengthscale; it is NOT a PSD-derived peak interval "
+                "and NOT a posterior credible interval."
             )
+            # Frequency interval from the period interval
+            f_lo = 1.0 / period_hi if period_hi > 0 else float("nan")
+            f_hi = 1.0 / period_lo if period_lo > 0 else float("nan")
         else:
+            interval_def = "none"
             notes = (
-                "Period extracted from the fitted period_length parameter "
-                "of the PeriodicKernel.  No coherence timescale found; "
-                "period interval set to a point estimate."
+                "Dominant period extracted from the fitted period_length "
+                "parameter of the PeriodicKernel (explicit_period backend). "
+                "No coherence timescale found; no defensible interval is "
+                "reported."
             )
+            period_lo = float("nan")
+            period_hi = float("nan")
+            f_lo = float("nan")
+            f_hi = float("nan")
 
-        return {
-            "component_periods": np.array([raw_period]),
-            "component_weights": np.array([np.nan]),
-            "component_period_scales": np.array([np.nan]),
-            "component_frequencies": np.array([raw_freq]),
-            "component_frequency_scales": np.array([np.nan]),
-            "freq_grid": None,
-            "psd": None,
-            "dominant_frequency": raw_freq,
-            "dominant_period": raw_period,
-            "period_interval_fwhm_like": (period_lo, period_hi),
-            "period_interval": (period_lo, period_hi),
-            "interval_definition": "coherence_proxy",
-            "q_factor": q_factor,
-            "peak_fraction": np.nan,
-            "n_peaks": 1,
-            "n_peaks_detected": 1,
-            "n_significant_peaks": 1,
-            "significant_periods": np.array([raw_period]),
-            "peaks": [],
-            "method": "explicit_period_parameter",
-            "notes": notes,
-        }
+        # Represent the single explicit period as a PeriodPeakResult so
+        # that all dict-access keys (period_interval_fwhm_like, n_peaks, …)
+        # remain backward-compatible.  area_fraction=1.0 marks this as the
+        # sole significant period.
+        _peak = PeriodPeakResult(
+            rank=1,
+            frequency=raw_freq,
+            period=raw_period,
+            height=float("nan"),
+            prominence=float("nan"),
+            area_fraction=1.0,
+            interval_frequency=(f_lo, f_hi),
+            interval_period=(period_lo, period_hi),
+            period_ratio_to_primary=1.0,
+            is_candidate_lsp=False,
+            notes=(
+                "Coherence-proxy interval from RBF lengthscale"
+                if raw_rbf_ls is not None
+                else "No interval available"
+            ),
+        )
+
+        return PeriodSummaryResult(
+            method="explicit_period_parameter",
+            backend="explicit_period",
+            kernel_family=kf,
+            time_kernel_family=kf,
+            has_stochastic_background=False,
+            dominant_period=raw_period,
+            dominant_frequency=raw_freq,
+            peaks=[_peak],
+            freq_grid=None,
+            psd=None,
+            notes=notes,
+            component_periods=np.array([raw_period]),
+            component_weights=np.array([np.nan]),
+            component_period_scales=np.array([np.nan]),
+            component_frequencies=np.array([raw_freq]),
+            component_frequency_scales=np.array([np.nan]),
+            interval_definition=interval_def,
+        )
 
     def _get_periodic_plus_stochastic_summary(self):
         """Return a period summary for a periodic-plus-stochastic kernel.
@@ -5796,27 +5874,51 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         purely stochastic RBF part.
 
         The dominant period is extracted from the quasi-periodic sub-kernel
-        using the same logic as :meth:`_get_explicit_period_summary`.  A
-        note is included to flag the mixed periodic/stochastic nature of the
-        model.
+        using the same logic as :meth:`_get_explicit_period_summary`.
+        The stochastic component is treated as non-periodic background
+        support and is **not** interpreted as an independent period.
 
         Returns
         -------
-        summary : dict
-            Same keys as :meth:`get_period_summary`.
+        summary : PeriodSummaryResult
+            Structured result.  ``backend == "periodic_plus_stochastic"``,
+            ``has_stochastic_background is True``.
         """
+        overall_kf = self._kernel_family_name(
+            getattr(self.model, "sci_kernel", None)
+        )
         # The first sub-kernel of the AdditiveKernel is the QP part.
         qp_kernel = self.model.sci_kernel.kernels[0]
-        summary = self._get_explicit_period_summary(kernel=qp_kernel)
-        # Update method and notes to reflect the mixed structure
-        summary["method"] = "periodic_plus_stochastic"
-        summary["notes"] = (
-            "This model combines a quasi-periodic term with a stochastic "
-            "(RBF) term.  The dominant period is extracted from the "
-            "quasi-periodic component only.  "
-            + summary["notes"]
+        qp_kf = self._kernel_family_name(qp_kernel)
+        ep_summary = self._get_explicit_period_summary(kernel=qp_kernel)
+
+        # Build updated notes that are explicit about periodic vs stochastic
+        _pps_note = (
+            "Periodic-plus-stochastic model (periodic_plus_stochastic "
+            "backend).  The reported period comes from the periodic "
+            "sub-kernel only.  The stochastic (RBF) component is treated "
+            "as non-periodic background support and is NOT interpreted as "
+            "an independent period.  "
         )
-        return summary
+        return PeriodSummaryResult(
+            method="periodic_plus_stochastic",
+            backend="periodic_plus_stochastic",
+            kernel_family=overall_kf,
+            time_kernel_family=qp_kf,
+            has_stochastic_background=True,
+            dominant_period=ep_summary.dominant_period,
+            dominant_frequency=ep_summary.dominant_frequency,
+            peaks=list(ep_summary.peaks),
+            freq_grid=ep_summary.freq_grid,
+            psd=ep_summary.psd,
+            notes=_pps_note + ep_summary.notes,
+            component_periods=ep_summary.component_periods,
+            component_weights=ep_summary.component_weights,
+            component_period_scales=ep_summary.component_period_scales,
+            component_frequencies=ep_summary.component_frequencies,
+            component_frequency_scales=ep_summary.component_frequency_scales,
+            interval_definition=ep_summary.interval_definition,
+        )
 
     def _get_separable_2d_period_summary(self, **kwargs):
         """Return a period summary for a separable-product 2D kernel.
@@ -5835,6 +5937,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         1. Identifies the time sub-kernel (``active_dims`` contains 0).
         2. Classifies the time kernel into a period-summary backend.
         3. Delegates to the appropriate backend method.
+        4. Wraps the result in a ``separable_2d``-annotated
+           :class:`PeriodSummaryResult` that explicitly records the
+           time-kernel family used for the summary.
 
         Parameters
         ----------
@@ -5844,11 +5949,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Returns
         -------
-        summary : dict
-            Same keys as :meth:`get_period_summary`.
+        summary : PeriodSummaryResult
+            Period summary based on the time kernel only.
+            ``backend == "separable_2d"``, ``time_kernel_family`` names
+            the time kernel.  The wavelength kernel does not contribute
+            to the reported period.
         """
 
         sk = self.model.sci_kernel
+        overall_kf = self._kernel_family_name(sk)
         # Identify the time sub-kernel (active_dims contains 0)
         time_kernel = None
         for k in sk.kernels:
@@ -5859,10 +5968,34 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if time_kernel is None:
             # Cannot identify time kernel; fall back to non-periodic
-            return self._get_non_periodic_summary()
+            np_summary = self._get_non_periodic_summary()
+            return PeriodSummaryResult(
+                method=np_summary.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family="",
+                has_stochastic_background=False,
+                dominant_period=np_summary.dominant_period,
+                dominant_frequency=np_summary.dominant_frequency,
+                peaks=list(np_summary.peaks),
+                freq_grid=np_summary.freq_grid,
+                psd=np_summary.psd,
+                notes=(
+                    "Separable 2D model: could not identify the time "
+                    "sub-kernel; no period summary is available."
+                ),
+                interval_definition=np_summary.interval_definition,
+            )
 
         # Classify the time kernel
         actual_tk = getattr(time_kernel, "base_kernel", time_kernel)
+        tkf = self._kernel_family_name(actual_tk)
+        _2d_prefix = (
+            "Separable 2D model (separable_2d backend): period summary "
+            f"derived from the time kernel ({tkf}) only.  "
+            "The wavelength kernel does not contribute to this period "
+            "determination.  "
+        )
 
         if hasattr(actual_tk, "mixture_means"):
             # Spectral-mixture time kernel - use PSD method
@@ -5871,45 +6004,74 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _orig_sk = self.model.sci_kernel
             self.model.sci_kernel = actual_tk
             try:
-                summary = self._get_sm_period_summary(**kwargs)
+                inner = self._get_sm_period_summary(**kwargs)
             finally:
                 self.model.sci_kernel = _orig_sk
-            _prefix = (
-                "Separable 2D model: period summary derived from the "
-                "time kernel only.  "
+            return PeriodSummaryResult(
+                method=inner.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family=tkf,
+                has_stochastic_background=inner.has_stochastic_background,
+                dominant_period=inner.dominant_period,
+                dominant_frequency=inner.dominant_frequency,
+                peaks=list(inner.peaks),
+                freq_grid=inner.freq_grid,
+                psd=inner.psd,
+                notes=_2d_prefix + inner.notes,
+                component_periods=inner.component_periods,
+                component_weights=inner.component_weights,
+                component_period_scales=inner.component_period_scales,
+                component_frequencies=inner.component_frequencies,
+                component_frequency_scales=inner.component_frequency_scales,
+                interval_definition=inner.interval_definition,
+                n_peaks_detected=inner.n_peaks_detected,
+                n_peaks_analyzed=inner.n_peaks_analyzed,
+                n_peaks_requested=inner.n_peaks_requested,
             )
-            if isinstance(summary, PeriodSummaryResult):
-                summary.notes = _prefix + summary.notes
-            else:
-                summary["notes"] = _prefix + summary["notes"]
-            return summary
 
         if self._find_period_length_in_kernel(time_kernel) is not None:
             # Explicit-period time kernel (e.g. quasi-periodic)
-            summary = self._get_explicit_period_summary(
-                kernel=time_kernel
+            inner = self._get_explicit_period_summary(kernel=time_kernel)
+            return PeriodSummaryResult(
+                method=inner.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family=tkf,
+                has_stochastic_background=inner.has_stochastic_background,
+                dominant_period=inner.dominant_period,
+                dominant_frequency=inner.dominant_frequency,
+                peaks=list(inner.peaks),
+                freq_grid=inner.freq_grid,
+                psd=inner.psd,
+                notes=_2d_prefix + inner.notes,
+                component_periods=inner.component_periods,
+                component_weights=inner.component_weights,
+                component_period_scales=inner.component_period_scales,
+                component_frequencies=inner.component_frequencies,
+                component_frequency_scales=inner.component_frequency_scales,
+                interval_definition=inner.interval_definition,
             )
-            _prefix = (
-                "Separable 2D model: period summary derived from the "
-                "time kernel only.  "
-            )
-            if isinstance(summary, PeriodSummaryResult):
-                summary.notes = _prefix + summary.notes
-            else:
-                summary["notes"] = _prefix + summary["notes"]
-            return summary
 
         # Non-periodic time kernel
-        summary = self._get_non_periodic_summary()
-        _note_np = (
-            "Separable 2D model: the time kernel is non-periodic, "
-            "so no dominant period is defined."
+        return PeriodSummaryResult(
+            method="non_periodic_kernel",
+            backend="separable_2d",
+            kernel_family=overall_kf,
+            time_kernel_family=tkf,
+            has_stochastic_background=False,
+            dominant_period=None,
+            dominant_frequency=None,
+            peaks=[],
+            freq_grid=None,
+            psd=None,
+            notes=(
+                "Separable 2D model: the time kernel "
+                f"({tkf}) is non-periodic, "
+                "so no dominant period is defined."
+            ),
+            interval_definition="none",
         )
-        if isinstance(summary, PeriodSummaryResult):
-            summary.notes = _note_np
-        else:
-            summary["notes"] = _note_np
-        return summary
 
     @staticmethod
     def _find_dominant_peak_basin(psd, dominant_idx):
@@ -6801,15 +6963,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"{' and '.join(_sides)} side(s) may still be "
                 "truncated; width estimate is a lower bound."
             )
-        notes = "".join(_note_parts)
+        _sm_psd_note = (
+            "Spectral-mixture model (spectral_mixture backend).  "
+            "Periods are derived from peaks of the SUMMED PSD on a "
+            "frequency grid — this is the literature-comparable output.  "
+            "The component periods/frequencies listed in the kernel "
+            "component diagnostics section are direct kernel hyperparameter "
+            "values and are for diagnostic purposes only; they are NOT "
+            "the reported period determinations.  "
+        )
+        notes = _sm_psd_note + "".join(_note_parts)
 
         if uncertainty == "peak_width":
             _interval_def = "half_maximum_fwhm_like"
         else:
             _interval_def = "peak_centered_68pct_mass_interval"
 
+        _kf = self._kernel_family_name(
+            getattr(self.model, "sci_kernel", None)
+        )
         return PeriodSummaryResult(
             method="spectral_mixture_psd_peak",
+            backend="spectral_mixture",
+            kernel_family=_kf,
+            time_kernel_family=_kf,
+            has_stochastic_background=False,
             model_name="",
             n_peaks_detected=n_sig_peaks,
             n_peaks_analyzed=len(peak_objects),
@@ -7121,6 +7299,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "peak_centered_68pct_mass_interval": "68% peak-centered mass interval",
             "half_maximum_fwhm_like": "half-max interval",
             "coherence_proxy": "coherence-proxy interval",
+            "coherence_proxy_from_rbf_lengthscale": (
+                "coherence-proxy interval (RBF lengthscale)"
+            ),
         }
         interval_label = _interval_labels.get(
             interval_definition, interval_definition or "interval"

@@ -55,6 +55,11 @@ _REQUIRED_KEYS = {
     "peaks",
     "method",
     "notes",
+    # Kernel-dispatch metadata (added in kernel-aware period-summary patch)
+    "backend",
+    "kernel_family",
+    "time_kernel_family",
+    "has_stochastic_background",
 }
 
 
@@ -276,7 +281,7 @@ class TestGetPeriodSummaryQuasiPeriodic(unittest.TestCase):
 
     def _check_summary(self, lc, model_name):
         summary = lc.get_period_summary()
-        self.assertIsInstance(summary, dict, msg=model_name)
+        self.assertIsInstance(summary, (dict, PeriodSummaryResult), msg=model_name)
         self.assertSetEqual(
             _REQUIRED_KEYS, set(summary.keys()), msg=model_name
         )
@@ -334,7 +339,7 @@ class TestGetPeriodSummaryPeriodicStochastic(unittest.TestCase):
         self.summary = self.lc.get_period_summary()
 
     def test_returns_dict(self):
-        self.assertIsInstance(self.summary, dict)
+        self.assertIsInstance(self.summary, (dict, PeriodSummaryResult))
 
     def test_all_required_keys_present(self):
         self.assertSetEqual(_REQUIRED_KEYS, set(self.summary.keys()))
@@ -368,7 +373,7 @@ class TestGetPeriodSummaryNonPeriodic(unittest.TestCase):
         self.summary = self.lc.get_period_summary()
 
     def test_returns_dict(self):
-        self.assertIsInstance(self.summary, dict)
+        self.assertIsInstance(self.summary, (dict, PeriodSummaryResult))
 
     def test_all_required_keys_present(self):
         self.assertSetEqual(_REQUIRED_KEYS, set(self.summary.keys()))
@@ -410,7 +415,7 @@ class TestGetPeriodSummarySeparable2D(unittest.TestCase):
 
     def _check_base(self, lc, model_name):
         s = lc.get_period_summary()
-        self.assertIsInstance(s, dict, msg=model_name)
+        self.assertIsInstance(s, (dict, PeriodSummaryResult), msg=model_name)
         self.assertSetEqual(
             _REQUIRED_KEYS, set(s.keys()), msg=model_name
         )
