@@ -186,8 +186,14 @@ class TestGetSignificantPeaks(unittest.TestCase):
 
     def test_nan_area_fraction_excluded(self):
         p_nan = _make_peak(rank=4, area_fraction=float("nan"), period=400.0)
-        peaks_with_nan = self.summary.peaks + [p_nan]
-        summary = _make_summary(peaks=peaks_with_nan)
+        # Build a fresh list of peaks independent of setUp state
+        extra_peaks = [
+            _make_peak(rank=1, area_fraction=0.80, period=100.0),
+            _make_peak(rank=2, area_fraction=0.60, period=200.0),
+            _make_peak(rank=3, area_fraction=0.30, period=300.0),
+            p_nan,
+        ]
+        summary = _make_summary(peaks=extra_peaks)
         # NaN peak should not appear regardless of threshold
         sig = summary.get_significant_peaks(threshold=0.0)
         self.assertTrue(all(np.isfinite(p.area_fraction) for p in sig))
