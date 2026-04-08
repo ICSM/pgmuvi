@@ -2329,5 +2329,263 @@ class TestComponentDiagnosticsResultStructure(unittest.TestCase):
         np.testing.assert_array_equal(d["component_weights"], [0.7, 0.3])
 
 
+# ---------------------------------------------------------------------------
+# 23. JSON round-trip tests and serialization robustness
+# ---------------------------------------------------------------------------
+
+
+class TestWriteJsonRoundTrip(unittest.TestCase):
+    """Round-trip and structural tests for PeriodSummaryResult.write_json()."""
+
+    def _make_summary_with_psd(self):
+        return _make_synthetic_summary(
+            n_peaks=2, with_components=True, with_psd=True
+        )
+
+    def _make_summary_no_psd(self):
+        return _make_synthetic_summary(
+            n_peaks=1, with_components=True, with_psd=False
+        )
+
+    # ------------------------------------------------------------------
+    # A) Nested component_diagnostics survives write→read intact
+    # ------------------------------------------------------------------
+
+    def test_component_diagnostics_is_dict_after_roundtrip(self):
+        """component_diagnostics is a dict (not a string) in loaded JSON."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_no_psd()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path)
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIn("component_diagnostics", data)
+            self.assertIsInstance(
+                data["component_diagnostics"],
+                dict,
+                msg="component_diagnostics must be a dict, not a string",
+            )
+        finally:
+            os.remove(path)
+
+    def test_component_diagnostics_sub_keys_present(self):
+        """component_periods and siblings are nested inside component_diagnostics."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_no_psd()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path)
+            with open(path) as fh:
+                data = json.load(fh)
+            cd = data["component_diagnostics"]
+            for key in (
+                "component_periods",
+                "component_frequencies",
+                "component_weights",
+                "component_period_scales",
+                "component_frequency_scales",
+            ):
+                self.assertIn(
+                    key,
+                    cd,
+                    msg=f"Expected '{key}' inside component_diagnostics",
+                )
+            self.assertIsInstance(cd["component_periods"], list)
+        finally:
+            os.remove(path)
+
+    def test_no_flat_component_keys_at_top_level(self):
+        """Flat component_* keys are absent at the top level of JSON."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_no_psd()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path)
+            with open(path) as fh:
+                data = json.load(fh)
+            for key in (
+                "component_periods",
+                "component_weights",
+                "component_frequencies",
+                "component_period_scales",
+                "component_frequency_scales",
+            ):
+                self.assertNotIn(
+                    key,
+                    data,
+                    msg=f"Flat key '{key}' must not appear at top level",
+                )
+        finally:
+            os.remove(path)
+
+    def test_scalar_fields_survive_roundtrip(self):
+        """dominant_period and method survive the JSON round-trip."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_no_psd()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path)
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIn("dominant_period", data)
+            self.assertIn("method", data)
+            self.assertIsInstance(data["dominant_period"], float)
+        finally:
+            os.remove(path)
+
+    def test_peaks_is_list_of_dicts(self):
+        """peaks key is a list of dicts after JSON round-trip."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_no_psd()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path)
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIn("peaks", data)
+            self.assertIsInstance(data["peaks"], list)
+            self.assertGreater(len(data["peaks"]), 0)
+            self.assertIsInstance(data["peaks"][0], dict)
+        finally:
+            os.remove(path)
+
+    # ------------------------------------------------------------------
+    # B) include_psd=False (default)
+    # ------------------------------------------------------------------
+
+    def test_include_psd_false_gives_null_arrays(self):
+        """include_psd=False (default) writes freq_grid and psd as null."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_with_psd()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path, include_psd=False)
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIsNone(data["freq_grid"])
+            self.assertIsNone(data["psd"])
+        finally:
+            os.remove(path)
+
+    # ------------------------------------------------------------------
+    # C) include_psd=True
+    # ------------------------------------------------------------------
+
+    def test_include_psd_true_writes_arrays(self):
+        """include_psd=True writes freq_grid and psd as JSON arrays."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_with_psd()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path, include_psd=True)
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIsInstance(data["freq_grid"], list)
+            self.assertIsInstance(data["psd"], list)
+            self.assertGreater(len(data["freq_grid"]), 0)
+            self.assertGreater(len(data["psd"]), 0)
+        finally:
+            os.remove(path)
+
+    def test_none_component_diagnostics_is_null(self):
+        """When component_diagnostics is None, JSON writes it as null."""
+        import json
+        import tempfile
+        import os
+
+        summary = _make_synthetic_summary(with_components=False)
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path)
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIn("component_diagnostics", data)
+            self.assertIsNone(data["component_diagnostics"])
+        finally:
+            os.remove(path)
+
+
+class TestJsonSerializeUnsupportedType(unittest.TestCase):
+    """_json_serialize() must raise TypeError for unsupported objects."""
+
+    def _make_minimal_summary(self):
+        return PeriodSummaryResult(method="psd_peak")
+
+    def test_unsupported_type_raises_type_error(self):
+        """_json_serialize raises TypeError for an unsupported type."""
+        summary = self._make_minimal_summary()
+        with self.assertRaises(TypeError):
+            summary._json_serialize(object())
+
+    def test_write_json_raises_on_unsupported_in_nested_dict(self):
+        """write_json() raises TypeError if as_dict() contains an unsupported type."""
+        import tempfile
+        import os
+
+        class _BadSummary(PeriodSummaryResult):
+            def as_dict(self):
+                d = super().as_dict()
+                d["bad_field"] = object()
+                return d
+
+        bad = _BadSummary(method="psd_peak")
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            with self.assertRaises(TypeError):
+                bad.write_json(path)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+
 if __name__ == "__main__":
     unittest.main()

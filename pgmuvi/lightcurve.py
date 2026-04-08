@@ -1369,7 +1369,9 @@ class PeriodSummaryResult:
         """Recursively convert *obj* to a JSON-serializable Python object.
 
         Handles nested dicts, lists/tuples, numpy arrays and scalars, and
-        the standard JSON primitives.  Unknown types fall back to ``str()``.
+        the standard JSON primitives.  Raises ``TypeError`` for any
+        unrecognised type so that serialization bugs are caught immediately
+        rather than silently corrupted via ``str()``.
         """
         if obj is None or isinstance(obj, (bool, int, float, str)):
             return obj
@@ -1381,7 +1383,9 @@ class PeriodSummaryResult:
             return obj.tolist()
         if isinstance(obj, (np.floating, np.integer)):
             return obj.item()
-        return str(obj)
+        raise TypeError(
+            f"Cannot JSON-serialize object of type {type(obj).__name__}"
+        )
 
     def write_json(self, filename, include_psd=False):
         d = self.as_dict()
