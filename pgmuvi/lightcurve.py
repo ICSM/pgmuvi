@@ -751,6 +751,97 @@ class PeriodPeakResult:
         }
 
 
+class ComponentDiagnosticsResult:
+    """Kernel-component diagnostic information for a spectral-mixture GP.
+
+    These values are extracted directly from GP hyperparameters and are
+    provided for diagnostic purposes only.  They must **not** be interpreted
+    as independent physical periods.  The literature-comparable period
+    estimates are the summed-PSD peaks stored in
+    :attr:`PeriodSummaryResult.peaks`.
+
+    Attributes
+    ----------
+    component_periods : numpy.ndarray
+        Centre period of each mixture component (1/frequency).
+    component_frequencies : numpy.ndarray
+        Centre frequency of each mixture component.
+    component_weights : numpy.ndarray
+        Relative amplitude weight of each mixture component.
+    component_period_scales : numpy.ndarray
+        Width (sigma) of each Gaussian component in period units.
+    component_frequency_scales : numpy.ndarray
+        Width (sigma) of each Gaussian component in frequency units.
+    n_components : int
+        Number of mixture components.
+    kernel_family : str
+        Name of the spectral-mixture kernel family.
+    notes : str
+        Diagnostic notes for this component set.
+    component_labels : list of str
+        Human-readable label for each component,
+        e.g. ``["SM component 1", "SM component 2"]``.
+    """
+
+    def __init__(
+        self,
+        component_periods=None,
+        component_frequencies=None,
+        component_weights=None,
+        component_period_scales=None,
+        component_frequency_scales=None,
+        n_components=0,
+        kernel_family="",
+        notes="",
+        component_labels=None,
+    ):
+        self.component_periods = (
+            component_periods
+            if component_periods is not None
+            else np.array([])
+        )
+        self.component_frequencies = (
+            component_frequencies
+            if component_frequencies is not None
+            else np.array([])
+        )
+        self.component_weights = (
+            component_weights
+            if component_weights is not None
+            else np.array([])
+        )
+        self.component_period_scales = (
+            component_period_scales
+            if component_period_scales is not None
+            else np.array([])
+        )
+        self.component_frequency_scales = (
+            component_frequency_scales
+            if component_frequency_scales is not None
+            else np.array([])
+        )
+        self.n_components = n_components
+        self.kernel_family = kernel_family
+        self.notes = notes
+        self.component_labels = component_labels or [
+            f"SM component {i + 1}" for i in range(n_components)
+        ]
+
+    def as_dict(self) -> dict:
+        """Return a plain-dict representation of this diagnostics object."""
+        return {
+            "n_components": self.n_components,
+            "kernel_family": self.kernel_family,
+            "notes": self.notes,
+            "component_labels": self.component_labels,
+            "component_periods": self.component_periods,
+            "component_frequencies": self.component_frequencies,
+            "component_weights": self.component_weights,
+            "component_period_scales": self.component_period_scales,
+            "component_frequency_scales": self.component_frequency_scales,
+        }
+
+
 class PeriodSummaryResult:
     """Structured result from :meth:`Lightcurve.get_period_summary`."""
 
@@ -767,11 +858,7 @@ class PeriodSummaryResult:
         freq_grid=None,
         psd=None,
         notes="",
-        component_periods=None,
-        component_weights=None,
-        component_period_scales=None,
-        component_frequencies=None,
-        component_frequency_scales=None,
+        component_diagnostics=None,
         interval_definition="peak_centered_68pct_mass_interval",
         backend="",
         kernel_family="",
@@ -824,31 +911,7 @@ class PeriodSummaryResult:
         self.psd = psd
         self.notes = notes
         self.interval_definition = interval_definition
-        self.component_periods = (
-            component_periods
-            if component_periods is not None
-            else np.array([])
-        )
-        self.component_weights = (
-            component_weights
-            if component_weights is not None
-            else np.array([])
-        )
-        self.component_period_scales = (
-            component_period_scales
-            if component_period_scales is not None
-            else np.array([])
-        )
-        self.component_frequencies = (
-            component_frequencies
-            if component_frequencies is not None
-            else np.array([])
-        )
-        self.component_frequency_scales = (
-            component_frequency_scales
-            if component_frequency_scales is not None
-            else np.array([])
-        )
+        self.component_diagnostics = component_diagnostics
 
     def as_dict(self) -> dict:
         # Derive primary-peak quantities once so they can be reused for
@@ -872,11 +935,11 @@ class PeriodSummaryResult:
         significant_periods = np.array([p.period for p in self.peaks])
 
         return {
-            "component_periods": self.component_periods,
-            "component_weights": self.component_weights,
-            "component_period_scales": self.component_period_scales,
-            "component_frequencies": self.component_frequencies,
-            "component_frequency_scales": self.component_frequency_scales,
+            "component_diagnostics": (
+                self.component_diagnostics.as_dict()
+                if self.component_diagnostics is not None
+                else None
+            ),
             "freq_grid": self.freq_grid,
             "psd": self.psd,
             "dominant_frequency": dominant_frequency,
@@ -1177,60 +1240,50 @@ class PeriodSummaryResult:
         # ------------------------------------------------------------------
         # Kernel component diagnostics (NOT final periods)
         # ------------------------------------------------------------------
-        if include_components:
-            _has_comp = any(
-                len(arr) > 0
-                for arr in (
-                    self.component_periods,
-                    self.component_frequencies,
-                    self.component_weights,
-                    self.component_period_scales,
-                    self.component_frequency_scales,
+        if include_components and self.component_diagnostics is not None:
+            diag = self.component_diagnostics
+            lines.append(
+                "KERNEL COMPONENT DIAGNOSTICS  "
+                "(internal quantities -- not final periods)"
+            )
+            lines.append("=" * 60)
+            lines.append(
+                "  These values are derived directly from GP kernel"
+                " hyperparameters."
+            )
+            lines.append(
+                "  They are provided for diagnostics only and should not"
+                " be cited"
+            )
+            lines.append(
+                "  as literature-comparable period determinations."
+            )
+            lines.append("")
+            lines.append(
+                _arr_summary(diag.component_periods, "Component periods")
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_frequencies,
+                    "Component frequencies",
                 )
             )
-            if _has_comp:
-                lines.append(
-                    "KERNEL COMPONENT DIAGNOSTICS  "
-                    "(internal quantities -- not final periods)"
+            lines.append(
+                _arr_summary(diag.component_weights, "Component weights")
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_period_scales,
+                    "Component period scales",
                 )
-                lines.append("=" * 60)
-                lines.append(
-                    "  These values are derived directly from GP kernel"
-                    " hyperparameters."
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_frequency_scales,
+                    "Component frequency scales",
                 )
-                lines.append(
-                    "  They are provided for diagnostics only and should not"
-                    " be cited"
-                )
-                lines.append(
-                    "  as literature-comparable period determinations."
-                )
-                lines.append("")
-                lines.append(
-                    _arr_summary(self.component_periods, "Component periods")
-                )
-                lines.append(
-                    _arr_summary(
-                        self.component_frequencies,
-                        "Component frequencies",
-                    )
-                )
-                lines.append(
-                    _arr_summary(self.component_weights, "Component weights")
-                )
-                lines.append(
-                    _arr_summary(
-                        self.component_period_scales,
-                        "Component period scales",
-                    )
-                )
-                lines.append(
-                    _arr_summary(
-                        self.component_frequency_scales,
-                        "Component frequency scales",
-                    )
-                )
-                lines.append("")
+            )
+            lines.append("")
 
         # ------------------------------------------------------------------
         # Optional PSD grid summary (never dumps full arrays)
@@ -5857,11 +5910,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             freq_grid=None,
             psd=None,
             notes=notes,
-            component_periods=np.array([raw_period]),
-            component_weights=np.array([np.nan]),
-            component_period_scales=np.array([np.nan]),
-            component_frequencies=np.array([raw_freq]),
-            component_frequency_scales=np.array([np.nan]),
             interval_definition=interval_def,
         )
 
@@ -5912,11 +5960,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             freq_grid=ep_summary.freq_grid,
             psd=ep_summary.psd,
             notes=_pps_note + ep_summary.notes,
-            component_periods=ep_summary.component_periods,
-            component_weights=ep_summary.component_weights,
-            component_period_scales=ep_summary.component_period_scales,
-            component_frequencies=ep_summary.component_frequencies,
-            component_frequency_scales=ep_summary.component_frequency_scales,
             interval_definition=ep_summary.interval_definition,
         )
 
@@ -6019,11 +6062,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 freq_grid=inner.freq_grid,
                 psd=inner.psd,
                 notes=_2d_prefix + inner.notes,
-                component_periods=inner.component_periods,
-                component_weights=inner.component_weights,
-                component_period_scales=inner.component_period_scales,
-                component_frequencies=inner.component_frequencies,
-                component_frequency_scales=inner.component_frequency_scales,
+                component_diagnostics=inner.component_diagnostics,
                 interval_definition=inner.interval_definition,
                 n_peaks_detected=inner.n_peaks_detected,
                 n_peaks_analyzed=inner.n_peaks_analyzed,
@@ -6045,11 +6084,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 freq_grid=inner.freq_grid,
                 psd=inner.psd,
                 notes=_2d_prefix + inner.notes,
-                component_periods=inner.component_periods,
-                component_weights=inner.component_weights,
-                component_period_scales=inner.component_period_scales,
-                component_frequencies=inner.component_frequencies,
-                component_frequency_scales=inner.component_frequency_scales,
                 interval_definition=inner.interval_definition,
             )
 
@@ -6982,6 +7016,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         _kf = self._kernel_family_name(
             getattr(self.model, "sci_kernel", None)
         )
+        _diag_notes = (
+            "Spectral-mixture kernel components.  These are internal kernel "
+            "parameters and are NOT independent physical periods.  "
+            "The summed-PSD peaks (see 'peaks') are the "
+            "literature-comparable period estimates."
+        )
+        _diag = ComponentDiagnosticsResult(
+            component_periods=params["component_periods"],
+            component_frequencies=params["component_frequencies"],
+            component_weights=params["component_weights"],
+            component_period_scales=params["component_period_scales"],
+            component_frequency_scales=(
+                params["component_frequency_scales"]
+            ),
+            n_components=len(params["component_periods"]),
+            kernel_family=_kf,
+            notes=_diag_notes,
+        )
         return PeriodSummaryResult(
             method="spectral_mixture_psd_peak",
             backend="spectral_mixture",
@@ -6998,13 +7050,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             freq_grid=freq_grid,
             psd=psd,
             notes=notes,
-            component_periods=params["component_periods"],
-            component_weights=params["component_weights"],
-            component_period_scales=params["component_period_scales"],
-            component_frequencies=params["component_frequencies"],
-            component_frequency_scales=(
-                params["component_frequency_scales"]
-            ),
+            component_diagnostics=_diag,
             interval_definition=_interval_def,
         )
 

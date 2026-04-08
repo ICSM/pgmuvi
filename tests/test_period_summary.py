@@ -25,7 +25,13 @@ import torch
 
 matplotlib.use("Agg")  # non-interactive backend for tests
 
-from pgmuvi.lightcurve import Lightcurve, MinMax, PeriodPeakResult, PeriodSummaryResult
+from pgmuvi.lightcurve import (
+    Lightcurve,
+    MinMax,
+    PeriodPeakResult,
+    PeriodSummaryResult,
+    ComponentDiagnosticsResult,
+)
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 
@@ -34,11 +40,7 @@ from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 # ---------------------------------------------------------------------------
 
 _REQUIRED_KEYS = {
-    "component_periods",
-    "component_weights",
-    "component_period_scales",
-    "component_frequencies",
-    "component_frequency_scales",
+    "component_diagnostics",
     "freq_grid",
     "psd",
     "dominant_frequency",
@@ -158,9 +160,12 @@ class TestGetPeriodSummary1D(unittest.TestCase):
 
     def test_component_arrays_have_n_mix_elements(self):
         n = 2
-        self.assertEqual(len(self.summary["component_periods"]), n)
-        self.assertEqual(len(self.summary["component_weights"]), n)
-        self.assertEqual(len(self.summary["component_frequencies"]), n)
+        diag = self.summary.component_diagnostics
+        self.assertIsNotNone(diag)
+        self.assertEqual(diag.n_components, n)
+        self.assertEqual(len(diag.component_periods), n)
+        self.assertEqual(len(diag.component_weights), n)
+        self.assertEqual(len(diag.component_frequencies), n)
 
     def test_method_field(self):
         self.assertEqual(
@@ -199,7 +204,10 @@ class TestGetPeriodSummary2D(unittest.TestCase):
 
     def test_component_arrays_have_n_mix_elements(self):
         n = 2
-        self.assertEqual(len(self.summary["component_periods"]), n)
+        diag = self.summary.component_diagnostics
+        self.assertIsNotNone(diag)
+        self.assertEqual(diag.n_components, n)
+        self.assertEqual(len(diag.component_periods), n)
 
     def test_freq_grid_all_positive(self):
         self.assertTrue(np.all(self.summary["freq_grid"] > 0))
@@ -1397,7 +1405,7 @@ class TestPeriodSummaryTextExport(unittest.TestCase):
     def test_to_text_contains_component_section(self):
         """to_text() includes component diagnostics when present."""
         summary = self._make_summary()
-        has_comp = len(summary.component_periods) > 0
+        has_comp = summary.component_diagnostics is not None
         text = summary.to_text(include_components=True)
         if has_comp:
             self.assertIn("KERNEL COMPONENT DIAGNOSTICS", text)
@@ -1472,7 +1480,7 @@ class TestPeriodSummaryTextExport(unittest.TestCase):
     def test_to_text_separates_peaks_from_components(self):
         """Peaks section appears before component diagnostics section."""
         summary = self._make_summary()
-        if not summary.peaks or len(summary.component_periods) == 0:
+        if not summary.peaks or summary.component_diagnostics is None:
             self.skipTest("Need peaks and components for ordering test")
         text = summary.to_text(include_peaks=True, include_components=True)
         peaks_pos = text.find("PRIMARY PEAK")
@@ -1555,6 +1563,20 @@ def _make_synthetic_summary(n_peaks=1, with_components=True, with_psd=False):
     ]
     freq_grid = np.linspace(0.001, 0.1, 200) if with_psd else None
     psd = np.random.default_rng(0).random(200) if with_psd else None
+    diag = (
+        ComponentDiagnosticsResult(
+            component_periods=np.array([100.0, 50.0, 33.0]),
+            component_frequencies=np.array([0.01, 0.02, 0.03]),
+            component_weights=np.array([0.6, 0.3, 0.1]),
+            component_period_scales=np.array([5.0, 3.0, 2.0]),
+            component_frequency_scales=np.array([0.001, 0.002, 0.003]),
+            n_components=3,
+            kernel_family="SpectralMixtureKernel",
+            notes="synthetic test component diagnostics",
+        )
+        if with_components
+        else None
+    )
     return PeriodSummaryResult(
         method="psd_peak",
         model_name="SM-2",
@@ -1565,21 +1587,7 @@ def _make_synthetic_summary(n_peaks=1, with_components=True, with_psd=False):
         dominant_frequency=peaks[0].frequency,
         peaks=peaks,
         notes="synthetic test",
-        component_periods=(
-            np.array([100.0, 50.0, 33.0]) if with_components else np.array([])
-        ),
-        component_frequencies=(
-            np.array([0.01, 0.02, 0.03]) if with_components else np.array([])
-        ),
-        component_weights=(
-            np.array([0.6, 0.3, 0.1]) if with_components else np.array([])
-        ),
-        component_period_scales=(
-            np.array([5.0, 3.0, 2.0]) if with_components else np.array([])
-        ),
-        component_frequency_scales=(
-            np.array([0.001, 0.002, 0.003]) if with_components else np.array([])
-        ),
+        component_diagnostics=diag,
         freq_grid=freq_grid,
         psd=psd,
     )
@@ -2121,6 +2129,204 @@ class TestWritePeriodSummaryOutputs(unittest.TestCase):
         finally:
             txt_path.unlink(missing_ok=True)
             png_path.unlink(missing_ok=True)
+
+
+
+# ---------------------------------------------------------------------------
+# 22. ComponentDiagnosticsResult structural separation tests
+# ---------------------------------------------------------------------------
+
+
+class TestComponentDiagnosticsResultStructure(unittest.TestCase):
+    """Unit tests for ComponentDiagnosticsResult and its integration
+    with PeriodSummaryResult."""
+
+    # ------------------------------------------------------------------
+    # A) Spectral-mixture backend: diagnostics exist and are well-formed
+    # ------------------------------------------------------------------
+
+    def test_sm_summary_has_component_diagnostics(self):
+        """Spectral-mixture summary has a non-None component_diagnostics."""
+        lc = _make_1d_lc_no_transform()
+        summary = lc.get_period_summary()
+        self.assertIsNotNone(summary.component_diagnostics)
+
+    def test_sm_component_diagnostics_is_correct_type(self):
+        """component_diagnostics is a ComponentDiagnosticsResult instance."""
+        lc = _make_1d_lc_no_transform()
+        summary = lc.get_period_summary()
+        self.assertIsInstance(
+            summary.component_diagnostics, ComponentDiagnosticsResult
+        )
+
+    def test_sm_component_diagnostics_n_components_positive(self):
+        """n_components > 0 for a spectral-mixture model."""
+        lc = _make_1d_lc_no_transform()
+        summary = lc.get_period_summary()
+        self.assertGreater(summary.component_diagnostics.n_components, 0)
+
+    def test_sm_component_diagnostics_arrays_consistent_length(self):
+        """All component arrays have length == n_components."""
+        lc = _make_1d_lc_no_transform()
+        diag = lc.get_period_summary().component_diagnostics
+        n = diag.n_components
+        self.assertEqual(len(diag.component_periods), n)
+        self.assertEqual(len(diag.component_frequencies), n)
+        self.assertEqual(len(diag.component_weights), n)
+        self.assertEqual(len(diag.component_period_scales), n)
+        self.assertEqual(len(diag.component_frequency_scales), n)
+
+    def test_sm_component_diagnostics_labels_consistent_length(self):
+        """component_labels has length == n_components."""
+        lc = _make_1d_lc_no_transform()
+        diag = lc.get_period_summary().component_diagnostics
+        self.assertEqual(len(diag.component_labels), diag.n_components)
+
+    def test_sm_summary_has_no_top_level_component_arrays(self):
+        """component_* arrays are NOT in the top-level as_dict() keys."""
+        lc = _make_1d_lc_no_transform()
+        d = lc.get_period_summary().as_dict()
+        for key in (
+            "component_periods",
+            "component_weights",
+            "component_frequencies",
+            "component_period_scales",
+            "component_frequency_scales",
+        ):
+            self.assertNotIn(
+                key,
+                d,
+                msg=f"Top-level key '{key}' must not exist; "
+                "component data belongs inside component_diagnostics",
+            )
+
+    # ------------------------------------------------------------------
+    # B) Non-SM backends: diagnostics is None
+    # ------------------------------------------------------------------
+
+    def test_explicit_period_backend_diagnostics_is_none(self):
+        """explicit_period backend returns component_diagnostics=None."""
+        lc = _make_1d_lc_model("1DQuasiPeriodic", period=100.0)
+        summary = lc.get_period_summary()
+        self.assertEqual(summary.backend, "explicit_period")
+        self.assertIsNone(summary.component_diagnostics)
+
+    def test_non_periodic_backend_diagnostics_is_none(self):
+        """non_periodic backend returns component_diagnostics=None."""
+        lc = _make_1d_lc_model("1DMatern")
+        summary = lc.get_period_summary()
+        self.assertEqual(summary.backend, "non_periodic")
+        self.assertIsNone(summary.component_diagnostics)
+
+    def test_periodic_plus_stochastic_diagnostics_is_none(self):
+        """periodic_plus_stochastic backend returns component_diagnostics=None."""
+        lc = _make_1d_lc_model("1DPeriodicStochastic", period=100.0)
+        summary = lc.get_period_summary()
+        self.assertEqual(summary.backend, "periodic_plus_stochastic")
+        self.assertIsNone(summary.component_diagnostics)
+
+    # ------------------------------------------------------------------
+    # C) as_dict() structural checks
+    # ------------------------------------------------------------------
+
+    def test_as_dict_contains_component_diagnostics_key(self):
+        """as_dict() always contains the 'component_diagnostics' key."""
+        lc = _make_1d_lc_no_transform()
+        d = lc.get_period_summary().as_dict()
+        self.assertIn("component_diagnostics", d)
+
+    def test_as_dict_sm_component_diagnostics_is_dict(self):
+        """For SM backend, as_dict()['component_diagnostics'] is a dict."""
+        lc = _make_1d_lc_no_transform()
+        d = lc.get_period_summary().as_dict()
+        self.assertIsInstance(d["component_diagnostics"], dict)
+
+    def test_as_dict_non_sm_component_diagnostics_is_none(self):
+        """For non-SM backends, as_dict()['component_diagnostics'] is None."""
+        lc = _make_1d_lc_model("1DMatern")
+        d = lc.get_period_summary().as_dict()
+        self.assertIsNone(d["component_diagnostics"])
+
+    def test_as_dict_component_diagnostics_sub_keys(self):
+        """component_diagnostics dict contains expected sub-keys."""
+        lc = _make_1d_lc_no_transform()
+        cd = lc.get_period_summary().as_dict()["component_diagnostics"]
+        for key in (
+            "n_components",
+            "kernel_family",
+            "notes",
+            "component_labels",
+            "component_periods",
+            "component_frequencies",
+            "component_weights",
+            "component_period_scales",
+            "component_frequency_scales",
+        ):
+            self.assertIn(key, cd, msg=f"Missing sub-key: '{key}'")
+
+    # ------------------------------------------------------------------
+    # D) to_text() component diagnostics section
+    # ------------------------------------------------------------------
+
+    def test_to_text_sm_prints_diagnostics_section(self):
+        """to_text() prints the diagnostics section for SM backend."""
+        lc = _make_1d_lc_no_transform()
+        text = lc.get_period_summary().to_text(include_components=True)
+        self.assertIn("KERNEL COMPONENT DIAGNOSTICS", text)
+
+    def test_to_text_non_sm_omits_diagnostics_section(self):
+        """to_text() omits diagnostics section when component_diagnostics=None."""
+        lc = _make_1d_lc_model("1DMatern")
+        text = lc.get_period_summary().to_text(include_components=True)
+        self.assertNotIn("KERNEL COMPONENT DIAGNOSTICS", text)
+
+    def test_to_text_sm_include_components_false_omits_section(self):
+        """to_text(include_components=False) omits section even for SM."""
+        lc = _make_1d_lc_no_transform()
+        text = lc.get_period_summary().to_text(include_components=False)
+        self.assertNotIn("KERNEL COMPONENT DIAGNOSTICS", text)
+
+    def test_to_text_diagnostics_disclaimer_present(self):
+        """Diagnostics section always includes the 'not final periods' text."""
+        lc = _make_1d_lc_no_transform()
+        text = lc.get_period_summary().to_text(include_components=True)
+        self.assertIn("not final periods", text)
+
+    def test_synthetic_no_components_to_text_no_section(self):
+        """Synthetic summary with no diagnostics has no component section."""
+        summary = _make_synthetic_summary(with_components=False)
+        text = summary.to_text(include_components=True)
+        self.assertNotIn("KERNEL COMPONENT DIAGNOSTICS", text)
+
+    def test_synthetic_with_components_to_text_has_section(self):
+        """Synthetic summary with diagnostics shows component section."""
+        summary = _make_synthetic_summary(with_components=True)
+        text = summary.to_text(include_components=True)
+        self.assertIn("KERNEL COMPONENT DIAGNOSTICS", text)
+        self.assertIn("Component periods", text)
+
+    # ------------------------------------------------------------------
+    # E) ComponentDiagnosticsResult.as_dict() directly
+    # ------------------------------------------------------------------
+
+    def test_component_diagnostics_as_dict_roundtrip(self):
+        """ComponentDiagnosticsResult.as_dict() returns expected structure."""
+        diag = ComponentDiagnosticsResult(
+            component_periods=np.array([100.0, 50.0]),
+            component_frequencies=np.array([0.01, 0.02]),
+            component_weights=np.array([0.7, 0.3]),
+            component_period_scales=np.array([5.0, 3.0]),
+            component_frequency_scales=np.array([0.001, 0.002]),
+            n_components=2,
+            kernel_family="SpectralMixtureKernel",
+            notes="test",
+        )
+        d = diag.as_dict()
+        self.assertEqual(d["n_components"], 2)
+        self.assertEqual(d["kernel_family"], "SpectralMixtureKernel")
+        self.assertEqual(len(d["component_labels"]), 2)
+        np.testing.assert_array_equal(d["component_periods"], [100.0, 50.0])
+        np.testing.assert_array_equal(d["component_weights"], [0.7, 0.3])
 
 
 if __name__ == "__main__":
