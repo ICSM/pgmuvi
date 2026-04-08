@@ -47,6 +47,7 @@ import arviz as az
 import warnings
 import dataclasses
 import json
+import math
 
 
 def _reraise_with_note(e, note):
@@ -1373,15 +1374,22 @@ class PeriodSummaryResult:
         unrecognised type so that serialization bugs are caught immediately
         rather than silently corrupted via ``str()``.
         """
-        if obj is None or isinstance(obj, (bool, int, float, str)):
+        if obj is None or isinstance(obj, (bool, str)):
             return obj
+        if isinstance(obj, int):
+            return obj
+        if isinstance(obj, float):
+            return None if not math.isfinite(obj) else obj
         if isinstance(obj, dict):
             return {k: self._json_serialize(v) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
             return [self._json_serialize(item) for item in obj]
         if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        if isinstance(obj, (np.floating, np.integer)):
+            return self._json_serialize(obj.tolist())
+        if isinstance(obj, np.floating):
+            scalar = obj.item()
+            return None if not math.isfinite(scalar) else scalar
+        if isinstance(obj, np.integer):
             return obj.item()
         raise TypeError(
             f"Cannot JSON-serialize object of type {type(obj).__name__}"
@@ -1395,7 +1403,7 @@ class PeriodSummaryResult:
             d = {**d, "freq_grid": None, "psd": None}
         data = self._json_serialize(d)
         with open(filename, "w") as fh:
-            json.dump(data, fh, indent=2)
+            json.dump(data, fh, indent=2, allow_nan=False)
 
 
 class Lightcurve(InputHelpers, gpytorch.Module):

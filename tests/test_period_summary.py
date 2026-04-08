@@ -2589,3 +2589,115 @@ class TestJsonSerializeUnsupportedType(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestJsonNonFiniteHandling(unittest.TestCase):
+    """_json_serialize() must map non-finite floats to None (JSON null)."""
+
+    def _make_minimal_summary(self):
+        return PeriodSummaryResult(method="psd_peak")
+
+    # ------------------------------------------------------------------
+    # A) Python float NaN / Inf
+    # ------------------------------------------------------------------
+
+    def test_python_float_nan_becomes_none(self):
+        summary = self._make_minimal_summary()
+        self.assertIsNone(summary._json_serialize(float("nan")))
+
+    def test_python_float_inf_becomes_none(self):
+        summary = self._make_minimal_summary()
+        self.assertIsNone(summary._json_serialize(float("inf")))
+
+    def test_python_float_neg_inf_becomes_none(self):
+        summary = self._make_minimal_summary()
+        self.assertIsNone(summary._json_serialize(float("-inf")))
+
+    def test_python_float_finite_unchanged(self):
+        summary = self._make_minimal_summary()
+        self.assertEqual(summary._json_serialize(3.14), 3.14)
+
+    # ------------------------------------------------------------------
+    # B) NumPy scalar NaN / Inf
+    # ------------------------------------------------------------------
+
+    def test_numpy_float64_nan_becomes_none(self):
+        summary = self._make_minimal_summary()
+        self.assertIsNone(summary._json_serialize(np.float64(np.nan)))
+
+    def test_numpy_float64_inf_becomes_none(self):
+        summary = self._make_minimal_summary()
+        self.assertIsNone(summary._json_serialize(np.float64(np.inf)))
+
+    def test_numpy_float64_finite_unchanged(self):
+        summary = self._make_minimal_summary()
+        result = summary._json_serialize(np.float64(2.71))
+        self.assertAlmostEqual(result, 2.71)
+        self.assertIsInstance(result, float)
+
+    # ------------------------------------------------------------------
+    # C) NumPy array containing NaN / Inf
+    # ------------------------------------------------------------------
+
+    def test_numpy_array_with_nan_sanitized(self):
+        summary = self._make_minimal_summary()
+        arr = np.array([1.0, float("nan"), 3.0])
+        result = summary._json_serialize(arr)
+        self.assertEqual(result, [1.0, None, 3.0])
+
+    def test_numpy_array_with_inf_sanitized(self):
+        summary = self._make_minimal_summary()
+        arr = np.array([float("inf"), 2.0, float("-inf")])
+        result = summary._json_serialize(arr)
+        self.assertEqual(result, [None, 2.0, None])
+
+    # ------------------------------------------------------------------
+    # D) write_json round-trip with NaN fields -> null
+    # ------------------------------------------------------------------
+
+    def test_write_json_nan_in_dominant_period_becomes_null(self):
+        """A summary with dominant_period=nan must write null to JSON."""
+        import json
+        import tempfile
+        import os
+
+        # Use a summary with no peaks so as_dict() falls back to
+        # self.dominant_period (not recomputed from peaks).
+        summary = PeriodSummaryResult(
+            method="psd_peak", dominant_period=float("nan")
+        )
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path)
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIsNone(data["dominant_period"])
+        finally:
+            os.remove(path)
+
+    def test_write_json_uses_allow_nan_false(self):
+        """write_json must produce valid JSON with no bare NaN/Infinity."""
+        import tempfile
+        import os
+
+        # Use a summary with no peaks so dominant_period=nan flows through.
+        summary = PeriodSummaryResult(
+            method="psd_peak", dominant_period=float("nan")
+        )
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            # Should not raise: sanitization converts nan -> None first
+            summary.write_json(path)
+            with open(path) as fh:
+                raw = fh.read()
+            # Confirm raw JSON text contains no bare NaN/Infinity literals
+            self.assertNotIn("NaN", raw)
+            self.assertNotIn("Infinity", raw)
+        finally:
+            os.remove(path)
