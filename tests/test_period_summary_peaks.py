@@ -336,5 +336,150 @@ class TestToTextMultiPeak(unittest.TestCase):
         self.assertNotIn("ADDITIONAL PEAKS", text)
 
 
+# ---------------------------------------------------------------------------
+# REGRESSION TESTS — final corrective patch
+# ---------------------------------------------------------------------------
+
+
+class TestConstructorInterfaceRegression(unittest.TestCase):
+    """Ensure the unrelated preprocessing params were removed from __init__."""
+
+    def test_constructor_does_not_accept_check_sampling(self):
+        """check_sampling must not be a named parameter of Lightcurve.__init__."""
+        import inspect
+        from pgmuvi.lightcurve import Lightcurve
+
+        sig = inspect.signature(Lightcurve.__init__)
+        self.assertNotIn(
+            "check_sampling",
+            sig.parameters,
+            "check_sampling should not be a Lightcurve.__init__ parameter",
+        )
+
+    def test_constructor_does_not_accept_check_variability(self):
+        """check_variability must not be a named parameter of __init__."""
+        import inspect
+        from pgmuvi.lightcurve import Lightcurve
+
+        sig = inspect.signature(Lightcurve.__init__)
+        self.assertNotIn(
+            "check_variability",
+            sig.parameters,
+            "check_variability should not be a Lightcurve.__init__ parameter",
+        )
+
+    def test_constructor_does_not_accept_max_samples(self):
+        """max_samples must not be a named parameter of Lightcurve.__init__."""
+        import inspect
+        from pgmuvi.lightcurve import Lightcurve
+
+        sig = inspect.signature(Lightcurve.__init__)
+        self.assertNotIn(
+            "max_samples",
+            sig.parameters,
+            "max_samples should not be a Lightcurve.__init__ parameter",
+        )
+
+    def test_constructor_does_not_accept_subsample_seed(self):
+        """subsample_seed must not be a named parameter of Lightcurve.__init__."""
+        import inspect
+        from pgmuvi.lightcurve import Lightcurve
+
+        sig = inspect.signature(Lightcurve.__init__)
+        self.assertNotIn(
+            "subsample_seed",
+            sig.parameters,
+            "subsample_seed should not be a Lightcurve.__init__ parameter",
+        )
+
+
+class TestFitLSInterfaceRegression(unittest.TestCase):
+    """Ensure fit_LS() has the previously existing max_samples/subsample_seed."""
+
+    def test_fit_ls_has_max_samples(self):
+        import inspect
+        from pgmuvi.lightcurve import Lightcurve
+
+        sig = inspect.signature(Lightcurve.fit_LS)
+        self.assertIn(
+            "max_samples",
+            sig.parameters,
+            "max_samples should be a fit_LS() parameter",
+        )
+
+    def test_fit_ls_has_subsample_seed(self):
+        import inspect
+        from pgmuvi.lightcurve import Lightcurve
+
+        sig = inspect.signature(Lightcurve.fit_LS)
+        self.assertIn(
+            "subsample_seed",
+            sig.parameters,
+            "subsample_seed should be a fit_LS() parameter",
+        )
+
+
+class TestToTextAsDictConsistency(unittest.TestCase):
+    """to_text() and as_dict() must report the same dominant peak values."""
+
+    def _make_summary_with_primary_peak(self):
+        """Return a summary where primary-peak period != raw dominant_period."""
+        # The primary peak (highest area_fraction) has period=100 and
+        # frequency=0.01; the raw dominant_period/frequency fields are set to
+        # deliberately different values so we can detect which one wins.
+        pk = _make_peak(rank=1, area_fraction=0.80, period=100.0)
+        return PeriodSummaryResult(
+            method="test",
+            model_name="TestModel",
+            n_peaks_detected=1,
+            n_peaks_analyzed=1,
+            peaks=[pk],
+            dominant_period=999.0,      # raw field — should NOT appear in output
+            dominant_frequency=0.001,    # raw field — should NOT appear in output
+        )
+
+    def test_to_text_uses_primary_peak_period(self):
+        summary = self._make_summary_with_primary_peak()
+        text = summary.to_text()
+        # Primary peak period is 100.0; raw dominant_period is 999.0.
+        # The header Dominant period line must NOT report 999.
+        dom_line = [ln for ln in text.splitlines() if "Dominant period" in ln]
+        self.assertEqual(len(dom_line), 1)
+        self.assertNotIn("999", dom_line[0])
+
+    def test_to_text_dominant_period_matches_as_dict(self):
+        summary = self._make_summary_with_primary_peak()
+        d = summary.as_dict()
+        text = summary.to_text()
+        # Extract the dominant period line from to_text()
+        dom_line = [ln for ln in text.splitlines() if "Dominant period" in ln]
+        self.assertEqual(len(dom_line), 1)
+        # The dict value and the text value must round-trip to the same number.
+        dict_period = d["dominant_period"]
+        self.assertIn(
+            str(round(dict_period, 6)).rstrip("0").rstrip("."),
+            dom_line[0],
+        )
+
+    def test_no_peaks_falls_back_to_raw_dominant(self):
+        """When there are no peaks, fall back to raw dominant_period."""
+        summary = PeriodSummaryResult(
+            method="test",
+            model_name="TestModel",
+            n_peaks_detected=0,
+            n_peaks_analyzed=0,
+            peaks=None,
+            dominant_period=250.0,
+            dominant_frequency=0.004,
+        )
+        text = summary.to_text()
+        d = summary.as_dict()
+        self.assertEqual(d["dominant_period"], 250.0)
+        # to_text() header should contain 250 (formatted without trailing zero)
+        dom_line = [ln for ln in text.splitlines() if "Dominant period" in ln]
+        self.assertEqual(len(dom_line), 1)
+        self.assertIn("250", dom_line[0])
+
+
 if __name__ == "__main__":
     unittest.main()

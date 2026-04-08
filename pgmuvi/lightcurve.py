@@ -1051,6 +1051,19 @@ class PeriodSummaryResult:
         # ------------------------------------------------------------------
         # Header
         # ------------------------------------------------------------------
+        # Use the same dominant-period/frequency logic as as_dict(): prefer
+        # the primary peak's values so that to_text() and as_dict() always
+        # describe the same dominant peak.
+        _primary = self.get_primary_peak()
+        _display_period = (
+            _primary.period if _primary is not None else self.dominant_period
+        )
+        _display_frequency = (
+            _primary.frequency
+            if _primary is not None
+            else self.dominant_frequency
+        )
+
         lines.append("PERIOD SUMMARY")
         lines.append("==============")
         lines.append(f"  Model name          : {self.model_name or 'N/A'}")
@@ -1058,9 +1071,9 @@ class PeriodSummaryResult:
         lines.append(
             f"  Interval definition : {self.interval_definition or 'N/A'}"
         )
-        lines.append(f"  Dominant period     : {_fmt(self.dominant_period)}")
+        lines.append(f"  Dominant period     : {_fmt(_display_period)}")
         lines.append(
-            f"  Dominant frequency  : {_fmt(self.dominant_frequency)}"
+            f"  Dominant frequency  : {_fmt(_display_frequency)}"
         )
         lines.append(f"  Peaks detected      : {self.n_peaks_detected}")
         lines.append(f"  Peaks analyzed      : {self.n_peaks_analyzed}")
@@ -1346,12 +1359,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ytransform=None,
         name=None,
         time_units=None,
-        max_samples: int | None = None,
-        subsample_seed: int | None = None,
-        check_sampling: bool = False,
-        sampling_kwargs: dict | None = None,
-        check_variability: bool = False,
-        variability_kwargs: dict | None = None,
         **kwargs,
     ):
         """Initialize a Lightcurve.
@@ -1378,38 +1385,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             or an ``astropy.units`` unit object.  If *None* (default) the
             data are assumed to already be in days and no conversion is
             performed.
-        max_samples : int or None, optional
-            Maximum number of observations to retain.  When the lightcurve
-            contains more than *max_samples* points a gap-preserving random
-            subsample of *max_samples* points is drawn and stored permanently
-            (see :func:`~pgmuvi.preprocess.subsample_lightcurve`).  Set to
-            ``None`` (default) to keep all observations.  A
-            :class:`UserWarning` is issued whenever subsampling occurs.
-        subsample_seed : int or None, optional
-            Random seed for the subsampler.  Provide an integer for
-            reproducible results; ``None`` (default) gives a non-deterministic
-            subsample.  Only used when *max_samples* is set.
-        check_sampling : bool, optional
-            If ``True``, assess temporal sampling quality after storing the
-            data.  For 1-D lightcurves a :class:`ValueError` is raised if
-            sampling is poor.  For 2-D (multiband) lightcurves each band is
-            checked independently: bands that fail are removed from the stored
-            data with a :class:`UserWarning`, and a :class:`ValueError` is
-            raised only if no bands pass.  Default is ``False``.
-        sampling_kwargs : dict or None, optional
-            Keyword arguments forwarded to the sampling quality gates
-            (``min_points``, ``max_gap_fraction``, ``min_baseline_factor``,
-            ``min_snr``, ``min_fraction_good_snr``).  Only used when
-            *check_sampling* is ``True``.
-        check_variability : bool, optional
-            If ``True``, verify that the lightcurve shows significant
-            variability after storing the data.  Raises :class:`ValueError`
-            if not variable.  Only supported for 1-D lightcurves.  Default
-            is ``False``.
-        variability_kwargs : dict or None, optional
-            Keyword arguments forwarded to the variability tests (``alpha``,
-            ``fvar_min``, ``stetson_k_min``).  Only used when
-            *check_variability* is ``True``.
         """
         super().__init__()
 
@@ -1459,192 +1434,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.__FITTED_MAP = False
         self.__FITTED_MCMC = False
 
-        # ------------------------------------------------------------------
-        # Sampling quality check
-        # ------------------------------------------------------------------
-        if check_sampling:
-            sk = sampling_kwargs or {}
-            if self.ndim > 1:
-                xdata_raw = self._xdata_raw
-                if xdata_raw.dim() != 2 or xdata_raw.shape[1] != 2:
-                    raise ValueError(
-                        "For 2D/multiband light curves, xdata must have shape "
-                        "(N, 2) with wavelength values in column 1. Received "
-                        f"shape {tuple(xdata_raw.shape)}. Please ensure "
-                        "that your input is not transposed or otherwise "
-                        "malformed."
-                    )
-                results = self.assess_sampling_quality_per_band(
-                    verbose=False, **sk
-                )
-                failing = results["summary"]["failing_wavelengths"]
-                passing = results["summary"]["passing_wavelengths"]
-
-                for wl in failing:
-                    diag = results[float(wl)]
-                    warnings_str = ", ".join(diag["warnings"])
-                    warnings.warn(
-                        f"Skipping band \u03bb={wl} due to poor "
-                        f"temporal sampling: {warnings_str}",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-
-                if not passing:
-                    raise ValueError(
-                        "No wavelength bands passed sampling quality checks. "
-                        "GP fitting is not recommended.\n"
-                        "To force fitting anyway, use: "
-                        "Lightcurve(..., check_sampling=False)"
-                    )
-
-                if failing:
-                    n_pass = len(passing)
-                    n_total = results["summary"]["n_bands"]
-                    skipped = [round(w, 4) for w in failing]
-                    _msg = (
-                        f"Retaining {n_pass}/{n_total} wavelength bands after "
-                        f"sampling-quality filtering (skipping \u03bb = "
-                        f"{skipped})."
-                    )
-                    warnings.warn(_msg, UserWarning, stacklevel=2)
-                    keep_mask = torch.isin(
-                        xdata_raw[:, 1],
-                        torch.tensor(
-                            passing,
-                            dtype=xdata_raw.dtype,
-                            device=xdata_raw.device,
-                        ),
-                    )
-                    self.xdata = xdata_raw[keep_mask].clone()
-                    self.ydata = self._ydata_raw[keep_mask].clone()
-                    if hasattr(self, "_yerr_raw"):
-                        self.yerr = self._yerr_raw[keep_mask].clone()
-            else:
-                from pgmuvi.preprocess.quality import assess_sampling_quality
-
-                t = self._xdata_raw.detach().cpu().numpy()
-                if t.ndim > 1:
-                    t = t[:, 0]
-                y_np = (
-                    self._ydata_raw.detach().cpu().numpy()
-                    if hasattr(self, "_ydata_raw")
-                    else None
-                )
-                yerr_np = (
-                    self._yerr_raw.detach().cpu().numpy()
-                    if hasattr(self, "_yerr_raw")
-                    else None
-                )
-                passes, diag = assess_sampling_quality(
-                    t, y_np, yerr_np, verbose=False, **sk
-                )
-                if not passes:
-                    warnings_str = "\n".join(
-                        f"  \u2022 {w}" for w in diag["warnings"]
-                    )
-                    raise ValueError(
-                        f"Lightcurve has poor temporal sampling:\n"
-                        f"{warnings_str}\n\n"
-                        f"Recommendation: {diag['recommendation']}\n"
-                        "GP fitting not recommended for poorly sampled data.\n"
-                        "To force fitting anyway, use: "
-                        "Lightcurve(..., check_sampling=False)"
-                    )
-
-        # ------------------------------------------------------------------
-        # Variability check
-        # ------------------------------------------------------------------
-        if check_variability:
-            from pgmuvi.preprocess.variability import is_variable
-
-            if self.ndim > 1:
-                raise ValueError(
-                    "check_variability=True is not supported for multiband "
-                    "(ndim > 1) lightcurves, because pooling bands may produce "
-                    "misleading variability results. Use "
-                    "check_variability_per_band() or filter_variable_bands() "
-                    "to assess each band independently."
-                )
-
-            vkwargs = variability_kwargs or {}
-            y_v, yerr_v = self._get_variability_arrays()
-            is_var, diag = is_variable(y_v, yerr_v, **vkwargs)
-
-            if not is_var:
-                raise ValueError(
-                    f"Lightcurve shows NO significant variability:\n"
-                    f"  p-value: {diag['p_value']:.4f} "
-                    f"[{'PASS' if diag['tests_passed']['chi2_test'] else 'FAIL'}]\n"
-                    f"  F_var: {diag['fvar']:.4f} "
-                    f"[{'PASS' if diag['tests_passed']['fvar_test'] else 'FAIL'}]\n"
-                    f"  Stetson K: {diag['stetson_k']:.3f} "
-                    f"[{'PASS' if diag['tests_passed']['stetson_test'] else 'FAIL'}]\n"
-                    f"Decision: {diag['decision']}\n\n"
-                    "GP fitting not recommended for non-variable sources.\n"
-                    "To force fitting anyway, use: "
-                    "Lightcurve(..., check_variability=False)"
-                )
-
-        # ------------------------------------------------------------------
-        # Subsampling: permanently reduce the stored data to at most
-        # max_samples observations while preserving the temporal baseline
-        # and the max-gap constraint.
-        # ------------------------------------------------------------------
-        if max_samples is not None:
-            from pgmuvi.preprocess import subsample_lightcurve
-
-            n_total = self._xdata_raw.shape[0]
-            # Subsampling is only valid for the standard (N,) or (N,2) shapes
-            # where observations lie along dimension 0.  Non-standard
-            # multi-dimensional ydata (e.g. shape (D, N)) would subsample the
-            # wrong axis; raise a clear error rather than silently misbehaving.
-            if self._ydata_raw.dim() != 1:
-                raise ValueError(
-                    "max_samples is only supported for standard 1-D "
-                    "ydata (shape (N,)). The supplied ydata has shape "
-                    f"{tuple(self._ydata_raw.shape)}."
-                )
-            if n_total > max_samples:
-                t_np = self._xdata_raw.detach().cpu().numpy()
-                if t_np.ndim > 1:
-                    t_np = t_np[:, 0]
-                mgf = (sampling_kwargs or {}).get("max_gap_fraction", 0.3)
-                idx = subsample_lightcurve(
-                    t_np,
-                    max_samples=max_samples,
-                    max_gap_fraction=mgf,
-                    random_seed=subsample_seed,
-                )
-                warnings.warn(
-                    f"Lightcurve has {n_total} points, which exceeds "
-                    f"max_samples={max_samples}. Retaining a random subsample "
-                    f"of {len(idx)} points. "
-                    "Set max_samples=None to disable subsampling.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                idx_t = torch.as_tensor(
-                    idx,
-                    dtype=torch.long,
-                    device=self._xdata_raw.device,
-                )
-                _buffer_names = (
-                    "_xdata_raw",
-                    "_xdata_transformed",
-                    "_ydata_raw",
-                    "_ydata_transformed",
-                    "_yerr_raw",
-                    "_yerr_transformed",
-                )
-                for bname in _buffer_names:
-                    if (
-                        hasattr(self, bname)
-                        and getattr(self, bname) is not None
-                    ):
-                        self.register_buffer(
-                            bname, getattr(self, bname)[idx_t]
-                        )
 
     @classmethod
     def from_table(
@@ -3373,6 +3162,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Nyquist_factor: int = 5,
         fap_method: str | None = None,
         use_best_band_init: bool = False,
+        max_samples: int | None = None,
+        subsample_seed: int | None = None,
         **kwargs,
     ) -> tuple:
         """
@@ -3429,6 +3220,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             informative band, which can speed up and improve the
             periodogram search when sampling is highly heterogeneous
             across bands.  Has no effect for 1D lightcurves.
+        - max_samples: int or None, optional, default=None
+            If not None, the periodogram is computed on a gap-preserving
+            random subsample of at most *max_samples* observations.  The
+            stored lightcurve data are not modified; subsampling is applied
+            only for this LS call.  A :class:`UserWarning` is issued when
+            subsampling occurs.
+        - subsample_seed: int or None, optional, default=None
+            Random seed for the subsampler used when *max_samples* is set.
+            Provide an integer for reproducible results; ``None`` gives a
+            non-deterministic subsample.
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
@@ -3499,6 +3300,35 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         _xdata = self.xdata
         _ydata = self.ydata
         _yerr = self.yerr if _has_yerr else None
+
+        # Apply transient subsampling for LS only (does not modify stored data).
+        if max_samples is not None:
+            from pgmuvi.preprocess import subsample_lightcurve
+
+            _t_np = _xdata.detach().cpu().numpy()
+            if _t_np.ndim > 1:
+                _t_np = _t_np[:, 0]
+            n_total = len(_t_np)
+            if n_total > max_samples:
+                _idx = subsample_lightcurve(
+                    _t_np,
+                    max_samples=max_samples,
+                    random_seed=subsample_seed,
+                )
+                warnings.warn(
+                    f"fit_LS: lightcurve has {n_total} points, which exceeds "
+                    f"max_samples={max_samples}. Using a random subsample of "
+                    f"{len(_idx)} points for the periodogram.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                _idx_t = torch.as_tensor(
+                    _idx, dtype=torch.long, device=_xdata.device
+                )
+                _xdata = _xdata[_idx_t]
+                _ydata = _ydata[_idx_t]
+                if _yerr is not None:
+                    _yerr = _yerr[_idx_t]
 
         if self.ndim > 1:
             # Multi-band case: _xdata[:, 0] is time, _xdata[:, 1] is band/wavelength
@@ -4469,13 +4299,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ------
         ValueError
             If no model is provided.
-
-        Notes
-        -----
-        Data validation, quality checks, and subsampling are performed at
-        object construction time (see :meth:`__init__`).  Use the
-        ``check_sampling``, ``check_variability``, and ``max_samples``
-        parameters of :meth:`__init__` to control pre-processing.
         """
         # Capture the caller's original num_mixtures argument before any
         # mutation (MLS init / fallback default).  Used later to decide
