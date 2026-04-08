@@ -49,6 +49,7 @@ _REQUIRED_KEYS = {
     "q_factor",
     "peak_fraction",
     "n_peaks",
+    "n_peaks_detected",
     "n_significant_peaks",
     "significant_periods",
     "peaks",
@@ -135,8 +136,14 @@ class TestGetPeriodSummary1D(unittest.TestCase):
             return  # peak_mass mode does not compute a Q-factor
         self.assertTrue((np.isfinite(q) and q > 0) or np.isinf(q))
 
-    def test_n_significant_peaks_at_least_one(self):
-        self.assertGreaterEqual(self.summary["n_significant_peaks"], 1)
+    def test_n_peaks_detected_at_least_one(self):
+        """SM model always detects at least one PSD peak above threshold."""
+        self.assertGreaterEqual(self.summary["n_peaks_detected"], 1)
+
+    def test_n_significant_peaks_consistent(self):
+        """n_significant_peaks must match get_significant_peaks() count."""
+        expected = len(self.summary.get_significant_peaks())
+        self.assertEqual(self.summary["n_significant_peaks"], expected)
 
     def test_freq_grid_and_psd_same_length(self):
         self.assertEqual(

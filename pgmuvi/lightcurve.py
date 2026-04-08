@@ -781,11 +781,37 @@ class PeriodSummaryResult:
         self.n_peaks_requested = n_peaks_requested
         self.dominant_period = dominant_period
         self.dominant_frequency = dominant_frequency
-        # Sort peaks once by rank (ascending) so that peaks[0] is always
-        # the primary (rank-1) peak.  Ranks are assigned by the backend;
-        # this sort is a safety net for peaks passed in out of order.
+        # Sort peaks once by descending significance so that peaks[0] is
+        # always the highest-significance peak regardless of insertion order.
+        # Sort key: (1) descending area_fraction (NaN sorts last),
+        #           (2) descending height (NaN sorts last),
+        #           (3) ascending original rank as tie-breaker.
+        # After sorting, ranks are reassigned sequentially (1, 2, 3 …) so
+        # that peak.rank reliably reflects position in the sorted list.
         _raw_peaks = peaks if peaks is not None else []
-        self.peaks = sorted(_raw_peaks, key=lambda p: p.rank)
+
+        def _significance_key(p):
+            af = p.area_fraction if np.isfinite(p.area_fraction) else -np.inf
+            h = p.height if np.isfinite(p.height) else -np.inf
+            return (-af, -h, p.rank)
+
+        _sorted = sorted(_raw_peaks, key=_significance_key)
+        # Reassign ranks sequentially and update period_ratio_to_primary so
+        # that the new rank-1 peak always has ratio=1.0 and the other peaks
+        # are relative to it.
+        _primary_period = _sorted[0].period if _sorted else 1.0
+        self.peaks = [
+            dataclasses.replace(
+                p,
+                rank=i + 1,
+                period_ratio_to_primary=(
+                    p.period / _primary_period
+                    if _primary_period > 0 and np.isfinite(p.period)
+                    else float("nan")
+                ),
+            )
+            for i, p in enumerate(_sorted)
+        ]
         self.freq_grid = freq_grid
         self.psd = psd
         self.notes = notes
@@ -824,6 +850,17 @@ class PeriodSummaryResult:
         primary_area = (
             primary.area_fraction if primary is not None else float("nan")
         )
+        # Prefer primary-peak values for dominant_period/frequency so that
+        # all reported quantities (period, interval, area) consistently
+        # describe the same peak.  Fall back to the constructor-provided
+        # values if no peaks are present (non-periodic / explicit-period
+        # backends that set dominant_period directly).
+        dominant_period = (
+            primary.period if primary is not None else self.dominant_period
+        )
+        dominant_frequency = (
+            primary.frequency if primary is not None else self.dominant_frequency
+        )
         significant_periods = np.array([p.period for p in self.peaks])
 
         return {
@@ -834,8 +871,8 @@ class PeriodSummaryResult:
             "component_frequency_scales": self.component_frequency_scales,
             "freq_grid": self.freq_grid,
             "psd": self.psd,
-            "dominant_frequency": self.dominant_frequency,
-            "dominant_period": self.dominant_period,
+            "dominant_frequency": dominant_frequency,
+            "dominant_period": dominant_period,
             # Backward-compatible interval keys (both alias the same value).
             "period_interval_fwhm_like": primary_interval,
             "period_interval": primary_interval,
@@ -843,7 +880,8 @@ class PeriodSummaryResult:
             "q_factor": None,
             "peak_fraction": primary_area,
             "n_peaks": len(self.peaks),
-            "n_significant_peaks": self.n_peaks_detected,
+            "n_peaks_detected": self.n_peaks_detected,
+            "n_significant_peaks": len(self.get_significant_peaks()),
             "significant_periods": significant_periods,
             "peaks": [p.as_dict() for p in self.peaks],
             "method": self.method,
@@ -5837,6 +5875,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "q_factor": None,
             "peak_fraction": np.nan,
             "n_peaks": 0,
+            "n_peaks_detected": 0,
             "n_significant_peaks": 0,
             "significant_periods": np.array([]),
             "peaks": [],
@@ -5917,6 +5956,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "q_factor": q_factor,
             "peak_fraction": np.nan,
             "n_peaks": 1,
+            "n_peaks_detected": 1,
             "n_significant_peaks": 1,
             "significant_periods": np.array([raw_period]),
             "peaks": [],

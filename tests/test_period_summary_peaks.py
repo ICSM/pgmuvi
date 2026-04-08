@@ -1,13 +1,14 @@
-"""Minimal tests for the multi-peak support added in patch 4.
+"""Minimal tests for the multi-peak support added in patch 4 (corrected).
 
 Covers:
-1. Peak sorting at PeriodSummaryResult construction time.
+1. Peak sorting at PeriodSummaryResult construction time by significance.
 2. get_primary_peak() — empty and non-empty cases.
 3. get_top_n_peaks(n) — bounds and ordering.
 4. get_significant_peaks(threshold) — correct filtering.
-5. as_dict() contains 'peaks', 'n_peaks', 'n_significant_peaks'.
-6. to_text() includes a PRIMARY PEAK section and ADDITIONAL PEAKS section.
-7. max_peaks_to_show parameter in to_text() limits output correctly.
+5. as_dict() contains 'peaks', 'n_peaks', 'n_significant_peaks', 'n_peaks_detected'.
+6. n_significant_peaks is consistent with get_significant_peaks().
+7. to_text() includes a PRIMARY PEAK section and ADDITIONAL PEAKS section.
+8. max_peaks_to_show parameter in to_text() limits output correctly.
 """
 
 import unittest
@@ -59,23 +60,39 @@ def _make_summary(peaks=None, **kwargs):
 
 
 class TestPeakSorting(unittest.TestCase):
-    """Peaks are sorted ascending by rank at init time."""
+    """Peaks are sorted by descending significance at init time.
 
-    def test_peaks_sorted_by_rank_asc(self):
-        p3 = _make_peak(rank=3, area_fraction=0.30, period=200.0)
-        p1 = _make_peak(rank=1, area_fraction=0.80, period=100.0)
-        p2 = _make_peak(rank=2, area_fraction=0.55, period=150.0)
-        # Pass in deliberately unsorted order
-        summary = _make_summary(peaks=[p3, p2, p1])
+    Significance order: descending area_fraction (NaN last), then
+    descending height, then ascending original rank as tie-breaker.
+    After sorting, ranks are reassigned sequentially (1, 2, 3 …).
+    """
+
+    def test_peaks_sorted_by_significance_desc(self):
+        """After construction, peaks[0] has the highest area_fraction."""
+        p_low = _make_peak(rank=1, area_fraction=0.30, period=200.0)
+        p_mid = _make_peak(rank=2, area_fraction=0.55, period=150.0)
+        p_high = _make_peak(rank=3, area_fraction=0.80, period=100.0)
+        # Pass in deliberately unsorted order (low, mid, high)
+        summary = _make_summary(peaks=[p_low, p_mid, p_high])
+        areas = [p.area_fraction for p in summary.peaks]
+        self.assertEqual(areas, sorted(areas, reverse=True))
+
+    def test_ranks_reassigned_sequentially(self):
+        """After significance sort, ranks are reassigned 1, 2, 3 …"""
+        p_low = _make_peak(rank=1, area_fraction=0.30, period=200.0)
+        p_high = _make_peak(rank=2, area_fraction=0.80, period=100.0)
+        summary = _make_summary(peaks=[p_low, p_high])
         ranks = [p.rank for p in summary.peaks]
-        self.assertEqual(ranks, sorted(ranks))
+        self.assertEqual(ranks, list(range(1, len(ranks) + 1)))
 
-    def test_primary_is_rank_1(self):
-        p2 = _make_peak(rank=2, area_fraction=0.20, period=300.0)
-        p1 = _make_peak(rank=1, area_fraction=0.75, period=100.0)
-        # Pass rank-2 first to ensure sorting works
-        summary = _make_summary(peaks=[p2, p1])
+    def test_primary_is_highest_significance(self):
+        """peaks[0] is the peak with the highest area_fraction."""
+        p_low = _make_peak(rank=2, area_fraction=0.20, period=300.0)
+        p_high = _make_peak(rank=1, area_fraction=0.75, period=100.0)
+        # Pass low-significance peak first to confirm it is reordered
+        summary = _make_summary(peaks=[p_low, p_high])
         self.assertEqual(summary.peaks[0].rank, 1)
+        self.assertAlmostEqual(summary.peaks[0].area_fraction, 0.75)
 
     def test_empty_peaks_is_empty_list(self):
         summary = _make_summary(peaks=None)
@@ -97,13 +114,14 @@ class TestGetPrimaryPeak(unittest.TestCase):
         summary = _make_summary(peaks=[pk])
         self.assertIs(summary.get_primary_peak(), summary.peaks[0])
 
-    def test_returns_rank_1_peak(self):
-        p2 = _make_peak(rank=2, area_fraction=0.75, period=200.0)
-        p1 = _make_peak(rank=1, area_fraction=0.20, period=100.0)
-        # Pass in reverse rank order to test sorting
-        summary = _make_summary(peaks=[p2, p1])
+    def test_returns_highest_significance_peak(self):
+        """get_primary_peak() returns the peak with the highest area_fraction."""
+        p_low = _make_peak(rank=2, area_fraction=0.75, period=200.0)
+        p_high = _make_peak(rank=1, area_fraction=0.20, period=100.0)
+        # p_low has higher area_fraction, so it becomes the primary
+        summary = _make_summary(peaks=[p_low, p_high])
         self.assertEqual(summary.get_primary_peak().rank, 1)
-        self.assertAlmostEqual(summary.get_primary_peak().area_fraction, 0.20)
+        self.assertAlmostEqual(summary.get_primary_peak().area_fraction, 0.75)
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +242,38 @@ class TestAsDictMultiPeak(unittest.TestCase):
         for pk_dict in self.d["peaks"]:
             for field in required:
                 self.assertIn(field, pk_dict)
+
+    def test_n_peaks_detected_present(self):
+        """as_dict() must contain n_peaks_detected (upstream detection count)."""
+        self.assertIn("n_peaks_detected", self.d)
+        self.assertEqual(self.d["n_peaks_detected"], 2)
+
+    def test_n_significant_peaks_consistent_with_accessor(self):
+        """n_significant_peaks in as_dict() matches get_significant_peaks()."""
+        expected = len(self.summary.get_significant_peaks())
+        self.assertEqual(self.d["n_significant_peaks"], expected)
+
+    def test_n_peaks_detected_and_significant_can_differ(self):
+        """n_peaks_detected (height-threshold) != n_significant_peaks (area)."""
+        # Two peaks: only one has area_fraction >= 0.68
+        peaks = [
+            _make_peak(rank=1, area_fraction=0.80, period=100.0),
+            _make_peak(rank=2, area_fraction=0.40, period=200.0),
+        ]
+        summary = PeriodSummaryResult(
+            method="test",
+            model_name="TestModel",
+            n_peaks_detected=2,
+            n_peaks_analyzed=2,
+            peaks=peaks,
+            dominant_period=100.0,
+            dominant_frequency=0.01,
+        )
+        d = summary.as_dict()
+        self.assertEqual(d["n_peaks_detected"], 2)
+        # Only one peak has area_fraction >= 0.68
+        self.assertEqual(d["n_significant_peaks"], 1)
+        self.assertNotEqual(d["n_peaks_detected"], d["n_significant_peaks"])
 
     def test_empty_summary_n_peaks_is_zero(self):
         empty = _make_summary(peaks=None)
