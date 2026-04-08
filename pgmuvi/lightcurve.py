@@ -4710,31 +4710,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         stacklevel=2,
                     )
             except Exception as exc:
-                # MLS failed for any reason; fall back gracefully but warn the user.
-
-            # Final fallback when MLS init is disabled or not applicable.
-            # If a model is already instantiated, try to infer the actual
-            # number of mixture components from its kernel so that
-            # _fit_num_mixtures_effective reflects the true model structure
-            # rather than the generic default of 4.
-            if num_mixtures is None:
-                inferred_count = None
-                if hasattr(self, "model") and self.model is not None:
-                    inferred_count = self._infer_num_mixtures_from_model()
-                num_mixtures = (
-                    inferred_count if inferred_count is not None else 4
-                )
-
-            # Store the authoritative mixture counts for get_period_summary().
-            self._fit_num_mixtures_requested = _num_mixtures_arg
-            self._fit_num_mixtures_effective = num_mixtures
-            warnings.warn(
+                # MLS failed for any reason; fall back gracefully but warn the
+                # user.  Ensure num_mixtures is set before issuing the warning.
+                if num_mixtures is None:
+                    inferred_count = None
+                    if hasattr(self, "model") and self.model is not None:
+                        inferred_count = self._infer_num_mixtures_from_model()
+                    num_mixtures = (
+                        inferred_count if inferred_count is not None else 4
+                    )
+                # Store the authoritative mixture counts now that we know the
+                # fallback value.
+                self._fit_num_mixtures_requested = _num_mixtures_arg
+                self._fit_num_mixtures_effective = num_mixtures
+                warnings.warn(
                     "MLS-based initialisation failed; falling back to "
                     f"num_mixtures={num_mixtures}. Original error was: "
                     f"{exc}",
                     RuntimeWarning,
                     stacklevel=2,
-            )
+                )
 
         # Final fallback when MLS init is disabled or not applicable.
         if num_mixtures is None:

@@ -205,9 +205,14 @@ class TestAsDictMultiPeak(unittest.TestCase):
         self.assertIn("n_significant_peaks", self.d)
 
     def test_backward_compat_keys_present(self):
-        for key in ("period_interval", "period_interval_fwhm_like",
-                    "significant_periods", "dominant_period",
-                    "dominant_frequency", "method"):
+        for key in (
+            "period_interval",
+            "period_interval_fwhm_like",
+            "significant_periods",
+            "dominant_period",
+            "dominant_frequency",
+            "method",
+        ):
             self.assertIn(key, self.d, msg=f"Missing key: {key}")
 
     def test_peaks_list_matches_count(self):
