@@ -3637,9 +3637,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 else:
                     _ls_1d_best = LombScargle(_t_best, _y_best)
                 freq = _ls_1d_best.autofrequency(nyquist_factor=Nyquist_factor)
+                power = _ls_1d_best.power(freq)
             else:
                 freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
-            power = LS.power(freq)
+                power = LS.power(freq)
 
             if freq_only:
                 return (
