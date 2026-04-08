@@ -1365,29 +1365,33 @@ class PeriodSummaryResult:
             fh.write(text)
         return path
 
+    def _json_serialize(self, obj):
+        """Recursively convert *obj* to a JSON-serializable Python object.
+
+        Handles nested dicts, lists/tuples, numpy arrays and scalars, and
+        the standard JSON primitives.  Unknown types fall back to ``str()``.
+        """
+        if obj is None or isinstance(obj, (bool, int, float, str)):
+            return obj
+        if isinstance(obj, dict):
+            return {k: self._json_serialize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._json_serialize(item) for item in obj]
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.floating, np.integer)):
+            return obj.item()
+        return str(obj)
+
     def write_json(self, filename, include_psd=False):
         d = self.as_dict()
-        out = {}
-        for k, v in d.items():
-            if k in ("freq_grid", "psd"):
-                if include_psd and v is not None:
-                    out[k] = (
-                        v.tolist()
-                        if hasattr(v, "tolist")
-                        else list(v)
-                    )
-                else:
-                    out[k] = None
-            elif hasattr(v, "tolist"):
-                out[k] = v.tolist()
-            elif isinstance(v, tuple):
-                out[k] = list(v)
-            elif isinstance(v, (int, float, str, bool, type(None))):
-                out[k] = v
-            else:
-                out[k] = str(v)
+        # Handle freq_grid/psd before general serialization: omit them
+        # unless the caller explicitly requests PSD data.
+        if not include_psd or d.get("freq_grid") is None:
+            d = {**d, "freq_grid": None, "psd": None}
+        data = self._json_serialize(d)
         with open(filename, "w") as fh:
-            json.dump(out, fh, indent=2)
+            json.dump(data, fh, indent=2)
 
 
 class Lightcurve(InputHelpers, gpytorch.Module):
