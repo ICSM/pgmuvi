@@ -5851,7 +5851,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 y_data_for_val,
                 "k*",
             )
-            ax.legend(["Observed Data", "Mean", "Confidence"])
+            ax.legend(["Mean", "Confidence", "Observed Data"])
 
             ax.set_ylabel("y")
             ax.set_xlabel("x")
