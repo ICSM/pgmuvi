@@ -2785,6 +2785,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Nyquist_factor: int = 5,
         fap_method: str | None = None,
         use_best_band_init: bool = False,
+        return_full: bool = False,
         **kwargs,
     ) -> tuple:
         """
@@ -2841,20 +2842,47 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             informative band, which can speed up and improve the
             periodogram search when sampling is highly heterogeneous
             across bands.  Has no effect for 1D lightcurves.
+        - return_full: bool, optional, default=False
+            If True and ``freq_only=False``, also return the complete
+            frequency grid and power spectrum alongside the peak frequencies
+            and significance mask (see return values below).  Ignored when
+            ``freq_only=True``.  The periodogram itself is not recomputed,
+            but returning the full grid may still allocate and/or copy the
+            frequency and power tensors before returning them.
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
 
         Returns:
         ----------------
-        - freq: torch.Tensor of floats
-          frequencies corresponding to the num_peaks periodogram peaks.
-          If freq_only is set, the entire frequency grid is returned.
-        - mask: torch.Tensor of bool
-          identifies statistically significant peaks. Only returned if
-          freq_only is not set.
-        - power: torch.Tensor of floats
-          PSD for the entire frequency grid. Returned if freq_only is set.
+        The return value depends on the combination of ``freq_only`` and
+        ``return_full``:
+
+        * ``freq_only=True`` (``return_full`` is ignored):
+          ``(freq_grid, power_grid)``
+
+          - freq_grid: torch.Tensor of floats — the full frequency grid.
+          - power_grid: torch.Tensor of floats — periodogram power at each
+            frequency.
+
+        * ``freq_only=False, return_full=False`` (default):
+          ``(peak_freqs, significance_mask)``
+
+          - peak_freqs: torch.Tensor of floats — frequencies of the
+            ``num_peaks`` highest periodogram peaks.
+          - significance_mask: torch.Tensor of bool — True for peaks that
+            are statistically significant after Benjamini-Hochberg FDR
+            correction.
+
+        * ``freq_only=False, return_full=True``:
+          ``(peak_freqs, significance_mask, freq_grid, power_grid)``
+
+          - peak_freqs: torch.Tensor of floats — as above.
+          - significance_mask: torch.Tensor of bool — as above.
+          - freq_grid: torch.Tensor of floats — the full frequency grid
+            (already computed internally; returned at no extra cost).
+          - power_grid: torch.Tensor of floats — periodogram power at each
+            frequency (already computed internally).
         """
         from astropy.timeseries import LombScargle
         from scipy.signal import find_peaks
@@ -2961,18 +2989,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                 )
 
+            # Build full-grid tensors only when they are requested to avoid
+            # unnecessary allocation/copy on the default path.
+            if return_full:
+                _freq_t = torch.as_tensor(
+                    freq, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+                _power_t = torch.as_tensor(
+                    power, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+
             # Find peaks in the multiband periodogram
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
             peaks = peaks[np.argsort(power[peaks])][::-1]
 
             # Handle case when no peaks found
             if len(peaks) == 0:
-                return (
-                    torch.as_tensor(
-                        [], dtype=self.xdata.dtype, device=self.xdata.device
-                    ),
-                    torch.as_tensor([], dtype=torch.bool, device=self.xdata.device),
+                _pf = torch.as_tensor(
+                    [], dtype=self.xdata.dtype, device=self.xdata.device
                 )
+                _sm = torch.as_tensor(
+                    [], dtype=torch.bool, device=self.xdata.device
+                )
+                # return_full=True exposes already-computed LS intermediates
+                if return_full:
+                    return (_pf, _sm, _freq_t, _power_t)
+                return (_pf, _sm)
 
             # Compute FAP for multiband periodogram
             fap_max = LS.false_alarm_probability(power.max(),
@@ -2982,14 +3024,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if fap_max > single_threshold:
                 # Highest peak is not significant, mark all as insignificant
-                return (
-                    torch.as_tensor(freq[peaks[:n_return]],
-                                    dtype=self.xdata.dtype,
-                                    device=self.xdata.device),
-                    torch.as_tensor(np.array([False] * n_return),
-                                    dtype=torch.bool,
-                                    device=self.xdata.device)
+                _pf = torch.as_tensor(
+                    freq[peaks[:n_return]],
+                    dtype=self.xdata.dtype,
+                    device=self.xdata.device,
                 )
+                _sm = torch.as_tensor(
+                    np.array([False] * n_return),
+                    dtype=torch.bool,
+                    device=self.xdata.device,
+                )
+                # return_full=True exposes already-computed LS intermediates
+                if return_full:
+                    return (_pf, _sm, _freq_t, _power_t)
+                return (_pf, _sm)
 
             # Calculate FAP for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
@@ -3000,18 +3048,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
             significant_mask[0] = True  # since fap_max <= single_threshold
 
-            return (
-                torch.as_tensor(
-                    freq[peaks[:n_return]],
-                    dtype=self.xdata.dtype,
-                    device=self.xdata.device
-                ),
-                torch.as_tensor(
-                    significant_mask[:n_return],
-                    dtype=torch.bool,
-                    device=self.xdata.device
-                )
+            _pf = torch.as_tensor(
+                freq[peaks[:n_return]],
+                dtype=self.xdata.dtype,
+                device=self.xdata.device,
             )
+            _sm = torch.as_tensor(
+                significant_mask[:n_return],
+                dtype=torch.bool,
+                device=self.xdata.device,
+            )
+            # return_full=True exposes already-computed LS intermediates
+            if return_full:
+                return (_pf, _sm, _freq_t, _power_t)
+            return (_pf, _sm)
         else:
             t, y = _xdata, _ydata
 
@@ -3038,6 +3088,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         power, dtype=self.xdata.dtype, device=self.xdata.device
                     ),
                 )
+
+            # Build full-grid tensors only when they are requested to avoid
+            # unnecessary allocation/copy on the default path.
+            if return_full:
+                _freq_t = torch.as_tensor(
+                    freq, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+                _power_t = torch.as_tensor(
+                    power, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+
             # distance set to Nyquist_factor for LS frequency grid computation
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
             # sort by decreasing power
@@ -3046,12 +3107,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Handle case when no peaks or fewer peaks than requested
             if len(peaks) == 0:
                 # No peaks found, return empty tensors
-                return (
-                    torch.as_tensor(
-                        [], dtype=self.xdata.dtype, device=self.xdata.device
-                    ),
-                    torch.as_tensor([], dtype=torch.bool, device=self.xdata.device),
+                _pf = torch.as_tensor(
+                    [], dtype=self.xdata.dtype, device=self.xdata.device
                 )
+                _sm = torch.as_tensor(
+                    [], dtype=torch.bool, device=self.xdata.device
+                )
+                # return_full=True exposes already-computed LS intermediates
+                if return_full:
+                    return (_pf, _sm, _freq_t, _power_t)
+                return (_pf, _sm)
 
             # Calculate the false alarm probability for the highest peak.
             # 'single' is not appropriate for fap_max (it computes the FAP
@@ -3072,18 +3137,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:
-                return (
-                    torch.as_tensor(
-                        freq[peaks[:n_return]],
-                        dtype=self.xdata.dtype,
-                        device=self.xdata.device,
-                    ),
-                    torch.as_tensor(
-                        np.array([False] * n_return),
-                        dtype=torch.bool,
-                        device=self.xdata.device,
-                    ),
+                _pf = torch.as_tensor(
+                    freq[peaks[:n_return]],
+                    dtype=self.xdata.dtype,
+                    device=self.xdata.device,
                 )
+                _sm = torch.as_tensor(
+                    np.array([False] * n_return),
+                    dtype=torch.bool,
+                    device=self.xdata.device,
+                )
+                # return_full=True exposes already-computed LS intermediates
+                if return_full:
+                    return (_pf, _sm, _freq_t, _power_t)
+                return (_pf, _sm)
             # Per-peak FAP for the Benjamini-Hochberg correction.
             # We use method='single' here: it gives the single-frequency FAP
             # (probability that one pre-specified frequency shows at least
@@ -3095,18 +3162,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
             significant_mask[0] = True  # since fap_max <= single_threshold
-            return (
-                torch.as_tensor(
-                    freq[peaks[:n_return]],
-                    dtype=self.xdata.dtype,
-                    device=self.xdata.device,
-                ),
-                torch.as_tensor(
-                    significant_mask[:n_return],
-                    dtype=torch.bool,
-                    device=self.xdata.device,
-                ),
+            _pf = torch.as_tensor(
+                freq[peaks[:n_return]],
+                dtype=self.xdata.dtype,
+                device=self.xdata.device,
             )
+            _sm = torch.as_tensor(
+                significant_mask[:n_return],
+                dtype=torch.bool,
+                device=self.xdata.device,
+            )
+            # return_full=True exposes already-computed LS intermediates
+            if return_full:
+                return (_pf, _sm, _freq_t, _power_t)
+            return (_pf, _sm)
 
     def compute_sampling_metrics(self) -> dict:
         """
