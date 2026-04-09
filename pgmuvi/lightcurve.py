@@ -714,14 +714,14 @@ class InputHelpers:
         # Returns (wave_tensor, unique_labels_array).
         # ------------------------------------------------------------------
         def _str_col_to_wave(arr):
-            str_vals = np.asarray(arr, dtype=str)
+            str_vals = np.asarray(arr, dtype=np.str_)
             # Preserve first-appearance order via dict.fromkeys.
             unique_labels = list(dict.fromkeys(str_vals.tolist()))
             label_to_idx = {lbl: float(i) for i, lbl in enumerate(unique_labels)}
             indices = np.array([label_to_idx[v] for v in str_vals], dtype=np.float64)
             return (
                 torch.as_tensor(indices, dtype=torch.float32),
-                np.array(unique_labels, dtype=str),
+                np.array(unique_labels, dtype=np.str_),
             )
 
         # ------------------------------------------------------------------
@@ -957,7 +957,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if band is None:
             self.band = None
         else:
-            band_arr = np.asarray(band, dtype=str)
+            band_arr = np.asarray(band, dtype=np.str_)
             if band_arr.ndim != 1:
                 raise ValueError(
                     f"'band' must be a 1-D array-like of strings (shape (n,)); "
@@ -1282,7 +1282,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     # first-appearance order.
                     str_vals = col_data.astype(str)
                     unique_labels = list(dict.fromkeys(str_vals.tolist()))
-                    kwargs["band"] = np.array(unique_labels, dtype=str)
+                    kwargs["band"] = np.array(unique_labels, dtype=np.str_)
 
         return cls(x, y, yerr, **kwargs)
 

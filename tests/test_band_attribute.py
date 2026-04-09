@@ -152,7 +152,7 @@ class TestBandFromCsvStringLabels(unittest.TestCase):
     def test_string_band_indices_are_floats(self):
         """The wavelength axis (xdata[:,1]) contains 0-based float indices."""
         lc = Lightcurve.from_csv(self._csv_path)
-        unique_wl = lc.xdata[:, 1].unique().sort().values
+        unique_wl = lc.xdata[:, 1].unique()
         np.testing.assert_array_almost_equal(
             unique_wl.numpy(), [0.0, 1.0]
         )
