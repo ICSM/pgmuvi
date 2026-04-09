@@ -2989,14 +2989,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                 )
 
-            # Pre-build tensors for the full grid so return_full incurs no
-            # extra computation cost (freq and power are already available).
-            _freq_t = torch.as_tensor(
-                freq, dtype=self.xdata.dtype, device=self.xdata.device
-            )
-            _power_t = torch.as_tensor(
-                power, dtype=self.xdata.dtype, device=self.xdata.device
-            )
+            # Build full-grid tensors only when they are requested to avoid
+            # unnecessary allocation/copy on the default path.
+            if return_full:
+                _freq_t = torch.as_tensor(
+                    freq, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+                _power_t = torch.as_tensor(
+                    power, dtype=self.xdata.dtype, device=self.xdata.device
+                )
 
             # Find peaks in the multiband periodogram
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
