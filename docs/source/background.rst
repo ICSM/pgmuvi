@@ -121,6 +121,5 @@ GP optimisation can be sensitive to the starting point.  ``pgmuvi`` uses the
 spectral mixture kernel frequencies before fitting.  This substantially improves
 convergence and reduces the risk of settling in a poor local optimum.
 
-The initialisation step is exposed via
-:meth:`~pgmuvi.lightcurve.Lightcurve.init_hypers_from_LombScargle` and is also
-invoked automatically by :meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS`.
+In the current API, this Lomb–Scargle-based initialisation is performed
+internally by :meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS`.

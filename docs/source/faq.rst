@@ -38,7 +38,7 @@ Not yet natively.  The ``magnitudes`` option of
 For now, convert magnitudes and their uncertainties to (relative) fluxes
 before constructing the :class:`~pgmuvi.lightcurve.Lightcurve`.  A standard
 conversion is :math:`f \propto 10^{-0.4\,m}`; see
-:ref:`loading-data:Working with Magnitudes` for a code example.
+:ref:`working-with-magnitudes` for a code example.
 
 **Q: My data have irregular gaps.  Is that a problem?**
 

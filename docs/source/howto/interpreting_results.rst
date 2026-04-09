@@ -30,7 +30,8 @@ to their optimised (MAP) values.  Retrieve them as a dictionary::
 
 The key parameters are:
 
-* ``mixture_means`` — optimised frequencies (Hz if time is in days, etc.).
+* ``mixture_means`` — optimised frequencies (in units of ``1 /`` the time
+  unit of ``xdata``).
   Convert to periods by taking the reciprocal: ``periods = 1.0 / mixture_means``.
 * ``mixture_scales`` — bandwidths (coherence timescales).
 * ``mixture_weights`` — relative amplitudes.

@@ -121,6 +121,8 @@ keyword arguments::
 The GP is trained in the transformed space, but all results and plots are
 automatically inverse-transformed back to the original units.
 
+.. _working-with-magnitudes:
+
 Working with Magnitudes
 ------------------------
 

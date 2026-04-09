@@ -19,8 +19,9 @@ too complex risks over-fitting and slow convergence.
 Available Models
 -----------------
 
-The ``model`` parameter of the :class:`~pgmuvi.lightcurve.Lightcurve` constructor
-(or :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`) selects the kernel structure:
+The kernel structure is selected with
+:meth:`~pgmuvi.lightcurve.Lightcurve.set_model` or by passing ``model=`` to
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit`:
 
 .. list-table::
    :header-rows: 1
@@ -74,8 +75,10 @@ Automatic Model Selection
 ``pgmuvi`` provides an automated model selection method based on data
 characteristics::
 
-    recommended = lc.auto_select_model()
-    print(recommended)
+    recommended, diagnostics = lc.auto_select_model()
+    print(f"Recommended model: {recommended}")
+    if diagnostics.get("reason"):
+        print(f"Reason: {diagnostics['reason']}")
 
 Internally, :meth:`~pgmuvi.lightcurve.Lightcurve.auto_select_model` evaluates:
 
@@ -83,8 +86,10 @@ Internally, :meth:`~pgmuvi.lightcurve.Lightcurve.auto_select_model` evaluates:
 * inter-band agreement in peak frequency (for multiband data),
 * noise level relative to variability amplitude.
 
-It returns the identifier of the recommended model, which can then be passed to
-:meth:`~pgmuvi.lightcurve.Lightcurve.set_model`.
+It returns a tuple of ``(model_identifier, diagnostics_dict)``.  The identifier
+can be passed directly to :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`::
+
+    lc.set_model(recommended)
 
 Manual Model Selection
 -----------------------

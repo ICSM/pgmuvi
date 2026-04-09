@@ -23,12 +23,16 @@ provides two mechanisms to constrain the parameter space:
 Default Priors and Constraints
 --------------------------------
 
-``pgmuvi`` sets sensible defaults automatically when a
-:class:`~pgmuvi.lightcurve.Lightcurve` is created.  Call
+``pgmuvi`` applies sensible default priors and constraints when you call
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit` or
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS`.  You can also apply those defaults
+explicitly after setting a model with
+:meth:`~pgmuvi.lightcurve.Lightcurve.set_model`.  Call
 :meth:`~pgmuvi.lightcurve.Lightcurve.set_default_priors` and
 :meth:`~pgmuvi.lightcurve.Lightcurve.set_default_constraints` to restore the
-defaults after manually modifying them::
+defaults after manually modifying them (a model must be set first)::
 
+    lc.set_model("1D")
     lc.set_default_priors()
     lc.set_default_constraints()
 
