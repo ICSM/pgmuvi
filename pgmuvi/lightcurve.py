@@ -2846,8 +2846,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If True and ``freq_only=False``, also return the complete
             frequency grid and power spectrum alongside the peak frequencies
             and significance mask (see return values below).  Ignored when
-            ``freq_only=True``.  Because the grid is already computed
-            internally, enabling this flag incurs no extra computation cost.
+            ``freq_only=True``.  The periodogram itself is not recomputed,
+            but returning the full grid may still allocate and/or copy the
+            frequency and power tensors before returning them.
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
@@ -3087,14 +3088,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                 )
 
-            # Pre-build tensors for the full grid so return_full incurs no
-            # extra computation cost (freq and power are already available).
-            _freq_t = torch.as_tensor(
-                freq, dtype=self.xdata.dtype, device=self.xdata.device
-            )
-            _power_t = torch.as_tensor(
-                power, dtype=self.xdata.dtype, device=self.xdata.device
-            )
+            # Build full-grid tensors only when they are requested to avoid
+            # unnecessary allocation/copy on the default path.
+            if return_full:
+                _freq_t = torch.as_tensor(
+                    freq, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+                _power_t = torch.as_tensor(
+                    power, dtype=self.xdata.dtype, device=self.xdata.device
+                )
 
             # distance set to Nyquist_factor for LS frequency grid computation
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
