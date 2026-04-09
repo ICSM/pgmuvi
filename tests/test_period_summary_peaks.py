@@ -342,80 +342,80 @@ class TestToTextMultiPeak(unittest.TestCase):
 
 
 class TestConstructorInterfaceRegression(unittest.TestCase):
-    """Ensure the unrelated preprocessing params were removed from __init__."""
+    """Ensure preprocessing params are present in __init__ (moved from fit/fit_LS)."""
 
-    def test_constructor_does_not_accept_check_sampling(self):
-        """check_sampling must not be a named parameter of Lightcurve.__init__."""
+    def test_constructor_accepts_check_sampling(self):
+        """check_sampling must be a named parameter of Lightcurve.__init__."""
         import inspect
         from pgmuvi.lightcurve import Lightcurve
 
         sig = inspect.signature(Lightcurve.__init__)
-        self.assertNotIn(
+        self.assertIn(
             "check_sampling",
             sig.parameters,
-            "check_sampling should not be a Lightcurve.__init__ parameter",
+            "check_sampling should be a Lightcurve.__init__ parameter",
         )
 
-    def test_constructor_does_not_accept_check_variability(self):
-        """check_variability must not be a named parameter of __init__."""
+    def test_constructor_accepts_check_variability(self):
+        """check_variability must be a named parameter of __init__."""
         import inspect
         from pgmuvi.lightcurve import Lightcurve
 
         sig = inspect.signature(Lightcurve.__init__)
-        self.assertNotIn(
+        self.assertIn(
             "check_variability",
             sig.parameters,
-            "check_variability should not be a Lightcurve.__init__ parameter",
+            "check_variability should be a Lightcurve.__init__ parameter",
         )
 
-    def test_constructor_does_not_accept_max_samples(self):
-        """max_samples must not be a named parameter of Lightcurve.__init__."""
+    def test_constructor_accepts_max_samples(self):
+        """max_samples must be a named parameter of Lightcurve.__init__."""
         import inspect
         from pgmuvi.lightcurve import Lightcurve
 
         sig = inspect.signature(Lightcurve.__init__)
-        self.assertNotIn(
+        self.assertIn(
             "max_samples",
             sig.parameters,
-            "max_samples should not be a Lightcurve.__init__ parameter",
+            "max_samples should be a Lightcurve.__init__ parameter",
         )
 
-    def test_constructor_does_not_accept_subsample_seed(self):
-        """subsample_seed must not be a named parameter of Lightcurve.__init__."""
+    def test_constructor_accepts_subsample_seed(self):
+        """subsample_seed must be a named parameter of Lightcurve.__init__."""
         import inspect
         from pgmuvi.lightcurve import Lightcurve
 
         sig = inspect.signature(Lightcurve.__init__)
-        self.assertNotIn(
+        self.assertIn(
             "subsample_seed",
             sig.parameters,
-            "subsample_seed should not be a Lightcurve.__init__ parameter",
+            "subsample_seed should be a Lightcurve.__init__ parameter",
         )
 
 
 class TestFitLSInterfaceRegression(unittest.TestCase):
-    """Ensure fit_LS() has the previously existing max_samples/subsample_seed."""
+    """Ensure fit_LS() no longer has max_samples/subsample_seed (moved to __init__)."""
 
-    def test_fit_ls_has_max_samples(self):
+    def test_fit_ls_does_not_have_max_samples(self):
         import inspect
         from pgmuvi.lightcurve import Lightcurve
 
         sig = inspect.signature(Lightcurve.fit_LS)
-        self.assertIn(
+        self.assertNotIn(
             "max_samples",
             sig.parameters,
-            "max_samples should be a fit_LS() parameter",
+            "max_samples should not be a fit_LS() parameter (moved to __init__)",
         )
 
-    def test_fit_ls_has_subsample_seed(self):
+    def test_fit_ls_does_not_have_subsample_seed(self):
         import inspect
         from pgmuvi.lightcurve import Lightcurve
 
         sig = inspect.signature(Lightcurve.fit_LS)
-        self.assertIn(
+        self.assertNotIn(
             "subsample_seed",
             sig.parameters,
-            "subsample_seed should be a fit_LS() parameter",
+            "subsample_seed should not be a fit_LS() parameter (moved to __init__)",
         )
 
 

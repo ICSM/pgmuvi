@@ -4573,7 +4573,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ------
         ValueError
             If no model is provided.
-        
+
         Notes
         -----
         Data validation, quality checks, and subsampling are performed at
@@ -5150,6 +5150,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 gpytorch.settings.fast_computations(False, False, False),
                 gpytorch.settings.max_cg_iterations(max_cg_iterations),
             ):
+                for key in self.state_dict().keys():
+                    print(key)
+                    with contextlib.suppress(AttributeError):
+                        print(self.state_dict()[key].device)
+                        # self.state_dict()[key] = self.state_dict()[key].cuda()
+                for param_name, param in self.model.named_parameters():
+                    print(
+                        f"Parameter name: {param_name:42} value = {param.data}, "
+                        f"device = {param.data.device}"
+                    )
+                print(self.model.covar_module.mixture_means)
+                print(self.model.covar_module.mixture_scales)
+                print(self.model.covar_module.mixture_weights)
+                print(self.model.covar_module.mixture_means_prior)
+                print("----")
+                print("Lookup dict:")
+                for param_name, param in self._model_pars.items():
+                    print(param)
+                    print("----")
+                    # print(f'Parameter name: {param_name:42} value = {param["module"].value}, device = {param["module"].value.device}')  # noqa: E501
                 sampled_model = model.pyro_sample_from_prior()  # .detatch()
                 output = sampled_model.likelihood(sampled_model(x))  # .detatch()
                 pyro.sample("obs", output, obs=y)
@@ -5166,6 +5186,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             disable_progbar=disable_progbar,
         )
         import linear_operator.utils.errors as linear
+
+        for key in self.state_dict().keys():
+            print(key)
+            with contextlib.suppress(AttributeError):
+                print(self.state_dict()[key].device)
+                # self.state_dict()[key] = self.state_dict()[key].cuda()
+        for param_name, param in self.model.named_parameters():
+            print(
+                f"Parameter name: {param_name:42} value = {param.data}, "
+                f"device = {param.data.device}"
+            )
 
         try:
             if cuda:
