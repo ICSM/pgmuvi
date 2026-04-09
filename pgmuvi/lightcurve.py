@@ -741,6 +741,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Units of the time axis.  Time values are converted to days
         internally.  If *None* (default) the data are assumed to already
         be in days.
+    band : array-like of str or None, optional
+        Optional labels for the wavelength entries in a 2-D light curve.
+        Each element should be a string identifier (e.g. ``"V"``, ``"R"``,
+        ``"W1"``).  The length must match the number of unique wavelength
+        values (i.e. the number of distinct bands).  ``None`` (default)
+        means no band labels are stored.
+
+    Attributes
+    ----------
+    band : numpy.ndarray of str or None
+        Array of string labels aligned with the wavelength axis, or ``None``
+        if no labels were provided.
 
 
     Examples
@@ -766,6 +778,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         sampling_kwargs: dict | None = None,
         check_variability: bool = False,
         variability_kwargs: dict | None = None,
+        band=None,
         **kwargs,
     ):
         """Initialize a Lightcurve.
@@ -824,6 +837,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Keyword arguments forwarded to the variability tests (``alpha``,
             ``fvar_min``, ``stetson_k_min``).  Only used when
             *check_variability* is ``True``.
+        band : array-like of str or None, optional
+            Optional labels for the wavelength entries in a 2-D light curve.
+            Each element should be a string identifier (e.g. ``"V"``,
+            ``"R"``, ``"W1"``).  The length must match the number of unique
+            wavelength values.  ``None`` (default) means no band labels are
+            stored.
         """
         super().__init__()
 
@@ -865,6 +884,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self.yerr = yerr
 
         self.name = "Lightcurve" if name is None else name
+
+        # ------------------------------------------------------------------
+        # Band labels
+        # ------------------------------------------------------------------
+        if band is None:
+            self.band = None
+        else:
+            band_arr = np.asarray(band, dtype=str)
+            if band_arr.ndim != 1:
+                raise ValueError(
+                    f"'band' must be a 1-D array-like of strings; "
+                    f"got shape {band_arr.shape}."
+                )
+            # Determine the expected length: number of unique wavelength values
+            # for 2-D data, or 1 for 1-D data.
+            if self.ndim > 1:
+                n_bands = int(self._xdata_raw[:, 1].unique().numel())
+            else:
+                n_bands = 1
+            if len(band_arr) != n_bands:
+                raise ValueError(
+                    f"Length of 'band' ({len(band_arr)}) does not match the "
+                    f"number of unique wavelength entries ({n_bands})."
+                )
+            self.band = band_arr
 
         self.__SET_LIKELIHOOD_CALLED = False
         self.__SET_MODEL_CALLED = False
