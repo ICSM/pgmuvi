@@ -894,7 +894,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band_arr = np.asarray(band, dtype=str)
             if band_arr.ndim != 1:
                 raise ValueError(
-                    f"'band' must be a 1-D array-like of strings; "
+                    f"'band' must be a 1-D array-like of strings (shape (n,)); "
                     f"got shape {band_arr.shape}."
                 )
             # Determine the expected length: number of unique wavelength values
@@ -906,7 +906,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if len(band_arr) != n_bands:
                 raise ValueError(
                     f"Length of 'band' ({len(band_arr)}) does not match the "
-                    f"number of unique wavelength entries ({n_bands})."
+                    f"expected number of bands ({n_bands})."
                 )
             self.band = band_arr
 

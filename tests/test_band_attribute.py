@@ -1,5 +1,7 @@
 """Tests for the optional ``band`` attribute of :class:`Lightcurve`."""
 
+import os
+import tempfile
 import unittest
 
 import numpy as np
@@ -100,9 +102,6 @@ class TestBandFromCsv(unittest.TestCase):
     """from_csv passes band through to the constructor."""
 
     def setUp(self):
-        import tempfile
-        import os
-
         self._tmpdir = tempfile.mkdtemp()
         csv_path = os.path.join(self._tmpdir, "lc.csv")
         with open(csv_path, "w") as f:
