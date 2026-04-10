@@ -758,10 +758,10 @@ class InputHelpers:
             x_tensors = []
             for col in xcol:
                 if _is_str_col(col):
-                    wave_t, band_labels = _str_col_to_wave(clean[col])
+                    wave_t, _unique = _str_col_to_wave(clean[col])
                     x_tensors.append(wave_t)
                     if "band" not in kwargs:
-                        kwargs["band"] = band_labels
+                        kwargs["band"] = np.asarray(clean[col], dtype=np.str_)
                 else:
                     x_tensors.append(_to_float_tensor(clean[col]))
             x = torch.stack(x_tensors, dim=1) if len(x_tensors) > 1 else x_tensors[0]
@@ -770,9 +770,9 @@ class InputHelpers:
             if wavelcol is not None:
                 if _is_str_col(wavelcol):
                     # Explicitly-provided string wavelcol: map labels → indices.
-                    wave_tensor, band_labels = _str_col_to_wave(clean[wavelcol])
+                    wave_tensor, _unique = _str_col_to_wave(clean[wavelcol])
                     if "band" not in kwargs:
-                        kwargs["band"] = band_labels
+                        kwargs["band"] = np.asarray(clean[wavelcol], dtype=np.str_)
                 else:
                     wave_tensor = _to_float_tensor(clean[wavelcol])
                 if wave_tensor.unique().numel() > 1:
@@ -786,13 +786,10 @@ class InputHelpers:
 
             # Independently populate band from the string band-ID column.
             # Only auto-populate when xdata is 2-D, matching from_table
-            # behaviour (band with multiple labels is meaningless for 1-D).
+            # behaviour (band labels per-row are meaningless for 1-D).
             if x.dim() == 2 and "band" not in kwargs and band_id_col is not None:
                 if _is_str_col(band_id_col):
-                    str_vals = np.asarray(clean[band_id_col], dtype=np.str_)
-                    kwargs["band"] = np.array(
-                        list(dict.fromkeys(str_vals.tolist())), dtype=np.str_
-                    )
+                    kwargs["band"] = np.asarray(clean[band_id_col], dtype=np.str_)
 
         y = _to_float_tensor(clean[ycol])
         yerr = _to_float_tensor(clean[yerrcol]) if yerrcol else None
@@ -844,16 +841,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         internally.  If *None* (default) the data are assumed to already
         be in days.
     band : array-like of str or None, optional
-        Optional labels for the wavelength entries in a 2-D light curve.
-        Each element should be a string identifier (e.g. ``"V"``, ``"R"``,
-        ``"W1"``).  The length must match the number of unique wavelength
-        values (i.e. the number of distinct bands).  ``None`` (default)
+        Optional per-row band labels for a 2-D light curve.  Each element
+        must be a string identifier (e.g. ``"V"``, ``"R"``, ``"W1"``), and
+        there must be exactly one label per observation row — i.e.
+        ``len(band) == len(xdata)`` for 2-D data.  For 1-D light curves a
+        single-element array ``["V"]`` is accepted.  ``None`` (default)
         means no band labels are stored.
 
     Attributes
     ----------
     band : numpy.ndarray of str or None
-        Array of string labels aligned with the wavelength axis, or ``None``
+        Per-row string labels aligned with ``xdata``, or ``None``
         if no labels were provided.
 
 
@@ -999,10 +997,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"'band' must be a 1-D array-like of strings (shape (n,)); "
                     f"got shape {band_arr.shape}."
                 )
-            # Determine the expected length: number of unique wavelength values
-            # for 2-D data, or 1 for 1-D data.
+            # Determine the expected length: one label per observation row for
+            # 2-D data, or 1 for 1-D data (single-band lightcurve).
             if self.ndim > 1:
-                n_bands = int(self._xdata_raw[:, 1].unique().numel())
+                n_bands = len(self._xdata_raw)
             else:
                 n_bands = 1
             if len(band_arr) != n_bands:
@@ -1237,7 +1235,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Name of column in table that contains the yerr data
         bandcol: str or None, optional
             Name of the column containing string band labels (e.g. ``"V"``,
-            ``"R"``, ``"W1"``).  When provided, the unique labels are read
+            ``"R"``, ``"W1"``).  When provided, the per-row labels are read
             from this column and stored in :attr:`Lightcurve.band`.  If
             ``None`` (default), the method attempts to auto-detect a
             string-typed column whose name matches one of the entries in
@@ -1295,12 +1293,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if yerr.shape[0] != nsamples and yerr.shape[1] == nsamples:
                 yerr = yerr.transpose(0, 1)
 
+        # Compute the finite-row mask before calling _drop_nonfinite_rows so
+        # that we can apply the same filter to the ancillary band column below.
+        _valid = torch.isfinite(y)
+        if x.dim() > 1:
+            _valid &= torch.isfinite(x).all(dim=1)
+        else:
+            _valid &= torch.isfinite(x)
+        if yerr is not None:
+            _valid &= torch.isfinite(yerr)
+        _valid_np = _valid.numpy().astype(bool)
+
         x, y, yerr = cls._drop_nonfinite_rows(x, y, yerr)
 
         # ------------------------------------------------------------------
         # Band labels: only relevant when xdata is already 2-D (multiband).
         # For 1-D lightcurves there is no wavelength axis, so band labels
         # from an ancillary string column would be meaningless.
+        # One label per row is stored (same length as xdata).
         # ------------------------------------------------------------------
         if "band" not in kwargs and x.dim() == 2:
             # Prefer the explicit bandcol; fall back to auto-detection.
@@ -1314,11 +1324,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     or np.issubdtype(col_dtype, np.bytes_)
                     or col_dtype.kind == "O"
                 ):
-                    # String column found — extract unique labels in
-                    # first-appearance order.
-                    str_vals = col_data.astype(str)
-                    unique_labels = list(dict.fromkeys(str_vals.tolist()))
-                    kwargs["band"] = np.array(unique_labels, dtype=np.str_)
+                    # String column found — store per-row labels (filtered to
+                    # the same valid rows as x/y/yerr).
+                    kwargs["band"] = np.array(
+                        col_data[_valid_np].astype(str), dtype=np.str_
+                    )
 
         return cls(x, y, yerr, **kwargs)
 

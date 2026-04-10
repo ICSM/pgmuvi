@@ -31,6 +31,11 @@ def _make_2d():
     return x, y, yerr
 
 
+# Per-row band label arrays for _make_2d() (20 rows: 10 band-1, 10 band-2)
+_BAND_2D_VR = np.array(["V"] * 10 + ["R"] * 10)
+_BAND_2D_W1W2 = np.array(["W1"] * 10 + ["W2"] * 10)
+
+
 class TestBandAttributeNone(unittest.TestCase):
     """band defaults to None when not provided."""
 
@@ -61,16 +66,19 @@ class TestBandAttribute1D(unittest.TestCase):
 
 
 class TestBandAttribute2D(unittest.TestCase):
-    """band storage for 2-D (multiband) light curves."""
+    """band storage for 2-D (multiband) light curves.
+
+    For a 20-row lightcurve (10 rows per band), band must have 20 elements.
+    """
 
     def test_two_band_labels(self):
         x, y, yerr = _make_2d()
-        lc = Lightcurve(x, y, yerr=yerr, band=["V", "R"])
-        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+        lc = Lightcurve(x, y, yerr=yerr, band=_BAND_2D_VR)
+        np.testing.assert_array_equal(lc.band, _BAND_2D_VR)
 
     def test_band_stored_as_numpy_strings(self):
         x, y, yerr = _make_2d()
-        lc = Lightcurve(x, y, yerr=yerr, band=["W1", "W2"])
+        lc = Lightcurve(x, y, yerr=yerr, band=_BAND_2D_W1W2)
         self.assertIsInstance(lc.band, np.ndarray)
         self.assertTrue(
             np.issubdtype(lc.band.dtype, np.str_),
@@ -78,14 +86,17 @@ class TestBandAttribute2D(unittest.TestCase):
         )
 
     def test_wrong_length_raises(self):
+        """Fewer labels than rows → ValueError."""
         x, y, yerr = _make_2d()
         with self.assertRaises(ValueError):
             Lightcurve(x, y, yerr=yerr, band=["V"])
 
     def test_wrong_length_too_many_raises(self):
+        """More labels than rows → ValueError."""
         x, y, yerr = _make_2d()
+        # 21 labels for a 20-row lightcurve
         with self.assertRaises(ValueError):
-            Lightcurve(x, y, yerr=yerr, band=["V", "R", "I"])
+            Lightcurve(x, y, yerr=yerr, band=["V"] * 11 + ["R"] * 10)
 
     def test_band_none_explicit(self):
         x, y, yerr = _make_2d()
@@ -119,9 +130,10 @@ class TestBandFromCsvNumericWavelength(unittest.TestCase):
         self.assertEqual(lc.ndim, 2)
 
     def test_explicit_band_kwarg_still_works(self):
-        """Callers can pass band= explicitly alongside a numeric wavelength col."""
-        lc = Lightcurve.from_csv(self._csv_path, band=["A", "B"])
-        np.testing.assert_array_equal(lc.band, np.array(["A", "B"]))
+        """Callers can pass per-row band= explicitly alongside a numeric wavelength col."""
+        per_row = ["A"] * 5 + ["B"] * 5
+        lc = Lightcurve.from_csv(self._csv_path, band=per_row)
+        np.testing.assert_array_equal(lc.band, np.array(per_row))
 
 
 class TestBandFromCsvNumericBandColNotWavelength(unittest.TestCase):
@@ -214,9 +226,11 @@ class TestBandFromCsvBothColumnsIndependent(unittest.TestCase):
         self.assertEqual(lc.ndim, 2)
 
     def test_both_band_populated(self):
-        """String 'band' column → lc.band populated independently."""
+        """String 'band' column → lc.band populated with per-row labels."""
         lc = Lightcurve.from_csv(self._csv_path)
-        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+        np.testing.assert_array_equal(
+            lc.band, np.array(["V"] * 5 + ["R"] * 5)
+        )
 
     def test_numeric_wavelength_in_xdata(self):
         """xdata[:,1] contains the numeric wavelength values, not indices."""
@@ -226,8 +240,9 @@ class TestBandFromCsvBothColumnsIndependent(unittest.TestCase):
 
     def test_explicit_band_kwarg_overrides_auto(self):
         """Caller-provided band= takes precedence over auto-detection."""
-        lc = Lightcurve.from_csv(self._csv_path, band=["g", "r"])
-        np.testing.assert_array_equal(lc.band, np.array(["g", "r"]))
+        per_row = ["g"] * 5 + ["r"] * 5
+        lc = Lightcurve.from_csv(self._csv_path, band=per_row)
+        np.testing.assert_array_equal(lc.band, np.array(per_row))
 
 
 class TestWavelengthIdColumnNames(unittest.TestCase):
@@ -248,39 +263,42 @@ class TestWavelengthIdColumnNames(unittest.TestCase):
     def test_filter_col_auto_detected(self):
         """Column named 'filter' is auto-detected via _WAVELENGTH_ID_COLUMN_NAMES."""
         path = os.path.join(self._tmpdir, "filter.csv")
-        self._write_csv(path, "filter", ["V", "V", "R", "R", "R"])
+        bands = ["V", "V", "R", "R", "R"]
+        self._write_csv(path, "filter", bands)
         lc = Lightcurve.from_csv(path)
-        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+        np.testing.assert_array_equal(lc.band, np.array(bands))
 
     def test_filtername_col_auto_detected(self):
         """Column named 'filtername' is auto-detected via _WAVELENGTH_ID_COLUMN_NAMES."""
         path = os.path.join(self._tmpdir, "filtername.csv")
-        self._write_csv(path, "filtername", ["g", "g", "r", "r"])
+        bands = ["g", "g", "r", "r"]
+        self._write_csv(path, "filtername", bands)
         lc = Lightcurve.from_csv(path)
-        np.testing.assert_array_equal(lc.band, np.array(["g", "r"]))
+        np.testing.assert_array_equal(lc.band, np.array(bands))
 
     def test_filter_name_col_auto_detected(self):
         """Column named 'filter_name' is auto-detected via _WAVELENGTH_ID_COLUMN_NAMES."""
         path = os.path.join(self._tmpdir, "filter_name.csv")
-        self._write_csv(path, "filter_name", ["W1", "W1", "W2", "W2"])
+        bands = ["W1", "W1", "W2", "W2"]
+        self._write_csv(path, "filter_name", bands)
         lc = Lightcurve.from_csv(path)
-        np.testing.assert_array_equal(lc.band, np.array(["W1", "W2"]))
+        np.testing.assert_array_equal(lc.band, np.array(bands))
 
     def test_numeric_wavelength_and_string_band_id_are_independent(self):
         """Numeric wavelength (xdata[:,1]) and string band-ID (lc.band) are
         populated independently when both columns are present."""
         path = os.path.join(self._tmpdir, "both.csv")
+        bands = ["V", "V", "R", "R"]
         with open(path, "w") as f:
             f.write("time,wavelength,band,flux\n")
-            for i in range(4):
-                b = "V" if i < 2 else "R"
-                wl = 550.0 if i < 2 else 650.0
+            for i, b in enumerate(bands):
+                wl = 550.0 if b == "V" else 650.0
                 f.write(f"{float(i)},{wl},{b},{float(i)}\n")
         lc = Lightcurve.from_csv(path)
         # Numeric wavelength column → 2-D xdata
         self.assertEqual(lc.ndim, 2)
-        # String band-ID column → lc.band populated independently
-        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+        # String band-ID column → lc.band populated per-row
+        np.testing.assert_array_equal(lc.band, np.array(bands))
 
     def test_string_band_id_col_not_used_for_xdata(self):
         """String band-ID column alone (no numeric wavelength) → 1-D, band=None."""
@@ -326,23 +344,24 @@ class TestWavelengthIdColumnNamesFromTable(unittest.TestCase):
 
     def test_filter_col_auto_detected(self):
         """Column named 'filter' is auto-detected."""
-        tab = self._make_table_2d_with_filter("filter", ["V", "V", "R", "R"])
+        band_values = ["V", "V", "R", "R"]
+        tab = self._make_table_2d_with_filter("filter", band_values)
         lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
-        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+        np.testing.assert_array_equal(lc.band, np.array(band_values))
 
     def test_filtername_col_auto_detected(self):
         """Column named 'filtername' is auto-detected."""
-        tab = self._make_table_2d_with_filter("filtername", ["g", "g", "r", "r"])
+        band_values = ["g", "g", "r", "r"]
+        tab = self._make_table_2d_with_filter("filtername", band_values)
         lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
-        np.testing.assert_array_equal(lc.band, np.array(["g", "r"]))
+        np.testing.assert_array_equal(lc.band, np.array(band_values))
 
     def test_filter_name_col_auto_detected(self):
         """Column named 'filter_name' is auto-detected."""
-        tab = self._make_table_2d_with_filter(
-            "filter_name", ["W1", "W1", "W2", "W2"]
-        )
+        band_values = ["W1", "W1", "W2", "W2"]
+        tab = self._make_table_2d_with_filter("filter_name", band_values)
         lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
-        np.testing.assert_array_equal(lc.band, np.array(["W1", "W2"]))
+        np.testing.assert_array_equal(lc.band, np.array(band_values))
 
 
 class TestBandFromTable(unittest.TestCase):
@@ -369,16 +388,16 @@ class TestBandFromTable(unittest.TestCase):
         )
 
     def test_explicit_bandcol_2d(self):
-        """Explicit bandcol with 2-D xcol → band labels stored."""
+        """Explicit bandcol with 2-D xcol → per-row band labels stored."""
         tab = self._make_table_2d()
         lc = Lightcurve.from_table(tab, xcol="x", ycol="y", bandcol="band")
-        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+        np.testing.assert_array_equal(lc.band, np.array(["V"] * 5 + ["R"] * 5))
 
     def test_auto_detect_string_band_col_2d(self):
         """String column named 'band' is auto-detected when xcol is 2-D."""
         tab = self._make_table_2d()
         lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
-        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+        np.testing.assert_array_equal(lc.band, np.array(["V"] * 5 + ["R"] * 5))
 
     def test_numeric_band_col_not_auto_ingested(self):
         """A numeric 'band' column alongside a 2-D xcol is NOT ingested."""
@@ -415,10 +434,11 @@ class TestBandFromTable(unittest.TestCase):
     def test_explicit_band_kwarg_takes_precedence(self):
         """Caller-provided band= takes precedence over auto-detection."""
         tab = self._make_table_2d()
+        per_row = ["g"] * 5 + ["r"] * 5
         lc = Lightcurve.from_table(
-            tab, xcol="x", ycol="y", bandcol="band", band=["g", "r"]
+            tab, xcol="x", ycol="y", bandcol="band", band=per_row
         )
-        np.testing.assert_array_equal(lc.band, np.array(["g", "r"]))
+        np.testing.assert_array_equal(lc.band, np.array(per_row))
 
     def test_no_band_col_is_none(self):
         """Table with no string band column → lc.band is None."""
