@@ -5848,9 +5848,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             # Plot training data as black stars (on top of model predictions)
             y_data_for_val = self.ydata[self.xdata[:, 1] == val]
-            ax.plot(
-                self.xdata[self.xdata[:, 1] == val, 0],
-                y_data_for_val,
             if self.yerr is not None:
                 ax.errorbar(
                     self.xdata[self.xdata[:, 1] == val, 0],
