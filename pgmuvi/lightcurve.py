@@ -1053,7 +1053,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     band_ids = xdata_np[:, 1]
                 unique_bands = np.unique(band_ids)
                 global_keep = []
-                any_subsampled = False
+                subsampled_bands = []
                 for bval in unique_bands:
                     band_mask = np.where(band_ids == bval)[0]
                     n_band = len(band_mask)
@@ -1066,17 +1066,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             random_seed=subsample_seed,
                         )
                         global_keep.append(band_mask[local_idx])
-                        _msg = (
-                            f"Band \u03bb={bval} has {n_band} points, which "
-                            f"exceeds max_samples={max_samples}. Retaining a "
-                            f"random subsample of {len(local_idx)} points. "
-                            "Set max_samples=None to disable subsampling."
-                        )
-                        warnings.warn(_msg, UserWarning, stacklevel=2)
-                        any_subsampled = True
+                        subsampled_bands.append(bval)
                     else:
                         global_keep.append(band_mask)
-                if any_subsampled:
+                if subsampled_bands:
+                    _band_str = ", ".join(
+                        f"\u03bb={b}" for b in subsampled_bands
+                    )
+                    _msg = (
+                        f"The following bands exceed max_samples={max_samples}"
+                        f" and were randomly subsampled: {_band_str}. "
+                        "Set max_samples=None to disable subsampling."
+                    )
+                    warnings.warn(_msg, UserWarning, stacklevel=2)
                     idx = np.sort(np.concatenate(global_keep))
                     idx_t = torch.as_tensor(
                         idx,
