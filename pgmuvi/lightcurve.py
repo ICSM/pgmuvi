@@ -1466,6 +1466,99 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def append_data(self, new_values_x, new_values_y):
         pass
 
+    def select_bands(self, bands):
+        """Return a new Lightcurve containing only the requested bands.
+
+        Parameters
+        ----------
+        bands : list, tuple, or numpy.ndarray
+            Selection criteria.  Each element may be:
+
+            * A **string** — matched against :attr:`band` (the per-row string
+              label array).  Requires that :attr:`band` is not ``None``.
+            * A **float** or **int** — matched against ``xdata[:, 1]`` (the
+              numeric wavelength column).  Exact equality is used.
+
+            Mixed lists (some strings, some floats) are supported; the row
+            mask is the logical OR of all individual matches.
+
+        Returns
+        -------
+        Lightcurve
+            A new :class:`Lightcurve` object built from the subset of rows
+            that match at least one of the requested *bands*.  The
+            :attr:`name`, :attr:`xtransform`, and :attr:`ytransform`
+            attributes are inherited from the original light curve.
+
+        Raises
+        ------
+        ValueError
+            If the light curve is 1-D (no wavelength axis).
+        ValueError
+            If any string selector is requested but :attr:`band` is ``None``.
+        TypeError
+            If any element of *bands* is neither a string nor a number.
+        """
+        if self.ndim < 2:
+            raise ValueError(
+                "select_bands requires a 2-D light curve "
+                "(xdata must have shape (N, 2) with a wavelength column)."
+            )
+
+        str_vals = []
+        float_vals = []
+        for b in bands:
+            if isinstance(b, str):
+                str_vals.append(b)
+            elif isinstance(b, (int, float, np.floating, np.integer)):
+                float_vals.append(float(b))
+            else:
+                raise TypeError(
+                    f"Each element of 'bands' must be a string or a number; "
+                    f"got {type(b).__name__!r}."
+                )
+
+        xdata_raw = self._xdata_raw
+        n = xdata_raw.shape[0]
+        mask = torch.zeros(n, dtype=torch.bool, device=xdata_raw.device)
+
+        if str_vals:
+            if self.band is None:
+                raise ValueError(
+                    "String band selectors require the 'band' attribute to be "
+                    "set, but this Lightcurve has band=None."
+                )
+            for s in str_vals:
+                mask |= torch.as_tensor(
+                    self.band == s, dtype=torch.bool, device=xdata_raw.device
+                )
+
+        if float_vals:
+            wl_col = xdata_raw[:, 1]
+            for fv in float_vals:
+                mask |= wl_col == fv
+
+        new_x = xdata_raw[mask]
+        new_y = self._ydata_raw[mask]
+        new_yerr = (
+            self._yerr_raw[mask] if hasattr(self, "_yerr_raw") else None
+        )
+        new_band = (
+            self.band[mask.cpu().numpy().astype(bool)]
+            if self.band is not None
+            else None
+        )
+
+        return Lightcurve(
+            new_x,
+            new_y,
+            yerr=new_yerr,
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+            band=new_band,
+        )
+
     def transform_x(self, values):
         if self.xtransform is None:
             return values
