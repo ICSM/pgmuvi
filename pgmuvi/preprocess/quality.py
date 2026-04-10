@@ -382,7 +382,7 @@ def assess_sampling_quality(
 
 def subsample_lightcurve(
     t,
-    max_samples=3000,
+    max_samples=500,
     max_gap_fraction=0.3,
     random_seed=None,
 ):
@@ -405,7 +405,7 @@ def subsample_lightcurve(
     ----------
     t : array_like
         Observation times (1-D).
-    max_samples : int, default 3000
+    max_samples : int, default 500
         Maximum number of points to include in the subsample.  Must be an
         integer >= 2.
     max_gap_fraction : float, default 0.3
