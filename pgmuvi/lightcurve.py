@@ -5789,14 +5789,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self.xdata.cpu().numpy(),
                 self.ydata.cpu().numpy(),
                 yerr=self.yerr.cpu().numpy(),
-                fmt="k*",
+                fmt="ko",
                 label="Observed",
             )
         else:
             ax.plot(
                 self.xdata.cpu().numpy(),
                 self.ydata.cpu().numpy(),
-                "k*",
+                "ko",
                 label="Observed",
             )
 
@@ -5834,7 +5834,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             x_fine_tmp = torch.cat((x_fine_transformed[:, None], vals[:, None]), dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), "b")
+            ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(),
+                    "b", label = "Mean")
 
             lower, upper = observed_pred.confidence_region()
             ax.fill_between(
@@ -5842,6 +5843,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 lower.cpu().numpy(),
                 upper.cpu().numpy(),
                 alpha=0.5,
+                label = "Confidence"
             )
 
             # Plot training data as black stars (on top of model predictions)
@@ -5849,20 +5851,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.plot(
                 self.xdata[self.xdata[:, 1] == val, 0],
                 y_data_for_val,
-if self.yerr is not None:
-    ax.errorbar(
-    self.xdata[self.xdata[:, 1] == val, 0],
-    y_data_for_val,
-    yerr = self.yerr,
-    fmt = "k*",
-)
-else:
-    ax.plot(
-    self.xdata[self.xdata[:, 1] == val, 0],
-    y_data_for_val,
-    "k*",
-            )
-            ax.legend(["Mean", "Confidence", "Observed Data"])
+            if self.yerr is not None:
+                ax.errorbar(
+                    self.xdata[self.xdata[:, 1] == val, 0],
+                    y_data_for_val,
+                    yerr = self.yerr,
+                    fmt = "ko",
+                    label = "Observed Data"
+                )
+            else:
+                ax.plot(
+                    self.xdata[self.xdata[:, 1] == val, 0],
+                    y_data_for_val,
+                    "ko",
+                    label = "Observed Data"
+                )
+            ax.legend()
 
             ax.set_ylabel("y")
             ax.set_xlabel("x")
