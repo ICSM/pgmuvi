@@ -98,12 +98,42 @@ class TestBandAttribute2D(unittest.TestCase):
             Lightcurve(x, y, yerr=yerr, band=[["V", "R"]])
 
 
-class TestBandFromCsvNumeric(unittest.TestCase):
-    """from_csv with numeric wavelength column: band is None unless provided."""
+class TestBandFromCsvNumericWavelength(unittest.TestCase):
+    """from_csv with a numeric 'wavelength' column: 2-D xdata, band=None."""
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp()
-        csv_path = os.path.join(self._tmpdir, "lc_num.csv")
+        csv_path = os.path.join(self._tmpdir, "lc_num_wl.csv")
+        with open(csv_path, "w") as f:
+            f.write("time,wavelength,flux,err\n")
+            for i in range(5):
+                f.write(f"{float(i)},550.0,{float(i)},0.1\n")
+            for i in range(5):
+                f.write(f"{float(i)},650.0,{float(i)},0.1\n")
+        self._csv_path = csv_path
+
+    def test_numeric_wavelength_col_2d(self):
+        """Numeric 'wavelength' column → 2-D xdata, band stays None."""
+        lc = Lightcurve.from_csv(self._csv_path)
+        self.assertIsNone(lc.band)
+        self.assertEqual(lc.ndim, 2)
+
+    def test_explicit_band_kwarg_still_works(self):
+        """Callers can pass band= explicitly alongside a numeric wavelength col."""
+        lc = Lightcurve.from_csv(self._csv_path, band=["A", "B"])
+        np.testing.assert_array_equal(lc.band, np.array(["A", "B"]))
+
+
+class TestBandFromCsvNumericBandColNotWavelength(unittest.TestCase):
+    """A column named 'band' with numeric values is NOT a wavelength column.
+
+    'band' is in _WAVELENGTH_ID_COLUMN_NAMES, not _WAVELENGTH_COLUMN_NAMES,
+    so it is never used for xdata[:, 1] by auto-detection.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        csv_path = os.path.join(self._tmpdir, "lc_num_band.csv")
         with open(csv_path, "w") as f:
             f.write("time,band,flux,err\n")
             for i in range(5):
@@ -112,20 +142,20 @@ class TestBandFromCsvNumeric(unittest.TestCase):
                 f.write(f"{float(i)},2.0,{float(i)},0.1\n")
         self._csv_path = csv_path
 
-    def test_numeric_band_col_no_labels(self):
-        """Numeric wavelength column → xdata is 2-D, band stays None."""
+    def test_numeric_band_col_gives_1d(self):
+        """Numeric 'band' col is not in _WAVELENGTH_COLUMN_NAMES → 1-D lightcurve."""
         lc = Lightcurve.from_csv(self._csv_path)
         self.assertIsNone(lc.band)
-        self.assertEqual(lc.ndim, 2)
-
-    def test_explicit_band_kwarg_still_works(self):
-        """Callers can still pass band= explicitly with a numeric wavelength col."""
-        lc = Lightcurve.from_csv(self._csv_path, band=["A", "B"])
-        np.testing.assert_array_equal(lc.band, np.array(["A", "B"]))
+        self.assertEqual(lc.ndim, 1)
 
 
-class TestBandFromCsvStringLabels(unittest.TestCase):
-    """from_csv auto-ingests string band labels and maps them to indices."""
+class TestBandFromCsvStringBandNoWavelength(unittest.TestCase):
+    """String band-ID column without a numeric wavelength → 1-D lightcurve.
+
+    The float wavelength column (from _WAVELENGTH_COLUMN_NAMES) is required
+    to create a 2-D lightcurve.  A string band-ID column alone produces a
+    1-D lightcurve with band=None (not auto-populated for 1-D data).
+    """
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp()
@@ -138,32 +168,18 @@ class TestBandFromCsvStringLabels(unittest.TestCase):
                 f.write(f"{float(i)},R,{float(i)},0.1\n")
         self._csv_path = csv_path
 
-    def test_string_band_auto_ingested(self):
-        """String band column is auto-detected and stored in lc.band."""
+    def test_string_band_no_wavelength_is_1d(self):
+        """String 'band' column without numeric wavelength → 1-D lightcurve."""
         lc = Lightcurve.from_csv(self._csv_path)
-        self.assertIsNotNone(lc.band)
-        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+        self.assertEqual(lc.ndim, 1)
 
-    def test_string_band_2d_xdata(self):
-        """String band column produces 2-D xdata."""
+    def test_string_band_no_auto_populate_for_1d(self):
+        """band is NOT auto-populated for 1-D lightcurves."""
         lc = Lightcurve.from_csv(self._csv_path)
-        self.assertEqual(lc.ndim, 2)
+        self.assertIsNone(lc.band)
 
-    def test_string_band_indices_are_floats(self):
-        """The wavelength axis (xdata[:,1]) contains 0-based float indices."""
-        lc = Lightcurve.from_csv(self._csv_path)
-        unique_wl = lc.xdata[:, 1].unique()
-        np.testing.assert_array_almost_equal(
-            unique_wl.numpy(), [0.0, 1.0]
-        )
-
-    def test_string_band_explicit_kwarg_overrides(self):
-        """Caller-provided band= takes precedence over auto-detection."""
-        lc = Lightcurve.from_csv(self._csv_path, band=["g", "r"])
-        np.testing.assert_array_equal(lc.band, np.array(["g", "r"]))
-
-    def test_single_string_band_is_1d(self):
-        """A string band column with only one unique value → 1-D lightcurve."""
+    def test_single_string_band_still_1d(self):
+        """A string band column with one unique value → 1-D, band=None."""
         csv_path = os.path.join(self._tmpdir, "lc_single.csv")
         with open(csv_path, "w") as f:
             f.write("time,band,flux\n")
@@ -171,17 +187,60 @@ class TestBandFromCsvStringLabels(unittest.TestCase):
                 f.write(f"{float(i)},V,{float(i)}\n")
         lc = Lightcurve.from_csv(csv_path)
         self.assertEqual(lc.ndim, 1)
-        np.testing.assert_array_equal(lc.band, np.array(["V"]))
+        self.assertIsNone(lc.band)
+
+
+class TestBandFromCsvBothColumnsIndependent(unittest.TestCase):
+    """Numeric wavelength AND string band-ID columns are populated independently.
+
+    When a CSV has both a numeric wavelength column (for xdata[:,1]) and a
+    string band-ID column (for lc.band), both are used independently.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        csv_path = os.path.join(self._tmpdir, "lc_both.csv")
+        with open(csv_path, "w") as f:
+            f.write("time,wavelength,band,flux\n")
+            for i in range(5):
+                f.write(f"{float(i)},550.0,V,{float(i)}\n")
+            for i in range(5):
+                f.write(f"{float(i)},650.0,R,{float(i)}\n")
+        self._csv_path = csv_path
+
+    def test_both_2d_xdata(self):
+        """Numeric 'wavelength' column → 2-D xdata."""
+        lc = Lightcurve.from_csv(self._csv_path)
+        self.assertEqual(lc.ndim, 2)
+
+    def test_both_band_populated(self):
+        """String 'band' column → lc.band populated independently."""
+        lc = Lightcurve.from_csv(self._csv_path)
+        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+
+    def test_numeric_wavelength_in_xdata(self):
+        """xdata[:,1] contains the numeric wavelength values, not indices."""
+        lc = Lightcurve.from_csv(self._csv_path)
+        unique_wl = lc.xdata[:, 1].unique().sort().values
+        np.testing.assert_array_almost_equal(unique_wl.numpy(), [550.0, 650.0])
+
+    def test_explicit_band_kwarg_overrides_auto(self):
+        """Caller-provided band= takes precedence over auto-detection."""
+        lc = Lightcurve.from_csv(self._csv_path, band=["g", "r"])
+        np.testing.assert_array_equal(lc.band, np.array(["g", "r"]))
 
 
 class TestWavelengthIdColumnNames(unittest.TestCase):
     """_WAVELENGTH_ID_COLUMN_NAMES is used for string band-ID auto-detection."""
 
-    def _write_csv(self, path, header, bands):
+    def _write_csv(self, path, band_col_name, bands):
+        """Write a CSV with a numeric 'wavelength' column AND a string band-ID col."""
+        unique = list(dict.fromkeys(bands))
         with open(path, "w") as f:
-            f.write(f"time,{header},flux\n")
+            f.write(f"time,wavelength,{band_col_name},flux\n")
             for i, b in enumerate(bands):
-                f.write(f"{float(i)},{b},{float(i)}\n")
+                wl = float(unique.index(b) + 1)
+                f.write(f"{float(i)},{wl},{b},{float(i)}\n")
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp()
@@ -207,11 +266,9 @@ class TestWavelengthIdColumnNames(unittest.TestCase):
         lc = Lightcurve.from_csv(path)
         np.testing.assert_array_equal(lc.band, np.array(["W1", "W2"]))
 
-    def test_numeric_wavelength_takes_priority_over_band_id(self):
-        """Numeric wavelength column is found via _WAVELENGTH_COLUMN_NAMES before
-        _WAVELENGTH_ID_COLUMN_NAMES is checked."""
-        # CSV has both 'wavelength' (numeric) and 'band' (string) columns;
-        # wavelength should be used for xdata and band for lc.band.
+    def test_numeric_wavelength_and_string_band_id_are_independent(self):
+        """Numeric wavelength (xdata[:,1]) and string band-ID (lc.band) are
+        populated independently when both columns are present."""
         path = os.path.join(self._tmpdir, "both.csv")
         with open(path, "w") as f:
             f.write("time,wavelength,band,flux\n")
@@ -219,12 +276,24 @@ class TestWavelengthIdColumnNames(unittest.TestCase):
                 b = "V" if i < 2 else "R"
                 wl = 550.0 if i < 2 else 650.0
                 f.write(f"{float(i)},{wl},{b},{float(i)}\n")
-        # 'wavelength' is in _WAVELENGTH_COLUMN_NAMES → picked first.
-        # 'band' is a separate string column; because wavelcol already resolved,
-        # only the wavelcol column is used for xdata (numeric wavelength).
         lc = Lightcurve.from_csv(path)
+        # Numeric wavelength column → 2-D xdata
         self.assertEqual(lc.ndim, 2)
-        # Numeric wavelength → no auto band labels
+        # String band-ID column → lc.band populated independently
+        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+
+    def test_string_band_id_col_not_used_for_xdata(self):
+        """String band-ID column alone (no numeric wavelength) → 1-D, band=None."""
+        path = os.path.join(self._tmpdir, "id_only.csv")
+        with open(path, "w") as f:
+            f.write("time,band,flux\n")
+            for i in range(4):
+                b = "V" if i < 2 else "R"
+                f.write(f"{float(i)},{b},{float(i)}\n")
+        lc = Lightcurve.from_csv(path)
+        # No numeric wavelength column → 1-D
+        self.assertEqual(lc.ndim, 1)
+        # band not auto-populated for 1-D
         self.assertIsNone(lc.band)
 
     def test_band_id_names_not_in_wavelength_column_names(self):
@@ -276,6 +345,7 @@ class TestWavelengthIdColumnNamesFromTable(unittest.TestCase):
         np.testing.assert_array_equal(lc.band, np.array(["W1", "W2"]))
 
 
+class TestBandFromTable(unittest.TestCase):
     """from_table ingests string band labels when xdata is 2-D (multiband)."""
 
     def _make_table_2d(self, band_values=None):

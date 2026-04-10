@@ -524,40 +524,40 @@ class InputHelpers:
             resulting ``xdata`` is a 1-D tensor of shape ``(N,)``.
 
         **2-D (multiband) lightcurves**
-            When the CSV contains a wavelength or band column with more than
+            When the CSV contains a *numeric* wavelength column with more than
             one unique value, the resulting ``xdata`` has shape ``(N, 2)``
             where column 0 holds the time values and column 1 holds the
-            wavelength/band values.  The ``ydata`` (and optional ``yerr``)
+            numeric wavelength values.  The ``ydata`` (and optional ``yerr``)
             remain 1-D tensors of shape ``(N,)``.
 
-            The wavelength/band column is selected in one of three ways:
+            The numeric wavelength column is selected in one of three ways:
 
             1. *Explicit ``xcol`` list*: pass ``xcol`` as a list of two
-               column names, e.g. ``xcol=["time", "band"]``.  The first
-               element is the time column and the second is the
-               wavelength/band column.  All subsequent x-axis columns are
-               stacked in the order given.
+               column names, e.g. ``xcol=["time", "wavelength"]``.  The first
+               element is the time column and the second is the wavelength
+               column.  All subsequent x-axis columns are stacked in the
+               order given.
             2. *Explicit ``wavelcol``*: pass the column name as a separate
                ``wavelcol`` keyword argument.
             3. *Auto-detection*: if neither an iterable ``xcol`` nor a
-               ``wavelcol`` is supplied, the method first searches for a
-               column whose name matches one of the entries in
-               :attr:`_WAVELENGTH_COLUMN_NAMES` (numeric wavelength columns
-               such as ``"wavelength"``, ``"wl"``); if no match is found it
-               then falls back to :attr:`_WAVELENGTH_ID_COLUMN_NAMES`
-               (string band-identifier columns such as ``"band"``,
-               ``"filter"``).  If a matching column is found *and* it
-               contains more than one unique value, a 2-D lightcurve is
-               returned automatically.
+               ``wavelcol`` is supplied, the method searches for a column
+               whose name matches one of the entries in
+               :attr:`_WAVELENGTH_COLUMN_NAMES` (e.g. ``"wavelength"``,
+               ``"wl"``).  If such a column is found and contains more than
+               one unique value, a 2-D lightcurve is returned automatically.
 
         **Band labels**
-            If the wavelength/band column contains *string* values (e.g.
-            ``"V"``, ``"R"``, ``"W1"``), the unique labels are automatically
-            stored in :attr:`Lightcurve.band` and the column values are
-            mapped to integer indices (``0.0, 1.0, …``) for the numeric
-            ``xdata[:, 1]`` axis.  Numeric wavelength columns are used
-            directly and :attr:`Lightcurve.band` is left as ``None`` unless
-            the caller provides ``band=`` explicitly in ``**kwargs``.
+            String band-identifier columns (e.g. one named ``"band"`` or
+            ``"filter"`` containing values like ``"V"``, ``"R"``) are
+            resolved *independently* of the numeric wavelength column.  When
+            the CSV contains a string-typed column whose name matches one of
+            the entries in :attr:`_WAVELENGTH_ID_COLUMN_NAMES` **and** the
+            resulting lightcurve is 2-D, the unique labels are stored
+            automatically in :attr:`Lightcurve.band`.  For 1-D lightcurves,
+            ``band`` is left as ``None`` unless supplied explicitly via
+            ``**kwargs``.  Numeric wavelength columns are used directly and
+            :attr:`Lightcurve.band` is left as ``None`` unless the caller
+            provides ``band=`` explicitly in ``**kwargs``.
 
         Parameters
         ----------
@@ -660,8 +660,10 @@ class InputHelpers:
             )
 
         # ------------------------------------------------------------------
-        # Resolve the x (time + optional band) columns
+        # Resolve the x (time + optional numeric wavelength) columns.
+        # The string band-ID column is resolved independently below.
         # ------------------------------------------------------------------
+        band_id_col = None  # set in the else branch when applicable
         if isinstance(xcol, list):
             # Explicit multi-column x specification
             for col in xcol:
@@ -673,9 +675,9 @@ class InputHelpers:
             # Build NaN mask across all columns before stacking
             xcol_names = xcol
         else:
-            # Resolve wavelength/band column (explicit or auto-detected).
-            # Try numeric wavelength names first; fall back to string band-ID
-            # names so that columns like "band" or "filter" are still found.
+            # Resolve numeric wavelength column for xdata[:, 1].
+            # Only _WAVELENGTH_COLUMN_NAMES is consulted; string band-ID
+            # columns are handled separately and independently.
             if wavelcol is not None:
                 # Explicit: validate it exists before proceeding.
                 if wavelcol not in columns:
@@ -685,10 +687,12 @@ class InputHelpers:
                     )
             else:
                 wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
-                if wavelcol is None:
-                    wavelcol = cls._find_column(
-                        columns, cls._WAVELENGTH_ID_COLUMN_NAMES
-                    )
+
+            # Independently resolve string band-ID column for lc.band.
+            # This is always attempted, regardless of whether a numeric
+            # wavelength column was found.
+            band_id_col = cls._find_column(columns, cls._WAVELENGTH_ID_COLUMN_NAMES)
+
             xcol_names = [xcol] + ([wavelcol] if wavelcol is not None else [])
 
         # ------------------------------------------------------------------
@@ -765,21 +769,30 @@ class InputHelpers:
             time_tensor = _to_float_tensor(clean[xcol])
             if wavelcol is not None:
                 if _is_str_col(wavelcol):
-                    # String band column: map labels to float indices.
+                    # Explicitly-provided string wavelcol: map labels → indices.
                     wave_tensor, band_labels = _str_col_to_wave(clean[wavelcol])
                     if "band" not in kwargs:
                         kwargs["band"] = band_labels
                 else:
                     wave_tensor = _to_float_tensor(clean[wavelcol])
-                    band_labels = None
                 if wave_tensor.unique().numel() > 1:
-                    # Multiple wavelengths/bands → 2-D lightcurve
+                    # Multiple wavelengths → 2-D lightcurve
                     x = torch.stack([time_tensor, wave_tensor], dim=1)
                 else:
                     # Single wavelength → treat as 1-D
                     x = time_tensor
             else:
                 x = time_tensor
+
+            # Independently populate band from the string band-ID column.
+            # Only auto-populate when xdata is 2-D, matching from_table
+            # behaviour (band with multiple labels is meaningless for 1-D).
+            if x.dim() == 2 and "band" not in kwargs and band_id_col is not None:
+                if _is_str_col(band_id_col):
+                    str_vals = np.asarray(clean[band_id_col], dtype=np.str_)
+                    kwargs["band"] = np.array(
+                        list(dict.fromkeys(str_vals.tolist())), dtype=np.str_
+                    )
 
         y = _to_float_tensor(clean[ycol])
         yerr = _to_float_tensor(clean[yerrcol]) if yerrcol else None
