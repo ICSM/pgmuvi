@@ -355,11 +355,17 @@ class InputHelpers:
         Candidate column names used for auto-detecting the uncertainty column,
         checked case-insensitively in order.
     _WAVELENGTH_COLUMN_NAMES : list of str
-        Candidate column names used for auto-detecting the wavelength or band
+        Candidate column names used for auto-detecting a *numeric* wavelength
         column, checked case-insensitively in order.  When such a column is
         found and contains more than one unique value, the data are loaded as
         a 2-D lightcurve whose ``xdata`` has shape ``(N, 2)`` with the time
-        values in column 0 and the wavelength/band values in column 1.
+        values in column 0 and the wavelength values in column 1.
+    _WAVELENGTH_ID_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting a *string* band
+        identifier column (e.g. ``"V"``, ``"R"``, ``"W1"``), checked
+        case-insensitively in order.  When such a column is found it is
+        ingested as the ``band`` attribute of the resulting
+        :class:`Lightcurve`.
     """
 
     _X_COLUMN_NAMES: ClassVar[list[str]] = [
@@ -390,11 +396,15 @@ class InputHelpers:
         "wave",
         "wl",
         "lambda",
-        "band",
-        "filter",
         "freq",
         "frequency",
         "channel",
+    ]
+    _WAVELENGTH_ID_COLUMN_NAMES: ClassVar[list[str]] = [
+        "band",
+        "filter",
+        "filtername",
+        "filter_name",
     ]
 
     @classmethod
@@ -530,11 +540,15 @@ class InputHelpers:
             2. *Explicit ``wavelcol``*: pass the column name as a separate
                ``wavelcol`` keyword argument.
             3. *Auto-detection*: if neither an iterable ``xcol`` nor a
-               ``wavelcol`` is supplied, the method searches for a column
-               whose name matches one of the entries in
-               :attr:`_WAVELENGTH_COLUMN_NAMES`.  If such a column is found
-               *and* it contains more than one unique value, a 2-D lightcurve
-               is returned automatically.
+               ``wavelcol`` is supplied, the method first searches for a
+               column whose name matches one of the entries in
+               :attr:`_WAVELENGTH_COLUMN_NAMES` (numeric wavelength columns
+               such as ``"wavelength"``, ``"wl"``); if no match is found it
+               then falls back to :attr:`_WAVELENGTH_ID_COLUMN_NAMES`
+               (string band-identifier columns such as ``"band"``,
+               ``"filter"``).  If a matching column is found *and* it
+               contains more than one unique value, a 2-D lightcurve is
+               returned automatically.
 
         **Band labels**
             If the wavelength/band column contains *string* values (e.g.
@@ -659,10 +673,16 @@ class InputHelpers:
             # Build NaN mask across all columns before stacking
             xcol_names = xcol
         else:
-            # Resolve wavelength/band column (explicit or auto-detected)
+            # Resolve wavelength/band column (explicit or auto-detected).
+            # Try numeric wavelength names first; fall back to string band-ID
+            # names so that columns like "band" or "filter" are still found.
             if wavelcol is None:
                 wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
-            elif wavelcol not in columns:
+            if wavelcol is None:
+                wavelcol = cls._find_column(
+                    columns, cls._WAVELENGTH_ID_COLUMN_NAMES
+                )
+            if wavelcol is not None and wavelcol not in columns:
                 raise ValueError(
                     f"Column '{wavelcol}' not found in CSV. "
                     f"Available columns: {columns}"
@@ -1205,9 +1225,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             from this column and stored in :attr:`Lightcurve.band`.  If
             ``None`` (default), the method attempts to auto-detect a
             string-typed column whose name matches one of the entries in
-            :attr:`_WAVELENGTH_COLUMN_NAMES`; if found it is used as the
-            band-label column.  The ``band`` kwarg in ``kwargs`` always takes
-            precedence.
+            :attr:`_WAVELENGTH_ID_COLUMN_NAMES` (e.g. ``"band"``,
+            ``"filter"``); if found it is used as the band-label column.
+            The ``band`` kwarg in ``kwargs`` always takes precedence.
         kwargs:
             Arguments to be passed to the Lightcurve constructor, including
             ``time_units`` (str or ``astropy.units`` unit, default *None*).
@@ -1269,7 +1289,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if "band" not in kwargs and x.dim() == 2:
             # Prefer the explicit bandcol; fall back to auto-detection.
             if bandcol is None:
-                bandcol = cls._find_column(c, cls._WAVELENGTH_COLUMN_NAMES)
+                bandcol = cls._find_column(c, cls._WAVELENGTH_ID_COLUMN_NAMES)
             if bandcol is not None and bandcol in c:
                 col_data = np.asarray(data[bandcol])
                 col_dtype = col_data.dtype

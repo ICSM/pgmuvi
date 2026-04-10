@@ -174,7 +174,108 @@ class TestBandFromCsvStringLabels(unittest.TestCase):
         np.testing.assert_array_equal(lc.band, np.array(["V"]))
 
 
-class TestBandFromTable(unittest.TestCase):
+class TestWavelengthIdColumnNames(unittest.TestCase):
+    """_WAVELENGTH_ID_COLUMN_NAMES is used for string band-ID auto-detection."""
+
+    def _write_csv(self, path, header, bands):
+        with open(path, "w") as f:
+            f.write(f"time,{header},flux\n")
+            for i, b in enumerate(bands):
+                f.write(f"{float(i)},{b},{float(i)}\n")
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+
+    def test_filter_col_auto_detected(self):
+        """Column named 'filter' is auto-detected via _WAVELENGTH_ID_COLUMN_NAMES."""
+        path = os.path.join(self._tmpdir, "filter.csv")
+        self._write_csv(path, "filter", ["V", "V", "R", "R", "R"])
+        lc = Lightcurve.from_csv(path)
+        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+
+    def test_filtername_col_auto_detected(self):
+        """Column named 'filtername' is auto-detected via _WAVELENGTH_ID_COLUMN_NAMES."""
+        path = os.path.join(self._tmpdir, "filtername.csv")
+        self._write_csv(path, "filtername", ["g", "g", "r", "r"])
+        lc = Lightcurve.from_csv(path)
+        np.testing.assert_array_equal(lc.band, np.array(["g", "r"]))
+
+    def test_filter_name_col_auto_detected(self):
+        """Column named 'filter_name' is auto-detected via _WAVELENGTH_ID_COLUMN_NAMES."""
+        path = os.path.join(self._tmpdir, "filter_name.csv")
+        self._write_csv(path, "filter_name", ["W1", "W1", "W2", "W2"])
+        lc = Lightcurve.from_csv(path)
+        np.testing.assert_array_equal(lc.band, np.array(["W1", "W2"]))
+
+    def test_numeric_wavelength_takes_priority_over_band_id(self):
+        """Numeric wavelength column is found via _WAVELENGTH_COLUMN_NAMES before
+        _WAVELENGTH_ID_COLUMN_NAMES is checked."""
+        # CSV has both 'wavelength' (numeric) and 'band' (string) columns;
+        # wavelength should be used for xdata and band for lc.band.
+        path = os.path.join(self._tmpdir, "both.csv")
+        with open(path, "w") as f:
+            f.write("time,wavelength,band,flux\n")
+            for i in range(4):
+                b = "V" if i < 2 else "R"
+                wl = 550.0 if i < 2 else 650.0
+                f.write(f"{float(i)},{wl},{b},{float(i)}\n")
+        # 'wavelength' is in _WAVELENGTH_COLUMN_NAMES → picked first.
+        # 'band' is a separate string column; because wavelcol already resolved,
+        # only the wavelcol column is used for xdata (numeric wavelength).
+        lc = Lightcurve.from_csv(path)
+        self.assertEqual(lc.ndim, 2)
+        # Numeric wavelength → no auto band labels
+        self.assertIsNone(lc.band)
+
+    def test_band_id_names_not_in_wavelength_column_names(self):
+        """'band' and 'filter' are NOT in _WAVELENGTH_COLUMN_NAMES."""
+        self.assertNotIn("band", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+        self.assertNotIn("filter", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+
+    def test_band_id_names_content(self):
+        """_WAVELENGTH_ID_COLUMN_NAMES contains the required entries."""
+        for name in ("band", "filter", "filtername", "filter_name"):
+            self.assertIn(name, Lightcurve._WAVELENGTH_ID_COLUMN_NAMES)
+
+
+class TestWavelengthIdColumnNamesFromTable(unittest.TestCase):
+    """from_table auto-detects string band IDs via _WAVELENGTH_ID_COLUMN_NAMES."""
+
+    def _make_table_2d_with_filter(self, col_name, band_values):
+        from astropy.table import Table
+
+        t = list(range(len(band_values)))
+        wl = [1.0 if v == band_values[0] else 2.0 for v in band_values]
+        x2d = np.column_stack([t, wl])
+        return Table(
+            {
+                "x": x2d,
+                "y": [float(i) for i in range(len(band_values))],
+                col_name: band_values,
+            }
+        )
+
+    def test_filter_col_auto_detected(self):
+        """Column named 'filter' is auto-detected."""
+        tab = self._make_table_2d_with_filter("filter", ["V", "V", "R", "R"])
+        lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
+        np.testing.assert_array_equal(lc.band, np.array(["V", "R"]))
+
+    def test_filtername_col_auto_detected(self):
+        """Column named 'filtername' is auto-detected."""
+        tab = self._make_table_2d_with_filter("filtername", ["g", "g", "r", "r"])
+        lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
+        np.testing.assert_array_equal(lc.band, np.array(["g", "r"]))
+
+    def test_filter_name_col_auto_detected(self):
+        """Column named 'filter_name' is auto-detected."""
+        tab = self._make_table_2d_with_filter(
+            "filter_name", ["W1", "W1", "W2", "W2"]
+        )
+        lc = Lightcurve.from_table(tab, xcol="x", ycol="y")
+        np.testing.assert_array_equal(lc.band, np.array(["W1", "W2"]))
+
+
     """from_table ingests string band labels when xdata is 2-D (multiband)."""
 
     def _make_table_2d(self, band_values=None):

@@ -755,9 +755,12 @@ class TestFromCSV(unittest.TestCase):
         self.assertIn("magnitude", Lightcurve._Y_COLUMN_NAMES)
         self.assertIn("err", Lightcurve._YERR_COLUMN_NAMES)
         self.assertIn("wavelength", Lightcurve._WAVELENGTH_COLUMN_NAMES)
-        self.assertIn("band", Lightcurve._WAVELENGTH_COLUMN_NAMES)
-        self.assertIn("filter", Lightcurve._WAVELENGTH_COLUMN_NAMES)
         self.assertIn("wave", Lightcurve._WAVELENGTH_COLUMN_NAMES)
+        # "band" and "filter" were moved to _WAVELENGTH_ID_COLUMN_NAMES
+        self.assertIn("band", Lightcurve._WAVELENGTH_ID_COLUMN_NAMES)
+        self.assertIn("filter", Lightcurve._WAVELENGTH_ID_COLUMN_NAMES)
+        self.assertIn("filtername", Lightcurve._WAVELENGTH_ID_COLUMN_NAMES)
+        self.assertIn("filter_name", Lightcurve._WAVELENGTH_ID_COLUMN_NAMES)
 
     # ------------------------------------------------------------------
     # 2D / multiband lightcurve tests
