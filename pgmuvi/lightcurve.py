@@ -5849,7 +5849,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.plot(
                 self.xdata[self.xdata[:, 1] == val, 0],
                 y_data_for_val,
-                "k*",
+if self.yerr is not None:
+    ax.errorbar(
+    self.xdata[self.xdata[:, 1] == val, 0],
+    y_data_for_val,
+    yerr = self.yerr,
+    fmt = "k*",
+)
+else:
+    ax.plot(
+    self.xdata[self.xdata[:, 1] == val, 0],
+    y_data_for_val,
+    "k*",
             )
             ax.legend(["Mean", "Confidence", "Observed Data"])
 
