@@ -865,6 +865,7 @@ class PeriodSummaryResult:
         kernel_family="",
         time_kernel_family="",
         has_stochastic_background=False,
+        q_factor=None,
     ):
         self.method = method
         self.model_name = model_name
@@ -877,6 +878,7 @@ class PeriodSummaryResult:
         self.n_peaks_requested = n_peaks_requested
         self.dominant_period = dominant_period
         self.dominant_frequency = dominant_frequency
+        self.q_factor = q_factor
         # Sort peaks once by descending significance so that peaks[0] is
         # always the highest-significance peak regardless of insertion order.
         # Sort key: (1) descending area_fraction (NaN sorts last),
@@ -933,7 +935,8 @@ class PeriodSummaryResult:
         dominant_frequency = (
             primary.frequency if primary is not None else self.dominant_frequency
         )
-        significant_periods = np.array([p.period for p in self.peaks])
+        _sig_peaks = self.get_significant_peaks()
+        significant_periods = np.array([p.period for p in _sig_peaks])
 
         return {
             "component_diagnostics": (
@@ -949,11 +952,11 @@ class PeriodSummaryResult:
             "period_interval_fwhm_like": primary_interval,
             "period_interval": primary_interval,
             "interval_definition": self.interval_definition,
-            "q_factor": None,
+            "q_factor": self.q_factor,
             "peak_fraction": primary_area,
             "n_peaks": len(self.peaks),
             "n_peaks_detected": self.n_peaks_detected,
-            "n_significant_peaks": len(self.get_significant_peaks()),
+            "n_significant_peaks": len(_sig_peaks),
             "significant_periods": significant_periods,
             "peaks": [p.as_dict() for p in self.peaks],
             "method": self.method,
@@ -1402,7 +1405,7 @@ class PeriodSummaryResult:
         if not include_psd or d.get("freq_grid") is None:
             d = {**d, "freq_grid": None, "psd": None}
         data = self._json_serialize(d)
-        with open(filename, "w") as fh:
+        with open(filename, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, allow_nan=False)
 
 
@@ -6088,6 +6091,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         period_lo = ep["period_lo"]
         period_hi = ep["period_hi"]
         raw_rbf_ls = ep["raw_rbf_lengthscale"]
+        q_factor = ep["q_factor"]
 
         if raw_rbf_ls is not None:
             interval_def = "coherence_proxy_from_rbf_lengthscale"
@@ -6149,6 +6153,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             psd=None,
             notes=notes,
             interval_definition=interval_def,
+            q_factor=q_factor,
         )
 
     def _get_periodic_plus_stochastic_summary(self):
@@ -7062,7 +7067,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         peak_threshold_rel : float, optional
             Relative height threshold for significant peak detection.
         uncertainty : str, optional
-            ``"peak_width"`` (legacy) or ``"peak_mass"`` (recommended).
+            Uncertainty method.  Only ``"peak_mass"`` is supported
+            (``"peak_width"`` raises ``NotImplementedError``).
         n_peaks : int or None, optional
             Number of peaks to analyse.  If ``None``, defaults to the
             effective number of mixtures used at fit time.
@@ -7140,8 +7146,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             n_peaks_to_analyze = (
                 int(n_eff) if n_eff is not None else len(all_peak_indices)
             )
-        n_peaks_detected = len(all_peak_indices)
-        n_peaks_to_analyze = min(n_peaks_to_analyze, n_peaks_detected)
+        n_peaks_available = len(all_peak_indices)
+        n_peaks_to_analyze = min(n_peaks_to_analyze, n_peaks_available)
 
         selected_indices = all_peak_indices[:n_peaks_to_analyze]
         selected_proms = all_prominences[:n_peaks_to_analyze]
@@ -7247,9 +7253,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         notes = _sm_psd_note + "".join(_note_parts)
 
         if uncertainty == "peak_width":
-            _interval_def = "half_maximum_fwhm_like"
-        else:
-            _interval_def = "peak_centered_68pct_mass_interval"
+            raise NotImplementedError(
+                "uncertainty='peak_width' is not implemented for the "
+                "spectral_mixture backend because the reported interval is "
+                "still computed using the peak-centered mass method.  "
+                "Use uncertainty='peak_mass' instead."
+            )
+        _interval_def = "peak_centered_68pct_mass_interval"
 
         _kf = self._kernel_family_name(
             getattr(self.model, "sci_kernel", None)
@@ -7363,13 +7373,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Relative height threshold for significant peaks (SM backend).
             Default 0.2.
         uncertainty : str, optional
-            Uncertainty method.  ``"peak_width"`` (legacy) uses the
-            half-maximum interval of the dominant PSD peak.  ``"peak_mass"``
-            (default, recommended for spectral-mixture models) uses an
-            equal-tail 68% mass interval within the dominant peak basin,
-            which is more robust for asymmetric or slowly decaying peaks.
-            Only the SM backend and separable-2D SM backends honour this
-            parameter; other backends always use their native interval method.
+            Uncertainty method.  Only ``"peak_mass"`` is supported for the
+            spectral-mixture backend (``"peak_width"`` raises
+            ``NotImplementedError``).  Non-SM backends always use their
+            native interval method and ignore this parameter.  Default
+            ``"peak_mass"``.
         n_peaks : int or None, optional
             Number of peaks to analyze and return in ``peaks``.  If ``None``
             (default), defaults to ``_fit_num_mixtures_effective`` when that
@@ -7420,7 +7428,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         NotImplementedError
             If an unsupported ``uncertainty`` method is requested.
         """
-        _sm_uncertainties = {"peak_width", "peak_mass"}
+        _sm_uncertainties = {"peak_mass"}
         if uncertainty not in _sm_uncertainties:
             raise NotImplementedError(
                 f"uncertainty='{uncertainty}' is not yet implemented. "
@@ -7997,7 +8005,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Returns
         -------
         pathlib.Path
-            Absolute path to the saved figure file.
+            Path to the saved figure file (same as *filename* as a
+            ``pathlib.Path``; may be relative).
         """
         from pathlib import Path
 

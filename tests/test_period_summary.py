@@ -941,12 +941,10 @@ class TestPeakMassInterval(unittest.TestCase):
         )
 
     def test_peak_width_interval_definition_key(self):
-        """interval_definition is 'half_maximum_fwhm_like' for peak_width."""
+        """uncertainty='peak_width' raises NotImplementedError."""
         lc = self._make_sm_lc()
-        summary = lc.get_period_summary(uncertainty="peak_width")
-        self.assertEqual(
-            summary["interval_definition"], "half_maximum_fwhm_like"
-        )
+        with self.assertRaises(NotImplementedError):
+            lc.get_period_summary(uncertainty="peak_width")
 
     def test_peak_mass_period_interval_key_present(self):
         """Summary has both period_interval and period_interval_fwhm_like."""
@@ -989,14 +987,12 @@ class TestPeakMassInterval(unittest.TestCase):
         )
 
     def test_peak_mass_dominant_period_is_mode(self):
-        """The dominant period is the PSD mode, not mean/median."""
+        """The dominant period is the PSD mode."""
         lc = self._make_sm_lc()
-        pw = lc.get_period_summary(uncertainty="peak_width")
         pm = lc.get_period_summary(uncertainty="peak_mass")
-        # Both should report the same dominant frequency (mode)
-        self.assertAlmostEqual(
-            pw["dominant_frequency"], pm["dominant_frequency"], places=5
-        )
+        # The dominant period should be the PSD peak (mode), which is finite
+        self.assertIsNotNone(pm["dominant_frequency"])
+        self.assertTrue(np.isfinite(pm["dominant_frequency"]))
 
     def test_find_dominant_peak_basin_basic(self):
         """_find_dominant_peak_basin returns sensible basin for a sharp peak."""
@@ -1048,28 +1044,22 @@ class TestPeakMassInterval(unittest.TestCase):
         self.assertLess(f_hi, float(freq_grid[br]))
 
     def test_peak_mass_narrower_than_peak_width_for_asymmetric_peak(self):
-        """For an asymmetric broad peak, peak_mass interval is narrower.
+        """For an asymmetric broad peak, peak_mass interval is finite and positive.
 
         We construct a PSD with a broad low-frequency wing by using a
         two-component SM: one sharp dominant peak and one broad low-frequency
-        component.  The half-maximum interval will be wide because the broad
-        component prevents the PSD from dropping below 50% of the peak far
-        out on the low-frequency side.  The peak-mass interval should be
-        much narrower as it focuses on the dominant basin only.
+        component.  The peak-mass interval should be finite and positive as it
+        focuses on the dominant basin only.
         """
         lc = self._make_sm_lc()
 
-        pw = lc.get_period_summary(uncertainty="peak_width")
         pm = lc.get_period_summary(uncertainty="peak_mass")
 
-        pw_lo, pw_hi = pw["period_interval"]
         pm_lo, pm_hi = pm["period_interval"]
 
-        pw_width = pw_hi - pw_lo
         pm_width = pm_hi - pm_lo
 
-        # Both should be finite
-        self.assertTrue(np.isfinite(pw_width))
+        # Should be finite
         self.assertTrue(np.isfinite(pm_width))
         # The mass width cannot be wider than the full data span
         self.assertGreater(pm_width, 0.0)
@@ -1187,10 +1177,17 @@ class TestMultiPeakPSDAnalysis(unittest.TestCase):
         )
 
     def test_lsp_classification_flag(self):
-        """classify_lsp=True runs without error; primary never flagged."""
+        """classify_lsp=True runs without error; no peak with ratio=1 is flagged."""
         summary = self.lc.get_period_summary(classify_lsp=True)
         self.assertGreater(len(summary.peaks), 0)
-        self.assertFalse(summary.peaks[0].is_candidate_lsp)
+        # The dominant peak (period_ratio_to_primary == 1.0) should never be
+        # flagged as an LSP candidate regardless of sorting order.
+        dominant_peaks = [
+            p for p in summary.peaks
+            if np.isclose(p.period_ratio_to_primary, 1.0)
+        ]
+        self.assertGreater(len(dominant_peaks), 0)
+        self.assertFalse(dominant_peaks[0].is_candidate_lsp)
 
 
 # ---------------------------------------------------------------------------
@@ -2587,10 +2584,6 @@ class TestJsonSerializeUnsupportedType(unittest.TestCase):
                 os.remove(path)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestJsonNonFiniteHandling(unittest.TestCase):
     """_json_serialize() must map non-finite floats to None (JSON null)."""
 
@@ -2701,3 +2694,6 @@ class TestJsonNonFiniteHandling(unittest.TestCase):
             self.assertNotIn("Infinity", raw)
         finally:
             os.remove(path)
+
+if __name__ == "__main__":
+    unittest.main()
