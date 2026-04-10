@@ -1073,10 +1073,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     _band_str = ", ".join(
                         f"\u03bb={b}" for b in subsampled_bands
                     )
+                    _struct_lines = "\n".join(
+                        f"    \u03bb={bval}: {len(keep)} points"
+                        for bval, keep in zip(unique_bands, global_keep, strict=True)
+                    )
                     _msg = (
                         f"The following bands exceed max_samples={max_samples}"
                         f" and were randomly subsampled: {_band_str}. "
-                        "Set max_samples=None to disable subsampling."
+                        "Set max_samples=None to disable subsampling.\n"
+                        "The subsampled 2D light curve has the following "
+                        f"structure:\n{_struct_lines}"
                     )
                     warnings.warn(_msg, UserWarning, stacklevel=2)
                     idx = np.sort(np.concatenate(global_keep))
