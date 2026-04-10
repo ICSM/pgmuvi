@@ -168,16 +168,10 @@ class TestSelectBandsErrors(unittest.TestCase):
         self.assertIsNone(result.band)
 
     def test_empty_selector_returns_empty(self):
-        """An empty selection list should return a zero-row lightcurve.
-
-        Note: this will raise ValueError inside Lightcurve.__init__ because
-        _ensure_dim rejects single-element tensors. We test the specific
-        empty-match case by checking it is either empty or raises a clear
-        error about having no data.
-        """
+        """Selecting a non-existent band raises ValueError (no rows match)."""
         lc = _make_2d()
-        # "Z" is not in the data — no rows match.
-        with self.assertRaises((ValueError, RuntimeError)):
+        # "Z" is not in the data — no rows match → ValueError from __init__.
+        with self.assertRaises(ValueError):
             lc.select_bands(["Z"])
 
 

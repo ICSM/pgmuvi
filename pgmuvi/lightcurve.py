@@ -938,11 +938,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ``fvar_min``, ``stetson_k_min``).  Only used when
             *check_variability* is ``True``.
         band : array-like of str or None, optional
-            Optional labels for the wavelength entries in a 2-D light curve.
-            Each element should be a string identifier (e.g. ``"V"``,
-            ``"R"``, ``"W1"``).  The length must match the number of unique
-            wavelength values.  ``None`` (default) means no band labels are
-            stored.
+            Optional per-row labels for a 2-D light curve.  Each element
+            should be a string identifier (e.g. ``"V"``, ``"R"``,
+            ``"W1"``).  The length must match the number of observation rows
+            (``len(band) == len(xdata)`` for 2-D data, or 1 for 1-D data).
+            ``None`` (default) means no band labels are stored.
         """
         super().__init__()
 
@@ -1000,13 +1000,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Determine the expected length: one label per observation row for
             # 2-D data, or 1 for 1-D data (single-band lightcurve).
             if self.ndim > 1:
-                n_bands = len(self._xdata_raw)
+                n_rows = len(self._xdata_raw)
             else:
-                n_bands = 1
-            if len(band_arr) != n_bands:
+                n_rows = 1
+            if len(band_arr) != n_rows:
                 raise ValueError(
                     f"Length of 'band' ({len(band_arr)}) does not match the "
-                    f"expected number of bands ({n_bands})."
+                    f"expected number of rows ({n_rows})."
                 )
             self.band = band_arr
 
