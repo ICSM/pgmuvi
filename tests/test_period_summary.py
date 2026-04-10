@@ -1182,12 +1182,12 @@ class TestMultiPeakPSDAnalysis(unittest.TestCase):
         self.assertGreater(len(summary.peaks), 0)
         # The dominant peak (period_ratio_to_primary == 1.0) should never be
         # flagged as an LSP candidate regardless of sorting order.
-        dominant_peaks = [
-            p for p in summary.peaks
-            if np.isclose(p.period_ratio_to_primary, 1.0)
-        ]
-        self.assertGreater(len(dominant_peaks), 0)
-        self.assertFalse(dominant_peaks[0].is_candidate_lsp)
+        dominant_peak = next(
+            (p for p in summary.peaks if np.isclose(p.period_ratio_to_primary, 1.0)),
+            None,
+        )
+        self.assertIsNotNone(dominant_peak)
+        self.assertFalse(dominant_peak.is_candidate_lsp)
 
 
 # ---------------------------------------------------------------------------

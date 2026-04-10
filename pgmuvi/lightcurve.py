@@ -7256,7 +7256,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise NotImplementedError(
                 "uncertainty='peak_width' is not implemented for the "
                 "spectral_mixture backend because the reported interval is "
-                "still computed using the peak-centered mass method.  "
+                "still computed using the peak-centered mass method. "
                 "Use uncertainty='peak_mass' instead."
             )
         _interval_def = "peak_centered_68pct_mass_interval"
