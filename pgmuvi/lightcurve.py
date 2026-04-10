@@ -1466,7 +1466,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def append_data(self, new_values_x, new_values_y):
         pass
 
-    def select_bands(self, bands):
+    def select_bands(
+        self, bands: list | tuple | np.ndarray
+    ) -> "Lightcurve":
         """Return a new Lightcurve containing only the requested bands.
 
         Parameters
@@ -1477,9 +1479,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             * A **string** — matched against :attr:`band` (the per-row string
               label array).  Requires that :attr:`band` is not ``None``.
             * A **float** or **int** — matched against ``xdata[:, 1]`` (the
-              numeric wavelength column).  Exact equality is used.
+              numeric wavelength column).  Exact equality is used.  ``NaN``
+              values are not accepted.
 
-            Mixed lists (some strings, some floats) are supported; the row
+            Mixed inputs (some strings, some floats) are supported; the row
             mask is the logical OR of all individual matches.
 
         Returns
@@ -1496,9 +1499,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If the light curve is 1-D (no wavelength axis).
         ValueError
             If any string selector is requested but :attr:`band` is ``None``.
+        ValueError
+            If a numeric selector is ``NaN``.
+        TypeError
+            If *bands* is a bare string rather than a sequence of selectors.
         TypeError
             If any element of *bands* is neither a string nor a number.
         """
+        if isinstance(bands, str):
+            raise TypeError(
+                "'bands' must be a sequence of selectors (list, tuple, or "
+                "numpy.ndarray), not a bare string. "
+                "To select a single band wrap it in a list: "
+                f"select_bands([{bands!r}])"
+            )
+
         if self.ndim < 2:
             raise ValueError(
                 "select_bands requires a 2-D light curve "
@@ -1511,7 +1526,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if isinstance(b, str):
                 str_vals.append(b)
             elif isinstance(b, (int, float, np.floating, np.integer)):
-                float_vals.append(float(b))
+                fv = float(b)
+                if np.isnan(fv):
+                    raise ValueError(
+                        "NaN is not a valid wavelength selector in 'bands'."
+                    )
+                float_vals.append(fv)
             else:
                 raise TypeError(
                     f"Each element of 'bands' must be a string or a number; "

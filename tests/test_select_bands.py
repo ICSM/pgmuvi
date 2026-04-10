@@ -104,6 +104,42 @@ class TestSelectBandsBasic(unittest.TestCase):
         self.assertEqual(result.name, "MyStar")
 
 
+class TestSelectBandsInputTypes(unittest.TestCase):
+    """Verify that tuple, ndarray and np.integer/np.float64 inputs work."""
+
+    def setUp(self):
+        self.lc = _make_2d()
+
+    def test_tuple_input(self):
+        """A tuple of selectors should work identically to a list."""
+        result = self.lc.select_bands(("V",))
+        self.assertEqual(len(result.xdata), 5)
+        self.assertTrue((result.xdata[:, 1] == 550.0).all())
+
+    def test_ndarray_string_input(self):
+        """A numpy string array of selectors should work."""
+        result = self.lc.select_bands(np.array(["V"]))
+        self.assertEqual(len(result.xdata), 5)
+
+    def test_ndarray_float_input(self):
+        """A numpy float array of selectors should work."""
+        result = self.lc.select_bands(np.array([550.0]))
+        self.assertEqual(len(result.xdata), 5)
+        self.assertTrue((result.xdata[:, 1] == 550.0).all())
+
+    def test_np_float64_element(self):
+        """numpy.float64 scalar elements should be accepted."""
+        result = self.lc.select_bands([np.float64(650.0)])
+        self.assertEqual(len(result.xdata), 5)
+        self.assertTrue((result.xdata[:, 1] == 650.0).all())
+
+    def test_np_int_element(self):
+        """numpy.int64 scalar elements should be accepted."""
+        lc = _make_2d(wl1=1.0, wl2=2.0)
+        result = lc.select_bands([np.int64(1)])
+        self.assertEqual(len(result.xdata), 5)
+
+
 class TestSelectBandsMultiple(unittest.TestCase):
     """Selecting multiple bands at once."""
 
@@ -159,6 +195,47 @@ class TestSelectBandsErrors(unittest.TestCase):
         with self.assertRaises(TypeError):
             lc.select_bands([["V"]])  # nested list element
 
+    def test_raises_for_bare_string_input(self):
+        """A bare string like bands='V' must raise TypeError.
+
+        Without this guard the string would be iterated as characters,
+        silently giving wrong results.
+        """
+        lc = _make_2d()
+        with self.assertRaises(TypeError):
+            lc.select_bands("V")
+
+    def test_raises_for_bare_multichar_string(self):
+        """A multi-character bare string like bands='W1' must raise TypeError."""
+        lc = _make_2d(label1="W1", label2="W2")
+        with self.assertRaises(TypeError):
+            lc.select_bands("W1")
+
+    def test_raises_for_nan_selector(self):
+        """np.nan as a float selector is not meaningful and must raise ValueError."""
+        lc = _make_2d()
+        with self.assertRaises(ValueError):
+            lc.select_bands([np.nan])
+
+    def test_raises_for_float_nan_selector(self):
+        """float('nan') must also raise ValueError."""
+        lc = _make_2d()
+        with self.assertRaises(ValueError):
+            lc.select_bands([float("nan")])
+
+    def test_nonexistent_band_raises_value_error(self):
+        """Selecting a label that is not present raises ValueError (no rows match)."""
+        lc = _make_2d()
+        # "Z" is not in the data — no rows match → ValueError from __init__.
+        with self.assertRaises(ValueError):
+            lc.select_bands(["Z"])
+
+    def test_negative_wavelength_no_match_raises(self):
+        """A negative wavelength not in the data yields no rows → ValueError."""
+        lc = _make_2d()
+        with self.assertRaises(ValueError):
+            lc.select_bands([-1.0])
+
     def test_float_selector_no_band_required(self):
         """Float selection works even when self.band is None."""
         lc = _make_2d()
@@ -166,13 +243,6 @@ class TestSelectBandsErrors(unittest.TestCase):
         result = lc.select_bands([550.0])
         self.assertEqual(len(result.xdata), 5)
         self.assertIsNone(result.band)
-
-    def test_empty_selector_returns_empty(self):
-        """Selecting a non-existent band raises ValueError (no rows match)."""
-        lc = _make_2d()
-        # "Z" is not in the data — no rows match → ValueError from __init__.
-        with self.assertRaises(ValueError):
-            lc.select_bands(["Z"])
 
 
 class TestSelectBandsNoBand(unittest.TestCase):
