@@ -676,17 +676,19 @@ class InputHelpers:
             # Resolve wavelength/band column (explicit or auto-detected).
             # Try numeric wavelength names first; fall back to string band-ID
             # names so that columns like "band" or "filter" are still found.
-            if wavelcol is None:
+            if wavelcol is not None:
+                # Explicit: validate it exists before proceeding.
+                if wavelcol not in columns:
+                    raise ValueError(
+                        f"Column '{wavelcol}' not found in CSV. "
+                        f"Available columns: {columns}"
+                    )
+            else:
                 wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
-            if wavelcol is None:
-                wavelcol = cls._find_column(
-                    columns, cls._WAVELENGTH_ID_COLUMN_NAMES
-                )
-            if wavelcol is not None and wavelcol not in columns:
-                raise ValueError(
-                    f"Column '{wavelcol}' not found in CSV. "
-                    f"Available columns: {columns}"
-                )
+                if wavelcol is None:
+                    wavelcol = cls._find_column(
+                        columns, cls._WAVELENGTH_ID_COLUMN_NAMES
+                    )
             xcol_names = [xcol] + ([wavelcol] if wavelcol is not None else [])
 
         # ------------------------------------------------------------------
@@ -701,8 +703,9 @@ class InputHelpers:
             if np.issubdtype(col_dtype, np.floating):
                 valid_mask &= ~np.isnan(data[col])
             elif _is_str_col(col):
-                # Treat empty strings as missing
-                valid_mask &= data[col].astype(str) != ""
+                # Treat empty strings as missing; convert once outside the
+                # per-element comparison.
+                valid_mask &= np.asarray(data[col], dtype=np.str_) != ""
             # Integer columns cannot contain NaN; no filtering needed.
 
         n_dropped = int((~valid_mask).sum())
