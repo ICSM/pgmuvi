@@ -396,8 +396,7 @@ class TestFitLSSubsampling2D(unittest.TestCase):
         self.assertTrue(torch.allclose(freq1, freq2))
 
     def test_data_permanently_subsampled(self):
-        """Each band is subsampled independently; bands below max_samples are
-        left untouched, and no band exceeds max_samples points."""
+        """Each band is subsampled independently to at most max_samples points."""
         orig_n = self.lc_2d.xdata.shape[0]
         max_samples = 50
         with warnings.catch_warnings(record=True):

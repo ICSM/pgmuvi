@@ -1039,8 +1039,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # 2D (multiband): subsample each band independently so that
                 # bands with fewer than max_samples points are left untouched.
                 xdata_np = self._xdata_raw.detach().cpu().numpy()
-                # Use a band attribute if present; otherwise use the second
-                # column of xdata (the wavelength/band values).
+                # `self.band` is an optional attribute that, when present,
+                # stores categorical band labels (e.g. strings) for each
+                # observation.  When it is absent, the second column of xdata
+                # holds the numeric wavelength/band identifier — the standard
+                # encoding for 2-D lightcurves.
                 if (
                     hasattr(self, "band")
                     and self.band is not None
