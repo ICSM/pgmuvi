@@ -80,9 +80,11 @@ def compute_sampling_metrics(
             'cadence_std': float,
                 Standard deviation of cadences
             'nyquist_period': float,
-                2 * median_cadence (shortest reliably detectable period)
+                2 * effective_cadence (shortest reliably detectable period),
+                where effective_cadence is the median cadence, or the mean
+                cadence if the median is zero (e.g. many duplicate timestamps)
             'nyquist_frequency': float,
-                1 / (2 * median_cadence)
+                1 / (2 * effective_cadence), np.inf if effective_cadence == 0
             'longest_detectable_period': float,
                 baseline / 2 (heuristic upper limit)
             'duty_cycle': float,
@@ -133,8 +135,12 @@ def compute_sampling_metrics(
     uniformity = 1.0 - (std_cad / mean_cad) if mean_cad > 0 else 0.0
     uniformity = max(0.0, min(1.0, uniformity))  # Clamp to [0,1]
 
+    # When median cadence is zero (many duplicate/near-identical timestamps),
+    # fall back to mean cadence for metrics that require a positive cadence.
+    effective_cad = median_cad if median_cad > 0 else mean_cad
+
     # Simple duty cycle estimate (assumes observation duration << cadence)
-    duty_cycle = n * median_cad / baseline if baseline > 0 else 0.0
+    duty_cycle = n * effective_cad / baseline if baseline > 0 else 0.0
     duty_cycle = min(1.0, duty_cycle)  # Can't exceed 1
 
     metrics = {
@@ -145,8 +151,10 @@ def compute_sampling_metrics(
         "median_cadence": median_cad,
         "mean_cadence": mean_cad,
         "cadence_std": std_cad,
-        "nyquist_period": 2.0 * median_cad,
-        "nyquist_frequency": 1.0 / (2.0 * median_cad) if median_cad > 0 else np.inf,
+        "nyquist_period": 2.0 * effective_cad,
+        "nyquist_frequency": (
+            1.0 / (2.0 * effective_cad) if effective_cad > 0 else np.inf
+        ),
         "longest_detectable_period": baseline / 2.0,
         "duty_cycle": duty_cycle,
         "sampling_uniformity": uniformity,
@@ -278,9 +286,9 @@ def assess_sampling_quality(
     elif median_cadence == 0:
         baseline_factor = metrics["baseline"] / metrics["mean_cadence"]
         warnings.append(
-            "Lightcurve contains large numbers of points with identical timestamps."
-            "Determining sampling quality using mean cadence instead of median,"
-            "result may not be robust."
+            "Lightcurve contains large numbers of points with identical "
+            "timestamps. Determining sampling quality using mean cadence "
+            "instead of median; result may not be robust."
         )
         gates["min_baseline"] = baseline_factor >= min_baseline_factor
         if not gates["min_baseline"]:
