@@ -358,11 +358,17 @@ class InputHelpers:
         Candidate column names used for auto-detecting the uncertainty column,
         checked case-insensitively in order.
     _WAVELENGTH_COLUMN_NAMES : list of str
-        Candidate column names used for auto-detecting the wavelength or band
+        Candidate column names used for auto-detecting a *numeric* wavelength
         column, checked case-insensitively in order.  When such a column is
         found and contains more than one unique value, the data are loaded as
         a 2-D lightcurve whose ``xdata`` has shape ``(N, 2)`` with the time
-        values in column 0 and the wavelength/band values in column 1.
+        values in column 0 and the wavelength values in column 1.
+    _WAVELENGTH_ID_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting a *string* band
+        identifier column (e.g. ``"V"``, ``"R"``, ``"W1"``), checked
+        case-insensitively in order.  When such a column is found it is
+        ingested as the ``band`` attribute of the resulting
+        :class:`Lightcurve`.
     """
 
     _X_COLUMN_NAMES: ClassVar[list[str]] = [
@@ -393,11 +399,15 @@ class InputHelpers:
         "wave",
         "wl",
         "lambda",
-        "band",
-        "filter",
         "freq",
         "frequency",
         "channel",
+    ]
+    _WAVELENGTH_ID_COLUMN_NAMES: ClassVar[list[str]] = [
+        "band",
+        "filter",
+        "filtername",
+        "filter_name",
     ]
 
     @classmethod
@@ -517,27 +527,40 @@ class InputHelpers:
             resulting ``xdata`` is a 1-D tensor of shape ``(N,)``.
 
         **2-D (multiband) lightcurves**
-            When the CSV contains a wavelength or band column with more than
+            When the CSV contains a *numeric* wavelength column with more than
             one unique value, the resulting ``xdata`` has shape ``(N, 2)``
             where column 0 holds the time values and column 1 holds the
-            wavelength/band values.  The ``ydata`` (and optional ``yerr``)
+            numeric wavelength values.  The ``ydata`` (and optional ``yerr``)
             remain 1-D tensors of shape ``(N,)``.
 
-            The wavelength/band column is selected in one of three ways:
+            The numeric wavelength column is selected in one of three ways:
 
             1. *Explicit ``xcol`` list*: pass ``xcol`` as a list of two
-               column names, e.g. ``xcol=["time", "band"]``.  The first
-               element is the time column and the second is the
-               wavelength/band column.  All subsequent x-axis columns are
-               stacked in the order given.
+               column names, e.g. ``xcol=["time", "wavelength"]``.  The first
+               element is the time column and the second is the wavelength
+               column.  All subsequent x-axis columns are stacked in the
+               order given.
             2. *Explicit ``wavelcol``*: pass the column name as a separate
                ``wavelcol`` keyword argument.
             3. *Auto-detection*: if neither an iterable ``xcol`` nor a
                ``wavelcol`` is supplied, the method searches for a column
                whose name matches one of the entries in
-               :attr:`_WAVELENGTH_COLUMN_NAMES`.  If such a column is found
-               *and* it contains more than one unique value, a 2-D lightcurve
-               is returned automatically.
+               :attr:`_WAVELENGTH_COLUMN_NAMES` (e.g. ``"wavelength"``,
+               ``"wl"``).  If such a column is found and contains more than
+               one unique value, a 2-D lightcurve is returned automatically.
+
+        **Band labels**
+            String band-identifier columns (e.g. one named ``"band"`` or
+            ``"filter"`` containing values like ``"V"``, ``"R"``) are
+            resolved *independently* of the numeric wavelength column.  When
+            the CSV contains a string-typed column whose name matches one of
+            the entries in :attr:`_WAVELENGTH_ID_COLUMN_NAMES` **and** the
+            resulting lightcurve is 2-D, the unique labels are stored
+            automatically in :attr:`Lightcurve.band`.  For 1-D lightcurves,
+            ``band`` is left as ``None`` unless supplied explicitly via
+            ``**kwargs``.  Numeric wavelength columns are used directly and
+            :attr:`Lightcurve.band` is left as ``None`` unless the caller
+            provides ``band=`` explicitly in ``**kwargs``.
 
         Parameters
         ----------
@@ -564,6 +587,8 @@ class InputHelpers:
             2-D ``xdata``.  Ignored when ``xcol`` is a list.
         **kwargs
             Additional keyword arguments passed to the Lightcurve constructor.
+            If ``band`` is not provided and the wavelength/band column is
+            string-typed, it is populated automatically.
 
         Returns
         -------
@@ -580,10 +605,20 @@ class InputHelpers:
             present in the file.
         """
         filepath = Path(filepath)
+        # Use dtype=None so that NumPy auto-detects each column's type.
+        # This allows string/bytes band columns (e.g. "V", "R") to be read
+        # as-is rather than being silently coerced to NaN.
         data = np.genfromtxt(
-            filepath, delimiter=",", names=True, dtype=float, encoding=None
+            filepath, delimiter=",", names=True, dtype=None, encoding=None
         )
         columns = list(data.dtype.names)
+
+        # ------------------------------------------------------------------
+        # Helper: is a structured-array column string-typed?
+        # ------------------------------------------------------------------
+        def _is_str_col(col_name):
+            dt = data.dtype[col_name]
+            return np.issubdtype(dt, np.str_) or np.issubdtype(dt, np.bytes_)
 
         # ------------------------------------------------------------------
         # Resolve all column names (no tensor building yet)
@@ -628,8 +663,10 @@ class InputHelpers:
             )
 
         # ------------------------------------------------------------------
-        # Resolve the x (time + optional band) columns
+        # Resolve the x (time + optional numeric wavelength) columns.
+        # The string band-ID column is resolved independently below.
         # ------------------------------------------------------------------
+        band_id_col = None  # set in the else branch when applicable
         if isinstance(xcol, list):
             # Explicit multi-column x specification
             for col in xcol:
@@ -641,23 +678,42 @@ class InputHelpers:
             # Build NaN mask across all columns before stacking
             xcol_names = xcol
         else:
-            # Resolve wavelength/band column (explicit or auto-detected)
-            if wavelcol is None:
+            # Resolve numeric wavelength column for xdata[:, 1].
+            # Only _WAVELENGTH_COLUMN_NAMES is consulted; string band-ID
+            # columns are handled separately and independently.
+            if wavelcol is not None:
+                # Explicit: validate it exists before proceeding.
+                if wavelcol not in columns:
+                    raise ValueError(
+                        f"Column '{wavelcol}' not found in CSV. "
+                        f"Available columns: {columns}"
+                    )
+            else:
                 wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
-            elif wavelcol not in columns:
-                raise ValueError(
-                    f"Column '{wavelcol}' not found in CSV. "
-                    f"Available columns: {columns}"
-                )
+
+            # Independently resolve string band-ID column for lc.band.
+            # This is always attempted, regardless of whether a numeric
+            # wavelength column was found.
+            band_id_col = cls._find_column(columns, cls._WAVELENGTH_ID_COLUMN_NAMES)
+
             xcol_names = [xcol] + ([wavelcol] if wavelcol is not None else [])
 
         # ------------------------------------------------------------------
-        # Build NaN mask from ALL relevant columns before creating tensors
+        # Build NaN / validity mask from ALL relevant columns.
+        # With dtype=None, integer and string columns cannot be NaN, so only
+        # check floating-point columns for non-finite values.
         # ------------------------------------------------------------------
         relevant_cols = xcol_names + [ycol] + ([yerrcol] if yerrcol else [])
         valid_mask = np.ones(len(data), dtype=bool)
         for col in relevant_cols:
-            valid_mask &= ~np.isnan(data[col])
+            col_dtype = data.dtype[col]
+            if np.issubdtype(col_dtype, np.floating):
+                valid_mask &= ~np.isnan(data[col])
+            elif _is_str_col(col):
+                # Treat empty strings as missing; convert once outside the
+                # per-element comparison.
+                valid_mask &= np.asarray(data[col], dtype=np.str_) != ""
+            # Integer columns cannot contain NaN; no filtering needed.
 
         n_dropped = int((~valid_mask).sum())
         if n_dropped > 0:
@@ -674,19 +730,56 @@ class InputHelpers:
         clean = data[valid_mask]
 
         # ------------------------------------------------------------------
+        # Helper: convert a structured-array column to a float32 tensor.
+        # Boolean-indexing a structured array with dtype=None can produce
+        # non-contiguous strides; np.array() (not np.asarray) forces a copy.
+        # ------------------------------------------------------------------
+        def _to_float_tensor(arr):
+            return torch.as_tensor(
+                np.array(arr, dtype=np.float64), dtype=torch.float32
+            )
+
+        # ------------------------------------------------------------------
+        # Helper: map string band labels to float indices and record them.
+        # Returns (wave_tensor, unique_labels_array).
+        # ------------------------------------------------------------------
+        def _str_col_to_wave(arr):
+            str_vals = np.asarray(arr, dtype=np.str_)
+            # Preserve first-appearance order via dict.fromkeys.
+            unique_labels = list(dict.fromkeys(str_vals.tolist()))
+            label_to_idx = {lbl: float(i) for i, lbl in enumerate(unique_labels)}
+            indices = np.array([label_to_idx[v] for v in str_vals], dtype=np.float64)
+            return (
+                torch.as_tensor(indices, dtype=torch.float32),
+                np.array(unique_labels, dtype=np.str_),
+            )
+
+        # ------------------------------------------------------------------
         # Build tensors from clean data
         # ------------------------------------------------------------------
         if isinstance(xcol, list):
-            x_tensors = [
-                torch.as_tensor(clean[col], dtype=torch.float32) for col in xcol
-            ]
+            x_tensors = []
+            for col in xcol:
+                if _is_str_col(col):
+                    wave_t, _unique = _str_col_to_wave(clean[col])
+                    x_tensors.append(wave_t)
+                    if "band" not in kwargs:
+                        kwargs["band"] = np.asarray(clean[col], dtype=np.str_)
+                else:
+                    x_tensors.append(_to_float_tensor(clean[col]))
             x = torch.stack(x_tensors, dim=1) if len(x_tensors) > 1 else x_tensors[0]
         else:
-            time_tensor = torch.as_tensor(clean[xcol], dtype=torch.float32)
+            time_tensor = _to_float_tensor(clean[xcol])
             if wavelcol is not None:
-                wave_tensor = torch.as_tensor(clean[wavelcol], dtype=torch.float32)
+                if _is_str_col(wavelcol):
+                    # Explicitly-provided string wavelcol: map labels → indices.
+                    wave_tensor, _unique = _str_col_to_wave(clean[wavelcol])
+                    if "band" not in kwargs:
+                        kwargs["band"] = np.asarray(clean[wavelcol], dtype=np.str_)
+                else:
+                    wave_tensor = _to_float_tensor(clean[wavelcol])
                 if wave_tensor.unique().numel() > 1:
-                    # Multiple wavelengths/bands → 2-D lightcurve
+                    # Multiple wavelengths → 2-D lightcurve
                     x = torch.stack([time_tensor, wave_tensor], dim=1)
                 else:
                     # Single wavelength → treat as 1-D
@@ -694,9 +787,15 @@ class InputHelpers:
             else:
                 x = time_tensor
 
-        y = torch.as_tensor(clean[ycol], dtype=torch.float32)
-        yerr = torch.as_tensor(clean[yerrcol], dtype=torch.float32) if yerrcol else None
+            # Independently populate band from the string band-ID column.
+            # Only auto-populate when xdata is 2-D, matching from_table
+            # behaviour (band labels per-row are meaningless for 1-D).
+            if x.dim() == 2 and "band" not in kwargs and band_id_col is not None:
+                if _is_str_col(band_id_col):
+                    kwargs["band"] = np.asarray(clean[band_id_col], dtype=np.str_)
 
+        y = _to_float_tensor(clean[ycol])
+        yerr = _to_float_tensor(clean[yerrcol]) if yerrcol else None
 
         return cls(xdata=x, ydata=y, yerr=yerr, **kwargs)
 
@@ -1433,6 +1532,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Units of the time axis.  Time values are converted to days
         internally.  If *None* (default) the data are assumed to already
         be in days.
+    band : array-like of str or None, optional
+        Optional per-row band labels for a 2-D light curve.  Each element
+        must be a string identifier (e.g. ``"V"``, ``"R"``, ``"W1"``), and
+        there must be exactly one label per observation row — i.e.
+        ``len(band) == len(xdata)`` for 2-D data.  For 1-D light curves a
+        single-element array ``["V"]`` is accepted.  ``None`` (default)
+        means no band labels are stored.
+
+    Attributes
+    ----------
+    band : numpy.ndarray of str or None
+        Per-row string labels aligned with ``xdata``, or ``None``
+        if no labels were provided.
 
 
     Examples
@@ -1458,6 +1570,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         sampling_kwargs: dict | None = None,
         check_variability: bool = False,
         variability_kwargs: dict | None = None,
+        band=None,
         **kwargs,
     ):
         """Initialize a Lightcurve.
@@ -1516,6 +1629,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Keyword arguments forwarded to the variability tests (``alpha``,
             ``fvar_min``, ``stetson_k_min``).  Only used when
             *check_variability* is ``True``.
+        band : array-like of str or None, optional
+            Optional per-row labels for a 2-D light curve.  Each element
+            should be a string identifier (e.g. ``"V"``, ``"R"``,
+            ``"W1"``).  The length must match the number of observation rows
+            (``len(band) == len(xdata)`` for 2-D data, or 1 for 1-D data).
+            ``None`` (default) means no band labels are stored.
         """
         super().__init__()
 
@@ -1557,6 +1676,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self.yerr = yerr
 
         self.name = "Lightcurve" if name is None else name
+
+        # ------------------------------------------------------------------
+        # Band labels
+        # ------------------------------------------------------------------
+        if band is None:
+            self.band = None
+        else:
+            band_arr = np.asarray(band, dtype=np.str_)
+            if band_arr.ndim != 1:
+                raise ValueError(
+                    f"'band' must be a 1-D array-like of strings (shape (n,)); "
+                    f"got shape {band_arr.shape}."
+                )
+            # Determine the expected length: one label per observation row for
+            # 2-D data, or 1 for 1-D data (single-band lightcurve).
+            if self.ndim > 1:
+                n_rows = len(self._xdata_raw)
+            else:
+                n_rows = 1
+            if len(band_arr) != n_rows:
+                raise ValueError(
+                    f"Length of 'band' ({len(band_arr)}) does not match the "
+                    f"expected number of rows ({n_rows})."
+                )
+            self.band = band_arr
 
         self.__SET_LIKELIHOOD_CALLED = False
         self.__SET_MODEL_CALLED = False
@@ -1754,7 +1898,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     @classmethod
     def from_table(
-        cls, tab, file_format="votable", xcol="x", ycol="y", yerrcol="yerr", **kwargs
+        cls,
+        tab,
+        file_format="votable",
+        xcol="x",
+        ycol="y",
+        yerrcol="yerr",
+        bandcol=None,
+        **kwargs,
     ):
         """Instantiate a Lightcurve object with
         data read in from a VOTable.
@@ -1774,6 +1925,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Name of column in table that contains the y data
         yerrcol: str
             Name of column in table that contains the yerr data
+        bandcol: str or None, optional
+            Name of the column containing string band labels (e.g. ``"V"``,
+            ``"R"``, ``"W1"``).  When provided, the per-row labels are read
+            from this column and stored in :attr:`Lightcurve.band`.  If
+            ``None`` (default), the method attempts to auto-detect a
+            string-typed column whose name matches one of the entries in
+            :attr:`_WAVELENGTH_ID_COLUMN_NAMES` (e.g. ``"band"``,
+            ``"filter"``); if found it is used as the band-label column.
+            The ``band`` kwarg in ``kwargs`` always takes precedence.
         kwargs:
             Arguments to be passed to the Lightcurve constructor, including
             ``time_units`` (str or ``astropy.units`` unit, default *None*).
@@ -1825,7 +1985,42 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if yerr.shape[0] != nsamples and yerr.shape[1] == nsamples:
                 yerr = yerr.transpose(0, 1)
 
+        # Compute the finite-row mask before calling _drop_nonfinite_rows so
+        # that we can apply the same filter to the ancillary band column below.
+        _valid = torch.isfinite(y)
+        if x.dim() > 1:
+            _valid &= torch.isfinite(x).all(dim=1)
+        else:
+            _valid &= torch.isfinite(x)
+        if yerr is not None:
+            _valid &= torch.isfinite(yerr)
+        _valid_np = _valid.numpy().astype(bool)
+
         x, y, yerr = cls._drop_nonfinite_rows(x, y, yerr)
+
+        # ------------------------------------------------------------------
+        # Band labels: only relevant when xdata is already 2-D (multiband).
+        # For 1-D lightcurves there is no wavelength axis, so band labels
+        # from an ancillary string column would be meaningless.
+        # One label per row is stored (same length as xdata).
+        # ------------------------------------------------------------------
+        if "band" not in kwargs and x.dim() == 2:
+            # Prefer the explicit bandcol; fall back to auto-detection.
+            if bandcol is None:
+                bandcol = cls._find_column(c, cls._WAVELENGTH_ID_COLUMN_NAMES)
+            if bandcol is not None and bandcol in c:
+                col_data = np.asarray(data[bandcol])
+                col_dtype = col_data.dtype
+                if (
+                    np.issubdtype(col_dtype, np.str_)
+                    or np.issubdtype(col_dtype, np.bytes_)
+                    or col_dtype.kind == "O"
+                ):
+                    # String column found — store per-row labels (filtered to
+                    # the same valid rows as x/y/yerr).
+                    kwargs["band"] = np.array(
+                        col_data[_valid_np].astype(str), dtype=np.str_
+                    )
 
         return cls(x, y, yerr, **kwargs)
 
@@ -1962,6 +2157,119 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def append_data(self, new_values_x, new_values_y):
         pass
+
+    def select_bands(
+        self, bands: list | tuple | np.ndarray
+    ) -> "Lightcurve":
+        """Return a new Lightcurve containing only the requested bands.
+
+        Parameters
+        ----------
+        bands : list, tuple, or numpy.ndarray
+            Selection criteria.  Each element may be:
+
+            * A **string** — matched against :attr:`band` (the per-row string
+              label array).  Requires that :attr:`band` is not ``None``.
+            * A **float** or **int** — matched against ``xdata[:, 1]`` (the
+              numeric wavelength column).  Exact equality is used.  ``NaN``
+              values are not accepted.
+
+            Mixed inputs (some strings, some floats) are supported; the row
+            mask is the logical OR of all individual matches.
+
+        Returns
+        -------
+        Lightcurve
+            A new :class:`Lightcurve` object built from the subset of rows
+            that match at least one of the requested *bands*.  The
+            :attr:`name`, :attr:`xtransform`, and :attr:`ytransform`
+            attributes are inherited from the original light curve.
+
+        Raises
+        ------
+        ValueError
+            If the light curve is 1-D (no wavelength axis).
+        ValueError
+            If any string selector is requested but :attr:`band` is ``None``.
+        ValueError
+            If a numeric selector is ``NaN``.
+        TypeError
+            If *bands* is a bare string rather than a sequence of selectors.
+        TypeError
+            If any element of *bands* is neither a string nor a number.
+        """
+        if isinstance(bands, str):
+            raise TypeError(
+                "'bands' must be a sequence of selectors (list, tuple, or "
+                "numpy.ndarray), not a bare string. "
+                "To select a single band wrap it in a list: "
+                f"select_bands([{bands!r}])"
+            )
+
+        if self.ndim < 2:
+            raise ValueError(
+                "select_bands requires a 2-D light curve "
+                "(xdata must have shape (N, 2) with a wavelength column)."
+            )
+
+        str_vals = []
+        float_vals = []
+        for b in bands:
+            if isinstance(b, str):
+                str_vals.append(b)
+            elif isinstance(b, (int, float, np.floating, np.integer)):
+                fv = float(b)
+                if np.isnan(fv):
+                    raise ValueError(
+                        "NaN is not a valid wavelength selector in 'bands'."
+                    )
+                float_vals.append(fv)
+            else:
+                raise TypeError(
+                    f"Each element of 'bands' must be a string or a number; "
+                    f"got {type(b).__name__!r}."
+                )
+
+        xdata_raw = self._xdata_raw
+        n = xdata_raw.shape[0]
+        mask = torch.zeros(n, dtype=torch.bool, device=xdata_raw.device)
+
+        if str_vals:
+            if self.band is None:
+                raise ValueError(
+                    "String band selectors require the 'band' attribute to be "
+                    "set, but this Lightcurve has band=None."
+                )
+            for s in str_vals:
+                mask |= torch.as_tensor(
+                    self.band == s, dtype=torch.bool, device=xdata_raw.device
+                )
+
+        if float_vals:
+            wl_col = xdata_raw[:, 1]
+            for fv in float_vals:
+                mask |= wl_col == fv
+
+        new_x = xdata_raw[mask]
+        new_y = self._ydata_raw[mask]
+        new_yerr = (
+            self._yerr_raw[mask] if hasattr(self, "_yerr_raw") else None
+        )
+        new_band = (
+            self.band[mask.cpu().numpy().astype(bool)]
+            if self.band is not None
+            else None
+        )
+
+        return Lightcurve(
+            new_x,
+            new_y,
+            yerr=new_yerr,
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+            band=new_band,
+        )
 
     def transform_x(self, values):
         if self.xtransform is None:
