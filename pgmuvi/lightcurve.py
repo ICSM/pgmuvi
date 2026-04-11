@@ -45,6 +45,9 @@ from inspect import isclass
 import xarray as xr
 import arviz as az
 import warnings
+import dataclasses
+import json
+import math
 
 
 def _reraise_with_note(e, note):
@@ -715,6 +718,695 @@ _SM_MODELS: frozenset[str] = frozenset(
         "2DDustSKI",
     }
 )
+
+
+@dataclasses.dataclass(frozen=True)
+class PeriodPeakResult:
+    """A single PSD peak from :meth:`Lightcurve.get_period_summary`."""
+
+    rank: int = 1
+    frequency: float = float("nan")
+    period: float = float("nan")
+    height: float = float("nan")
+    prominence: float = float("nan")
+    area_fraction: float = float("nan")
+    interval_frequency: tuple = (float("nan"), float("nan"))
+    interval_period: tuple = (float("nan"), float("nan"))
+    period_ratio_to_primary: float = 1.0
+    is_candidate_lsp: bool = False
+    notes: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "rank": self.rank,
+            "frequency": self.frequency,
+            "period": self.period,
+            "height": self.height,
+            "prominence": self.prominence,
+            "area_fraction": self.area_fraction,
+            "interval_frequency": list(self.interval_frequency),
+            "interval_period": list(self.interval_period),
+            "period_ratio_to_primary": self.period_ratio_to_primary,
+            "is_candidate_lsp": self.is_candidate_lsp,
+            "notes": self.notes,
+        }
+
+
+class ComponentDiagnosticsResult:
+    """Kernel-component diagnostic information for a spectral-mixture GP.
+
+    These values are extracted directly from GP hyperparameters and are
+    provided for diagnostic purposes only.  They must **not** be interpreted
+    as independent physical periods.  The literature-comparable period
+    estimates are the summed-PSD peaks stored in
+    :attr:`PeriodSummaryResult.peaks`.
+
+    Attributes
+    ----------
+    component_periods : numpy.ndarray
+        Centre period of each mixture component (1/frequency).
+    component_frequencies : numpy.ndarray
+        Centre frequency of each mixture component.
+    component_weights : numpy.ndarray
+        Relative amplitude weight of each mixture component.
+    component_period_scales : numpy.ndarray
+        Width (sigma) of each Gaussian component in period units.
+    component_frequency_scales : numpy.ndarray
+        Width (sigma) of each Gaussian component in frequency units.
+    n_components : int
+        Number of mixture components.
+    kernel_family : str
+        Name of the spectral-mixture kernel family.
+    notes : str
+        Diagnostic notes for this component set.
+    component_labels : list of str
+        Human-readable label for each component,
+        e.g. ``["SM component 1", "SM component 2"]``.
+    """
+
+    def __init__(
+        self,
+        component_periods=None,
+        component_frequencies=None,
+        component_weights=None,
+        component_period_scales=None,
+        component_frequency_scales=None,
+        n_components=0,
+        kernel_family="",
+        notes="",
+        component_labels=None,
+    ):
+        self.component_periods = (
+            component_periods
+            if component_periods is not None
+            else np.array([])
+        )
+        self.component_frequencies = (
+            component_frequencies
+            if component_frequencies is not None
+            else np.array([])
+        )
+        self.component_weights = (
+            component_weights
+            if component_weights is not None
+            else np.array([])
+        )
+        self.component_period_scales = (
+            component_period_scales
+            if component_period_scales is not None
+            else np.array([])
+        )
+        self.component_frequency_scales = (
+            component_frequency_scales
+            if component_frequency_scales is not None
+            else np.array([])
+        )
+        self.n_components = n_components
+        self.kernel_family = kernel_family
+        self.notes = notes
+        self.component_labels = component_labels or [
+            f"SM component {i + 1}" for i in range(n_components)
+        ]
+
+    def as_dict(self) -> dict:
+        """Return a plain-dict representation of this diagnostics object."""
+        return {
+            "n_components": self.n_components,
+            "kernel_family": self.kernel_family,
+            "notes": self.notes,
+            "component_labels": self.component_labels,
+            "component_periods": self.component_periods,
+            "component_frequencies": self.component_frequencies,
+            "component_weights": self.component_weights,
+            "component_period_scales": self.component_period_scales,
+            "component_frequency_scales": self.component_frequency_scales,
+        }
+
+
+class PeriodSummaryResult:
+    """Structured result from :meth:`Lightcurve.get_period_summary`."""
+
+    def __init__(
+        self,
+        method="",
+        model_name="",
+        n_peaks_detected=0,
+        n_peaks_analyzed=0,
+        n_peaks_requested=None,
+        dominant_period=None,
+        dominant_frequency=None,
+        peaks=None,
+        freq_grid=None,
+        psd=None,
+        notes="",
+        component_diagnostics=None,
+        interval_definition="peak_centered_68pct_mass_interval",
+        backend="",
+        kernel_family="",
+        time_kernel_family="",
+        has_stochastic_background=False,
+        q_factor=None,
+    ):
+        self.method = method
+        self.model_name = model_name
+        self.backend = backend
+        self.kernel_family = kernel_family
+        self.time_kernel_family = time_kernel_family
+        self.has_stochastic_background = has_stochastic_background
+        self.n_peaks_detected = n_peaks_detected
+        self.n_peaks_analyzed = n_peaks_analyzed
+        self.n_peaks_requested = n_peaks_requested
+        self.dominant_period = dominant_period
+        self.dominant_frequency = dominant_frequency
+        self.q_factor = q_factor
+        # Sort peaks once by descending significance so that peaks[0] is
+        # always the highest-significance peak regardless of insertion order.
+        # Sort key: (1) descending area_fraction (NaN sorts last),
+        #           (2) descending height (NaN sorts last),
+        #           (3) ascending original rank as tie-breaker.
+        # After sorting, ranks are reassigned sequentially (1, 2, 3 …) so
+        # that peak.rank reliably reflects position in the sorted list.
+        _raw_peaks = peaks if peaks is not None else []
+
+        def _significance_key(p):
+            af = p.area_fraction if np.isfinite(p.area_fraction) else -np.inf
+            h = p.height if np.isfinite(p.height) else -np.inf
+            return (-af, -h, p.rank)
+
+        _sorted = sorted(_raw_peaks, key=_significance_key)
+        # Reassign ranks sequentially and update period_ratio_to_primary so
+        # that the new rank-1 peak always has ratio=1.0 and the other peaks
+        # are relative to it.
+        _primary_period = _sorted[0].period if _sorted else 1.0
+        self.peaks = [
+            dataclasses.replace(
+                p,
+                rank=i + 1,
+                period_ratio_to_primary=(
+                    p.period / _primary_period
+                    if _primary_period > 0 and np.isfinite(p.period)
+                    else float("nan")
+                ),
+            )
+            for i, p in enumerate(_sorted)
+        ]
+        self.freq_grid = freq_grid
+        self.psd = psd
+        self.notes = notes
+        self.interval_definition = interval_definition
+        self.component_diagnostics = component_diagnostics
+
+    def as_dict(self) -> dict:
+        # Derive primary-peak quantities once so they can be reused for
+        # the backward-compatible alias keys without repeating the logic.
+        primary = self.get_primary_peak()
+        primary_interval = primary.interval_period if primary is not None else None
+        primary_area = (
+            primary.area_fraction if primary is not None else float("nan")
+        )
+        # Prefer primary-peak values for dominant_period/frequency so that
+        # all reported quantities (period, interval, area) consistently
+        # describe the same peak.  Fall back to the constructor-provided
+        # values if no peaks are present (non-periodic / explicit-period
+        # backends that set dominant_period directly).
+        dominant_period = (
+            primary.period if primary is not None else self.dominant_period
+        )
+        dominant_frequency = (
+            primary.frequency if primary is not None else self.dominant_frequency
+        )
+        _sig_peaks = self.get_significant_peaks()
+        significant_periods = np.array([p.period for p in _sig_peaks])
+
+        return {
+            "component_diagnostics": (
+                self.component_diagnostics.as_dict()
+                if self.component_diagnostics is not None
+                else None
+            ),
+            "freq_grid": self.freq_grid,
+            "psd": self.psd,
+            "dominant_frequency": dominant_frequency,
+            "dominant_period": dominant_period,
+            # Backward-compatible interval keys (both alias the same value).
+            "period_interval_fwhm_like": primary_interval,
+            "period_interval": primary_interval,
+            "interval_definition": self.interval_definition,
+            "q_factor": self.q_factor,
+            "peak_fraction": primary_area,
+            "n_peaks": len(self.peaks),
+            "n_peaks_detected": self.n_peaks_detected,
+            "n_significant_peaks": len(_sig_peaks),
+            "significant_periods": significant_periods,
+            "peaks": [p.as_dict() for p in self.peaks],
+            "method": self.method,
+            "notes": self.notes,
+            # Kernel-dispatch metadata
+            "backend": self.backend,
+            "kernel_family": self.kernel_family,
+            "time_kernel_family": self.time_kernel_family,
+            "has_stochastic_background": self.has_stochastic_background,
+        }
+
+    def __getitem__(self, key):
+        return self.as_dict()[key]
+
+    def __contains__(self, key):
+        return key in self.as_dict()
+
+    def get(self, key, default=None):
+        return self.as_dict().get(key, default)
+
+    def keys(self):
+        return self.as_dict().keys()
+
+    def items(self):
+        return self.as_dict().items()
+
+    def values(self):
+        return self.as_dict().values()
+
+    # ------------------------------------------------------------------
+    # Multi-peak accessors
+    # ------------------------------------------------------------------
+
+    def get_primary_peak(self):
+        """Return the primary (rank-1) peak, or ``None`` if none exist.
+
+        Returns
+        -------
+        PeriodPeakResult or None
+            The first entry in :attr:`peaks` (sorted by ascending rank,
+            so rank 1 is always first), or ``None`` when :attr:`peaks`
+            is empty.
+        """
+        return self.peaks[0] if self.peaks else None
+
+    def get_top_n_peaks(self, n):
+        """Return up to *n* peaks in ascending rank order.
+
+        Parameters
+        ----------
+        n : int
+            Maximum number of peaks to return.
+
+        Returns
+        -------
+        list of PeriodPeakResult
+            A slice of :attr:`peaks` of length ``min(n, len(peaks))``.
+        """
+        return self.peaks[:n]
+
+    def get_significant_peaks(self, threshold=0.68):
+        """Return peaks whose area fraction meets or exceeds *threshold*.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Minimum ``area_fraction`` to qualify as significant.
+            Default is ``0.68`` (~1 sigma).
+
+        Returns
+        -------
+        list of PeriodPeakResult
+            Peaks from :attr:`peaks` (in rank order) for which
+            ``peak.area_fraction >= threshold``.  Peaks with NaN area
+            fraction are excluded.
+        """
+        return [
+            p for p in self.peaks
+            if np.isfinite(p.area_fraction) and p.area_fraction >= threshold
+        ]
+
+    def to_table(self) -> list:
+        return [
+            {
+                "peak_rank": p.rank,
+                "period": p.period,
+                "frequency": p.frequency,
+                "height": p.height,
+                "prominence": p.prominence,
+                "area_fraction": p.area_fraction,
+                "period_interval_lo": p.interval_period[0],
+                "period_interval_hi": p.interval_period[1],
+                "period_ratio_to_primary": p.period_ratio_to_primary,
+                "is_candidate_lsp": p.is_candidate_lsp,
+                "notes": p.notes,
+            }
+            for p in self.peaks
+        ]
+
+    def to_text(
+        self,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+        max_peaks_to_show=3,
+    ) -> str:
+        """Return a human-readable text summary of this period result.
+
+        The text is plain UTF-8 text, suitable for writing to a ``.txt``
+        file, reading in a terminal, or storing alongside analysis outputs.
+        It clearly separates **analyzed peak results** (the
+        literature-comparable outputs) from **kernel component diagnostics**
+        (internal quantities derived directly from GP hyperparameters).
+
+        Parameters
+        ----------
+        include_components : bool, optional
+            If ``True`` (default), include a section listing the kernel
+            component periods, frequencies, and weights.  These are
+            **diagnostic quantities** and should not be cited as final
+            period determinations.
+        include_peaks : bool, optional
+            If ``True`` (default), include one block per analyzed peak.
+        include_psd_info : bool, optional
+            If ``True``, include a short summary of the PSD grid
+            (existence, length, frequency range, PSD range).  The full
+            arrays are never dumped.  Default is ``False``.
+        max_peaks_to_show : int, optional
+            Maximum number of peaks to show in detail.  The primary peak
+            is always shown first; up to ``max_peaks_to_show - 1``
+            additional peaks follow.  If more peaks exist, a count line
+            is appended.  Default is ``3``.
+
+        Returns
+        -------
+        str
+            Formatted text summary.
+        """
+
+        def _fmt(v, precision=6):
+            """Format a scalar value for display."""
+            if v is None:
+                return "N/A"
+            try:
+                if np.isnan(v):
+                    return "nan"
+                if np.isinf(v):
+                    return "inf" if v > 0 else "-inf"
+            except (TypeError, ValueError):
+                pass
+            try:
+                return f"{v:.{precision}g}"
+            except (TypeError, ValueError):
+                return str(v)
+
+        def _fmt_interval(pair, precision=6):
+            """Format a (lo, hi) interval pair."""
+            if pair is None:
+                return "N/A"
+            lo, hi = pair
+            return f"[{_fmt(lo, precision)}, {_fmt(hi, precision)}]"
+
+        def _arr_summary(arr, label, precision=6):
+            """One-line summary of a 1-D array."""
+            if arr is None or len(arr) == 0:
+                return f"  {label}: (none)"
+            vals = ", ".join(_fmt(v, precision) for v in arr)
+            return f"  {label}: {vals}"
+
+        lines = []
+
+        # ------------------------------------------------------------------
+        # Header
+        # ------------------------------------------------------------------
+        # Use the same dominant-period/frequency logic as as_dict(): prefer
+        # the primary peak's values so that to_text() and as_dict() always
+        # describe the same dominant peak.
+        _primary = self.get_primary_peak()
+        _display_period = (
+            _primary.period if _primary is not None else self.dominant_period
+        )
+        _display_frequency = (
+            _primary.frequency
+            if _primary is not None
+            else self.dominant_frequency
+        )
+
+        lines.append("PERIOD SUMMARY")
+        lines.append("==============")
+        lines.append(f"  Model name          : {self.model_name or 'N/A'}")
+        lines.append(f"  Method              : {self.method or 'N/A'}")
+        lines.append(f"  Backend             : {self.backend or 'N/A'}")
+        lines.append(
+            f"  Kernel family       : {self.kernel_family or 'N/A'}"
+        )
+        _tkf = self.time_kernel_family or "N/A"
+        lines.append(f"  Time-kernel family  : {_tkf}")
+        _hsb = str(self.has_stochastic_background)
+        lines.append(f"  Stochastic bg       : {_hsb}")
+        lines.append(
+            f"  Interval definition : {self.interval_definition or 'N/A'}"
+        )
+        lines.append(f"  Dominant period     : {_fmt(_display_period)}")
+        lines.append(
+            f"  Dominant frequency  : {_fmt(_display_frequency)}"
+        )
+        lines.append(f"  Peaks detected      : {self.n_peaks_detected}")
+        lines.append(f"  Peaks analyzed      : {self.n_peaks_analyzed}")
+        _req = (
+            str(self.n_peaks_requested)
+            if self.n_peaks_requested is not None
+            else "N/A"
+        )
+        lines.append(f"  Peaks requested     : {_req}")
+        if self.notes:
+            lines.append(f"  Notes               : {self.notes}")
+        lines.append("")
+
+        # ------------------------------------------------------------------
+        # Analyzed peaks (literature-comparable outputs)
+        # ------------------------------------------------------------------
+        if include_peaks and self.peaks:
+            primary = self.peaks[0]
+
+            # ---- Primary peak (full detail) ------------------------------
+            lines.append("PRIMARY PEAK  (literature-comparable output)")
+            lines.append("=" * 44)
+            lines.append(
+                f"    Period                     : {_fmt(primary.period)}"
+            )
+            lines.append(
+                f"    Frequency                  : {_fmt(primary.frequency)}"
+            )
+            lines.append(
+                f"    Height                     : {_fmt(primary.height)}"
+            )
+            lines.append(
+                f"    Prominence                 : {_fmt(primary.prominence)}"
+            )
+            lines.append(
+                f"    Area fraction              : {_fmt(primary.area_fraction)}"
+            )
+            lines.append(
+                f"    Interval (frequency)       : "
+                f"{_fmt_interval(primary.interval_frequency)}"
+            )
+            lines.append(
+                f"    Interval (period)          : "
+                f"{_fmt_interval(primary.interval_period)}"
+            )
+            lines.append(
+                f"    LSP candidate              : {primary.is_candidate_lsp}"
+            )
+            if primary.notes:
+                lines.append(
+                    f"    Notes                      : {primary.notes}"
+                )
+            lines.append("")
+
+            # ---- Additional peaks (compact) ------------------------------
+            extra_peaks = self.peaks[1:]
+            if extra_peaks:
+                n_to_show = max(0, max_peaks_to_show - 1)
+                shown = extra_peaks[:n_to_show]
+                n_hidden = len(extra_peaks) - len(shown)
+
+                if shown:
+                    lines.append("ADDITIONAL PEAKS")
+                    lines.append("=" * 16)
+                    for pk in shown:
+                        _int_str = _fmt_interval(pk.interval_period)
+                        lines.append(
+                            f"  #{pk.rank}  period={_fmt(pk.period)}"
+                            f"  freq={_fmt(pk.frequency)}"
+                            f"  area={_fmt(pk.area_fraction)}"
+                            f"  interval={_int_str}"
+                        )
+                    if n_hidden > 0:
+                        lines.append(
+                            f"  (+{n_hidden} additional peak"
+                            f"{'s' if n_hidden != 1 else ''} not shown)"
+                        )
+                    lines.append("")
+
+        # ------------------------------------------------------------------
+        # Kernel component diagnostics (NOT final periods)
+        # ------------------------------------------------------------------
+        if include_components and self.component_diagnostics is not None:
+            diag = self.component_diagnostics
+            lines.append(
+                "KERNEL COMPONENT DIAGNOSTICS  "
+                "(internal quantities -- not final periods)"
+            )
+            lines.append("=" * 60)
+            lines.append(
+                "  These values are derived directly from GP kernel"
+                " hyperparameters."
+            )
+            lines.append(
+                "  They are provided for diagnostics only and should not"
+                " be cited"
+            )
+            lines.append(
+                "  as literature-comparable period determinations."
+            )
+            lines.append("")
+            lines.append(
+                _arr_summary(diag.component_periods, "Component periods")
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_frequencies,
+                    "Component frequencies",
+                )
+            )
+            lines.append(
+                _arr_summary(diag.component_weights, "Component weights")
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_period_scales,
+                    "Component period scales",
+                )
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_frequency_scales,
+                    "Component frequency scales",
+                )
+            )
+            lines.append("")
+
+        # ------------------------------------------------------------------
+        # Optional PSD grid summary (never dumps full arrays)
+        # ------------------------------------------------------------------
+        if include_psd_info:
+            lines.append("PSD GRID INFORMATION")
+            lines.append("====================")
+            has_freq = self.freq_grid is not None
+            has_psd = self.psd is not None
+            lines.append(
+                f"  Frequency grid present : {has_freq}"
+            )
+            lines.append(f"  PSD array present      : {has_psd}")
+            if has_freq:
+                try:
+                    lines.append(
+                        f"  Grid length            : {len(self.freq_grid)}"
+                    )
+                    lines.append(
+                        f"  Frequency min          : "
+                        f"{_fmt(float(self.freq_grid[0]))}"
+                    )
+                    lines.append(
+                        f"  Frequency max          : "
+                        f"{_fmt(float(self.freq_grid[-1]))}"
+                    )
+                except Exception:
+                    pass
+            if has_psd:
+                try:
+                    _psd_min = float(np.min(self.psd))
+                    _psd_max = float(np.max(self.psd))
+                    lines.append(f"  PSD min                : {_fmt(_psd_min)}")
+                    lines.append(f"  PSD max                : {_fmt(_psd_max)}")
+                except Exception:
+                    pass
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def write_text(
+        self,
+        filename,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+    ):
+        """Write a human-readable text summary to *filename*.
+
+        Calls :meth:`to_text` and writes the result to disk.
+
+        Parameters
+        ----------
+        filename : str or Path-like
+            Destination file path.  The file is created or overwritten.
+        include_components : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``True``.
+        include_peaks : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``True``.
+        include_psd_info : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``False``.
+
+        Returns
+        -------
+        pathlib.Path
+            The path to the file that was written, constructed from
+            *filename* via :class:`pathlib.Path`.  If *filename* is a
+            relative path, the returned value is also relative.
+        """
+        from pathlib import Path
+
+        path = Path(filename)
+        text = self.to_text(
+            include_components=include_components,
+            include_peaks=include_peaks,
+            include_psd_info=include_psd_info,
+        )
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def _json_serialize(self, obj):
+        """Recursively convert *obj* to a JSON-serializable Python object.
+
+        Handles nested dicts, lists/tuples, numpy arrays and scalars, and
+        the standard JSON primitives.  Raises ``TypeError`` for any
+        unrecognised type so that serialization bugs are caught immediately
+        rather than silently corrupted via ``str()``.
+        """
+        if obj is None or isinstance(obj, (bool, str)):
+            return obj
+        if isinstance(obj, int):
+            return obj
+        if isinstance(obj, float):
+            return None if not math.isfinite(obj) else obj
+        if isinstance(obj, dict):
+            return {k: self._json_serialize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._json_serialize(item) for item in obj]
+        if isinstance(obj, np.ndarray):
+            return self._json_serialize(obj.tolist())
+        if isinstance(obj, np.floating):
+            scalar = obj.item()
+            return None if not math.isfinite(scalar) else scalar
+        if isinstance(obj, np.integer):
+            return obj.item()
+        raise TypeError(
+            f"Cannot JSON-serialize object of type {type(obj).__name__}"
+        )
+
+    def write_json(self, filename, include_psd=False):
+        d = self.as_dict()
+        # Handle freq_grid/psd before general serialization: omit them
+        # unless the caller explicitly requests PSD data.
+        if not include_psd or d.get("freq_grid") is None:
+            d = {**d, "freq_grid": None, "psd": None}
+        data = self._json_serialize(d)
+        with open(filename, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, allow_nan=False)
 
 
 class Lightcurve(InputHelpers, gpytorch.Module):
@@ -1464,6 +2156,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._model_str = None
             self._model_instance = None
         self._model_num_mixtures = num_mixtures
+        self._fit_num_mixtures_effective = num_mixtures
+        self._fit_num_mixtures_requested = num_mixtures
         model_dic_1 = {
             "2D": TwoDSpectralMixtureGPModel,
             "1D": SpectralMixtureGPModel,
@@ -4230,10 +4924,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         stacklevel=2,
                     )
             except Exception as exc:
-                # MLS failed for any reason; fall back gracefully but warn the user.
-
+                # MLS failed for any reason; fall back gracefully but warn the
+                # user.  Ensure num_mixtures is set before issuing the warning.
                 if num_mixtures is None:
-                    num_mixtures = 4
+                    inferred_count = None
+                    if hasattr(self, "model") and self.model is not None:
+                        inferred_count = self._infer_num_mixtures_from_model()
+                    num_mixtures = (
+                        inferred_count if inferred_count is not None else 4
+                    )
+                # Store the authoritative mixture counts now that we know the
+                # fallback value.
+                self._fit_num_mixtures_requested = _num_mixtures_arg
+                self._fit_num_mixtures_effective = num_mixtures
                 warnings.warn(
                     "MLS-based initialisation failed; falling back to "
                     f"num_mixtures={num_mixtures}. Original error was: "
@@ -4899,6 +5602,2636 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             torch.as_tensor(scales),
         )
 
+    def _infer_num_mixtures_from_model(self):
+        """Infer the number of spectral-mixture components from the current model.
+
+        Walks the kernel tree of ``self.model.sci_kernel`` (including SKI
+        and separable-2D wrappers) looking for a ``mixture_means`` attribute
+        and returns ``len(mixture_means)``.  Falls back to inspecting
+        ``mixture_scales`` or ``mixture_weights`` if ``mixture_means`` is
+        unavailable.
+
+        Returns ``None`` if the model does not expose mixture parameters or if
+        ``self.model`` has not been initialised.
+
+        Returns
+        -------
+        n_mix : int or None
+        """
+        if not hasattr(self, "model") or self.model is None:
+            return None
+        if not hasattr(self.model, "sci_kernel"):
+            return None
+        sk = self.model.sci_kernel
+        # Unwrap GridInterpolationKernel (SKI)
+        actual_sk = getattr(sk, "base_kernel", sk)
+        # For separable 2D, look for the time sub-kernel
+        if not hasattr(actual_sk, "mixture_means"):
+            from gpytorch.kernels import ProductKernel
+
+            if isinstance(actual_sk, ProductKernel):
+                for k in actual_sk.kernels:
+                    inner = getattr(k, "base_kernel", k)
+                    if hasattr(inner, "mixture_means"):
+                        actual_sk = inner
+                        break
+        # Try mixture_means first, then fallbacks
+        for attr in ("mixture_means", "mixture_scales", "mixture_weights"):
+            if hasattr(actual_sk, attr):
+                try:
+                    return len(getattr(actual_sk, attr))
+                except (TypeError, RuntimeError):
+                    pass
+        return None
+
+    def _extract_sm_params(self):
+        """Extract raw spectral-mixture parameters in physical (data) units.
+
+        Helper for :meth:`get_period_summary`.  Extracts per-component
+        means, scales, and weights from ``self.model.sci_kernel`` (or its
+        ``base_kernel`` if the sci_kernel is a
+        :class:`~gpytorch.kernels.GridInterpolationKernel`) and converts
+        them from the transformed (normalised) frequency space back to the
+        original data units, following the same convention as
+        :meth:`get_periods`.
+
+        The conversions performed here are scientifically important:
+
+        * If ``self.xtransform is None`` the model operates directly in the
+          raw time units, so ``mixture_mean`` is already the raw frequency
+          and ``mixture_scale`` is already the raw frequency scale.
+        * If ``self.xtransform is not None`` the model was trained in a
+          normalised time coordinate.  Frequencies and scales must be
+          inverse-transformed (with ``shift=False``, i.e. scaling only)
+          to recover quantities in the original time units.
+
+        For both 1-D and 2-D spectral-mixture models the *time* dimension
+        (index 0 of the last axis of ``mixture_means``) is used, consistent
+        with :meth:`get_periods`.  The indexing ``[i, 0, 0]`` selects
+        mixture component ``i``, collapses the redundant size-1 middle
+        dimension, and picks time-dimension index 0 from the last axis.
+        For a 1-D kernel the shape is ``(n_mix, 1, 1)``; for a 2-D kernel
+        the shape is ``(n_mix, 1, 2)``, and index 0 of the last axis is
+        always the time dimension.
+
+        Returns
+        -------
+        params : dict
+            Keys and values (all 1-D :class:`numpy.ndarray` of length
+            ``num_mixtures``):
+
+            * ``component_frequencies``    - raw centre frequencies
+            * ``component_periods``        - raw centre periods
+            * ``component_frequency_scales`` - Gaussian sigma in frequency
+            * ``component_period_scales``  - Gaussian sigma in period units
+            * ``component_weights``        - kernel component weights
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been initialised.
+        ValueError
+            If neither the ``sci_kernel`` nor its ``base_kernel`` expose
+            ``mixture_means`` (i.e. the model is not spectral-mixture).
+        """
+        if not hasattr(self, "model") or self.model is None:
+            raise RuntimeError(
+                "Model not initialised.  Call set_model() first."
+            )
+        # Some SKI variants set sci_kernel to the GridInterpolationKernel
+        # wrapper rather than the SpectralMixtureKernel itself.  Unwrap it.
+        sk = self.model.sci_kernel
+        if not hasattr(sk, "mixture_means") and hasattr(
+            sk, "base_kernel"
+        ):
+            sk = sk.base_kernel
+
+        if not hasattr(sk, "mixture_means"):
+            raise ValueError(
+                "_extract_sm_params() requires a spectral-mixture kernel.  "
+                "The current sci_kernel does not expose mixture_means."
+            )
+
+        n_mix = len(sk.mixture_means)
+
+        freqs = []
+        periods = []
+        freq_scales = []
+        period_scales = []
+        wts = []
+
+        for i in range(n_mix):
+            # -- extract the time-dimension mean and scale ------------------
+            # mixture_means shape is [n_mix, 1, ard_num_dims].
+            # Index [i, 0, 0] selects mixture i, the redundant size-1
+            # dimension, and dimension 0 (time axis).  This is consistent
+            # with the [i, 0] indexing used in get_periods() for 2-D models.
+            mu_t = sk.mixture_means[i, 0, 0]
+            sig_t = sk.mixture_scales[i, 0, 0]
+
+            if self.xtransform is None:
+                # No coordinate transform: mixture_mean IS the raw frequency,
+                # and mixture_scale IS the raw frequency-domain half-width.
+                raw_freq = float(mu_t.detach().cpu())
+                raw_period = 1.0 / raw_freq
+                # Convert frequency-domain scale to period-domain scale.
+                raw_freq_scale = float(sig_t.detach().cpu())
+                raw_period_scale = (
+                    1.0 / (2.0 * np.pi * raw_freq_scale)
+                )
+            else:
+                # The model was trained in normalised time units.
+                # Inverse-transform (shift=False = scale only) to recover
+                # physical (raw) period, then compute frequency from it.
+                raw_period = float(
+                    self.xtransform.inverse(
+                        1.0 / mu_t, shift=False
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .ravel()[0]
+                )
+                raw_freq = 1.0 / raw_period
+                # Same inverse transform for the scale parameter,
+                # converting normalised frequency scale to raw period scale.
+                raw_period_scale = float(
+                    self.xtransform.inverse(
+                        1.0 / (2.0 * torch.pi * sig_t),
+                        shift=False,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .ravel()[0]
+                )
+                raw_freq_scale = (
+                    1.0 / (2.0 * np.pi * raw_period_scale)
+                )
+
+            freqs.append(raw_freq)
+            periods.append(raw_period)
+            freq_scales.append(raw_freq_scale)
+            period_scales.append(raw_period_scale)
+            wts.append(float(sk.mixture_weights[i].detach().cpu()))
+
+        return {
+            "component_frequencies": np.array(freqs),
+            "component_periods": np.array(periods),
+            "component_frequency_scales": np.array(freq_scales),
+            "component_period_scales": np.array(period_scales),
+            "component_weights": np.array(wts),
+        }
+
+    @staticmethod
+    def _sm_psd_on_grid(freq_grid, params):
+        """Evaluate the total spectral-mixture PSD on a frequency grid.
+
+        The PSD is the (non-normalised) sum of weighted Gaussians in
+        frequency space::
+
+            PSD(f) = sum_k  w_k * exp(-0.5 * ((f - mu_k) / sigma_k)^2)
+
+        where ``mu_k``, ``sigma_k`` and ``w_k`` are the raw (physical-unit)
+        component frequencies, frequency scales, and weights returned by
+        :meth:`_extract_sm_params`.  Overall normalisation is not enforced
+        because only the peak *location* matters for period identification.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            1-D positive-frequency evaluation grid in physical units.
+        params : dict
+            Output of :meth:`_extract_sm_params`.
+
+        Returns
+        -------
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``, same shape as ``freq_grid``.
+        """
+        psd = np.zeros_like(freq_grid, dtype=float)
+        mus = params["component_frequencies"]
+        sigs = params["component_frequency_scales"]
+        wts = params["component_weights"]
+        if not (len(mus) == len(sigs) == len(wts)):
+            raise ValueError(
+                f"Spectral-mixture parameter arrays have inconsistent "
+                f"lengths: component_frequencies={len(mus)}, "
+                f"component_frequency_scales={len(sigs)}, "
+                f"component_weights={len(wts)}.  This indicates an "
+                f"internal error in _extract_sm_params()."
+            )
+        for mu_k, sig_k, w_k in zip(mus, sigs, wts, strict=True):
+            psd += w_k * np.exp(
+                -0.5 * ((freq_grid - mu_k) / sig_k) ** 2
+            )
+        return psd
+
+    def _detect_period_summary_backend(self):
+        """Classify the fitted model into a period-summary backend family.
+
+        Inspects the actual kernel objects attached to the model and returns
+        a string label that :meth:`get_period_summary` uses to dispatch to
+        the appropriate extraction routine.
+
+        Returns
+        -------
+        backend : str
+            One of:
+
+            * ``"spectral_mixture"`` - SpectralMixture kernel (or SKI
+              wrapper around one) - use PSD-peak extraction.
+            * ``"explicit_period"`` - kernel tree contains a
+              :class:`~gpytorch.kernels.PeriodicKernel` with a fitted
+              ``period_length`` parameter (e.g. quasi-periodic models).
+            * ``"periodic_plus_stochastic"`` - AdditiveKernel combining a
+              quasi-periodic term with a stochastic (RBF) term.
+            * ``"separable_2d"`` - ProductKernel with per-dimension
+              ``active_dims`` (separable 2D models); the time sub-kernel
+              is inspected independently.
+            * ``"non_periodic"`` - no periodic structure found (e.g.
+              Matérn-only model).
+        """
+        from gpytorch.kernels import AdditiveKernel, ProductKernel
+
+        sk = self.model.sci_kernel
+        # Unwrap GridInterpolationKernel if present
+        actual_sk = getattr(sk, "base_kernel", sk)
+
+        # 1. Spectral-mixture family (includes SKI wrappers)
+        if hasattr(actual_sk, "mixture_means"):
+            return "spectral_mixture"
+
+        # 2. Additive kernel - periodic + stochastic decomposition
+        if isinstance(sk, AdditiveKernel):
+            return "periodic_plus_stochastic"
+
+        # 3. Product kernel with active_dims on sub-kernels - separable 2D
+        if isinstance(sk, ProductKernel):
+            has_active_dims = any(
+                hasattr(k, "active_dims") and k.active_dims is not None
+                for k in sk.kernels
+            )
+            if has_active_dims:
+                return "separable_2d"
+
+        # 4. Any kernel that contains a PeriodicKernel with period_length
+        if self._find_period_length_in_kernel(sk) is not None:
+            return "explicit_period"
+
+        # 5. Non-periodic fallback
+        return "non_periodic"
+
+    @staticmethod
+    def _find_period_length_in_kernel(kernel):
+        """Recursively search a kernel tree for a PeriodicKernel.
+
+        Walks the kernel tree depth-first via ``base_kernel`` and
+        ``kernels`` attributes and returns the first kernel instance that
+        has a ``period_length`` attribute (i.e. a
+        :class:`~gpytorch.kernels.PeriodicKernel`).
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel
+            Root kernel to search.
+
+        Returns
+        -------
+        periodic_kernel : gpytorch.kernels.Kernel or None
+            The first kernel with ``period_length``, or ``None`` if none
+            is found.
+        """
+        if hasattr(kernel, "period_length"):
+            return kernel
+        # Unwrap ScaleKernel / GridInterpolationKernel wrappers
+        if hasattr(kernel, "base_kernel"):
+            result = Lightcurve._find_period_length_in_kernel(
+                kernel.base_kernel
+            )
+            if result is not None:
+                return result
+        # Recurse into ProductKernel / AdditiveKernel sub-kernels
+        if hasattr(kernel, "kernels"):
+            for k in kernel.kernels:
+                result = Lightcurve._find_period_length_in_kernel(k)
+                if result is not None:
+                    return result
+        return None
+
+    def _extract_explicit_period_params(self, kernel):
+        """Extract the dominant period from a kernel containing a PeriodicKernel.
+
+        Finds the first :class:`~gpytorch.kernels.PeriodicKernel` in the
+        kernel tree (via :meth:`_find_period_length_in_kernel`), reads its
+        ``period_length``, and inverse-transforms it back to raw data units
+        using ``self.xtransform`` (with ``shift=False`` - scaling only,
+        since a period is a duration, not an absolute coordinate).
+
+        If an RBF sub-kernel is found alongside the PeriodicKernel (as in
+        the quasi-periodic product), its lengthscale is used to derive a
+        practical coherence-based period interval and Q-factor.
+
+        The scientifically important transforms are:
+
+        * If ``self.xtransform is None``: period is stored in raw units
+          already.
+        * If ``self.xtransform is not None``: ``period_length`` is in the
+          normalised time coordinate; ``xtransform.inverse(..., shift=False)``
+          recovers the raw-unit period (``shift=False`` because a period is a
+          *duration*, not an absolute time, so only the scale factor matters).
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel
+            Kernel tree to search (typically ``self.model.sci_kernel`` or a
+            sub-kernel thereof).
+
+        Returns
+        -------
+        params : dict or None
+            Dictionary with:
+
+            * ``raw_period`` - dominant period in raw data units
+            * ``raw_freq`` - ``1 / raw_period``
+            * ``raw_rbf_lengthscale`` - coherence timescale in raw units, or
+              ``None`` if no RBF kernel was found alongside the periodic one
+            * ``period_lo``, ``period_hi`` - coherence-based interval (or
+              equal to ``raw_period`` when no RBF lengthscale is available)
+            * ``q_factor`` - coherence Q (RBF-based), or ``None``
+
+            Returns ``None`` if no PeriodicKernel is found.
+        """
+        pk = self._find_period_length_in_kernel(kernel)
+        if pk is None:
+            return None
+
+        period_norm = float(
+            pk.period_length.detach().cpu().numpy().ravel()[0]
+        )
+
+        if self.xtransform is None:
+            # period_length is in raw data units already
+            raw_period = period_norm
+        else:
+            # Inverse-transform: shift=False because a period is a duration
+            # (only the scale factor matters, not the origin shift).
+            raw_period = float(
+                self.xtransform.inverse(
+                    torch.as_tensor([period_norm]), shift=False
+                )
+                .detach()
+                .cpu()
+                .numpy()
+                .ravel()[0]
+            )
+
+        raw_period = abs(raw_period)
+        raw_freq = 1.0 / raw_period if raw_period > 0 else np.nan
+
+        # -- RBF lengthscale for coherence estimate (optional) --------------
+        # In a quasi-periodic kernel the RBF lengthscale sets the coherence
+        # time.  We search the same kernel tree for an RBF lengthscale that
+        # lives alongside the PeriodicKernel.
+        raw_rbf_ls = None
+        if hasattr(kernel, "kernels"):
+            # ProductKernel or AdditiveKernel at top level
+            _kernels_to_search = list(kernel.kernels)
+        elif hasattr(kernel, "base_kernel") and hasattr(
+            kernel.base_kernel, "kernels"
+        ):
+            # ScaleKernel wrapping a ProductKernel
+            _kernels_to_search = list(kernel.base_kernel.kernels)
+        else:
+            _kernels_to_search = []
+
+        for k in _kernels_to_search:
+            # Unwrap ScaleKernel wrappers
+            inner = getattr(k, "base_kernel", k)
+            if hasattr(inner, "lengthscale") and not hasattr(
+                inner, "period_length"
+            ):
+                ls_norm = float(
+                    inner.lengthscale.detach().cpu().numpy().ravel()[0]
+                )
+                if self.xtransform is None:
+                    raw_rbf_ls = ls_norm
+                else:
+                    raw_rbf_ls = float(
+                        self.xtransform.inverse(
+                            torch.as_tensor([ls_norm]), shift=False
+                        )
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .ravel()[0]
+                    )
+                break
+
+        # -- period interval and Q from RBF coherence time -----------------
+        if raw_rbf_ls is not None and raw_rbf_ls > 0:
+            # Bandwidth from Gaussian (RBF) envelope: delta_f ~ 1/(2pi*L)
+            # Linearised period uncertainty: delta_p ~ P^2 * delta_f
+            delta_p = raw_period**2 / (2.0 * np.pi * raw_rbf_ls)
+            period_lo = max(raw_period - delta_p / 2.0, 1e-12)
+            period_hi = raw_period + delta_p / 2.0
+            # Q = f_peak / FWHM_f ~ (2*pi * L) / P
+            q_factor = 2.0 * np.pi * raw_rbf_ls / raw_period
+        else:
+            period_lo = raw_period
+            period_hi = raw_period
+            q_factor = None
+
+        return {
+            "raw_period": raw_period,
+            "raw_freq": raw_freq,
+            "raw_rbf_lengthscale": raw_rbf_ls,
+            "period_lo": period_lo,
+            "period_hi": period_hi,
+            "q_factor": q_factor,
+        }
+
+    @staticmethod
+    def _kernel_family_name(kernel):
+        """Return the class name of *kernel*, or ``""`` if not available.
+
+        Used to populate ``kernel_family`` and ``time_kernel_family`` on
+        :class:`PeriodSummaryResult` objects.  If *kernel* is ``None`` an
+        empty string is returned so that callers can fall back gracefully.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None
+            The kernel whose class name should be returned.
+
+        Returns
+        -------
+        str
+            ``type(kernel).__name__`` or ``""``.
+        """
+        if kernel is None:
+            return ""
+        return type(kernel).__name__
+
+    def _get_non_periodic_summary(self, kernel=None):
+        """Return a graceful period summary for a non-periodic kernel.
+
+        Used when the model has no periodic structure (e.g.
+        :class:`~pgmuvi.gps.MaternGPModel`).  All period-related fields
+        are set to ``None`` or empty arrays, and the ``backend`` field is
+        set to ``"non_periodic"`` so that downstream code can
+        distinguish this from a genuine period summary.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None, optional
+            Kernel to report as the family name.  Defaults to
+            ``self.model.sci_kernel`` when available.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+            Consistent structured result with no period information.
+        """
+        _k = (
+            kernel if kernel is not None
+            else getattr(getattr(self, "model", None), "sci_kernel", None)
+        )
+        kf = self._kernel_family_name(_k)
+        return PeriodSummaryResult(
+            method="non_periodic_kernel",
+            backend="non_periodic",
+            kernel_family=kf,
+            time_kernel_family=kf,
+            has_stochastic_background=False,
+            dominant_period=None,
+            dominant_frequency=None,
+            peaks=[],
+            freq_grid=None,
+            psd=None,
+            interval_definition="none",
+            notes=(
+                "This kernel family does not encode a periodic timescale, "
+                "so no dominant period is defined. "
+                f"Kernel: {kf}."
+            ),
+        )
+
+    def _get_explicit_period_summary(self, kernel=None):
+        """Return a period summary for an explicit-period kernel (e.g. QP).
+
+        Extracts the dominant period directly from a
+        :class:`~gpytorch.kernels.PeriodicKernel` embedded in the model's
+        ``sci_kernel``.  This is appropriate for quasi-periodic models
+        (:class:`~pgmuvi.gps.QuasiPeriodicGPModel`,
+        :class:`~pgmuvi.gps.LinearMeanQuasiPeriodicGPModel`) where the
+        period is a directly fitted parameter.
+
+        The uncertainty is a coherence-based proxy derived from the RBF
+        lengthscale that accompanies the PeriodicKernel in the product
+        ``k_periodic * k_rbf``.  It is **not** a posterior credible
+        interval; MCMC-based intervals are not yet implemented.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None, optional
+            Kernel to search.  Defaults to ``self.model.sci_kernel``.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+            Structured result.  ``freq_grid`` and ``psd`` are ``None``
+            (no PSD is computed for this backend).  The dominant period
+            comes from the kernel's fitted period parameter, not a PSD
+            peak search.  The uncertainty interval, when present, is a
+            coherence proxy from the RBF lengthscale, labelled
+            ``"coherence_proxy_from_rbf_lengthscale"``.
+        """
+        if kernel is None:
+            kernel = self.model.sci_kernel
+
+        kf = self._kernel_family_name(kernel)
+        ep = self._extract_explicit_period_params(kernel)
+        if ep is None:
+            return self._get_non_periodic_summary(kernel=kernel)
+
+        raw_period = ep["raw_period"]
+        raw_freq = ep["raw_freq"]
+        period_lo = ep["period_lo"]
+        period_hi = ep["period_hi"]
+        raw_rbf_ls = ep["raw_rbf_lengthscale"]
+        q_factor = ep["q_factor"]
+
+        if raw_rbf_ls is not None:
+            interval_def = "coherence_proxy_from_rbf_lengthscale"
+            notes = (
+                "Dominant period extracted from the fitted period_length "
+                "parameter of the PeriodicKernel (explicit_period backend). "
+                "The uncertainty interval is a coherence proxy derived from "
+                "the RBF lengthscale; it is NOT a PSD-derived peak interval "
+                "and NOT a posterior credible interval."
+            )
+            # Frequency interval from the period interval
+            f_lo = 1.0 / period_hi if period_hi > 0 else float("nan")
+            f_hi = 1.0 / period_lo if period_lo > 0 else float("nan")
+        else:
+            interval_def = "none"
+            notes = (
+                "Dominant period extracted from the fitted period_length "
+                "parameter of the PeriodicKernel (explicit_period backend). "
+                "No coherence timescale found; no defensible interval is "
+                "reported."
+            )
+            period_lo = float("nan")
+            period_hi = float("nan")
+            f_lo = float("nan")
+            f_hi = float("nan")
+
+        # Represent the single explicit period as a PeriodPeakResult so
+        # that all dict-access keys (period_interval_fwhm_like, n_peaks, …)
+        # remain backward-compatible.  area_fraction=1.0 marks this as the
+        # sole significant period.
+        _peak = PeriodPeakResult(
+            rank=1,
+            frequency=raw_freq,
+            period=raw_period,
+            height=float("nan"),
+            prominence=float("nan"),
+            area_fraction=1.0,
+            interval_frequency=(f_lo, f_hi),
+            interval_period=(period_lo, period_hi),
+            period_ratio_to_primary=1.0,
+            is_candidate_lsp=False,
+            notes=(
+                "Coherence-proxy interval from RBF lengthscale"
+                if raw_rbf_ls is not None
+                else "No interval available"
+            ),
+        )
+
+        return PeriodSummaryResult(
+            method="explicit_period_parameter",
+            backend="explicit_period",
+            kernel_family=kf,
+            time_kernel_family=kf,
+            has_stochastic_background=False,
+            dominant_period=raw_period,
+            dominant_frequency=raw_freq,
+            peaks=[_peak],
+            freq_grid=None,
+            psd=None,
+            notes=notes,
+            interval_definition=interval_def,
+            q_factor=q_factor,
+        )
+
+    def _get_periodic_plus_stochastic_summary(self):
+        """Return a period summary for a periodic-plus-stochastic kernel.
+
+        Used for :class:`~pgmuvi.gps.PeriodicPlusStochasticGPModel`, whose
+        ``sci_kernel`` is an :class:`~gpytorch.kernels.AdditiveKernel`
+        combining a quasi-periodic part (``k_periodic * k_rbf``) with a
+        purely stochastic RBF part.
+
+        The dominant period is extracted from the quasi-periodic sub-kernel
+        using the same logic as :meth:`_get_explicit_period_summary`.
+        The stochastic component is treated as non-periodic background
+        support and is **not** interpreted as an independent period.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+            Structured result.  ``backend == "periodic_plus_stochastic"``,
+            ``has_stochastic_background is True``.
+        """
+        overall_kf = self._kernel_family_name(
+            getattr(self.model, "sci_kernel", None)
+        )
+        # The first sub-kernel of the AdditiveKernel is the QP part.
+        qp_kernel = self.model.sci_kernel.kernels[0]
+        qp_kf = self._kernel_family_name(qp_kernel)
+        ep_summary = self._get_explicit_period_summary(kernel=qp_kernel)
+
+        # Build updated notes that are explicit about periodic vs stochastic
+        _pps_note = (
+            "Periodic-plus-stochastic model (periodic_plus_stochastic "
+            "backend).  The reported period comes from the periodic "
+            "sub-kernel only.  The stochastic (RBF) component is treated "
+            "as non-periodic background support and is NOT interpreted as "
+            "an independent period.  "
+        )
+        return PeriodSummaryResult(
+            method="periodic_plus_stochastic",
+            backend="periodic_plus_stochastic",
+            kernel_family=overall_kf,
+            time_kernel_family=qp_kf,
+            has_stochastic_background=True,
+            dominant_period=ep_summary.dominant_period,
+            dominant_frequency=ep_summary.dominant_frequency,
+            peaks=list(ep_summary.peaks),
+            freq_grid=ep_summary.freq_grid,
+            psd=ep_summary.psd,
+            notes=_pps_note + ep_summary.notes,
+            interval_definition=ep_summary.interval_definition,
+        )
+
+    def _get_separable_2d_period_summary(self, **kwargs):
+        """Return a period summary for a separable-product 2D kernel.
+
+        For separable 2D models (e.g. :class:`~pgmuvi.gps.SeparableGPModel`,
+        :class:`~pgmuvi.gps.AchromaticGPModel`,
+        :class:`~pgmuvi.gps.WavelengthDependentGPModel`,
+        :class:`~pgmuvi.gps.DustMeanGPModel`,
+        :class:`~pgmuvi.gps.PowerLawMeanGPModel`) the ``sci_kernel`` is a
+        :class:`~gpytorch.kernels.ProductKernel` whose sub-kernels each
+        carry an ``active_dims`` attribute that identifies which input
+        dimension (time = 0, wavelength = 1) they act on.
+
+        This method:
+
+        1. Identifies the time sub-kernel (``active_dims`` contains 0).
+        2. Classifies the time kernel into a period-summary backend.
+        3. Delegates to the appropriate backend method.
+        4. Wraps the result in a ``separable_2d``-annotated
+           :class:`PeriodSummaryResult` that explicitly records the
+           time-kernel family used for the summary.
+
+        Parameters
+        ----------
+        **kwargs
+            Forwarded to :meth:`_get_sm_period_summary` when the time
+            kernel is spectral-mixture.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+            Period summary based on the time kernel only.
+            ``backend == "separable_2d"``, ``time_kernel_family`` names
+            the time kernel.  The wavelength kernel does not contribute
+            to the reported period.
+        """
+
+        sk = self.model.sci_kernel
+        overall_kf = self._kernel_family_name(sk)
+        # Identify the time sub-kernel (active_dims contains 0)
+        time_kernel = None
+        for k in sk.kernels:
+            ad = getattr(k, "active_dims", None)
+            if ad is not None and 0 in ad.tolist():
+                time_kernel = k
+                break
+
+        if time_kernel is None:
+            # Cannot identify time kernel; fall back to non-periodic
+            np_summary = self._get_non_periodic_summary()
+            return PeriodSummaryResult(
+                method=np_summary.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family="",
+                has_stochastic_background=False,
+                dominant_period=np_summary.dominant_period,
+                dominant_frequency=np_summary.dominant_frequency,
+                peaks=list(np_summary.peaks),
+                freq_grid=np_summary.freq_grid,
+                psd=np_summary.psd,
+                notes=(
+                    "Separable 2D model: could not identify the time "
+                    "sub-kernel; no period summary is available."
+                ),
+                interval_definition=np_summary.interval_definition,
+            )
+
+        # Classify the time kernel
+        actual_tk = getattr(time_kernel, "base_kernel", time_kernel)
+        tkf = self._kernel_family_name(actual_tk)
+        _2d_prefix = (
+            "Separable 2D model (separable_2d backend): period summary "
+            f"derived from the time kernel ({tkf}) only.  "
+            "The wavelength kernel does not contribute to this period "
+            "determination.  "
+        )
+
+        if hasattr(actual_tk, "mixture_means"):
+            # Spectral-mixture time kernel - use PSD method
+            # Temporarily swap sci_kernel to expose the time kernel
+            # as a stand-alone SM kernel for _extract_sm_params.
+            _orig_sk = self.model.sci_kernel
+            self.model.sci_kernel = actual_tk
+            try:
+                inner = self._get_sm_period_summary(**kwargs)
+            finally:
+                self.model.sci_kernel = _orig_sk
+            return PeriodSummaryResult(
+                method=inner.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family=tkf,
+                has_stochastic_background=inner.has_stochastic_background,
+                dominant_period=inner.dominant_period,
+                dominant_frequency=inner.dominant_frequency,
+                peaks=list(inner.peaks),
+                freq_grid=inner.freq_grid,
+                psd=inner.psd,
+                notes=_2d_prefix + inner.notes,
+                component_diagnostics=inner.component_diagnostics,
+                interval_definition=inner.interval_definition,
+                n_peaks_detected=inner.n_peaks_detected,
+                n_peaks_analyzed=inner.n_peaks_analyzed,
+                n_peaks_requested=inner.n_peaks_requested,
+            )
+
+        if self._find_period_length_in_kernel(time_kernel) is not None:
+            # Explicit-period time kernel (e.g. quasi-periodic)
+            inner = self._get_explicit_period_summary(kernel=time_kernel)
+            return PeriodSummaryResult(
+                method=inner.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family=tkf,
+                has_stochastic_background=inner.has_stochastic_background,
+                dominant_period=inner.dominant_period,
+                dominant_frequency=inner.dominant_frequency,
+                peaks=list(inner.peaks),
+                freq_grid=inner.freq_grid,
+                psd=inner.psd,
+                notes=_2d_prefix + inner.notes,
+                interval_definition=inner.interval_definition,
+            )
+
+        # Non-periodic time kernel
+        return PeriodSummaryResult(
+            method="non_periodic_kernel",
+            backend="separable_2d",
+            kernel_family=overall_kf,
+            time_kernel_family=tkf,
+            has_stochastic_background=False,
+            dominant_period=None,
+            dominant_frequency=None,
+            peaks=[],
+            freq_grid=None,
+            psd=None,
+            notes=(
+                "Separable 2D model: the time kernel "
+                f"({tkf}) is non-periodic, "
+                "so no dominant period is defined."
+            ),
+            interval_definition="none",
+        )
+
+    @staticmethod
+    def _find_dominant_peak_basin(psd, dominant_idx):
+        """Identify the basin of the dominant PSD peak.
+
+        Starting from the dominant peak index, walk left and right until a
+        local minimum is found or the edge of the array is reached.  The
+        basin is the contiguous region associated with the dominant mode.
+
+        Parameters
+        ----------
+        psd : numpy.ndarray
+            1-D PSD values on a frequency grid.
+        dominant_idx : int
+            Index of the dominant PSD peak in ``psd``.
+
+        Returns
+        -------
+        basin_left : int
+            Index of the left edge of the basin (inclusive).
+        basin_right : int
+            Index of the right edge of the basin (inclusive).
+        left_at_boundary : bool
+            ``True`` if the left edge reached the array boundary without
+            finding a local minimum.
+        right_at_boundary : bool
+            ``True`` if the right edge reached the array boundary without
+            finding a local minimum.
+        """
+        n = len(psd)
+
+        # Walk left: stop at local minimum (psd starts rising)
+        left = dominant_idx
+        while left > 0 and psd[left - 1] < psd[left]:
+            left -= 1
+        left_at_boundary = left == 0
+
+        # Walk right: stop at local minimum (psd starts rising)
+        right = dominant_idx
+        while right < n - 1 and psd[right + 1] < psd[right]:
+            right += 1
+        right_at_boundary = right == n - 1
+
+        return left, right, left_at_boundary, right_at_boundary
+
+    @staticmethod
+    def _integrate_logspace(psd, freq_grid):
+        """Integrate a PSD over a log-spaced frequency grid.
+
+        Computes the integral of ``psd * freq`` with respect to
+        ``log(freq)``, which equals the linear integral of ``psd`` over
+        ``freq`` when the grid is logarithmically spaced.  Using this
+        formulation on a log-spaced grid avoids the strong bias towards
+        high frequencies that arises from naively applying the trapezoidal
+        rule in linear frequency space.
+
+        Formally this implements::
+
+            integral of psd(f) df  ~  integral of (f * psd(f)) d(log f)
+                                   ~  trapz(psd * freq, log(freq))
+
+        Parameters
+        ----------
+        psd : numpy.ndarray
+            1-D PSD values on ``freq_grid``.
+        freq_grid : numpy.ndarray
+            Positive, log-spaced frequency values with the same length as
+            ``psd``.
+
+        Returns
+        -------
+        integral : float
+            Estimated integral value.  Always ≥ 0.
+        """
+        if len(freq_grid) < 2:
+            return 0.0
+        log_f = np.log(freq_grid)
+        weights = psd * freq_grid
+        try:
+            return float(np.trapezoid(weights, log_f))
+        except AttributeError:
+            return float(np.trapz(weights, log_f))
+
+    @staticmethod
+    def _compute_equal_tail_mass_interval(
+        freq_grid, psd, basin_left, basin_right, mass_level=0.68
+    ):
+        """Compute an equal-tail mass interval within the dominant peak basin.
+
+        .. deprecated::
+            This method is retained as a legacy helper.  The default
+            ``uncertainty="peak_mass"`` path now uses
+            :meth:`_compute_peak_centered_mass_interval`, which guarantees
+            that the returned interval contains the peak frequency.
+
+        Integrates the PSD (as a proxy for a probability density) over the
+        basin region and returns the frequency interval that contains a
+        centred fraction ``mass_level`` of the total basin mass, using an
+        equal-tail (symmetric quantile) approach.
+
+        Integration is performed in log-frequency space (``trapz(psd *
+        freq, log_freq)``) to avoid the bias towards high frequencies that
+        arises from naive linear-space integration on a log-spaced grid.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Full frequency evaluation grid (positive, log-spaced).
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        basin_left : int
+            Left edge index of the dominant-peak basin (inclusive).
+        basin_right : int
+            Right edge index of the dominant-peak basin (inclusive).
+        mass_level : float, optional
+            Fraction of the basin mass to enclose (default 0.68 for
+            approximately ``1 sigma`` coverage).  Must be in ``(0, 1)``.
+
+        Returns
+        -------
+        f_lo : float
+            Lower frequency bound of the equal-tail interval.
+        f_hi : float
+            Upper frequency bound of the equal-tail interval.
+        success : bool
+            ``True`` if the interval could be computed; ``False`` if the
+            basin was too narrow (< 2 grid points) or the total mass was
+            numerically zero.
+        """
+        f_basin = freq_grid[basin_left : basin_right + 1]
+        p_basin = psd[basin_left : basin_right + 1]
+
+        if len(f_basin) < 2:
+            return float(f_basin[0]), float(f_basin[0]), False
+
+        # Log-space integration via shared helper
+        total_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
+        if total_mass <= 0:
+            return float(f_basin[0]), float(f_basin[-1]), False
+
+        # Build cumulative mass in log-space
+        log_f = np.log(f_basin)
+        weights = p_basin * f_basin
+        cum = np.zeros(len(f_basin))
+        for i in range(1, len(f_basin)):
+            dlogf = log_f[i] - log_f[i - 1]
+            cum[i] = cum[i - 1] + 0.5 * (
+                weights[i - 1] + weights[i]
+            ) * dlogf
+        cum /= total_mass  # normalise to [0, 1]
+
+        tail = (1.0 - mass_level) / 2.0
+
+        # Interpolate lower quantile
+        f_lo = float(np.interp(tail, cum, f_basin))
+        # Interpolate upper quantile
+        f_hi = float(np.interp(1.0 - tail, cum, f_basin))
+
+        return f_lo, f_hi, True
+
+    @staticmethod
+    def _compute_peak_centered_mass_interval(
+        freq_grid, psd, basin_left, basin_right, peak_idx, mass_level=0.68
+    ):
+        """Compute a peak-centered mass interval within a PSD basin.
+
+        This is the preferred method for ``uncertainty="peak_mass"``.
+
+        Unlike the equal-tail approach, this method **guarantees that the
+        returned interval contains the peak frequency** by growing the
+        interval outward from the peak, always expanding toward the side
+        that contributes more mass per log-frequency unit.  This greedy
+        "grow from the peak" strategy is equivalent to finding the shortest
+        interval (in log-frequency space) that encloses the requested mass
+        fraction and still contains the peak.
+
+        Integration is performed in log-frequency space to avoid the
+        high-frequency bias of naive linear-space trapezoidal integration
+        on a log-spaced grid.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Full frequency evaluation grid (positive, log-spaced).
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        basin_left : int
+            Left edge index of the basin (inclusive).
+        basin_right : int
+            Right edge index of the basin (inclusive).
+        peak_idx : int
+            Index of the peak in the full ``freq_grid``.  Must satisfy
+            ``basin_left <= peak_idx <= basin_right``.
+        mass_level : float, optional
+            Target fraction of basin mass to enclose.  Default 0.68.
+
+        Returns
+        -------
+        f_lo : float
+            Lower frequency bound of the peak-centered interval.
+        f_hi : float
+            Upper frequency bound of the peak-centered interval.
+        success : bool
+            ``True`` if the interval was computed successfully.  ``False``
+            if the basin has fewer than 2 grid points or the total mass is
+            numerically zero.
+        """
+        f_basin = freq_grid[basin_left : basin_right + 1]
+        p_basin = psd[basin_left : basin_right + 1]
+        pk_rel = int(peak_idx) - int(basin_left)
+
+        if len(f_basin) < 2:
+            return float(f_basin[0]), float(f_basin[0]), False
+
+        # Log-space integration weights
+        log_f = np.log(f_basin)
+        weights = p_basin * f_basin
+
+        # Total basin mass via shared helper (avoids duplicating try/except)
+        total_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
+        if total_mass <= 0:
+            return float(f_basin[0]), float(f_basin[-1]), False
+
+        # Per-segment mass in log-space
+        # seg_mass[i] = mass of segment [i, i+1]
+        n = len(f_basin)
+        seg_mass = np.zeros(n - 1)
+        for i in range(n - 1):
+            dlogf = log_f[i + 1] - log_f[i]
+            seg_mass[i] = 0.5 * (weights[i] + weights[i + 1]) * dlogf
+
+        # Greedy grow from the peak: always expand into the denser side
+        left_ptr = pk_rel
+        right_ptr = pk_rel
+        accumulated = 0.0
+
+        while accumulated / total_mass < mass_level:
+            can_go_left = left_ptr > 0
+            can_go_right = right_ptr < n - 1
+
+            if not can_go_left and not can_go_right:
+                break
+
+            if can_go_left and can_go_right:
+                left_seg = seg_mass[left_ptr - 1]
+                right_seg = seg_mass[right_ptr]
+                if left_seg >= right_seg:
+                    accumulated += left_seg
+                    left_ptr -= 1
+                else:
+                    accumulated += right_seg
+                    right_ptr += 1
+            elif can_go_left:
+                accumulated += seg_mass[left_ptr - 1]
+                left_ptr -= 1
+            else:
+                accumulated += seg_mass[right_ptr]
+                right_ptr += 1
+
+        f_lo = float(f_basin[left_ptr])
+        f_hi = float(f_basin[right_ptr])
+        return f_lo, f_hi, True
+
+    @staticmethod
+    def _build_frequency_grid(min_freq, max_freq, n_grid, spacing="log"):
+        """Build a 1-D positive-frequency evaluation grid.
+
+        Parameters
+        ----------
+        min_freq : float
+            Lowest frequency.  Must be strictly positive.
+        max_freq : float
+            Highest frequency.  Must be greater than ``min_freq``.
+        n_grid : int
+            Number of grid points.
+        spacing : str, optional
+            ``"log"`` (default) for logarithmically spaced points;
+            ``"linear"`` for linearly spaced points.  The spectral-mixture
+            summary uses ``"log"`` to ensure adequate low-frequency
+            resolution across wide dynamic ranges.
+
+        Returns
+        -------
+        freq_grid : numpy.ndarray
+            1-D array of ``n_grid`` frequencies in ``[min_freq, max_freq]``.
+
+        Notes
+        -----
+        If ``max_freq <= min_freq`` on entry, ``max_freq`` is automatically
+        adjusted to ``min_freq * 2.0`` so that the grid is always valid.
+
+        Raises
+        ------
+        ValueError
+            If ``min_freq <= 0`` when ``spacing="log"``.
+        """
+        min_freq = float(min_freq)
+        max_freq = float(max_freq)
+        n_grid = int(n_grid)
+
+        if max_freq <= min_freq:
+            max_freq = min_freq * 2.0
+
+        if spacing == "log":
+            if min_freq <= 0:
+                raise ValueError(
+                    f"min_freq must be > 0 for log spacing, "
+                    f"got {min_freq!r}"
+                )
+            return np.logspace(
+                np.log10(min_freq), np.log10(max_freq), n_grid
+            )
+        return np.linspace(min_freq, max_freq, n_grid)
+
+    @staticmethod
+    def _refine_peak_region(
+        freq_grid, psd, params, dominant_idx,
+        f_left_approx, f_right_approx,
+        pad_log_factor=0.2, n_refine=None,
+    ):
+        """Refine the half-max crossing estimate with a denser local grid.
+
+        Builds a fine log-spaced grid over a padded window around the
+        approximate half-max interval ``[f_left_approx, f_right_approx]``,
+        recomputes the PSD, re-finds the dominant peak, and walks the new
+        PSD to locate the bracketing indices for both crossings.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Global log-spaced frequency grid (used for fallback bounds).
+        psd : numpy.ndarray
+            PSD on ``freq_grid``.
+        params : dict
+            Output of :meth:`_extract_sm_params`.
+        dominant_idx : int
+            Index of the dominant peak on ``freq_grid``.
+        f_left_approx, f_right_approx : float
+            Approximate left and right half-max crossing frequencies from
+            the global grid.
+        pad_log_factor : float, optional
+            Fractional padding in log space on each side.  Default 0.2
+            (i.e. widen the local window by 20 % in log units on each side).
+        n_refine : int or None, optional
+            Number of points in the local grid.  Defaults to
+            ``max(4 * len(freq_grid), 2000)``.  The factor of 4 ensures
+            the local grid is at least 4x denser than the global grid;
+            the minimum of 2000 avoids a coarse local grid when the
+            global grid is small.
+
+        Returns
+        -------
+        freq_fine : numpy.ndarray
+            Dense local frequency grid.
+        psd_fine : numpy.ndarray
+            PSD on ``freq_fine``.
+        dominant_idx_fine : int
+            Index of the dominant peak on ``freq_fine``.
+        """
+        from scipy.signal import find_peaks
+
+        if n_refine is None:
+            n_refine = max(4 * len(freq_grid), 2000)
+        n_refine = int(n_refine)
+
+        dom_freq = float(freq_grid[dominant_idx])
+
+        # Pad in log space on both sides
+        log_lo = np.log10(f_left_approx) - pad_log_factor
+        log_hi = np.log10(f_right_approx) + pad_log_factor
+
+        # Clamp within the global grid bounds
+        log_lo = max(log_lo, np.log10(float(freq_grid[0])))
+        log_hi = min(log_hi, np.log10(float(freq_grid[-1])))
+
+        # Ensure the dominant frequency is bracketed
+        if np.log10(dom_freq) < log_lo:
+            log_lo = np.log10(dom_freq) - pad_log_factor
+        if np.log10(dom_freq) > log_hi:
+            log_hi = np.log10(dom_freq) + pad_log_factor
+
+        if log_hi <= log_lo:
+            log_hi = log_lo + 0.1
+
+        freq_fine = np.logspace(log_lo, log_hi, n_refine)
+        psd_fine = Lightcurve._sm_psd_on_grid(freq_fine, params)
+
+        peaks_fine, _ = find_peaks(psd_fine)
+        if len(peaks_fine) == 0:
+            dominant_idx_fine = int(np.argmax(psd_fine))
+        else:
+            dominant_idx_fine = int(
+                peaks_fine[np.argmax(psd_fine[peaks_fine])]
+            )
+
+        return freq_fine, psd_fine, dominant_idx_fine
+
+    @staticmethod
+    def _interpolate_halfmax_crossing(freq_grid, psd, idx, direction, half_max):
+        """Linearly interpolate the frequency where PSD crosses ``half_max``.
+
+        Given that ``psd[idx]`` is the last point **above** (or at) the
+        half-maximum on one side of the dominant peak, and ``psd[idx ±1]``
+        is the first point **below** it, return the linearly interpolated
+        crossing frequency.
+
+        If the neighbouring index is out of range (the crossing was at the
+        very boundary of the grid), the exact grid frequency at ``idx`` is
+        returned as a fallback.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            1-D frequency evaluation grid.
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        idx : int
+            Index of the last point whose PSD is still at or above
+            ``half_max`` on the side being interpolated.
+        direction : str
+            ``"left"`` or ``"right"``.  Determines which neighbour to use
+            for interpolation (``idx - 1`` for left, ``idx + 1`` for right).
+        half_max : float
+            The half-maximum level, i.e. ``0.5 * peak_height``.
+
+        Returns
+        -------
+        f_crossing : float
+            Interpolated crossing frequency.
+        interpolated : bool
+            ``True`` if a proper bracketed interpolation was performed;
+            ``False`` if the boundary fallback was used.
+        """
+        if direction == "left":
+            neighbor = idx - 1
+        else:
+            neighbor = idx + 1
+
+        if neighbor < 0 or neighbor >= len(freq_grid):
+            # Boundary fallback: can't interpolate, return the grid point
+            return float(freq_grid[idx]), False
+
+        f_a = float(freq_grid[idx])
+        f_b = float(freq_grid[neighbor])
+        psd_a = float(psd[idx])
+        psd_b = float(psd[neighbor])
+
+        # Safeguard: if psd values don't bracket half_max (shouldn't happen
+        # given how idx was found, but guard against numerical edge cases)
+        if psd_a == psd_b:
+            return f_a, False
+
+        # Linear interpolation: half_max = psd_a + t * (psd_b - psd_a)
+        t = (half_max - psd_a) / (psd_b - psd_a)
+        f_crossing = f_a + t * (f_b - f_a)
+        return float(f_crossing), True
+
+    @staticmethod
+    def _expand_psd_grid_until_contained(
+        freq_grid, psd, params, dominant_idx, half_max,
+        max_expansions=10, expansion_factor=2.0, n_grid=5000,
+    ):
+        """Expand the frequency grid until both half-max crossings are inside.
+
+        Starting from the already-computed ``freq_grid`` / ``psd``, test
+        whether the half-maximum crossings of the dominant PSD peak are
+        contained within the grid.  If the left crossing is at the first
+        grid point (``psd[0] >= half_max``) the low end of the grid is
+        extended by dividing ``min_freq`` by ``expansion_factor``.  If the
+        right crossing is at the last grid point the high end is extended by
+        multiplying ``max_freq`` by ``expansion_factor``.  The dominant peak
+        position is re-evaluated after each expansion to remain consistent.
+
+        The grid is always rebuilt as a **log-spaced** grid via
+        :meth:`_build_frequency_grid` to ensure adequate low-frequency
+        resolution across wide dynamic ranges.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Initial evaluation grid.
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        params : dict
+            Output of :meth:`_extract_sm_params`, passed to
+            :meth:`_sm_psd_on_grid` for PSD recomputation.
+        dominant_idx : int
+            Index of the dominant PSD peak on the *current* grid.
+        half_max : float
+            ``0.5 * psd[dominant_idx]``.
+        max_expansions : int, optional
+            Maximum number of expansion iterations.  Default 10.
+        expansion_factor : float, optional
+            Multiplicative factor for grid edge expansion.  Default 2.0.
+        n_grid : int, optional
+            Number of grid points to use when rebuilding.  Default 5000.
+
+        Returns
+        -------
+        freq_grid : numpy.ndarray
+            Possibly expanded frequency grid.
+        psd : numpy.ndarray
+            PSD values on the returned ``freq_grid``.
+        dominant_idx : int
+            Index of the dominant peak on the returned grid.
+        left_truncated : bool
+            ``True`` if the left half-max crossing is still at the boundary
+            after all expansion attempts.
+        right_truncated : bool
+            ``True`` if the right half-max crossing is still at the boundary.
+        n_expansions : int
+            Number of expansions that were performed.
+        """
+        from scipy.signal import find_peaks
+
+        min_freq = float(freq_grid[0])
+        max_freq = float(freq_grid[-1])
+        n_grid = int(n_grid)
+        n_expansions = 0
+
+        for _ in range(max_expansions):
+            left_truncated = psd[0] >= half_max
+            right_truncated = psd[-1] >= half_max
+
+            if not left_truncated and not right_truncated:
+                break  # Both crossings are inside the grid
+
+            if left_truncated:
+                min_freq = max(min_freq / expansion_factor, 1e-12)
+            if right_truncated:
+                max_freq = max_freq * expansion_factor
+
+            freq_grid = Lightcurve._build_frequency_grid(
+                min_freq, max_freq, n_grid, spacing="log"
+            )
+            psd = Lightcurve._sm_psd_on_grid(freq_grid, params)
+
+            # Re-find dominant peak on the new grid
+            peaks, _ = find_peaks(psd)
+            if len(peaks) == 0:
+                dominant_idx = int(np.argmax(psd))
+            else:
+                dominant_idx = int(peaks[np.argmax(psd[peaks])])
+            half_max = 0.5 * float(psd[dominant_idx])
+
+            n_expansions += 1
+
+        left_truncated = bool(psd[0] >= half_max)
+        right_truncated = bool(psd[-1] >= half_max)
+
+        return (
+            freq_grid, psd, dominant_idx,
+            left_truncated, right_truncated, n_expansions,
+        )
+
+    @staticmethod
+    def _find_psd_peaks(freq_grid, psd):
+        """Detect all local maxima in a PSD array, sorted by height.
+
+        Returns ``(peak_indices, prominences)`` where ``peak_indices`` is a
+        1-D numpy int array and ``prominences`` is a 1-D float array of the
+        same length.  If no peaks are detected the global maximum is returned
+        as a single peak with prominence equal to its height.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Frequency evaluation grid (unused directly; kept for API symmetry).
+        psd : numpy.ndarray
+            1-D PSD values.
+
+        Returns
+        -------
+        peak_indices : numpy.ndarray
+            Indices into ``psd`` of the detected peaks, sorted by descending
+            height.
+        prominences : numpy.ndarray
+            Corresponding peak prominences.
+        """
+        from scipy.signal import find_peaks as _scipy_find_peaks
+
+        peaks_idx, props = _scipy_find_peaks(psd, prominence=0)
+        if len(peaks_idx) == 0:
+            dom = int(np.argmax(psd))
+            return np.array([dom]), np.array([float(psd[dom])])
+        proms = props["prominences"]
+        order = np.argsort(psd[peaks_idx])[::-1]
+        return peaks_idx[order], proms[order]
+
+    @staticmethod
+    def _characterize_peak_basin(
+        freq_grid, psd, peak_idx, mass_level=0.68
+    ):
+        """Characterize a single PSD peak basin.
+
+        Finds the basin boundaries by walking left/right from the peak
+        until the PSD stops decreasing, computes the peak-centered mass
+        interval (which always contains the peak), and returns a summary
+        dict.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Frequency evaluation grid.
+        psd : numpy.ndarray
+            1-D PSD values.
+        peak_idx : int
+            Index of the peak in ``psd``.
+        mass_level : float, optional
+            Fraction of basin mass to enclose.  Default 0.68.
+
+        Returns
+        -------
+        info : dict
+            Keys: ``height``, ``basin_left``, ``basin_right``,
+            ``f_lo``, ``f_hi``, ``area_fraction``, ``mass_ok``.
+        """
+        peak_idx = int(peak_idx)
+        height = float(psd[peak_idx])
+
+        n = len(psd)
+        left = peak_idx
+        while left > 0 and psd[left - 1] < psd[left]:
+            left -= 1
+        right = peak_idx
+        while right < n - 1 and psd[right + 1] < psd[right]:
+            right += 1
+
+        f_lo, f_hi, mass_ok = Lightcurve._compute_peak_centered_mass_interval(
+            freq_grid, psd, left, right, peak_idx, mass_level=mass_level
+        )
+
+        f_basin = freq_grid[left : right + 1]
+        p_basin = psd[left : right + 1]
+        basin_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
+        total_mass = Lightcurve._integrate_logspace(psd, freq_grid)
+        area_fraction = (
+            basin_mass / total_mass if total_mass > 0 else float("nan")
+        )
+
+        return {
+            "height": height,
+            "basin_left": left,
+            "basin_right": right,
+            "f_lo": f_lo,
+            "f_hi": f_hi,
+            "area_fraction": area_fraction,
+            "mass_ok": mass_ok,
+        }
+
+    @staticmethod
+    def _identify_lsp_candidates(
+        peaks_list,
+        ratio_range=(5.0, 15.0),
+        min_area_fraction=0.05,
+    ):
+        """Flag peaks that are candidate Long Secondary Periods (LSPs).
+
+        A peak is flagged as a candidate LSP if its
+        ``period_ratio_to_primary`` lies within ``ratio_range`` and its
+        ``area_fraction`` is at least ``min_area_fraction``.
+
+        Parameters
+        ----------
+        peaks_list : list[PeriodPeakResult]
+            Peaks with ``period_ratio_to_primary`` already set.
+        ratio_range : tuple of float, optional
+            ``(min_ratio, max_ratio)`` for LSP detection.  Default
+            ``(5.0, 15.0)``.
+        min_area_fraction : float, optional
+            Minimum basin area fraction.  Default 0.05.
+
+        Returns
+        -------
+        list[PeriodPeakResult]
+            Same list with ``is_candidate_lsp`` updated via
+            ``dataclasses.replace()``.
+        """
+        updated = []
+        for p in peaks_list:
+            r = p.period_ratio_to_primary
+            is_lsp = (
+                r > 1.0
+                and ratio_range[0] <= r <= ratio_range[1]
+                and p.area_fraction >= min_area_fraction
+            )
+            updated.append(dataclasses.replace(p, is_candidate_lsp=is_lsp))
+        return updated
+
+    def _get_sm_period_summary(
+        self,
+        n_grid=5000,
+        min_freq=None,
+        max_freq=None,
+        peak_threshold_rel=0.2,
+        uncertainty="peak_mass",
+        n_peaks=None,
+        mass_level=0.68,
+        classify_lsp=False,
+    ):
+        """Return the PSD-based period summary for a spectral-mixture model.
+
+        Implements the core PSD-peak extraction logic used when the model
+        (or the time sub-kernel of a separable 2D model) is a
+        :class:`~gpytorch.kernels.SpectralMixtureKernel`.
+
+        Parameters
+        ----------
+        n_grid : int, optional
+            Number of points in the positive-frequency evaluation grid.
+        min_freq, max_freq : float or None, optional
+            Initial grid limits.  If ``None``, defaults are derived from
+            the data time span and the component centres + five sigma.
+            These are treated as *starting* bounds only; the grid may be
+            expanded automatically.
+        peak_threshold_rel : float, optional
+            Relative height threshold for significant peak detection.
+        uncertainty : str, optional
+            Uncertainty method.  Only ``"peak_mass"`` is supported
+            (``"peak_width"`` raises ``NotImplementedError``).
+        n_peaks : int or None, optional
+            Number of peaks to analyse.  If ``None``, defaults to the
+            effective number of mixtures used at fit time.
+        mass_level : float, optional
+            Fraction of basin mass to enclose.  Default 0.68.
+        classify_lsp : bool, optional
+            If ``True``, flag candidate Long Secondary Periods.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+        """
+        n_grid = int(n_grid)
+        params = self._extract_sm_params()
+
+        comp_freqs = params["component_frequencies"]
+        comp_scales = params["component_frequency_scales"]
+
+        if min_freq is None:
+            if self.ndim == 1:
+                t_span = (
+                    self._xdata_raw.max() - self._xdata_raw.min()
+                ).item()
+            else:
+                t_col = self._xdata_raw[:, 0]
+                t_span = (t_col.max() - t_col.min()).item()
+            t_span = max(float(t_span), 1e-10)
+            min_freq = 1.0 / t_span
+
+        if max_freq is None:
+            max_freq = float(
+                np.max(comp_freqs + 5.0 * comp_scales)
+            )
+
+        min_freq = max(float(min_freq), 1e-12)
+        max_freq = max(float(max_freq), min_freq * 2.0)
+
+        freq_grid = self._build_frequency_grid(
+            min_freq, max_freq, n_grid, spacing="log"
+        )
+        psd = self._sm_psd_on_grid(freq_grid, params)
+
+        from scipy.signal import find_peaks as _sp_find_peaks
+
+        _peaks, _ = _sp_find_peaks(psd)
+        if len(_peaks) == 0:
+            dominant_idx = int(np.argmax(psd))
+        else:
+            dominant_idx = int(_peaks[np.argmax(psd[_peaks])])
+
+        peak_height = float(psd[dominant_idx])
+        half_max = 0.5 * peak_height
+
+        # -- adaptive grid expansion to contain both half-max crossings ----
+        (
+            freq_grid, psd, dominant_idx,
+            left_truncated, right_truncated, n_expansions,
+        ) = self._expand_psd_grid_until_contained(
+            freq_grid, psd, params, dominant_idx, half_max,
+            max_expansions=10, expansion_factor=2.0, n_grid=n_grid,
+        )
+        peak_height = float(psd[dominant_idx])
+
+        # -- detect all peaks, sorted by height (descending) ---------------
+        all_peak_indices, all_prominences = self._find_psd_peaks(
+            freq_grid, psd
+        )
+
+        # -- determine how many peaks to analyse ---------------------------
+        n_peaks_requested = n_peaks
+        if n_peaks is not None:
+            n_peaks_to_analyze = int(n_peaks)
+        else:
+            n_eff = getattr(self, "_fit_num_mixtures_effective", None)
+            n_peaks_to_analyze = (
+                int(n_eff) if n_eff is not None else len(all_peak_indices)
+            )
+        n_peaks_available = len(all_peak_indices)
+        n_peaks_to_analyze = min(n_peaks_to_analyze, n_peaks_available)
+
+        selected_indices = all_peak_indices[:n_peaks_to_analyze]
+        selected_proms = all_prominences[:n_peaks_to_analyze]
+
+        # -- characterize each selected peak --------------------------------
+        dominant_freq = float(freq_grid[selected_indices[0]])
+        dominant_period = 1.0 / dominant_freq
+
+        peak_objects = []
+        for rank_idx, (pidx, prom) in enumerate(
+            zip(selected_indices, selected_proms, strict=True)
+        ):
+            info = self._characterize_peak_basin(
+                freq_grid, psd, pidx, mass_level=mass_level
+            )
+            f_pk = float(freq_grid[pidx])
+            p_pk = 1.0 / f_pk
+            f_lo = info["f_lo"]
+            f_hi = info["f_hi"]
+            p_lo = 1.0 / f_hi if f_hi > 0 else float("nan")
+            p_hi = 1.0 / f_lo if f_lo > 0 else float("nan")
+            ratio = p_pk / dominant_period if dominant_period > 0 else 1.0
+            peak_objects.append(
+                PeriodPeakResult(
+                    rank=rank_idx + 1,
+                    frequency=f_pk,
+                    period=p_pk,
+                    height=info["height"],
+                    prominence=float(prom),
+                    area_fraction=info["area_fraction"],
+                    interval_frequency=(f_lo, f_hi),
+                    interval_period=(p_lo, p_hi),
+                    period_ratio_to_primary=ratio,
+                    is_candidate_lsp=False,
+                    notes="",
+                )
+            )
+
+        if classify_lsp:
+            peak_objects = self._identify_lsp_candidates(peak_objects)
+
+        # -- backward-compat: significant peaks via threshold ---------------
+        threshold = peak_threshold_rel * peak_height
+        sig_mask = psd[all_peak_indices] >= threshold
+        n_sig_peaks = int(np.sum(sig_mask))
+
+        # -- notes string ---------------------------------------------------
+        dominant_info = self._characterize_peak_basin(
+            freq_grid, psd, dominant_idx, mass_level=mass_level
+        )
+        _mass_ok = dominant_info["mass_ok"]
+        _basin_l, _basin_r, _basin_left_at_bdy, _basin_right_at_bdy = (
+            self._find_dominant_peak_basin(psd, dominant_idx)
+        )
+        _note_parts = [
+            "Interval is based on the integrated PSD mass within the "
+            "dominant peak basin (peak-centered shortest-mass interval). "
+            "The interval is guaranteed to contain the peak frequency. "
+            "Integration is performed in log-frequency space to avoid "
+            "high-frequency bias on a log-spaced grid. "
+            "PSD evaluated on a log-spaced frequency grid."
+        ]
+        if _basin_left_at_bdy:
+            _note_parts.append(
+                "  Basin reached the left grid boundary; "
+                "left edge of the basin may be underestimated."
+            )
+        if _basin_right_at_bdy:
+            _note_parts.append(
+                "  Basin reached the right grid boundary; "
+                "right edge of the basin may be underestimated."
+            )
+        if not _mass_ok:
+            _note_parts.append(
+                "  WARNING: peak-mass interval could not be computed "
+                "(basin too narrow); falling back to basin edges."
+            )
+        if n_expansions > 0:
+            _note_parts.append(
+                f"  Grid expanded {n_expansions} time(s) to contain "
+                "the half-maximum interval."
+            )
+        if left_truncated or right_truncated:
+            _sides = []
+            if left_truncated:
+                _sides.append("left")
+            if right_truncated:
+                _sides.append("right")
+            _note_parts.append(
+                f"  WARNING: half-maximum crossing on the "
+                f"{' and '.join(_sides)} side(s) may still be "
+                "truncated; width estimate is a lower bound."
+            )
+        _sm_psd_note = (
+            "Spectral-mixture model (spectral_mixture backend).  "
+            "Periods are derived from peaks of the SUMMED PSD on a "
+            "frequency grid — this is the literature-comparable output.  "
+            "The component periods/frequencies listed in the kernel "
+            "component diagnostics section are direct kernel hyperparameter "
+            "values and are for diagnostic purposes only; they are NOT "
+            "the reported period determinations.  "
+        )
+        notes = _sm_psd_note + "".join(_note_parts)
+
+        if uncertainty == "peak_width":
+            raise NotImplementedError(
+                "uncertainty='peak_width' is not implemented for the "
+                "spectral_mixture backend because the reported interval is "
+                "still computed using the peak-centered mass method. "
+                "Use uncertainty='peak_mass' instead."
+            )
+        _interval_def = "peak_centered_68pct_mass_interval"
+
+        _kf = self._kernel_family_name(
+            getattr(self.model, "sci_kernel", None)
+        )
+        _diag_notes = (
+            "Spectral-mixture kernel components.  These are internal kernel "
+            "parameters and are NOT independent physical periods.  "
+            "The summed-PSD peaks (see 'peaks') are the "
+            "literature-comparable period estimates."
+        )
+        _diag = ComponentDiagnosticsResult(
+            component_periods=params["component_periods"],
+            component_frequencies=params["component_frequencies"],
+            component_weights=params["component_weights"],
+            component_period_scales=params["component_period_scales"],
+            component_frequency_scales=(
+                params["component_frequency_scales"]
+            ),
+            n_components=len(params["component_periods"]),
+            kernel_family=_kf,
+            notes=_diag_notes,
+        )
+        return PeriodSummaryResult(
+            method="spectral_mixture_psd_peak",
+            backend="spectral_mixture",
+            kernel_family=_kf,
+            time_kernel_family=_kf,
+            has_stochastic_background=False,
+            model_name="",
+            n_peaks_detected=n_sig_peaks,
+            n_peaks_analyzed=len(peak_objects),
+            n_peaks_requested=n_peaks_requested,
+            dominant_period=dominant_period,
+            dominant_frequency=dominant_freq,
+            peaks=peak_objects,
+            freq_grid=freq_grid,
+            psd=psd,
+            notes=notes,
+            component_diagnostics=_diag,
+            interval_definition=_interval_def,
+        )
+
+    def get_period_summary(
+        self,
+        n_grid=5000,
+        min_freq=None,
+        max_freq=None,
+        peak_threshold_rel=0.2,
+        uncertainty="peak_mass",
+        n_peaks=None,
+        mass_level=0.68,
+        classify_lsp=False,
+    ):
+        """Return a literature-comparable period summary for the fitted model.
+
+        Unlike :meth:`get_periods`, which returns the raw kernel-basis
+        parameters of each spectral-mixture component (component centres,
+        scales, and weights), this method aims to produce a *single dominant
+        period* that can be directly compared to published values.
+
+        The method dispatches to the appropriate backend based on the type of
+        kernel used by the model:
+
+        **Spectral-mixture models** (all ``"1D"``, ``"2D"``, ``"SKI"``,
+        ``"PowerLaw"``, ``"Dust"`` variants):
+            Constructs the total positive-frequency PSD as a sum of weighted
+            Gaussians, identifies the highest PSD peak, and returns its
+            location as the dominant period.  The half-maximum width of the
+            peak provides a practical uncertainty interval.
+
+        **Explicit-period models** (``"1DQuasiPeriodic"``,
+        ``"1DLinearQuasiPeriodic"``):
+            Reads the fitted ``period_length`` parameter directly from the
+            :class:`~gpytorch.kernels.PeriodicKernel`.  The RBF lengthscale
+            is used as a coherence proxy to derive a period interval and
+            Q-factor.
+
+        **Periodic-plus-stochastic** (``"1DPeriodicStochastic"``):
+            Extracts the period from the quasi-periodic sub-kernel.  The
+            summary notes flag the mixed periodic/stochastic nature of the
+            model.
+
+        **Separable 2D models** (``"2DSeparable"``, ``"2DAchromatic"``,
+        ``"2DWavelengthDependent"``, ``"2DDustMean"``,
+        ``"2DPowerLawMean"``):
+            Identifies the time sub-kernel (``active_dims = [0]``) and
+            applies the appropriate backend to that sub-kernel only.
+
+        **Non-periodic models** (``"1DMatern"``):
+            Returns a consistent summary dictionary with ``None`` values for
+            all period-related fields rather than raising an exception, so
+            that automated scripts can handle all model types gracefully.
+
+        .. note::
+            All uncertainty estimates are *practical proxies*, not posterior
+            credible intervals.  MCMC-based credible intervals are not yet
+            implemented.
+
+        Parameters
+        ----------
+        n_grid : int, optional
+            Number of points in the positive-frequency evaluation grid
+            (spectral-mixture backend only).  Default 5000.
+        min_freq : float or None, optional
+            Minimum frequency for the evaluation grid (SM backend only).
+            Defaults to ``1 / time_span``.
+        max_freq : float or None, optional
+            Maximum frequency for the evaluation grid (SM backend only).
+            Defaults to the highest component centre plus five sigma.
+        peak_threshold_rel : float, optional
+            Relative height threshold for significant peaks (SM backend).
+            Default 0.2.
+        uncertainty : str, optional
+            Uncertainty method.  Only ``"peak_mass"`` is supported for the
+            spectral-mixture backend (``"peak_width"`` raises
+            ``NotImplementedError``).  Non-SM backends always use their
+            native interval method and ignore this parameter.  Default
+            ``"peak_mass"``.
+        n_peaks : int or None, optional
+            Number of peaks to analyze and return in ``peaks``.  If ``None``
+            (default), defaults to ``_fit_num_mixtures_effective`` when that
+            attribute is available (i.e. after a call to :meth:`fit` or
+            :meth:`set_model`), otherwise all detected peaks are returned.
+            Pass an explicit integer to override.
+        mass_level : float, optional
+            Fraction of basin mass to enclose in the equal-tail interval
+            (``"peak_mass"`` mode only).  Default 0.68 (~1 sigma).
+        classify_lsp : bool, optional
+            If ``True``, flag peaks whose period ratio to the dominant peak
+            falls within the Long Secondary Period range (5-15) and whose
+            basin area fraction exceeds 0.05.  Default ``False``.
+
+        Returns
+        -------
+        summary : dict
+            Dictionary with keys:
+
+            * ``component_periods``          - raw kernel component periods
+            * ``component_weights``          - raw kernel component weights
+            * ``component_period_scales``    - raw kernel period widths
+            * ``component_frequencies``      - raw kernel component freqs
+            * ``component_frequency_scales`` - raw kernel frequency widths
+            * ``freq_grid``  - evaluation grid (``None`` for non-PSD backends)
+            * ``psd``        - PSD values (``None`` for non-PSD backends)
+            * ``dominant_frequency`` - frequency of the dominant peak
+              (``None`` for non-periodic models)
+            * ``dominant_period``    - ``1 / dominant_frequency``
+              (``None`` for non-periodic models)
+            * ``period_interval_fwhm_like`` - ``(period_lo, period_hi)``
+              uncertainty interval (``None`` for non-periodic models;
+              kept for backward compatibility)
+            * ``period_interval`` - same as ``period_interval_fwhm_like``
+              (generic key independent of uncertainty method)
+            * ``interval_definition`` - string describing the interval type
+            * ``q_factor``        - coherence Q (``None`` if not defined)
+            * ``peak_fraction``   - dominant peak height / total weight
+            * ``n_significant_peaks`` - peaks above threshold
+            * ``significant_periods`` - periods of significant peaks
+            * ``method``  - string identifying the backend used
+            * ``notes``   - additional diagnostic notes
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been initialised.
+        NotImplementedError
+            If an unsupported ``uncertainty`` method is requested.
+        """
+        _sm_uncertainties = {"peak_mass"}
+        if uncertainty not in _sm_uncertainties:
+            raise NotImplementedError(
+                f"uncertainty='{uncertainty}' is not yet implemented. "
+                f"Supported values: {sorted(_sm_uncertainties)!r}."
+            )
+
+        if not hasattr(self, "model") or self.model is None:
+            raise RuntimeError(
+                "Model not initialised.  Call set_model() first."
+            )
+
+        backend = self._detect_period_summary_backend()
+
+        if backend == "spectral_mixture":
+            return self._get_sm_period_summary(
+                n_grid=n_grid,
+                min_freq=min_freq,
+                max_freq=max_freq,
+                peak_threshold_rel=peak_threshold_rel,
+                uncertainty=uncertainty,
+                n_peaks=n_peaks,
+                mass_level=mass_level,
+                classify_lsp=classify_lsp,
+            )
+
+        if backend == "explicit_period":
+            return self._get_explicit_period_summary()
+
+        if backend == "periodic_plus_stochastic":
+            return self._get_periodic_plus_stochastic_summary()
+
+        if backend == "separable_2d":
+            return self._get_separable_2d_period_summary(
+                n_grid=n_grid,
+                min_freq=min_freq,
+                max_freq=max_freq,
+                peak_threshold_rel=peak_threshold_rel,
+                uncertainty=uncertainty,
+                n_peaks=n_peaks,
+                mass_level=mass_level,
+                classify_lsp=classify_lsp,
+            )
+
+        # backend == "non_periodic"
+        return self._get_non_periodic_summary()
+
+    def plot_period_summary(
+        self,
+        summary=None,
+        show=True,
+        log_freq=True,
+        show_full_psd=None,
+        max_peaks_to_mark=3,
+        **kwargs,
+    ):
+        """Plot the period summary from :meth:`get_period_summary`.
+
+        Produces a matplotlib figure appropriate for the type of period
+        summary:
+
+        * **Spectral-mixture PSD summary with a single analyzed peak**
+          (``PeriodSummaryResult``, ``n_peaks_analyzed == 1``): generates a
+          **single peak-centered panel** zoomed in on the dominant peak.
+          Pass ``show_full_psd=True`` to add a second full-range PSD panel.
+        * **Spectral-mixture PSD summary with structured peaks**
+          (``PeriodSummaryResult``, ``n_peaks_analyzed > 1``): generates a
+          **multi-panel figure** with the full PSD in the top panel and one
+          zoomed panel per analyzed peak below.  Each peak is labeled
+          P1, P2, … with a distinct color.
+        * **Spectral-mixture PSD summary (plain dict)**: plots the PSD curve
+          with the dominant peak and dotted lines for other significant peaks.
+        * **Explicit-period summary** (e.g. quasi-periodic): plots a single
+          vertical line at the dominant frequency with an annotated period,
+          interval, and Q-factor.  No PSD curve is drawn because none is
+          computed for this backend.
+        * **Non-periodic summary**: produces a simple figure with explanatory
+          text stating that no dominant period is defined for this kernel.
+
+        The figure type is determined by ``summary["method"]`` and by whether
+        ``summary["freq_grid"]`` is ``None``.
+
+        Parameters
+        ----------
+        summary : dict or None, optional
+            Output of :meth:`get_period_summary`.  If ``None``, it is
+            computed automatically.  Extra keyword arguments (``**kwargs``)
+            are forwarded to :meth:`get_period_summary`.
+        show : bool, optional
+            If ``True`` (default), call ``plt.show()``.  If ``False``,
+            return ``(fig, ax)`` for further customisation.
+        log_freq : bool, optional
+            If ``True`` (default), plot the x-axis (frequency) on a log
+            scale.  Ignored for non-periodic summaries.
+        show_full_psd : bool or None, optional
+            Controls whether a full-range PSD panel is included in the
+            single-peak case.  When ``None`` (default), a full-range panel
+            is *not* added in single-peak mode (the main panel is already
+            peak-centered) but *is* included in multi-peak mode.  Set to
+            ``True`` to force a full-range panel even in single-peak mode;
+            set to ``False`` to suppress it even in multi-peak mode.
+        max_peaks_to_mark : int, optional
+            Maximum number of peaks to mark on the plot.  In multi-peak
+            mode this also limits the number of zoom panels created.
+            Default is ``3``.
+        **kwargs
+            Additional keyword arguments forwarded to
+            :meth:`get_period_summary` when ``summary`` is ``None``.
+
+        Returns
+        -------
+        fig, ax : matplotlib.figure.Figure, matplotlib.axes.Axes
+            Returned when ``show=False``; otherwise ``None``.
+            For the multi-panel case ``ax`` is the top axes.
+        """
+        if summary is None:
+            summary = self.get_period_summary(**kwargs)
+
+        method = summary.get("method", "")
+        has_psd = summary["freq_grid"] is not None
+
+        # -- non-periodic: informational plot only -------------------------
+        if method == "non_periodic_kernel" or (
+            summary["dominant_period"] is None
+        ):
+            fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+            ax.text(
+                0.5,
+                0.5,
+                summary.get(
+                    "notes",
+                    "No dominant period defined for this kernel.",
+                ),
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=11,
+                wrap=True,
+            )
+            ax.set_axis_off()
+            ax.set_title("Period summary")
+            if show:
+                plt.show()
+                return None
+            return fig, ax
+
+        # -- common fields -------------------------------------------------
+        f_peak = summary["dominant_frequency"]
+        p_dom = summary["dominant_period"]
+        # Prefer the generic key; fall back to the legacy key for old summaries
+        interval = summary.get(
+            "period_interval", summary.get("period_interval_fwhm_like")
+        )
+        interval_definition = summary.get("interval_definition", "")
+        q = summary["q_factor"]
+        n_sig = summary["n_significant_peaks"]
+
+        # Build a human-readable interval type label for annotations
+        _interval_labels = {
+            "equal_tail_68pct_peak_mass": "68% peak mass interval",
+            "peak_centered_68pct_mass_interval": "68% peak-centered mass interval",
+            "half_maximum_fwhm_like": "half-max interval",
+            "coherence_proxy": "coherence-proxy interval",
+            "coherence_proxy_from_rbf_lengthscale": (
+                "coherence-proxy interval (RBF lengthscale)"
+            ),
+        }
+        interval_label = _interval_labels.get(
+            interval_definition, interval_definition or "interval"
+        )
+
+        # Decide whether we have a structured PeriodSummaryResult with peaks.
+        # Plain-dict summaries (non-SM backends) do not have a .peaks attr.
+        structured_peaks = getattr(summary, "peaks", None)
+        has_structured_peaks = (
+            structured_peaks is not None and len(structured_peaks) > 0
+        )
+
+        # -- colour palette for per-peak markers ---------------------------
+        # crimson = P1 (dominant), then cycling through a friendly palette
+        _peak_colors = [
+            "crimson",
+            "darkorange",
+            "forestgreen",
+            "mediumpurple",
+            "saddlebrown",
+            "deepskyblue",
+        ]
+
+        def _peak_color(rank):
+            """Return the color for a peak by rank (1-indexed)."""
+            idx = max(rank - 1, 0)
+            return _peak_colors[idx % len(_peak_colors)]
+
+        # ------------------------------------------------------------------
+        # Helpers shared by both structured-peak plot paths
+        # ------------------------------------------------------------------
+        def _zoom_window(pk, freq_grid):
+            """Return (f_win_lo, f_win_hi, f_zoom, p_zoom) for one peak.
+
+            The window is centered on the peak and expanded symmetrically
+            around it.  If the interval bounds are finite and sensible the
+            interval half-width is used as the core; otherwise a ±25%
+            fallback is applied.  A ±10% emergency fallback is used when
+            the resulting slice is too narrow.
+            """
+            f_ctr = pk.frequency
+            p_lo, p_hi = pk.interval_period
+            if (
+                np.isfinite(p_lo) and np.isfinite(p_hi)
+                and p_lo > 0 and p_hi > 0
+            ):
+                f_int_lo = 1.0 / p_hi
+                f_int_hi = 1.0 / p_lo
+                # Half-width of the interval, but at least 10% of peak freq
+                half = max(0.5 * (f_int_hi - f_int_lo), 0.1 * f_ctr)
+                # Expand by 50% symmetrically around the peak
+                f_win_lo = max(f_ctr - 1.5 * half, freq_grid[0])
+                f_win_hi = min(f_ctr + 1.5 * half, freq_grid[-1])
+            else:
+                # Fallback: ±25% symmetric window
+                half = 0.25 * f_ctr
+                f_win_lo = max(f_ctr - half, freq_grid[0])
+                f_win_hi = min(f_ctr + half, freq_grid[-1])
+            mask = (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
+            f_zoom = freq_grid[mask]
+            p_zoom = psd[mask]
+            if len(f_zoom) < 2:
+                # Emergency: ±10% around peak
+                f_win_lo = f_ctr * 0.9
+                f_win_hi = f_ctr * 1.1
+                mask = (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
+                f_zoom = freq_grid[mask]
+                p_zoom = psd[mask]
+            return f_win_lo, f_win_hi, f_zoom, p_zoom
+
+        def _draw_peak_zoom(panel_ax, pk, f_win_lo, f_win_hi,
+                            f_zoom, p_zoom):
+            """Populate a zoom panel for one peak."""
+            col = _peak_color(pk.rank)
+            panel_ax.plot(f_zoom, p_zoom, color="steelblue", lw=1.5)
+            panel_ax.axvline(pk.frequency, color=col, lw=1.5, ls="--")
+            p_lo, p_hi = pk.interval_period
+            if (
+                np.isfinite(p_lo) and np.isfinite(p_hi) and p_lo > 0
+            ):
+                f_lo_int = 1.0 / p_hi
+                f_hi_int = 1.0 / p_lo
+                if (
+                    f_lo_int < f_hi_int
+                    and f_lo_int >= f_win_lo
+                    and f_hi_int <= f_win_hi
+                ):
+                    panel_ax.axvspan(
+                        f_lo_int, f_hi_int,
+                        alpha=0.25, color=col,
+                        label=(
+                            f"{interval_label}  "
+                            f"[{p_lo:.4g}, {p_hi:.4g}]"
+                        ),
+                    )
+            _ratio_str = (
+                f"  ratio={pk.period_ratio_to_primary:.3g}"
+                if pk.rank > 1
+                else ""
+            )
+            panel_ax.set_title(
+                f"P{pk.rank}  period = {pk.period:.6g}{_ratio_str}"
+            )
+            if log_freq:
+                panel_ax.set_xscale("log")
+            panel_ax.set_xlabel("Frequency")
+            panel_ax.set_ylabel("PSD")
+            panel_ax.legend(fontsize=7, loc="upper left")
+
+        # ------------------------------------------------------------------
+        # Structured PeriodSummaryResult with PSD available
+        # ------------------------------------------------------------------
+        if has_structured_peaks and has_psd:
+            freq_grid = summary["freq_grid"]
+            psd = summary["psd"]
+            # Limit to max_peaks_to_mark peaks
+            _peaks_to_plot = structured_peaks[:max_peaks_to_mark]
+            _n_peaks = len(_peaks_to_plot)
+            # Determine whether we are in single-peak mode.
+            # show_full_psd=None means: auto (False for 1 peak, True for >1).
+            _single_peak = _n_peaks == 1
+            _include_full = (
+                show_full_psd
+                if show_full_psd is not None
+                else not _single_peak
+            )
+
+            if _single_peak:
+                # -------------------------------------------------------
+                # Single-peak mode: one peak-centered panel (+ optional
+                # full-PSD panel if show_full_psd=True was requested).
+                # -------------------------------------------------------
+                pk = _peaks_to_plot[0]
+                col = _peak_color(pk.rank)
+                f_win_lo, f_win_hi, f_zoom, p_zoom = _zoom_window(
+                    pk, freq_grid
+                )
+
+                if _include_full:
+                    fig, axes = plt.subplots(
+                        2, 1, figsize=(9, 7), squeeze=False
+                    )
+                    axes = axes[:, 0]
+                    ax = axes[0]  # main = peak-centered
+                    ax_full = axes[1]
+                else:
+                    fig, ax = plt.subplots(1, 1, figsize=(9, 4.5))
+                    ax_full = None
+
+                # Main panel: peak-centered zoom
+                _draw_peak_zoom(ax, pk, f_win_lo, f_win_hi, f_zoom, p_zoom)
+                ax.set_title(
+                    f"Period summary - dominant peak  "
+                    f"(P = {pk.period:.6g})"
+                )
+
+                if ax_full is not None:
+                    # Optional full-range panel below
+                    ax_full.plot(
+                        freq_grid, psd,
+                        color="steelblue", lw=1.5, label="PSD"
+                    )
+                    ax_full.axvline(
+                        pk.frequency, color=col, lw=1.5, ls="--",
+                        label=f"P1  period={pk.period:.4g}",
+                    )
+                    p_lo_fp, p_hi_fp = pk.interval_period
+                    if (
+                        np.isfinite(p_lo_fp) and np.isfinite(p_hi_fp)
+                        and p_lo_fp > 0 and p_hi_fp > 0
+                    ):
+                        f_lo_int = 1.0 / p_hi_fp
+                        f_hi_int = 1.0 / p_lo_fp
+                        if f_lo_int < f_hi_int:
+                            ax_full.axvspan(
+                                f_lo_int, f_hi_int,
+                                alpha=0.15, color=col,
+                                label=(
+                                    f"{interval_label}  "
+                                    f"[{p_lo_fp:.4g}, {p_hi_fp:.4g}]"
+                                ),
+                            )
+                    if log_freq:
+                        ax_full.set_xscale("log")
+                    ax_full.set_ylabel("PSD")
+                    ax_full.set_title(
+                        f"Period summary - full PSD ({method})"
+                    )
+                    ax_full.legend(fontsize=7, loc="upper left", ncol=2)
+
+            else:
+                # -------------------------------------------------------
+                # Multi-peak mode: full PSD top + one zoom panel per peak
+                # (limited to max_peaks_to_mark peaks)
+                # -------------------------------------------------------
+                n_panels = 1 + _n_peaks
+                fig, axes = plt.subplots(
+                    n_panels, 1,
+                    figsize=(9, 3.5 + 2.5 * _n_peaks),
+                    squeeze=False,
+                )
+                axes = axes[:, 0]
+                ax = axes[0]  # top panel = full PSD
+
+                # Top panel: full PSD
+                ax.plot(
+                    freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
+                )
+                for pk in _peaks_to_plot:
+                    col = _peak_color(pk.rank)
+                    ax.axvline(
+                        pk.frequency,
+                        color=col,
+                        lw=1.5,
+                        ls="--",
+                        label=f"P{pk.rank}  period={pk.period:.4g}",
+                    )
+                    p_lo, p_hi = pk.interval_period
+                    if (
+                        np.isfinite(p_lo) and np.isfinite(p_hi)
+                        and p_lo > 0 and p_hi > 0
+                    ):
+                        f_lo_int = 1.0 / p_hi
+                        f_hi_int = 1.0 / p_lo
+                        if f_lo_int < f_hi_int:
+                            _span_label = (
+                                f"{interval_label}  "
+                                f"[{p_lo:.4g}, {p_hi:.4g}]"
+                                if pk.rank == 1
+                                else None
+                            )
+                            ax.axvspan(
+                                f_lo_int, f_hi_int,
+                                alpha=0.15, color=col,
+                                label=_span_label,
+                            )
+                if log_freq:
+                    ax.set_xscale("log")
+                ax.set_ylabel("PSD")
+                ax.set_title(f"Period summary - full PSD ({method})")
+                ax.legend(fontsize=7, loc="upper left", ncol=2)
+
+                # Per-peak zoom panels (one per plotted peak)
+                for i, pk in enumerate(_peaks_to_plot):
+                    panel_ax = axes[i + 1]
+                    f_win_lo, f_win_hi, f_zoom, p_zoom = _zoom_window(
+                        pk, freq_grid
+                    )
+                    _draw_peak_zoom(
+                        panel_ax, pk, f_win_lo, f_win_hi, f_zoom, p_zoom
+                    )
+
+            fig.tight_layout()
+            if show:
+                plt.show()
+                return None
+            return fig, ax
+
+        # ------------------------------------------------------------------
+        # Single-panel fallback (non-structured or no PSD)
+        # ------------------------------------------------------------------
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+
+        # -- PSD curve (spectral-mixture only) -----------------------------
+        if has_psd:
+            freq_grid = summary["freq_grid"]
+            psd = summary["psd"]
+            ax.plot(
+                freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
+            )
+
+        # -- dominant peak marker -----------------------------------------
+        ax.axvline(
+            f_peak,
+            color="crimson",
+            lw=1.5,
+            ls="--",
+            label=f"Dominant peak  P = {p_dom:.4g}",
+        )
+
+        # -- period interval shaded band (if finite interval) --------------
+        if interval is not None:
+            period_lo, period_hi = interval
+            f_left = (
+                1.0 / period_hi if period_hi and period_hi > 0 else None
+            )
+            f_right = (
+                1.0 / period_lo if period_lo and period_lo > 0 else None
+            )
+            if (
+                f_left is not None and f_right is not None
+                and np.isfinite(f_left) and np.isfinite(f_right)
+                and f_left < f_right
+            ):
+                ax.axvspan(
+                    f_left,
+                    f_right,
+                    alpha=0.25,
+                    color="crimson",
+                    label=(
+                        f"{interval_label}  "
+                        f"[{period_lo:.4g}, {period_hi:.4g}]"
+                    ),
+                )
+
+        # -- other significant peaks from structured summary ---------------
+        if has_structured_peaks:
+            for pk in structured_peaks[1:max_peaks_to_mark]:
+                col = _peak_color(pk.rank)
+                ax.axvline(
+                    pk.frequency,
+                    color=col,
+                    lw=1.0,
+                    ls=":",
+                    alpha=0.9,
+                    label=f"P{pk.rank}  period={pk.period:.4g}",
+                )
+        else:
+            sig_periods = summary.get("significant_periods", np.array([]))
+            for sp in sig_periods:
+                sf = 1.0 / sp
+                if abs(sf - f_peak) > 1e-12 * max(f_peak, 1e-12):
+                    ax.axvline(
+                        sf,
+                        color="darkorange",
+                        lw=1.0,
+                        ls=":",
+                        alpha=0.8,
+                    )
+
+        # -- text annotation -----------------------------------------------
+        if q is not None and np.isfinite(q):
+            q_str = f"{q:.2f}"
+        elif q is not None and np.isinf(q):
+            q_str = "inf"
+        else:
+            q_str = "N/A"
+
+        if interval is not None:
+            p_lo, p_hi = interval
+            int_str = f"[{p_lo:.4g}, {p_hi:.4g}]"
+        else:
+            int_str = "N/A"
+
+        ann_lines = [
+            f"Dominant period:   {p_dom:.6g}",
+            f"Interval ({interval_label}): {int_str}",
+            f"Q-factor:          {q_str}",
+            f"Significant peaks: {n_sig}",
+        ]
+        ax.text(
+            0.97,
+            0.97,
+            "\n".join(ann_lines),
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
+            family="monospace",
+            bbox=dict(
+                boxstyle="round,pad=0.3", fc="white", alpha=0.8
+            ),
+        )
+
+        if log_freq:
+            ax.set_xscale("log")
+        ax.set_xlabel("Frequency")
+        ax.set_ylabel("PSD" if has_psd else "")
+        ax.set_title(f"Period summary ({method})")
+        ax.legend(fontsize=8, loc="upper left")
+
+        if show:
+            plt.show()
+            return None
+        return fig, ax
+
+    # ------------------------------------------------------------------
+    # High-level output-writing convenience
+    # ------------------------------------------------------------------
+
+    def _save_period_summary_figure(
+        self,
+        summary,
+        filename,
+        plot_kwargs=None,
+        close_figure=True,
+        dpi=150,
+    ):
+        """Internal helper for write_period_summary_outputs().
+
+        Calls :meth:`plot_period_summary` with ``show=False``, saves the
+        resulting figure, and optionally closes it.
+
+        Parameters
+        ----------
+        summary : dict or PeriodSummaryResult
+            Pre-computed period summary (passed straight through to
+            :meth:`plot_period_summary`).
+        filename : str or Path-like
+            Destination path for the PNG (or any format supported by
+            matplotlib's ``savefig``).
+        plot_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`plot_period_summary`.
+        close_figure : bool, optional
+            If ``True`` (default), call ``plt.close(fig)`` after saving.
+        dpi : int, optional
+            Resolution in dots per inch, default ``150``.
+
+        Returns
+        -------
+        pathlib.Path
+            Path to the saved figure file (same as *filename* as a
+            ``pathlib.Path``; may be relative).
+        """
+        from pathlib import Path
+
+        if plot_kwargs is None:
+            plot_kwargs = {}
+        path = Path(filename)
+        result = self.plot_period_summary(
+            summary=summary, show=False, **plot_kwargs
+        )
+        # plot_period_summary returns None when show=True; that should not
+        # happen here (we always pass show=False), but guard defensively.
+        if result is None:
+            return path
+        fig, _ax = result
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        if close_figure:
+            plt.close(fig)
+        return path
+
+    def write_period_summary_outputs(
+        self,
+        text_file=None,
+        png_file=None,
+        json_file=None,
+        summary=None,
+        show=False,
+        close_figure=True,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+        include_psd_in_json=False,
+        summary_kwargs=None,
+        plot_kwargs=None,
+    ):
+        """Write period-summary outputs (text, PNG, JSON) to disk.
+
+        This is a high-level **convenience wrapper** around:
+
+        * :meth:`get_period_summary` — computes the summary if not supplied
+        * :meth:`PeriodSummaryResult.write_text` — human-readable text report
+        * :meth:`_save_period_summary_figure` — period-summary figure (PNG)
+        * :meth:`PeriodSummaryResult.write_json` — machine-readable JSON export
+
+        The method writes only the files whose paths are provided. Pass
+        ``text_file``, ``png_file``, and/or ``json_file`` in any combination.
+
+        Parameters
+        ----------
+        text_file : str, Path-like, or None, optional
+            If given, the human-readable period-summary text is written here.
+            The output is intended for direct reading by a researcher: it
+            includes the dominant period, peak table, kernel-component
+            diagnostics, and (optionally) PSD grid information.
+        png_file : str, Path-like, or None, optional
+            If given, the period-summary figure is saved here.  The PNG is a
+            visualisation of the analyzed peak structure produced by
+            :meth:`plot_period_summary`.
+        json_file : str, Path-like, or None, optional
+            If given, a machine-readable JSON export is written here.  The
+            JSON contains the same information as the text report plus the
+            raw array data (unless *include_psd_in_json* is ``False``).
+        summary : dict or PeriodSummaryResult or None, optional
+            A pre-computed period summary returned by
+            :meth:`get_period_summary`.  If ``None`` (default) the summary is
+            computed by calling ``get_period_summary(**summary_kwargs)``.
+            Supplying a pre-computed summary avoids redundant computation when
+            multiple output files are requested.
+        show : bool, optional
+            Passed through to :meth:`plot_period_summary`.  Ignored when
+            *png_file* is ``None``.  Default is ``False``.
+        close_figure : bool, optional
+            If ``True`` (default), close the matplotlib figure after saving.
+            Set to ``False`` to keep the figure in memory for further
+            inspection.
+        include_components : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether the kernel-component diagnostics block appears in the text
+            output.  Default is ``True``.
+        include_peaks : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether the analyzed-peaks block appears in the text output.
+            Default is ``True``.
+        include_psd_info : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether PSD grid statistics appear in the text output.  Default is
+            ``False``.
+        include_psd_in_json : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_json`.  When
+            ``True`` the full frequency grid and PSD arrays are embedded in
+            the JSON file.  Default is ``False`` (arrays are omitted to keep
+            the file small).
+        summary_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`get_period_summary`
+            when *summary* is ``None``.  Ignored if *summary* is supplied.
+        plot_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`plot_period_summary`
+            (and thus to :meth:`_save_period_summary_figure`).  Ignored when
+            *png_file* is ``None``.
+
+        Returns
+        -------
+        PeriodSummaryResult or dict
+            The period summary (computed or passed in).
+
+        Examples
+        --------
+        Write all three output types in one call::
+
+            lc.write_period_summary_outputs(
+                text_file="results/summary.txt",
+                png_file="results/summary.png",
+                json_file="results/summary.json",
+            )
+
+        Reuse an existing summary to avoid recomputation::
+
+            s = lc.get_period_summary()
+            lc.write_period_summary_outputs(
+                summary=s,
+                text_file="results/summary.txt",
+                png_file="results/summary.png",
+            )
+        """
+        if summary_kwargs is None:
+            summary_kwargs = {}
+        if summary is None:
+            summary = self.get_period_summary(**summary_kwargs)
+        elif summary_kwargs:
+            warnings.warn(
+                "summary_kwargs are ignored because a pre-computed summary "
+                "was supplied via the summary= argument.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        if text_file is not None:
+            summary.write_text(
+                text_file,
+                include_components=include_components,
+                include_peaks=include_peaks,
+                include_psd_info=include_psd_info,
+            )
+
+        if json_file is not None:
+            summary.write_json(json_file, include_psd=include_psd_in_json)
+
+        if png_file is not None:
+            self._save_period_summary_figure(
+                summary,
+                png_file,
+                plot_kwargs=plot_kwargs,
+                close_figure=close_figure,
+            )
+
+        return summary
+
     def get_parameters(self, raw=False, transform=True):
         """
         Returns a dictionary of the parameters of the model, with the keys
@@ -5110,7 +8443,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         - self._xdata_raw.sort().values[:-1]
                     )
                     mindelta = (diffs[diffs > 0]).min().item()
-                    print(step, mindelta, 1 / (mindelta / 2))
 
                     # we want to sample a set of frequencies that are spaced
                     # in the range covered by the gaussian mixture, but we
@@ -5122,7 +8454,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         1 / (mindelta / 2),
                         step.item(),
                     )
-                    print(freq.shape)
 
             elif self.ndim == 2:
                 raise NotImplementedError(
@@ -5590,8 +8921,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(
             self.num_samples, 1, 1
         )  # .unsqueeze(0)
-        print(self.x_fine_transformed.shape)
-        print(self.expanded_test_x.shape)
         output = self.model(self.expanded_test_x)
         with torch.no_grad():
             f, ax = plt.subplots(1, 1, figsize=(8, 6))
