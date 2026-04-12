@@ -8,6 +8,8 @@ randomly draw a size-limited subset of observations while preserving the
 temporal baseline, sampling structure and gap-coverage constraints.
 """
 
+import warnings
+
 import numpy as np
 
 
@@ -137,7 +139,29 @@ def compute_sampling_metrics(
 
     # When median cadence is zero (many duplicate/near-identical timestamps),
     # fall back to mean cadence for metrics that require a positive cadence.
+    # Tightly clustered but non-identical timestamps (median_cad > 0) are
+    # handled correctly as-is; the fallback only applies when the median
+    # collapses to exactly zero.
     effective_cad = median_cad if median_cad > 0 else mean_cad
+
+    if median_cad == 0:
+        warnings.warn(
+            "median_cadence is zero (many duplicate timestamps present)."
+            " Falling back to mean_cadence for nyquist_period, "
+            "nyquist_frequency, and duty_cycle; results may not be robust.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    if effective_cad == 0:
+        # Reached only in pathological cases (e.g. floating-point underflow);
+        # baseline == 0 is already caught above, so this is a last-resort guard.
+        warnings.warn(
+            "effective cadence is zero; nyquist_period and duty_cycle will be "
+            "zero and nyquist_frequency will be np.inf.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # Simple duty cycle estimate (assumes observation duration << cadence)
     duty_cycle = n * effective_cad / baseline if baseline > 0 else 0.0
