@@ -25,8 +25,9 @@ A typical workflow is::
 
     import pgmuvi
     lc = pgmuvi.lightcurve.Lightcurve(times, fluxes, errors)
-    lc.fit_LS()          # initialise and optimise
-    lc.plot_results()    # visualise
+    lc.fit_LS()              # optional: inspect candidate periods
+    lc.fit(model="1D")       # initialise and optimise the GP model
+    lc.plot()                # visualise the predictive distribution
 
 Hyperparameters
 ---------------

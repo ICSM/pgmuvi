@@ -48,19 +48,21 @@ All bands are stacked into a single array::
     xdata = np.column_stack([times_all, wavelengths])
     lc = pgmuvi.lightcurve.Lightcurve(xdata, fluxes_all, errors_all)
 
-``pgmuvi`` detects the 2D input shape and configures the model accordingly.
+``pgmuvi`` detects that this is 2D input and sets up the light-curve object
+accordingly, but you must still choose a 2D model explicitly when fitting
+(for example, with ``fit(model="2D")`` or ``set_model("2D"); fit()``).
 
 Fitting a 2D Model
 -------------------
 
 The fitting workflow is the same as in 1D::
 
-    lc.fit_LS()
+    lc.fit(model="2D")
 
 For heterogeneous band sampling (e.g., one band has far more observations than
 others), consider using the best-band initialisation option::
 
-    lc.fit_LS(use_best_band_init=True)
+    lc.fit(model="2D", use_best_band_init=True)
 
 This runs the Lomb–Scargle periodogram on the most densely sampled band before
 computing the multiband periodogram, which can substantially improve frequency

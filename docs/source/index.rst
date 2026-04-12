@@ -90,7 +90,7 @@ API reference
 Contributing
 ------------
 
-We very much welcome contributions to `pgmuvi`! Please take a look at our `github repository <https://github.com/ICSM/pgmuvi/>`_ for more information on how to contribute!
+We very much welcome contributions to `pgmuvi`! Please take a look at our `GitHub repository <https://github.com/ICSM/pgmuvi/>`_ for more information on how to contribute!
 
 Citing `pgmuvi`
 ----------------

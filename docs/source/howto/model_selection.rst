@@ -98,7 +98,7 @@ If you have domain knowledge about the expected variability type, you can set th
 model directly::
 
     lc.set_model('1DQuasiPeriodic')
-    lc.fit_LS()
+    lc.fit()
 
 Alternative Kernel Configurations
 -----------------------------------

@@ -21,12 +21,18 @@ After fitting a ``pgmuvi`` model, you have access to:
 Fitted Hyperparameters
 -----------------------
 
-After calling :meth:`~pgmuvi.lightcurve.Lightcurve.fit` or
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS`, the model hyperparameters are updated
-to their optimised (MAP) values.  Retrieve them as a dictionary::
+After calling :meth:`~pgmuvi.lightcurve.Lightcurve.fit`, the model
+hyperparameters are updated to their optimised (MAP) values.  After calling
+:meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`, posterior samples are available
+instead of a single MAP estimate.  Retrieve the current parameter values as a
+dictionary after ``fit()``::
 
     params = lc.get_parameters()
     print(params)
+
+Note that :meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` computes
+Lomb–Scargle peak frequencies for initialisation and does not update the model
+hyperparameters to MAP values.
 
 The key parameters are:
 

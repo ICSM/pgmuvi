@@ -17,9 +17,9 @@ https://pytorch.org/get-started/locally/ and then install ``pgmuvi``.
 
 **Q: The docs say Python >=3.10 is required.  Will it work on 3.9?**
 
-No.  ``pgmuvi`` uses Python 3.10+ syntax (including structural pattern matching).
-If you need to use an older Python version, please open an issue on the GitHub
-repository.
+No.  ``pgmuvi`` uses Python 3.10+ syntax and typing features such as
+PEP 604 union types (for example, ``X | None``).  If you need to use an
+older Python version, please open an issue on the GitHub repository.
 
 Data and Input
 --------------
@@ -74,26 +74,30 @@ dominant period, then increase.
 
 **Q: Should I use fit() or fit_LS()?**
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` is almost always preferable because
-it automatically initialises the spectral mixture kernel frequencies using the
-Lomb–Scargle periodogram before optimisation.  Use
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit` only if you have already set the
-hyperparameters manually using
-:meth:`~pgmuvi.lightcurve.Lightcurve.set_hypers`.
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` runs a Lomb–Scargle periodogram
+to identify candidate periods and can be used as a diagnostic tool.
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit` performs the actual GP MAP
+optimisation.  For the most common workflow, call :meth:`~pgmuvi.lightcurve.Lightcurve.fit`
+with ``use_mls_init=True`` (the default) so that MLS-based frequency seeding is
+applied automatically before fitting.
 
-**Q: fit_LS() finds too many / too few mixture components.**
+**Q: fit() finds too many / too few mixture components.**
 
-Adjust ``num_mixtures`` when calling
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS`::
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` and
+:meth:`~pgmuvi.lightcurve.Lightcurve.set_model` do not take a
+``num_mixtures`` argument; set it when calling
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit` (or
+:meth:`~pgmuvi.lightcurve.Lightcurve.set_model`)::
 
-    lc.fit_LS(num_mixtures=2)
+    lc.fit(model="1D", num_mixtures=2)
 
 **Q: MCMC is very slow.**
 
 MCMC is inherently more expensive than MAP estimation.  Suggestions:
 
-* Run MAP first (``fit_LS()``) and use the MAP solution as the starting point for
-  MCMC.
+* Run MAP first with :meth:`~pgmuvi.lightcurve.Lightcurve.fit` and use the MAP
+  solution as the starting point for
+  :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`.
 * Reduce ``num_samples`` and ``warmup_steps`` for a quick initial run to check
   convergence behaviour.
 * Use a GPU if available.
