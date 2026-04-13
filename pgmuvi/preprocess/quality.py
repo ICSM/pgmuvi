@@ -296,19 +296,19 @@ def assess_sampling_quality(
 
     # Quality gates
     gates = {}
-    warnings = []
+    warning_msgs = []
 
     # Gate 1: Minimum points
     gates["min_points"] = metrics["n_points"] >= min_points
     if not gates["min_points"]:
-        warnings.append(
+        warning_msgs.append(
             f"Too few points: {metrics['n_points']} < {min_points}"
         )
 
     # Gate 2: Maximum gap
     gates["max_gap"] = metrics["max_gap_fraction"] <= max_gap_fraction
     if not gates["max_gap"]:
-        warnings.append(
+        warning_msgs.append(
             f"Large gap: {metrics['max_gap']:.2f} "
             f"({100 * metrics['max_gap_fraction']:.1f}% of baseline) "
             f"> {100 * max_gap_fraction:.0f}% threshold"
@@ -320,20 +320,20 @@ def assess_sampling_quality(
         # Non-positive median cadence indicates duplicate or invalid timestamps.
         baseline_factor = 0.0
         gates["min_baseline"] = False
-        warnings.append(
+        warning_msgs.append(
             "Non-positive median cadence; baseline coverage cannot be reliably "
             "assessed and the baseline gate has been failed."
         )
     elif median_cadence == 0:
         baseline_factor = metrics["baseline"] / metrics["mean_cadence"]
-        warnings.append(
+        warning_msgs.append(
             "Lightcurve contains large numbers of points with identical "
             "timestamps. Determining sampling quality using mean cadence "
             "instead of median; result may not be robust."
         )
         gates["min_baseline"] = baseline_factor >= min_baseline_factor
         if not gates["min_baseline"]:
-            warnings.append(
+            warning_msgs.append(
                 f"Insufficient baseline: {baseline_factor:.1f} median cadences "
                 f"< {min_baseline_factor} required"
             )
@@ -341,7 +341,7 @@ def assess_sampling_quality(
         baseline_factor = metrics["baseline"] / median_cadence
         gates["min_baseline"] = baseline_factor >= min_baseline_factor
         if not gates["min_baseline"]:
-            warnings.append(
+            warning_msgs.append(
                 f"Insufficient baseline: {baseline_factor:.1f} median cadences "
                 f"< {min_baseline_factor} required"
             )
@@ -365,7 +365,7 @@ def assess_sampling_quality(
             and fraction_snr_gt_min >= min_fraction_good_snr
         )
         if not gates["min_snr"]:
-            warnings.append(
+            warning_msgs.append(
                 f"Poor SNR: median={metrics['median_snr']:.1f} < {min_snr}, "
                 f"fraction>={min_snr:.1f}={100 * fraction_snr_gt_min:.0f}%"
                 f" < {100 * min_fraction_good_snr:.0f}%"
@@ -379,7 +379,7 @@ def assess_sampling_quality(
     diagnostics = {
         "metrics": metrics,
         "gates": gates,
-        "warnings": warnings,
+        "warnings": warning_msgs,
         "recommendation": recommendation,
     }
 
@@ -418,9 +418,9 @@ def assess_sampling_quality(
             symbol = "\u2713" if status else "\u2717"
             print(f"  {symbol} {gate}: {'PASS' if status else 'FAIL'}")
 
-        if warnings:
+        if warning_msgs:
             print("\nWarnings:")
-            for w in warnings:
+            for w in warning_msgs:
                 print(f"  \u26a0 {w}")
 
         print(f"\nRecommendation: {recommendation}")

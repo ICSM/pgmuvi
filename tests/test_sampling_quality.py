@@ -109,14 +109,16 @@ class TestComputeSamplingMetricsDuplicateTimestamps(unittest.TestCase):
         gaps = np.diff(np.sort(t))
         self.assertEqual(float(np.median(gaps)), 0.0)
 
-    def test_nyquist_period_uses_mean_cadence(self):
-        """nyquist_period should equal 2 * mean_cadence when median is zero."""
+    def test_nyquist_period_uses_positive_mean_cadence(self):
+        """nyquist_period should equal 2 * mean(positive gaps) when median is zero."""
         t = self._make_duplicate_heavy_times()
+        gaps = np.diff(np.sort(t))
+        positive_mean = float(np.mean(gaps[gaps > 0]))
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             metrics = compute_sampling_metrics(t)
         self.assertEqual(metrics["median_cadence"], 0.0)
-        expected = 2.0 * metrics["mean_cadence"]
+        expected = 2.0 * positive_mean
         self.assertAlmostEqual(metrics["nyquist_period"], expected)
 
     def test_userwarning_emitted_when_median_zero(self):
@@ -129,7 +131,7 @@ class TestComputeSamplingMetricsDuplicateTimestamps(unittest.TestCase):
         self.assertGreater(len(user_warns), 0)
         msg = str(user_warns[0].message)
         self.assertIn("median_cadence", msg)
-        self.assertIn("mean_cadence", msg)
+        self.assertIn("positive gaps", msg)
 
 
 class TestComputeSamplingMetricsTightlyClustered(unittest.TestCase):
