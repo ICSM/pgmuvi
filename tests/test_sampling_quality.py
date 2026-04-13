@@ -182,13 +182,15 @@ class TestAssessSamplingQualityDuplicateWarning(unittest.TestCase):
         self.assertIn("identical", combined.lower())
 
     def test_assess_uses_mean_cadence_for_baseline_factor(self):
-        """assess_sampling_quality should fall through to the mean-cadence path."""
+        """Duplicate timestamps should trigger the mean-cadence fallback."""
         t = self._make_duplicate_heavy_times()
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             _, diag = assess_sampling_quality(t)
-        # Confirm 'min_baseline' gate exists (median==0 branch was taken).
-        self.assertIn("min_baseline", diag["gates"])
+        self.assertEqual(diag["metrics"]["median_cadence"], 0.0)
+        combined = " ".join(diag["warnings"]).lower()
+        self.assertIn("identical", combined)
+        self.assertIn("mean cadence", combined)
 
 
 if __name__ == "__main__":
