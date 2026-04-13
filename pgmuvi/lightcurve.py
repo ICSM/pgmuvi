@@ -7493,6 +7493,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if len(_peaks) == 0:
             dominant_idx = int(np.argmax(psd))
         else:
+            import pdb; pdb.set_trace()
             dominant_idx = int(_peaks[np.argmax(psd[_peaks])])
 
         peak_height = float(psd[dominant_idx])
