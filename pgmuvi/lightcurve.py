@@ -1060,10 +1060,13 @@ class PeriodSummaryResult:
                 self.q_factor = _primary.frequency / _width
             else:
                 # Invalid interval (e.g. explicit-period backend with no RBF
-                # lengthscale): fall through to the constructor-provided value.
-                self.q_factor = q_factor
+                # lengthscale): set to None so that self.q_factor always
+                # describes the post-sort primary peak, never a stale
+                # upstream value.
+                self.q_factor = None
         else:
-            # No peaks — keep constructor-provided values unchanged.
+            # No peaks — pass the constructor-provided value through
+            # unchanged, since there is no primary peak to override it.
             self.q_factor = q_factor
         # Validate internal consistency: dominant attributes must agree with
         # peaks[0] whenever peaks exist.

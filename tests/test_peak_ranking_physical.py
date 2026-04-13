@@ -618,5 +618,96 @@ class TestDominantScalarConsistency(unittest.TestCase):
         self.assertEqual(summary.as_dict()["dominant_period"], 99999.9)
 
 
+# ---------------------------------------------------------------------------
+# G. q_factor fallback removal: invalid interval => None, no-peaks => ctor arg
+# ---------------------------------------------------------------------------
+
+
+class TestQFactorFallbackRemoval(unittest.TestCase):
+    """self.q_factor must never fall back to a stale constructor-provided value
+    when peaks exist.  Only the no-peaks case may use the constructor arg.
+    """
+
+    def _make_peak_with_invalid_interval(self, period=100.0):
+        """Return a peak whose interval_frequency is (nan, nan)."""
+        frequency = 1.0 / period
+        return PeriodPeakResult(
+            rank=1,
+            frequency=frequency,
+            period=period,
+            height=1.0,
+            prominence=0.5,
+            area_fraction=0.6,
+            interval_frequency=(float("nan"), float("nan")),
+            interval_period=(float("nan"), float("nan")),
+        )
+
+    def test_invalid_primary_interval_gives_none(self):
+        """Invalid primary interval_frequency => summary.q_factor is None."""
+        peak = self._make_peak_with_invalid_interval()
+        summary = PeriodSummaryResult(
+            peaks=[peak],
+            q_factor=42.0,  # stale upstream value that must NOT be used
+        )
+        self.assertIsNone(summary.q_factor)
+
+    def test_invalid_primary_interval_dict_gives_none(self):
+        """Invalid primary interval => as_dict()['q_factor'] is None."""
+        peak = self._make_peak_with_invalid_interval()
+        summary = PeriodSummaryResult(peaks=[peak], q_factor=42.0)
+        self.assertIsNone(summary.as_dict()["q_factor"])
+
+    def test_zero_width_interval_gives_none(self):
+        """Zero-width interval_frequency (f_lo == f_hi) => q_factor is None."""
+        frequency = 0.01
+        peak = PeriodPeakResult(
+            rank=1,
+            frequency=frequency,
+            period=100.0,
+            height=1.0,
+            prominence=0.5,
+            area_fraction=0.6,
+            interval_frequency=(frequency, frequency),  # width = 0
+            interval_period=(100.0, 100.0),
+        )
+        summary = PeriodSummaryResult(peaks=[peak], q_factor=99.9)
+        self.assertIsNone(summary.q_factor)
+
+    def test_no_peaks_uses_constructor_q_factor(self):
+        """No peaks => constructor q_factor is passed through unchanged."""
+        summary = PeriodSummaryResult(peaks=None, q_factor=123.0)
+        self.assertAlmostEqual(summary.q_factor, 123.0)
+        self.assertAlmostEqual(summary.as_dict()["q_factor"], 123.0)
+
+    def test_no_peaks_none_q_factor_preserved(self):
+        """No peaks with q_factor=None => summary.q_factor is None."""
+        summary = PeriodSummaryResult(peaks=None, q_factor=None)
+        self.assertIsNone(summary.q_factor)
+        self.assertIsNone(summary.as_dict()["q_factor"])
+
+    def test_valid_interval_still_computes_correctly(self):
+        """Valid primary interval => q_factor = frequency / (f_hi - f_lo)."""
+        peak = _make_peak(rank=1, area_fraction=0.6, prominence=0.5, period=100.0)
+        summary = PeriodSummaryResult(peaks=[peak])
+        primary = summary.peaks[0]
+        f_lo, f_hi = primary.interval_frequency
+        expected = primary.frequency / (f_hi - f_lo)
+        self.assertAlmostEqual(summary.q_factor, expected, places=10)
+        self.assertAlmostEqual(summary.as_dict()["q_factor"], expected, places=10)
+
+    def test_dict_q_factor_matches_attr(self):
+        """as_dict()['q_factor'] always equals summary.q_factor (both paths)."""
+        # Case 1: valid interval
+        peak_valid = _make_peak(rank=1, area_fraction=0.6, prominence=0.5)
+        s_valid = PeriodSummaryResult(peaks=[peak_valid])
+        self.assertEqual(s_valid.q_factor, s_valid.as_dict()["q_factor"])
+
+        # Case 2: invalid interval
+        peak_invalid = self._make_peak_with_invalid_interval()
+        s_invalid = PeriodSummaryResult(peaks=[peak_invalid], q_factor=7.0)
+        self.assertIsNone(s_invalid.q_factor)
+        self.assertIsNone(s_invalid.as_dict()["q_factor"])
+
+
 if __name__ == "__main__":
     unittest.main()
