@@ -254,8 +254,9 @@ class TestDominantPeriodSemantics(unittest.TestCase):
 
     def test_same_peak_when_primary_also_has_largest_area(self):
         """When primary also has largest area, both period fields are equal."""
-        peak = _make_peak(rank=1, area_fraction=0.90, prominence=0.90,
-                          period=100.0)
+        peak = _make_peak(
+            rank=1, area_fraction=0.90, prominence=0.90, period=100.0
+        )
         summary = _make_summary([peak])
         d = summary.as_dict()
         self.assertAlmostEqual(d["dominant_period"], d["largest_area_period"])
@@ -291,8 +292,9 @@ class TestToTextDistinction(unittest.TestCase):
 
     def test_same_note_when_primary_equals_largest_area(self):
         """When same peak is both primary and largest-area, say so."""
-        peak = _make_peak(rank=1, area_fraction=0.90, prominence=0.90,
-                          period=100.0)
+        peak = _make_peak(
+            rank=1, area_fraction=0.90, prominence=0.90, period=100.0
+        )
         text = _make_summary([peak]).to_text()
         self.assertIn("Primary peak also has the largest area fraction", text)
         self.assertNotIn("LARGEST INTEGRATED-POWER FEATURE", text)
@@ -307,8 +309,9 @@ class TestToTextDistinction(unittest.TestCase):
 
     def test_no_largest_area_section_with_single_peak(self):
         """With only one peak, there is no LARGEST INTEGRATED-POWER FEATURE section."""
-        peak = _make_peak(rank=1, area_fraction=0.80, prominence=0.80,
-                          period=100.0)
+        peak = _make_peak(
+            rank=1, area_fraction=0.80, prominence=0.80, period=100.0
+        )
         text = _make_summary([peak]).to_text()
         self.assertNotIn("LARGEST INTEGRATED-POWER FEATURE", text)
 
