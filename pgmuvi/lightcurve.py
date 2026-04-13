@@ -1055,6 +1055,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # are left untouched.  The second column of xdata holds the
                 # numeric wavelength/band identifier for standard 2-D
                 # lightcurves.
+                if (
+                    self._xdata_raw.dim() != 2
+                    or self._xdata_raw.shape[1] != 2
+                ):
+                    raise ValueError(
+                        "Per-band subsampling requires xdata of shape "
+                        "(N, 2) with time in column 0 and wavelength in "
+                        "column 1. Received shape "
+                        f"{tuple(self._xdata_raw.shape)}. Please ensure "
+                        "that your input is not transposed or otherwise "
+                        "malformed."
+                    )
                 xdata_np = self._xdata_raw.detach().cpu().numpy()
                 band_ids = xdata_np[:, 1]
                 unique_bands = np.unique(band_ids)
