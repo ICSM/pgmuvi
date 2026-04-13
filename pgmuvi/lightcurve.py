@@ -1100,14 +1100,14 @@ class PeriodSummaryResult:
         # the primary peak's frequency interval is invalid (e.g. explicit-
         # period backend with no RBF lengthscale → interval is all NaN).
         if primary is not None:
-            _f_lo_q, _f_hi_q = primary.interval_frequency
-            _w_q = _f_hi_q - _f_lo_q
+            f_lo_q, f_hi_q = primary.interval_frequency
+            interval_width = f_hi_q - f_lo_q
             if (
-                np.isfinite(_w_q)
-                and _w_q > 0
+                np.isfinite(interval_width)
+                and interval_width > 0
                 and np.isfinite(primary.frequency)
             ):
-                _q_factor = primary.frequency / _w_q
+                _q_factor = primary.frequency / interval_width
             else:
                 _q_factor = self.q_factor
         else:

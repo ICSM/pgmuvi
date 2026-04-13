@@ -125,8 +125,9 @@ class TestPhysicalRankingBroadVsNarrow(unittest.TestCase):
     def test_primary_and_largest_area_are_different(self):
         """primary and largest-area features are different peaks."""
         summary, _, _ = self._build_summary()
-        self.assertNotEqual(summary.primary_peak_index,
-                            summary.largest_area_peak_index)
+        self.assertNotEqual(
+            summary.primary_peak_index, summary.largest_area_peak_index
+        )
 
 
 class TestPhysicalRankingProminencePrimary(unittest.TestCase):
@@ -249,8 +250,7 @@ class TestDominantPeriodSemantics(unittest.TestCase):
         """dominant_period and largest_area_period differ when peaks differ."""
         summary = self._build_summary()
         d = summary.as_dict()
-        self.assertNotAlmostEqual(d["dominant_period"],
-                                  d["largest_area_period"])
+        self.assertNotAlmostEqual(d["dominant_period"], d["largest_area_period"])
 
     def test_same_peak_when_primary_also_has_largest_area(self):
         """When primary also has largest area, both period fields are equal."""
@@ -532,25 +532,18 @@ class TestDominantScalarConsistency(unittest.TestCase):
         f_lo, f_hi = primary.interval_frequency
         expected_q = primary.frequency / (f_hi - f_lo)
         self.assertAlmostEqual(d["q_factor"], expected_q, places=10)
+        # The formula gives exactly 5.0 for symmetric ±10% intervals.
+        self.assertAlmostEqual(d["q_factor"], 5.0, places=10)
 
     def test_q_factor_not_from_area_dominant_peak(self):
-        """q_factor does NOT describe the area-dominant (broad, low-rank) peak."""
+        """q_factor is consistent with peaks[0] (the primary), not peak_a."""
         summary, peak_a, _ = self._build_summary()
         d = summary.as_dict()
-        # Peak A's q_factor would be 5.0 (same formula) but at peak_a's freq
-        f_lo_a, f_hi_a = peak_a.interval_frequency
-        q_if_from_peak_a = peak_a.frequency / (f_hi_a - f_lo_a)
-        # Primary (peak B) has a different frequency, so q_factors differ
-        # (both are 5.0 in this symmetric case, but the frequencies differ)
-        # More directly: assert q_factor is consistent with peaks[0], not peak_a
         primary = summary.peaks[0]
         f_lo_p, f_hi_p = primary.interval_frequency
         expected = primary.frequency / (f_hi_p - f_lo_p)
         self.assertAlmostEqual(d["q_factor"], expected, places=10)
-        # And verify it does NOT accidentally match peak_a at a different freq
-        # (both happen to give q=5 due to symmetric intervals, but the ratio
-        # of primary vs area-dominant q_factors is the ratio of frequencies,
-        # so the test confirms we used the right frequency)
+        # dominant_frequency must also follow the primary, not peak_a
         self.assertAlmostEqual(
             d["dominant_frequency"], primary.frequency, places=10
         )
@@ -566,9 +559,7 @@ class TestDominantScalarConsistency(unittest.TestCase):
         """dominant_period and largest_area_period differ in this scenario."""
         summary, _, _ = self._build_summary()
         d = summary.as_dict()
-        self.assertNotAlmostEqual(
-            d["dominant_period"], d["largest_area_period"]
-        )
+        self.assertNotAlmostEqual(d["dominant_period"], d["largest_area_period"])
 
     def test_text_primary_peak_period_matches_dict_dominant(self):
         """to_text() and as_dict() report the same dominant period."""
