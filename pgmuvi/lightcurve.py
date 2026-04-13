@@ -9241,8 +9241,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     alpha=0.2,
                 )
 
-            # Plot training data as black stars (on top of model predictions)
-            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
+            # Plot training data as black filled circles (on top of model predictions)
+            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "ko")
 
             ax.legend(["Observed Data", "Sample means"])
             if ylim is not None:
@@ -9420,7 +9420,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             label="Confidence",
         )
 
-        # Plot training data as black stars (on top of model predictions)
+        # Plot training data as black filled circles (on top of model predictions)
         if self.yerr is not None:
             ax.errorbar(
                 self.xdata.cpu().numpy(),
@@ -9483,7 +9483,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 label = "Confidence"
             )
 
-            # Plot training data as black stars (on top of model predictions)
+            # Plot training data as black filled circles (on top of model predictions)
             y_data_for_val = self.ydata[self.xdata[:, 1] == val]
             if self.yerr is not None:
                 y_err_for_val = self.yerr[self.xdata[:, 1] == val]
