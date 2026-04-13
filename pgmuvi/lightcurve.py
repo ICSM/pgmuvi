@@ -794,19 +794,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             data are assumed to already be in days and no conversion is
             performed.
         max_samples_per_band : int or None, optional
-            Maximum number of observations to retain per band. For 1-D 
+            Maximum number of observations to retain per band. For 1-D
             lightcurves, this has no effect. For 2-D (multiband)
             lightcurves, each band is checked independently: only bands that
-            exceed `max_samples_per_band` are subsampled; bands already at 
+            exceed `max_samples_per_band` are subsampled; bands already at
             or below the limit are left untouched.
             (see :func:`~pgmuvi.preprocess.subsample_lightcurve`).  Set to
             ``None`` (default) to keep all observations.  A
             :class:`UserWarning` is issued whenever subsampling occurs.
         max_samples : int or None, optional
-            Maximum number of observations in the overall lightcurve. 
+            Maximum number of observations in the overall lightcurve.
             For 1-D lightcurves, when the total number of points exceeds
             `max_samples` a gap-preserving random subsample of `max_samples`
-            points is drawn and stored permanently. For 2-D lightcurves, 
+            points is drawn and stored permanently. For 2-D lightcurves,
             if they have more than `max_samples` points after subsampling
             each band below `max_samples_per_band` then a warning will be
             raised.
