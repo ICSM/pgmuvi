@@ -7531,6 +7531,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # -- characterize each selected peak --------------------------------
         dominant_freq = float(freq_grid[selected_indices[0]])
         dominant_period = 1.0 / dominant_freq
+        import pdb; pdb.set_trace()
 
         peak_objects = []
         for rank_idx, (pidx, prom) in enumerate(
