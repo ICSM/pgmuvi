@@ -306,7 +306,7 @@ class TestToTextDistinction(unittest.TestCase):
         self.assertIn(expected, text)
 
     def test_no_largest_area_section_with_single_peak(self):
-        """With only one peak no LARGEST INTEGRATED-POWER FEATURE section."""
+        """With only one peak, there is no LARGEST INTEGRATED-POWER FEATURE section."""
         peak = _make_peak(rank=1, area_fraction=0.80, prominence=0.80,
                           period=100.0)
         text = _make_summary([peak]).to_text()

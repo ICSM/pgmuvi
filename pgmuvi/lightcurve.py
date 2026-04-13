@@ -7655,7 +7655,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             p_hi = 1.0 / f_lo if f_lo > 0 else float("nan")
             ratio = p_pk / dominant_period if dominant_period > 0 else 1.0
             # Coherence proxy: ratio of peak frequency to frequency-interval
-            # width.  A narrow, well-localised peak yields a large value; a
+            # width.  A narrow, well-localized peak yields a large value; a
             # broad diffuse structure yields a small value.  Non-finite or
             # non-positive widths produce NaN (treated as worst in ranking).
             _width = f_hi - f_lo
