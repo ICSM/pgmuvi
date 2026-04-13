@@ -1039,6 +1039,12 @@ class PeriodSummaryResult:
         else:
             self.largest_area_peak_index = 0
         self.primary_peak_index = 0
+        # Keep dominant_period / dominant_frequency in sync with the
+        # post-sort primary peak so that direct attribute access is also
+        # consistent (not just as_dict() which already prefers peaks[0]).
+        if self.peaks:
+            self.dominant_period = self.peaks[0].period
+            self.dominant_frequency = self.peaks[0].frequency
         self.freq_grid = freq_grid
         self.psd = psd
         self.notes = notes
@@ -1084,6 +1090,29 @@ class PeriodSummaryResult:
             else float("nan")
         )
 
+        # Compute q_factor from the post-sort primary peak's
+        # interval_frequency so that the value is never stale relative to
+        # the physically ranked primary pulsation candidate.
+        # Formula: q_factor = frequency / (f_hi - f_lo)
+        # This is equivalent to coherence_proxy for PSD peaks and
+        # approximates the RBF-based Q for explicit-period peaks.
+        # Fall back to the constructor-provided self.q_factor only when
+        # the primary peak's frequency interval is invalid (e.g. explicit-
+        # period backend with no RBF lengthscale → interval is all NaN).
+        if primary is not None:
+            _f_lo_q, _f_hi_q = primary.interval_frequency
+            _w_q = _f_hi_q - _f_lo_q
+            if (
+                np.isfinite(_w_q)
+                and _w_q > 0
+                and np.isfinite(primary.frequency)
+            ):
+                _q_factor = primary.frequency / _w_q
+            else:
+                _q_factor = self.q_factor
+        else:
+            _q_factor = self.q_factor
+
         return {
             "component_diagnostics": (
                 self.component_diagnostics.as_dict()
@@ -1098,7 +1127,7 @@ class PeriodSummaryResult:
             "period_interval_fwhm_like": primary_interval,
             "period_interval": primary_interval,
             "interval_definition": self.interval_definition,
-            "q_factor": self.q_factor,
+            "q_factor": _q_factor,
             "peak_fraction": primary_area,
             "n_peaks": len(self.peaks),
             "n_peaks_detected": self.n_peaks_detected,
@@ -7698,7 +7727,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         _note_parts = [
             "Interval is based on the integrated PSD mass within the "
-            "dominant peak basin (peak-centered shortest-mass interval). "
+            "primary peak basin (peak-centered shortest-mass interval). "
             "The interval is guaranteed to contain the peak frequency. "
             "Integration is performed in log-frequency space to avoid "
             "high-frequency bias on a log-spaced grid. "

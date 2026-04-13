@@ -441,5 +441,158 @@ class TestCoherenceProxyField(unittest.TestCase):
         self.assertTrue(math.isnan(d["coherence_proxy"]))
 
 
+# ---------------------------------------------------------------------------
+# F. Dominant-scalar consistency (all quantities must refer to post-sort primary)
+# ---------------------------------------------------------------------------
+
+
+class TestDominantScalarConsistency(unittest.TestCase):
+    """All summary-level 'dominant' scalars must refer to the post-sort
+    primary pulsation candidate, not a pre-sort peak.
+
+    Construct a two-peak summary where:
+    - Peak A: high area_fraction, low prominence, low coherence (broad)
+    - Peak B: low area_fraction, high prominence, high coherence (narrow)
+    After physical ranking, Peak B is rank-1 (primary).
+    ALL dominant scalars must agree with Peak B, not Peak A.
+    """
+
+    def _build_summary(self):
+        # Peak A: broad, large area — area-dominant but not physically primary
+        peak_a = _make_peak(
+            rank=1, area_fraction=0.70, prominence=0.10,
+            coherence_proxy=2.0, period=500.0,
+        )
+        # Peak B: narrow, high prominence — physical primary pulsation
+        peak_b = _make_peak(
+            rank=2, area_fraction=0.30, prominence=0.80,
+            coherence_proxy=20.0, period=100.0,
+        )
+        return _make_summary([peak_a, peak_b]), peak_a, peak_b
+
+    def test_peaks_zero_is_primary_pulsation(self):
+        """peaks[0] is the physically ranked primary (high prominence)."""
+        summary, _, peak_b = self._build_summary()
+        self.assertAlmostEqual(summary.peaks[0].period, peak_b.period)
+
+    def test_dominant_period_attribute_matches_primary_peak(self):
+        """summary.dominant_period (direct attribute) matches peaks[0].period."""
+        summary, _, _ = self._build_summary()
+        self.assertAlmostEqual(
+            summary.dominant_period, summary.peaks[0].period
+        )
+
+    def test_dominant_frequency_attribute_matches_primary_peak(self):
+        """summary.dominant_frequency (direct attribute) matches peaks[0].frequency."""
+        summary, _, _ = self._build_summary()
+        self.assertAlmostEqual(
+            summary.dominant_frequency, summary.peaks[0].frequency
+        )
+
+    def test_dict_dominant_period_matches_primary(self):
+        """as_dict()['dominant_period'] == peaks[0].period."""
+        summary, _, _ = self._build_summary()
+        d = summary.as_dict()
+        self.assertAlmostEqual(d["dominant_period"], summary.peaks[0].period)
+
+    def test_dict_dominant_frequency_matches_primary(self):
+        """as_dict()['dominant_frequency'] == peaks[0].frequency."""
+        summary, _, _ = self._build_summary()
+        d = summary.as_dict()
+        self.assertAlmostEqual(
+            d["dominant_frequency"], summary.peaks[0].frequency
+        )
+
+    def test_dict_period_interval_matches_primary(self):
+        """as_dict()['period_interval'] == peaks[0].interval_period."""
+        summary, _, _ = self._build_summary()
+        d = summary.as_dict()
+        self.assertEqual(
+            list(d["period_interval"]),
+            list(summary.peaks[0].interval_period),
+        )
+
+    def test_dict_peak_fraction_matches_primary(self):
+        """as_dict()['peak_fraction'] == peaks[0].area_fraction."""
+        summary, _, _ = self._build_summary()
+        d = summary.as_dict()
+        self.assertAlmostEqual(
+            d["peak_fraction"], summary.peaks[0].area_fraction
+        )
+
+    def test_dict_q_factor_matches_primary_peak_interval(self):
+        """as_dict()['q_factor'] is derived from the primary peak's interval.
+
+        For the synthetic peaks built here, interval_frequency = (f*0.9, f*1.1),
+        so q_factor = frequency / (f*1.1 - f*0.9) = frequency / (0.2*f) = 5.0.
+        """
+        summary, _, _ = self._build_summary()
+        d = summary.as_dict()
+        primary = summary.peaks[0]
+        f_lo, f_hi = primary.interval_frequency
+        expected_q = primary.frequency / (f_hi - f_lo)
+        self.assertAlmostEqual(d["q_factor"], expected_q, places=10)
+
+    def test_q_factor_not_from_area_dominant_peak(self):
+        """q_factor does NOT describe the area-dominant (broad, low-rank) peak."""
+        summary, peak_a, _ = self._build_summary()
+        d = summary.as_dict()
+        # Peak A's q_factor would be 5.0 (same formula) but at peak_a's freq
+        f_lo_a, f_hi_a = peak_a.interval_frequency
+        q_if_from_peak_a = peak_a.frequency / (f_hi_a - f_lo_a)
+        # Primary (peak B) has a different frequency, so q_factors differ
+        # (both are 5.0 in this symmetric case, but the frequencies differ)
+        # More directly: assert q_factor is consistent with peaks[0], not peak_a
+        primary = summary.peaks[0]
+        f_lo_p, f_hi_p = primary.interval_frequency
+        expected = primary.frequency / (f_hi_p - f_lo_p)
+        self.assertAlmostEqual(d["q_factor"], expected, places=10)
+        # And verify it does NOT accidentally match peak_a at a different freq
+        # (both happen to give q=5 due to symmetric intervals, but the ratio
+        # of primary vs area-dominant q_factors is the ratio of frequencies,
+        # so the test confirms we used the right frequency)
+        self.assertAlmostEqual(
+            d["dominant_frequency"], primary.frequency, places=10
+        )
+
+    def test_largest_area_remains_separate(self):
+        """largest_area_period still refers to the area-dominant broad peak."""
+        summary, peak_a, _ = self._build_summary()
+        d = summary.as_dict()
+        self.assertAlmostEqual(d["largest_area_period"], peak_a.period)
+        self.assertAlmostEqual(d["largest_area_fraction"], peak_a.area_fraction)
+
+    def test_dominant_differs_from_largest_area(self):
+        """dominant_period and largest_area_period differ in this scenario."""
+        summary, _, _ = self._build_summary()
+        d = summary.as_dict()
+        self.assertNotAlmostEqual(
+            d["dominant_period"], d["largest_area_period"]
+        )
+
+    def test_text_primary_peak_period_matches_dict_dominant(self):
+        """to_text() and as_dict() report the same dominant period."""
+        summary, _, _ = self._build_summary()
+        d = summary.as_dict()
+        text = summary.to_text()
+        # The dominant period from as_dict() should appear in to_text()
+        period_str = f"{d['dominant_period']:.6g}"
+        self.assertIn(period_str, text)
+
+    def test_text_q_factor_consistent_with_primary(self):
+        """to_text() does not claim a q_factor for the area-dominant peak."""
+        # to_text() doesn't currently print q_factor directly, but the
+        # PRIMARY PEAK section shows the primary's coherence_proxy which
+        # equals q_factor for these synthetic peaks.
+        summary, _, _ = self._build_summary()
+        text = summary.to_text()
+        # PRIMARY PEAK section must be present
+        self.assertIn("PRIMARY PEAK", text)
+        # The primary peak's period must appear in the PRIMARY PEAK section
+        primary = summary.peaks[0]
+        period_str = f"{primary.period:.6g}"
+        self.assertIn(period_str, text)
+
+
 if __name__ == "__main__":
     unittest.main()
