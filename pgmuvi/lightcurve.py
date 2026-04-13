@@ -1107,14 +1107,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                 bname, getattr(self, bname)[idx_t]
                             )
                 if self._xdata_raw.shape[0] > max_samples:
-                    warnings.warn(
-                        f"Lightcurve has {self._xdata_raw.shape[0]} points, which exceeds "  # noqa: E501
-                        f"max_samples={max_samples}. Execution may be slow. "
-                        "Consider reducing max_samples_per_band to reduce "
-                        "the total size of the lightcurve."
-                        UserWarning,
-                        stacklevel=2,
+                    _msg = (
+                        f"Lightcurve has {self._xdata_raw.shape[0]} points, "
+                        f"which exceeds max_samples={max_samples}. "
+                        "Execution may be slow. Consider reducing "
+                        "max_samples_per_band to reduce the total size of "
+                        "the lightcurve."
                     )
+                    warnings.warn(_msg, UserWarning, stacklevel=2)
             else:
                 # 1D light curve: subsample the whole array if it exceeds the
                 # limit.
