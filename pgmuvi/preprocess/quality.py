@@ -132,30 +132,47 @@ def compute_sampling_metrics(
     median_cad = float(np.median(gaps))
     mean_cad = float(np.mean(gaps))
     std_cad = float(np.std(gaps))
+    positive_gaps = gaps[gaps > 0]
+    positive_mean_cad = (
+        float(np.mean(positive_gaps)) if len(positive_gaps) > 0 else 0.0
+    )
 
     # Sampling quality indicators
     uniformity = 1.0 - (std_cad / mean_cad) if mean_cad > 0 else 0.0
     uniformity = max(0.0, min(1.0, uniformity))  # Clamp to [0,1]
 
     # When median cadence is zero (many duplicate/near-identical timestamps),
-    # fall back to mean cadence for metrics that require a positive cadence.
+    # fall back to the mean of strictly positive gaps for metrics that
+    # require a positive cadence. Duplicate timestamps do not improve the
+    # temporal resolution, so zero-valued gaps are excluded from the fallback.
     # Tightly clustered but non-identical timestamps (median_cad > 0) are
     # handled correctly as-is; the fallback only applies when the median
     # collapses to exactly zero.
-    effective_cad = median_cad if median_cad > 0 else mean_cad
+    effective_cad = median_cad if median_cad > 0 else positive_mean_cad
 
-    if median_cad == 0:
+    if median_cad == 0 and effective_cad > 0:
         warnings.warn(
             "median_cadence is zero (many duplicate timestamps present)."
-            " Falling back to mean_cadence for nyquist_period, "
-            "nyquist_frequency, and duty_cycle; results may not be robust.",
+            " Falling back to the mean of positive gaps only for "
+            "nyquist_period, nyquist_frequency, and duty_cycle; results may "
+            "not be robust.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    if median_cad == 0 and len(positive_gaps) == 0:
+        warnings.warn(
+            "median_cadence is zero and there are no positive timestamp gaps; "
+            "effective cadence is undefined. nyquist_period and duty_cycle "
+            "will be zero and nyquist_frequency will be np.inf.",
             UserWarning,
             stacklevel=2,
         )
 
     if effective_cad == 0:
-        # Reached only in pathological cases (e.g. floating-point underflow);
-        # baseline == 0 is already caught above, so this is a last-resort guard.
+        # Reached only in pathological cases (e.g. all timestamps identical or
+        # floating-point underflow); baseline == 0 is already caught above, so
+        # this is a last-resort guard.
         warnings.warn(
             "effective cadence is zero; nyquist_period and duty_cycle will be "
             "zero and nyquist_frequency will be np.inf.",
