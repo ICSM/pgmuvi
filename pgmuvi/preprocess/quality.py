@@ -8,6 +8,8 @@ randomly draw a size-limited subset of observations while preserving the
 temporal baseline, sampling structure and gap-coverage constraints.
 """
 
+import warnings
+
 import numpy as np
 
 
@@ -80,9 +82,11 @@ def compute_sampling_metrics(
             'cadence_std': float,
                 Standard deviation of cadences
             'nyquist_period': float,
-                2 * median_cadence (shortest reliably detectable period)
+                2 * effective_cadence (shortest reliably detectable period),
+                where effective_cadence is the median cadence, or the mean
+                cadence if the median is zero (e.g. many duplicate timestamps)
             'nyquist_frequency': float,
-                1 / (2 * median_cadence)
+                1 / (2 * effective_cadence), np.inf if effective_cadence == 0
             'longest_detectable_period': float,
                 baseline / 2 (heuristic upper limit)
             'duty_cycle': float,
@@ -128,13 +132,56 @@ def compute_sampling_metrics(
     median_cad = float(np.median(gaps))
     mean_cad = float(np.mean(gaps))
     std_cad = float(np.std(gaps))
+    positive_gaps = gaps[gaps > 0]
+    positive_mean_cad = (
+        float(np.mean(positive_gaps)) if len(positive_gaps) > 0 else 0.0
+    )
 
     # Sampling quality indicators
     uniformity = 1.0 - (std_cad / mean_cad) if mean_cad > 0 else 0.0
     uniformity = max(0.0, min(1.0, uniformity))  # Clamp to [0,1]
 
+    # When median cadence is zero (many duplicate/near-identical timestamps),
+    # fall back to the mean of strictly positive gaps for metrics that
+    # require a positive cadence. Duplicate timestamps do not improve the
+    # temporal resolution, so zero-valued gaps are excluded from the fallback.
+    # Tightly clustered but non-identical timestamps (median_cad > 0) are
+    # handled correctly as-is; the fallback only applies when the median
+    # collapses to exactly zero.
+    effective_cad = median_cad if median_cad > 0 else positive_mean_cad
+
+    if median_cad == 0 and effective_cad > 0:
+        warnings.warn(
+            "median_cadence is zero (many duplicate timestamps present)."
+            " Falling back to the mean of positive gaps only for "
+            "nyquist_period, nyquist_frequency, and duty_cycle; results may "
+            "not be robust.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    if median_cad == 0 and len(positive_gaps) == 0:
+        warnings.warn(
+            "median_cadence is zero and there are no positive timestamp gaps; "
+            "effective cadence is undefined. nyquist_period and duty_cycle "
+            "will be zero and nyquist_frequency will be np.inf.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    if effective_cad == 0:
+        # Reached only in pathological cases (e.g. all timestamps identical or
+        # floating-point underflow); baseline == 0 is already caught above, so
+        # this is a last-resort guard.
+        warnings.warn(
+            "effective cadence is zero; nyquist_period and duty_cycle will be "
+            "zero and nyquist_frequency will be np.inf.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     # Simple duty cycle estimate (assumes observation duration << cadence)
-    duty_cycle = n * median_cad / baseline if baseline > 0 else 0.0
+    duty_cycle = n * effective_cad / baseline if baseline > 0 else 0.0
     duty_cycle = min(1.0, duty_cycle)  # Can't exceed 1
 
     metrics = {
@@ -145,8 +192,10 @@ def compute_sampling_metrics(
         "median_cadence": median_cad,
         "mean_cadence": mean_cad,
         "cadence_std": std_cad,
-        "nyquist_period": 2.0 * median_cad,
-        "nyquist_frequency": 1.0 / (2.0 * median_cad) if median_cad > 0 else np.inf,
+        "nyquist_period": 2.0 * effective_cad,
+        "nyquist_frequency": (
+            1.0 / (2.0 * effective_cad) if effective_cad > 0 else np.inf
+        ),
         "longest_detectable_period": baseline / 2.0,
         "duty_cycle": duty_cycle,
         "sampling_uniformity": uniformity,
@@ -247,19 +296,19 @@ def assess_sampling_quality(
 
     # Quality gates
     gates = {}
-    warnings = []
+    warning_msgs = []
 
     # Gate 1: Minimum points
     gates["min_points"] = metrics["n_points"] >= min_points
     if not gates["min_points"]:
-        warnings.append(
+        warning_msgs.append(
             f"Too few points: {metrics['n_points']} < {min_points}"
         )
 
     # Gate 2: Maximum gap
     gates["max_gap"] = metrics["max_gap_fraction"] <= max_gap_fraction
     if not gates["max_gap"]:
-        warnings.append(
+        warning_msgs.append(
             f"Large gap: {metrics['max_gap']:.2f} "
             f"({100 * metrics['max_gap_fraction']:.1f}% of baseline) "
             f"> {100 * max_gap_fraction:.0f}% threshold"
@@ -271,20 +320,20 @@ def assess_sampling_quality(
         # Non-positive median cadence indicates duplicate or invalid timestamps.
         baseline_factor = 0.0
         gates["min_baseline"] = False
-        warnings.append(
+        warning_msgs.append(
             "Non-positive median cadence; baseline coverage cannot be reliably "
             "assessed and the baseline gate has been failed."
         )
     elif median_cadence == 0:
         baseline_factor = metrics["baseline"] / metrics["mean_cadence"]
-        warnings.append(
-            "Lightcurve contains large numbers of points with identical timestamps."
-            "Determining sampling quality using mean cadence instead of median,"
-            "result may not be robust."
+        warning_msgs.append(
+            "Lightcurve contains large numbers of points with identical "
+            "timestamps. Determining sampling quality using mean cadence "
+            "instead of median; result may not be robust."
         )
         gates["min_baseline"] = baseline_factor >= min_baseline_factor
         if not gates["min_baseline"]:
-            warnings.append(
+            warning_msgs.append(
                 f"Insufficient baseline: {baseline_factor:.1f} median cadences "
                 f"< {min_baseline_factor} required"
             )
@@ -292,7 +341,7 @@ def assess_sampling_quality(
         baseline_factor = metrics["baseline"] / median_cadence
         gates["min_baseline"] = baseline_factor >= min_baseline_factor
         if not gates["min_baseline"]:
-            warnings.append(
+            warning_msgs.append(
                 f"Insufficient baseline: {baseline_factor:.1f} median cadences "
                 f"< {min_baseline_factor} required"
             )
@@ -316,7 +365,7 @@ def assess_sampling_quality(
             and fraction_snr_gt_min >= min_fraction_good_snr
         )
         if not gates["min_snr"]:
-            warnings.append(
+            warning_msgs.append(
                 f"Poor SNR: median={metrics['median_snr']:.1f} < {min_snr}, "
                 f"fraction>={min_snr:.1f}={100 * fraction_snr_gt_min:.0f}%"
                 f" < {100 * min_fraction_good_snr:.0f}%"
@@ -330,7 +379,7 @@ def assess_sampling_quality(
     diagnostics = {
         "metrics": metrics,
         "gates": gates,
-        "warnings": warnings,
+        "warnings": warning_msgs,
         "recommendation": recommendation,
     }
 
@@ -369,9 +418,9 @@ def assess_sampling_quality(
             symbol = "\u2713" if status else "\u2717"
             print(f"  {symbol} {gate}: {'PASS' if status else 'FAIL'}")
 
-        if warnings:
+        if warning_msgs:
             print("\nWarnings:")
-            for w in warnings:
+            for w in warning_msgs:
                 print(f"  \u26a0 {w}")
 
         print(f"\nRecommendation: {recommendation}")
