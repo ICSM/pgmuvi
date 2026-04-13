@@ -62,6 +62,12 @@ _REQUIRED_KEYS = {
     "kernel_family",
     "time_kernel_family",
     "has_stochastic_background",
+    # Physical-ranking fields (added in peak-ranking patch)
+    "primary_peak_rank",
+    "largest_area_peak_rank",
+    "largest_area_period",
+    "largest_area_frequency",
+    "largest_area_fraction",
 }
 
 
