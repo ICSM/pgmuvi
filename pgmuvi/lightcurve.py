@@ -1043,8 +1043,41 @@ class PeriodSummaryResult:
         # post-sort primary peak so that direct attribute access is also
         # consistent (not just as_dict() which already prefers peaks[0]).
         if self.peaks:
-            self.dominant_period = self.peaks[0].period
-            self.dominant_frequency = self.peaks[0].frequency
+            _primary = self.peaks[0]
+            self.dominant_period = _primary.period
+            self.dominant_frequency = _primary.frequency
+            # Compute q_factor from the post-sort primary peak's
+            # interval_frequency so that summary.q_factor is always correct
+            # at the object level, not just inside as_dict().
+            # Formula: q_factor = frequency / (f_hi - f_lo)
+            _f_lo, _f_hi = _primary.interval_frequency
+            _width = _f_hi - _f_lo
+            if (
+                np.isfinite(_width)
+                and _width > 0
+                and np.isfinite(_primary.frequency)
+            ):
+                self.q_factor = _primary.frequency / _width
+            else:
+                # Invalid interval (e.g. explicit-period backend with no RBF
+                # lengthscale): fall through to the constructor-provided value.
+                self.q_factor = q_factor
+        else:
+            # No peaks — keep constructor-provided values unchanged.
+            self.q_factor = q_factor
+        # Validate internal consistency: dominant attributes must agree with
+        # peaks[0] whenever peaks exist.
+        if self.peaks:
+            assert self.dominant_period == self.peaks[0].period, (
+                f"PeriodSummaryResult internal error: dominant_period "
+                f"({self.dominant_period!r}) != peaks[0].period "
+                f"({self.peaks[0].period!r})"
+            )
+            assert self.dominant_frequency == self.peaks[0].frequency, (
+                f"PeriodSummaryResult internal error: dominant_frequency "
+                f"({self.dominant_frequency!r}) != peaks[0].frequency "
+                f"({self.peaks[0].frequency!r})"
+            )
         self.freq_grid = freq_grid
         self.psd = psd
         self.notes = notes
@@ -1058,17 +1091,6 @@ class PeriodSummaryResult:
         primary_interval = primary.interval_period if primary is not None else None
         primary_area = (
             primary.area_fraction if primary is not None else float("nan")
-        )
-        # Prefer primary-peak values for dominant_period/frequency so that
-        # all reported quantities (period, interval, area) consistently
-        # describe the same peak.  Fall back to the constructor-provided
-        # values if no peaks are present (non-periodic / explicit-period
-        # backends that set dominant_period directly).
-        dominant_period = (
-            primary.period if primary is not None else self.dominant_period
-        )
-        dominant_frequency = (
-            primary.frequency if primary is not None else self.dominant_frequency
         )
         _sig_peaks = self.get_significant_peaks()
         significant_periods = np.array([p.period for p in _sig_peaks])
@@ -1090,29 +1112,6 @@ class PeriodSummaryResult:
             else float("nan")
         )
 
-        # Compute q_factor from the post-sort primary peak's
-        # interval_frequency so that the value is never stale relative to
-        # the physically ranked primary pulsation candidate.
-        # Formula: q_factor = frequency / (f_hi - f_lo)
-        # This is equivalent to coherence_proxy for PSD peaks and
-        # approximates the RBF-based Q for explicit-period peaks.
-        # Fall back to the constructor-provided self.q_factor only when
-        # the primary peak's frequency interval is invalid (e.g. explicit-
-        # period backend with no RBF lengthscale → interval is all NaN).
-        if primary is not None:
-            f_lo_q, f_hi_q = primary.interval_frequency
-            interval_width = f_hi_q - f_lo_q
-            if (
-                np.isfinite(interval_width)
-                and interval_width > 0
-                and np.isfinite(primary.frequency)
-            ):
-                _q_factor = primary.frequency / interval_width
-            else:
-                _q_factor = self.q_factor
-        else:
-            _q_factor = self.q_factor
-
         return {
             "component_diagnostics": (
                 self.component_diagnostics.as_dict()
@@ -1121,13 +1120,15 @@ class PeriodSummaryResult:
             ),
             "freq_grid": self.freq_grid,
             "psd": self.psd,
-            "dominant_frequency": dominant_frequency,
-            "dominant_period": dominant_period,
+            # self.dominant_frequency/dominant_period/q_factor are set in
+            # __init__() from peaks[0] and are already authoritative.
+            "dominant_frequency": self.dominant_frequency,
+            "dominant_period": self.dominant_period,
             # Backward-compatible interval keys (both alias the same value).
             "period_interval_fwhm_like": primary_interval,
             "period_interval": primary_interval,
             "interval_definition": self.interval_definition,
-            "q_factor": _q_factor,
+            "q_factor": self.q_factor,
             "peak_fraction": primary_area,
             "n_peaks": len(self.peaks),
             "n_peaks_detected": self.n_peaks_detected,

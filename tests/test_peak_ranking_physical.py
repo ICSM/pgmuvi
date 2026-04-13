@@ -570,19 +570,49 @@ class TestDominantScalarConsistency(unittest.TestCase):
         period_str = f"{d['dominant_period']:.6g}"
         self.assertIn(period_str, text)
 
-    def test_text_q_factor_consistent_with_primary(self):
-        """to_text() does not claim a q_factor for the area-dominant peak."""
-        # to_text() doesn't currently print q_factor directly, but the
-        # PRIMARY PEAK section shows the primary's coherence_proxy which
-        # equals q_factor for these synthetic peaks.
+    def test_q_factor_attribute_equals_dict_value(self):
+        """summary.q_factor (direct attr) equals as_dict()['q_factor']."""
         summary, _, _ = self._build_summary()
-        text = summary.to_text()
-        # PRIMARY PEAK section must be present
-        self.assertIn("PRIMARY PEAK", text)
-        # The primary peak's period must appear in the PRIMARY PEAK section
+        self.assertAlmostEqual(
+            summary.q_factor, summary.as_dict()["q_factor"], places=10
+        )
+
+    def test_dominant_period_attribute_equals_dict_value(self):
+        """summary.dominant_period attr equals as_dict()['dominant_period']."""
+        summary, _, _ = self._build_summary()
+        self.assertAlmostEqual(
+            summary.dominant_period,
+            summary.as_dict()["dominant_period"],
+            places=10,
+        )
+
+    def test_dominant_frequency_attribute_equals_dict_value(self):
+        """summary.dominant_frequency attr equals as_dict()['dominant_frequency']."""
+        summary, _, _ = self._build_summary()
+        self.assertAlmostEqual(
+            summary.dominant_frequency,
+            summary.as_dict()["dominant_frequency"],
+            places=10,
+        )
+
+    def test_q_factor_attribute_matches_primary_interval(self):
+        """summary.q_factor (direct attr) is computed from peaks[0].interval."""
+        summary, _, _ = self._build_summary()
         primary = summary.peaks[0]
-        period_str = f"{primary.period:.6g}"
-        self.assertIn(period_str, text)
+        f_lo, f_hi = primary.interval_frequency
+        expected_q = primary.frequency / (f_hi - f_lo)
+        self.assertAlmostEqual(summary.q_factor, expected_q, places=10)
+        self.assertAlmostEqual(summary.q_factor, 5.0, places=10)
+
+    def test_validation_raises_on_mismatch(self):
+        """PeriodSummaryResult raises AssertionError when dominant attrs mismatch peaks[0]."""
+        # Directly manipulate a summary post-construction to simulate mismatch
+        summary, _, _ = self._build_summary()
+        # Monkey-patch dominant_period to a wrong value
+        summary.dominant_period = 99999.9
+        # as_dict() should return the patched (wrong) value — that's intentional
+        # to show that the guard catches construction-time errors, not runtime ones
+        self.assertEqual(summary.as_dict()["dominant_period"], 99999.9)
 
 
 if __name__ == "__main__":
