@@ -9340,11 +9340,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         x_plot,
                         y_plot,
                         yerr=self.yerr[mask].cpu().numpy(),
-                        fmt="k*",
+                        fmt="ko",
                         label="Observed",
                     )
                 else:
-                    ax.plot(x_plot, y_plot, "k*", label="Observed")
+                    ax.plot(x_plot, y_plot, "ko", label="Observed")
 
                 ax.set_ylabel("y")
                 ax.set_xlabel("x")
@@ -9369,10 +9369,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         y_plot = self.ydata.cpu().numpy()
         if hasattr(self, "yerr") and self.yerr is not None:
             ax.errorbar(
-                x_plot, y_plot, yerr=self.yerr.cpu().numpy(), fmt="k*", label="Observed"
+                x_plot, y_plot, yerr=self.yerr.cpu().numpy(), fmt="ko", label="Observed"
             )
         else:
-            ax.plot(x_plot, y_plot, "k*", label="Observed")
+            ax.plot(x_plot, y_plot, "ko", label="Observed")
         current_yscale, current_ylim = self._yscale_and_ylim(y_plot, yscale, ylim)
         ax.set_yscale(current_yscale)
         if current_ylim is not None:
