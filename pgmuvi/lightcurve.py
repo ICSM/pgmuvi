@@ -3831,10 +3831,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (a warning is issued and ``'baluev'`` is used instead); it is
             however used internally as the per-frequency p-value when
             applying the Benjamini-Hochberg correction.
-            For multi-band lightcurves the default is ``'analytical'`` (fast
-            Baluev-style approximation).  Slower but more accurate options
-            are ``'bootstrap'``, ``'phase_scramble'``, and ``'calibrated'``
-            (see
+            For multi-band lightcurves the default is ``'phase_scramble'``.
+            Slower but more accurate options are ``'bootstrap'``, ``'calibrated'``,
+            and ``'analytical'``  (fast Baluev-style approximation) (see
             :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`).
         - use_best_band_init: bool, optional, default=False
             If True and the lightcurve is multiband (ndim > 1), the
@@ -3948,8 +3947,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             bands = _xdata[:, 1]
             y = _ydata
 
-            # Default FAP method for multiband: analytical (fast)
-            _fap_method = fap_method if fap_method is not None else 'analytical'
+            # Default FAP method for multiband: phase_scramble
+            _fap_method = fap_method if fap_method is not None else 'phase_scramble'
 
             if _yerr is not None:
                 yerr = _yerr
