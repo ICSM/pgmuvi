@@ -794,22 +794,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             data are assumed to already be in days and no conversion is
             performed.
         max_samples_per_band : int or None, optional
-            Maximum number of observations to retain per band. For 1-D
-            lightcurves, this has no effect. For 2-D (multiband)
-            lightcurves, each band is checked independently: only bands that
-            exceed `max_samples_per_band` are subsampled; bands already at
-            or below the limit are left untouched.
-            (see :func:`~pgmuvi.preprocess.subsample_lightcurve`).  Set to
-            ``None`` (default) to keep all observations.  A
-            :class:`UserWarning` is issued whenever subsampling occurs.
+            Maximum number of observations to retain per band for 2-D
+            (multiband) lightcurves.  Each band is checked independently:
+            only bands that exceed `max_samples_per_band` are subsampled;
+            bands already at or below the limit are left untouched.  For
+            1-D lightcurves, this parameter has no effect.  Set to ``None``
+            (default) to fall back to `max_samples` as the per-band cap.
+            A :class:`UserWarning` is issued whenever subsampling occurs
+            (see :func:`~pgmuvi.preprocess.subsample_lightcurve`).
         max_samples : int or None, optional
-            Maximum number of observations in the overall lightcurve.
-            For 1-D lightcurves, when the total number of points exceeds
-            `max_samples` a gap-preserving random subsample of `max_samples`
-            points is drawn and stored permanently. For 2-D lightcurves,
-            if they have more than `max_samples` points after subsampling
-            each band below `max_samples_per_band` then a warning will be
-            raised.
+            Maximum number of observations to retain.  For 1-D lightcurves,
+            when the total number of points exceeds `max_samples`, a
+            gap-preserving random subsample of `max_samples` points is
+            drawn and stored permanently.  For 2-D lightcurves, `max_samples`
+            is used as the per-band cap when `max_samples_per_band` is
+            ``None``; additionally, a :class:`UserWarning` is issued if the
+            total point count after per-band subsampling still exceeds
+            `max_samples`.  Default is ``1000``.  Set to ``None`` to
+            disable all automatic subsampling.
         subsample_seed : int or None, optional
             Random seed for the subsampler.  Provide an integer for
             reproducible results; ``None`` (default) gives a non-deterministic
@@ -1018,7 +1020,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # For 2D (multiband) light curves, each band is subsampled
         # independently so that bands already below the limit are untouched.
         # ------------------------------------------------------------------
-        if max_samples is not None:
+        # Effective per-band cap: explicit max_samples_per_band overrides;
+        # falls back to max_samples when max_samples_per_band is not set.
+        _eff_per_band = (
+            max_samples_per_band
+            if max_samples_per_band is not None
+            else max_samples
+        )
+        _run_2d = self.ndim > 1 and _eff_per_band is not None
+        _run_1d = self.ndim == 1 and max_samples is not None
+        if _run_1d or _run_2d:
             from pgmuvi.preprocess import subsample_lightcurve
 
             # Subsampling is only valid for the standard (N,) or (N,2) shapes
@@ -1042,19 +1053,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "_yerr_transformed",
             )
 
-            if self.ndim > 1:
+            if _run_2d:
                 # 2D (multiband): subsample each band independently so that
-                # bands with fewer than max_samples points are left untouched.
+                # bands with fewer than _eff_per_band points are left
+                # untouched.
                 xdata_np = self._xdata_raw.detach().cpu().numpy()
                 # `self.band` is an optional attribute that, when present,
                 # stores categorical band labels (e.g. strings) for each
-                # observation.  When it is absent, the second column of xdata
-                # holds the numeric wavelength/band identifier — the standard
-                # encoding for 2-D lightcurves.
-                if (
-                    hasattr(self, "band")
-                    and self.band is not None
-                ):
+                # observation.  When it is absent, the second column of
+                # xdata holds the numeric wavelength/band identifier — the
+                # standard encoding for 2-D lightcurves.
+                if hasattr(self, "band") and self.band is not None:
                     band_ids = np.asarray(self.band)
                 else:
                     band_ids = xdata_np[:, 1]
@@ -1064,11 +1073,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 for bval in unique_bands:
                     band_mask = np.where(band_ids == bval)[0]
                     n_band = len(band_mask)
-                    if n_band > max_samples_per_band:
+                    if n_band > _eff_per_band:
                         t_band = xdata_np[band_mask, 0]
                         local_idx = subsample_lightcurve(
                             t_band,
-                            max_samples=max_samples_per_band,
+                            max_samples=_eff_per_band,
                             max_gap_fraction=mgf,
                             random_seed=subsample_seed,
                         )
@@ -1077,22 +1086,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     else:
                         global_keep.append(band_mask)
                 if subsampled_bands:
+                    _param_name = (
+                        "max_samples_per_band"
+                        if max_samples_per_band is not None
+                        else "max_samples"
+                    )
                     _band_str = ", ".join(
                         f"\u03bb={b}" for b in subsampled_bands
                     )
                     _struct_lines = "\n".join(
                         f"    \u03bb={bval}: {len(keep)} points"
-                        for bval, keep in zip(unique_bands, global_keep, strict=True)
+                        for bval, keep in zip(
+                            unique_bands, global_keep, strict=True
+                        )
                     )
                     _msg = (
-                        f"The following bands exceed max_samples_per_band={max_samples_per_band}"
+                        f"The following bands exceed "
+                        f"{_param_name}={_eff_per_band}"
                         f" and were randomly subsampled: {_band_str}. "
-                        "Set max_samples_per_band=None to disable subsampling.\n"
+                        f"Set {_param_name}=None to disable subsampling.\n"
                         "The subsampled 2D light curve has the following "
                         f"structure:\n{_struct_lines}"
                     )
                     warnings.warn(_msg, UserWarning, stacklevel=2)
-                    idx = np.sort(np.concatenate(global_keep))
+                    idx = np.concatenate(global_keep)
+                    # Sort by time column to preserve temporal ordering.
+                    idx = idx[np.argsort(xdata_np[idx, 0], kind="stable")]
                     idx_t = torch.as_tensor(
                         idx,
                         dtype=torch.long,
@@ -1106,10 +1125,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             self.register_buffer(
                                 bname, getattr(self, bname)[idx_t]
                             )
-                if self._xdata_raw.shape[0] > max_samples:
+                if (
+                    max_samples is not None
+                    and self._xdata_raw.shape[0] > max_samples
+                ):
                     _msg = (
-                        f"Lightcurve has {self._xdata_raw.shape[0]} points, "
-                        f"which exceeds max_samples={max_samples}. "
+                        f"Lightcurve has {self._xdata_raw.shape[0]} points,"
+                        f" which exceeds max_samples={max_samples}. "
                         "Execution may be slow. Consider reducing "
                         "max_samples_per_band to reduce the total size of "
                         "the lightcurve."
