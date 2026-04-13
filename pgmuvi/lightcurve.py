@@ -1148,7 +1148,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             self.register_buffer(
                                 bname, getattr(self, bname)[idx_t]
                             )
-                
 
     @classmethod
     def from_table(
