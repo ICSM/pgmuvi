@@ -4586,11 +4586,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             xdata[:, 1],
             torch.tensor(keep_wl, dtype=xdata.dtype, device=xdata.device),
         )
+        new_band = self.band[keep_mask.cpu().numpy()] if self.band is not None else None
 
         return Lightcurve(
             xdata[keep_mask].clone(),
             self._ydata_raw[keep_mask].clone(),
             self._yerr_raw[keep_mask].clone() if hasattr(self, "_yerr_raw") else None,
+            band=new_band
         )
 
     def _get_best_sampled_band_lc(self) -> "Lightcurve":
