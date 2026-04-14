@@ -9598,28 +9598,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
             # Plot training data as black filled circles (on top of model predictions)
-            y_data_for_val = self.ydata[self.xdata[:, 1] == val]
-            if self.yerr is not None:
-                y_err_for_val = self.yerr[self.xdata[:, 1] == val]
+            mask = self.xdata[:, 1] == val
+            x_data_for_val = self.xdata[mask, 0]
+            y_data_for_val = self.ydata[mask]
+            if hasattr(self, "yerr") and self.yerr is not None:
+                y_err_for_val = self.yerr[mask]
                 ax.errorbar(
-                    self.xdata[self.xdata[:, 1] == val, 0],
+                    x_data_for_val,
                     y_data_for_val,
-                    yerr = y_err_for_val,
-                    fmt = "ko",
-                    label = "Observed Data"
+                    yerr=y_err_for_val,
+                    fmt="ko",
+                    label="Observed Data",
                 )
             else:
                 ax.plot(
-                    self.xdata[self.xdata[:, 1] == val, 0],
+                    x_data_for_val,
                     y_data_for_val,
                     "ko",
-                    label = "Observed Data"
+                    label="Observed Data",
                 )
             ax.legend()
 
             ax.set_ylabel("y")
             ax.set_xlabel("x")
             ax.set_title(f"y vs x for {val}")
+
+            # Set x-axis limits to the data range for this wavelength so that
+            # the plot is centred on that wavelength's observations, even when
+            # the fit is evaluated over the combined time grid of all bands.
+            x_min = x_data_for_val.min().item()
+            x_max = x_data_for_val.max().item()
+            x_padding = 0.05 * (x_max - x_min) if x_max != x_min else 0.5
+            ax.set_xlim(x_min - x_padding, x_max + x_padding)
 
             # Determine y-axis scale and limits for this wavelength
             # independently, using the shared helper.

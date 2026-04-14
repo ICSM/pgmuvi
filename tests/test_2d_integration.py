@@ -253,5 +253,77 @@ class Test2DWithLinearMean(unittest.TestCase):
         self.assertIsInstance(lightcurve.model.mean_module, LinearMean)
 
 
+class TestPlot2DXLimits(unittest.TestCase):
+    """Test that _plot_2d centres the x-axis on each wavelength's own data."""
+
+    def setUp(self):
+        """Create 2D data where the two bands cover different time ranges."""
+        import matplotlib
+        matplotlib.use("Agg")
+
+        # Band 0: times 0–10, Band 1: times 5–20
+        t0 = torch.linspace(0.0, 10.0, 30)
+        t1 = torch.linspace(5.0, 20.0, 20)
+        wl0 = torch.zeros(30)
+        wl1 = torch.ones(20)
+        xdata = torch.cat(
+            [
+                torch.stack([t0, wl0], dim=1),
+                torch.stack([t1, wl1], dim=1),
+            ],
+            dim=0,
+        )
+        ydata = torch.sin(xdata[:, 0])
+        self.lc = Lightcurve(xdata, ydata)
+        self.t0_min, self.t0_max = 0.0, 10.0
+        self.t1_min, self.t1_max = 5.0, 20.0
+
+    def _xlim_ok(self, ax_xlim, data_min, data_max):
+        """Return True when the axes x-limits are centred on [data_min, data_max]."""
+        x_lo, x_hi = ax_xlim
+        # Limits must not extend outside [data_min − 20%, data_max + 20%]
+        margin = 0.2 * (data_max - data_min)
+        self.assertGreaterEqual(x_lo, data_min - margin)
+        self.assertLessEqual(x_hi, data_max + margin)
+        # And the data must be visible (limits encompass the data range)
+        self.assertLessEqual(x_lo, data_min)
+        self.assertGreaterEqual(x_hi, data_max)
+
+    def test_xlim_data_only(self):
+        """X-axis limits are centred per-wavelength when no fit is present."""
+        import matplotlib.pyplot as plt
+
+        figs = self.lc.plot(show=False)
+        self.assertIsInstance(figs, list)
+        self.assertEqual(len(figs), 2)
+
+        ax0 = figs[0].axes[0]
+        ax1 = figs[1].axes[0]
+        self._xlim_ok(ax0.get_xlim(), self.t0_min, self.t0_max)
+        self._xlim_ok(ax1.get_xlim(), self.t1_min, self.t1_max)
+        plt.close("all")
+
+    def test_xlim_with_fit(self):
+        """X-axis limits are centred per-wavelength even when a fit is plotted."""
+        import matplotlib.pyplot as plt
+
+        self.lc.fit(
+            model="2D",
+            num_mixtures=1,
+            training_iter=5,
+            miniter=2,
+            lr=0.05,
+        )
+        figs = self.lc.plot(show=False)
+        self.assertIsInstance(figs, list)
+        self.assertEqual(len(figs), 2)
+
+        ax0 = figs[0].axes[0]
+        ax1 = figs[1].axes[0]
+        self._xlim_ok(ax0.get_xlim(), self.t0_min, self.t0_max)
+        self._xlim_ok(ax1.get_xlim(), self.t1_min, self.t1_max)
+        plt.close("all")
+
+
 if __name__ == '__main__':
     unittest.main()
