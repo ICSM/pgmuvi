@@ -1784,6 +1784,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     self.ydata = self._ydata_raw[keep_mask].clone()
                     if hasattr(self, "_yerr_raw"):
                         self.yerr = self._yerr_raw[keep_mask].clone()
+                    if self.band is not None:
+                        self.band = self.band[keep_mask.detach().cpu().numpy()]
             else:
                 from pgmuvi.preprocess.quality import assess_sampling_quality
 
