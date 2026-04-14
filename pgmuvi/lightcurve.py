@@ -1962,6 +1962,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             self.register_buffer(
                                 bname, getattr(self, bname)[idx_t]
                             )
+                    if self.band is not None:
+                        self.band = self.band[idx]
             else:
                 # 1D light curve: subsample the whole array if it exceeds the
                 # limit.
