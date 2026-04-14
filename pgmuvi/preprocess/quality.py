@@ -224,7 +224,7 @@ def assess_sampling_quality(
     t: np.ndarray,
     y: np.ndarray = None,
     yerr: np.ndarray = None,
-    min_points: int = 6,
+    min_points: int = 15,
     max_gap_fraction: float = 0.3,
     min_baseline_factor: float = 3.0,
     min_snr: float = 3.0,
