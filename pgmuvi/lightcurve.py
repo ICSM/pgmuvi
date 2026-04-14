@@ -988,13 +988,13 @@ class PeriodSummaryResult:
         #   2. descending coherence_proxy — narrower/more coherent peak first
         #   3. descending area_fraction  — larger integrated power next
         #   4. descending height         — absolute amplitude tie-breaker
-        #   5. ascending original rank   — stable insertion-order tie-breaker
+        #   5. ascending original rank   — deterministic final tie-breaker
         #
         # After sorting, ranks are reassigned sequentially (1, 2, 3 …) so
         # that peak.rank reliably reflects position in the sorted list.
         _raw_peaks = peaks if peaks is not None else []
 
-        def _significance_key(p):
+        def _physical_rank_key(p):
             prom = (
                 p.prominence if np.isfinite(p.prominence) else -np.inf
             )
@@ -1007,7 +1007,7 @@ class PeriodSummaryResult:
             h = p.height if np.isfinite(p.height) else -np.inf
             return (-prom, -coh, -af, -h, p.rank)
 
-        _sorted = sorted(_raw_peaks, key=_significance_key)
+        _sorted = sorted(_raw_peaks, key=_physical_rank_key)
         # Reassign ranks sequentially and update period_ratio_to_primary so
         # that the new rank-1 peak always has ratio=1.0 and the other peaks
         # are relative to it.
@@ -1036,9 +1036,10 @@ class PeriodSummaryResult:
                     else -np.inf
                 ),
             )
+            self.primary_peak_index = 0
         else:
-            self.largest_area_peak_index = 0
-        self.primary_peak_index = 0
+            self.largest_area_peak_index = None
+            self.primary_peak_index = None
         # Keep dominant_period / dominant_frequency in sync with the
         # post-sort primary peak so that direct attribute access is also
         # consistent (not just as_dict() which already prefers peaks[0]).
@@ -1146,7 +1147,7 @@ class PeriodSummaryResult:
             "time_kernel_family": self.time_kernel_family,
             "has_stochastic_background": self.has_stochastic_background,
             # Physical-ranking indices
-            "primary_peak_rank": 1 if self.peaks else None,
+            "primary_peak_rank": primary.rank if primary is not None else None,
             "largest_area_peak_rank": _la_rank,
             # Largest-area-fraction feature (diagnostic)
             "largest_area_period": _la_period,

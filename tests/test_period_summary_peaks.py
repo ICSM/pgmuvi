@@ -72,7 +72,7 @@ class TestPeakSorting(unittest.TestCase):
     expected ordering while remaining numerically well-defined.
     """
 
-    def test_peaks_sorted_by_significance_desc(self):
+    def test_peaks_sorted_by_area_fraction_when_equal_prominence(self):
         """When prominence/coherence equal, peaks sort by descending area_fraction."""
         p_low = _make_peak(rank=1, area_fraction=0.30, period=200.0)
         p_mid = _make_peak(rank=2, area_fraction=0.55, period=150.0)
@@ -90,7 +90,7 @@ class TestPeakSorting(unittest.TestCase):
         ranks = [p.rank for p in summary.peaks]
         self.assertEqual(ranks, list(range(1, len(ranks) + 1)))
 
-    def test_primary_is_highest_significance(self):
+    def test_primary_is_highest_area_fraction_tiebreak(self):
         """When prominence/coherence equal, peaks[0] has the highest area_fraction."""
         p_low = _make_peak(rank=2, area_fraction=0.20, period=300.0)
         p_high = _make_peak(rank=1, area_fraction=0.75, period=100.0)
@@ -119,7 +119,7 @@ class TestGetPrimaryPeak(unittest.TestCase):
         summary = _make_summary(peaks=[pk])
         self.assertIs(summary.get_primary_peak(), summary.peaks[0])
 
-    def test_returns_highest_significance_peak(self):
+    def test_returns_rank1_peak_physically_dominant(self):
         """get_primary_peak() returns rank-1 peak (physically dominant)."""
         p_low = _make_peak(rank=2, area_fraction=0.75, period=200.0)
         p_high = _make_peak(rank=1, area_fraction=0.20, period=100.0)

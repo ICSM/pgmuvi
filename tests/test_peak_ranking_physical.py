@@ -607,14 +607,13 @@ class TestDominantScalarConsistency(unittest.TestCase):
         self.assertAlmostEqual(summary.q_factor, expected_q, places=10)
         self.assertAlmostEqual(summary.q_factor, 5.0, places=10)
 
-    def test_validation_raises_on_mismatch(self):
-        """PeriodSummaryResult raises AssertionError when dominant attrs mismatch peaks[0]."""
-        # Directly manipulate a summary post-construction to simulate mismatch
+    def test_dominant_period_post_construction_patch_reflects_in_dict(self):
+        """Monkey-patching dominant_period after construction is reflected by
+        as_dict() (the dict reads the attribute directly, not peaks[0]).
+        This documents that the construction-time assertion guard is a
+        one-time check and does not re-run on every as_dict() call."""
         summary, _, _ = self._build_summary()
-        # Monkey-patch dominant_period to a wrong value
         summary.dominant_period = 99999.9
-        # as_dict() should return the patched (wrong) value — that's intentional
-        # to show that the guard catches construction-time errors, not runtime ones
         self.assertEqual(summary.as_dict()["dominant_period"], 99999.9)
 
 
