@@ -363,6 +363,7 @@ class TestFitLSSubsampling2D(unittest.TestCase):
         """A UserWarning should be issued when the 2D lightcurve is too large."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
+            # max_samples triggers the advisory total-size warning for 2D.
             Lightcurve(
                 xdata=self.lc_2d.xdata,
                 ydata=self.lc_2d.ydata,
@@ -382,13 +383,13 @@ class TestFitLSSubsampling2D(unittest.TestCase):
             lc1 = Lightcurve(
                 xdata=self.lc_2d.xdata,
                 ydata=self.lc_2d.ydata,
-                max_samples=50,
+                max_samples_per_band=50,
                 subsample_seed=3,
             )
             lc2 = Lightcurve(
                 xdata=self.lc_2d.xdata,
                 ydata=self.lc_2d.ydata,
-                max_samples=50,
+                max_samples_per_band=50,
                 subsample_seed=3,
             )
             freq1, mask1 = lc1.fit_LS()
@@ -396,18 +397,76 @@ class TestFitLSSubsampling2D(unittest.TestCase):
         self.assertTrue(torch.allclose(freq1, freq2))
 
     def test_data_permanently_subsampled(self):
-        """Lightcurve data is permanently subsampled when max_samples is set."""
+        """Each band is subsampled independently to at most max_samples_per_band."""
         orig_n = self.lc_2d.xdata.shape[0]
+        max_samples_per_band = 50
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             lc_sub = Lightcurve(
                 xdata=self.lc_2d.xdata,
                 ydata=self.lc_2d.ydata,
-                max_samples=50,
+                max_samples_per_band=max_samples_per_band,
                 subsample_seed=0,
             )
+        # Overall size is reduced
         self.assertLess(lc_sub.xdata.shape[0], orig_n)
-        self.assertLessEqual(lc_sub.xdata.shape[0], 50)
+        # Each band should have at most max_samples_per_band points
+        unique_bands = torch.unique(lc_sub.xdata[:, 1])
+        for band in unique_bands:
+            band_count = (lc_sub.xdata[:, 1] == band).sum().item()
+            self.assertLessEqual(band_count, max_samples_per_band)
+
+    def test_band_below_limit_not_reduced(self):
+        """A band whose count is already <= max_samples_per_band is preserved."""
+        # Create a 2D lightcurve with two bands of very different sizes:
+        # band A has 30 points (below limit), band B has 120 points (above).
+        lc_big = make_chromatic_sinusoid_2d(
+            n_per_band=120,
+            period=2.0,
+            wavelengths=[0.5, 1.5],
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            seed=99,
+        )
+        lc_small = make_chromatic_sinusoid_2d(
+            n_per_band=30,
+            period=2.0,
+            wavelengths=[2.5],
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            seed=99,
+        )
+        # Combine: band 0.5 and 1.5 have 120 pts; band 2.5 has 30 pts.
+        xdata_combined = torch.cat(
+            [lc_big.xdata, lc_small.xdata], dim=0
+        )
+        ydata_combined = torch.cat(
+            [lc_big.ydata, lc_small.ydata], dim=0
+        )
+        max_samples_per_band = 50
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            lc_sub = Lightcurve(
+                xdata=xdata_combined,
+                ydata=ydata_combined,
+                max_samples_per_band=max_samples_per_band,
+                subsample_seed=0,
+            )
+        # Band 2.5 had 30 points (< 50), so it must remain at 30.
+        band_val = torch.tensor(2.5, dtype=lc_sub.xdata.dtype)
+        small_band_count = (
+            torch.abs(lc_sub.xdata[:, 1] - band_val) < 1e-5
+        ).sum().item()
+        self.assertEqual(small_band_count, 30)
+        # The two large bands produce one combined subsampling warning.
+        sub_warns = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "max_samples_per_band" in str(w.message)
+        ]
+        self.assertGreaterEqual(len(sub_warns), 1)
 
 
 def _make_lightcurve(n):
