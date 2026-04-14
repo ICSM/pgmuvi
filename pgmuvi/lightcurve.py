@@ -4338,7 +4338,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Quality gate thresholds (see
             preprocess.quality.assess_sampling_quality):
 
-            - min_points: int (default 6)
+            - min_points: int (default 15)
             - max_gap_fraction: float (default 0.3)
             - min_baseline_factor: float (default 3.0)
             - min_snr: float (default 3.0)
