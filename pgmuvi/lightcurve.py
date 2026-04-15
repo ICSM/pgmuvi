@@ -9833,25 +9833,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "Each wavelength must correspond to exactly one band."
                 )
 
-    @staticmethod
-    def _constituent_bands(lc):
-        """Return a dict mapping each band label to the row indices for it.
-
-        Parameters
-        ----------
-        lc : Lightcurve
-            A 2-D lightcurve with ``band`` set.
-
-        Returns
-        -------
-        dict[str, numpy.ndarray]
-            Keys are band label strings; values are integer index arrays.
-        """
-        result = {}
-        for b in np.unique(lc.band):
-            result[b] = np.where(lc.band == b)[0]
-        return result
-
     # ------------------------------------------------------------------
     # merge
     # ------------------------------------------------------------------
@@ -10244,6 +10225,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         final_x_parts = []
         final_y_parts = []
         final_yerr_parts: list | None = []
+        have_yerr = True  # set to False the moment any band lacks yerr
         final_band_parts = []
 
         for x_2d, y, yerr, band_arr in resolved:
@@ -10279,10 +10261,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
                 final_x_parts.append(x_2d[idx])
                 final_y_parts.append(y[idx])
-                if final_yerr_parts is not None:
+                if have_yerr:
                     if yerr is not None:
                         final_yerr_parts.append(yerr[idx])
                     else:
+                        # First band without yerr — drop all collected so far
+                        have_yerr = False
                         final_yerr_parts = None
                 final_band_parts.append(band_arr[idx])
 

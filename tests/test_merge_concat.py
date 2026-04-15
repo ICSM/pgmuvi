@@ -96,7 +96,7 @@ def _make_csv(wavelengths, n_per_band=8, band_labels=None, seed=1):
 
     fd, path = tempfile.mkstemp(suffix=".csv")
     with os.fdopen(fd, "w") as fh:
-        fh.write("time,flux,fluxerr,wavelength,band\n")
+        fh.write("time,flux,flux_error,wavelength,band\n")
         fh.write("\n".join(rows))
     return path
 
@@ -144,10 +144,10 @@ class TestMergeSuccess(unittest.TestCase):
         lc_self = _make_2d_lc([1.0], band_labels=["V"])
         lc_other = _make_2d_lc([2.0], band_labels=["R"])
         result = lc_self.merge(lc_other)
-        # No model attribute should be set
-        self.assertFalse(hasattr(result, "model") and result.model is not None
-                         if hasattr(result, "_Lightcurve__SET_MODEL_CALLED")
-                         else False)
+        # A freshly constructed Lightcurve should have no model
+        self.assertFalse(
+            getattr(result, "_Lightcurve__SET_MODEL_CALLED", False)
+        )
 
 
 class TestMergeDuplicateBandRaises(unittest.TestCase):
@@ -184,10 +184,9 @@ class TestMergeOnConflictSkip(unittest.TestCase):
         # "V" should have been skipped, "I" should be present
         unique_bands = set(np.unique(result.band))
         self.assertIn("I", unique_bands)
-        self.assertNotIn("V", {b for b in unique_bands} - {"V"})
-        # The "V" from other is not there (only original self "V")
-        # Check that "I" was added
-        self.assertIn("I", unique_bands)
+        # The duplicate "V" from other was skipped; only self's "V" rows remain
+        v_count = int((result.band == "V").sum())
+        self.assertEqual(v_count, 10)  # only self's 10 rows
         # A warning should have been emitted
         self.assertTrue(
             any("skip" in str(warning.message).lower()
