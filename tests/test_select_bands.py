@@ -256,11 +256,59 @@ class TestSelectBandsErrors(unittest.TestCase):
         with self.assertRaises(TypeError):
             lc.select_bands(["g", 3.0])
 
+    def test_raises_for_bytes_element(self):
+        """bytes elements are rejected with TypeError."""
+        lc = _make_2d()
+        with self.assertRaises(TypeError):
+            lc.select_bands([b"V"])
+
     def test_all_missing_labels_raises_value_error(self):
         """All selectors present but none matching raises ValueError."""
         lc = _make_2d()
         with self.assertRaises(ValueError):
             lc.select_bands(["Z", "X"])
+
+
+class TestSelectBandsContainerTypes(unittest.TestCase):
+    """Verify that unsupported container types are rejected."""
+
+    def setUp(self):
+        self.lc = _make_2d()
+
+    def test_raises_for_integer_input(self):
+        """An integer is not a valid container."""
+        with self.assertRaises(TypeError):
+            self.lc.select_bands(5)
+
+    def test_raises_for_set_input(self):
+        """A set is not an accepted container type."""
+        with self.assertRaises(TypeError):
+            self.lc.select_bands({"V"})
+
+    def test_raises_for_dict_input(self):
+        """A dict is not an accepted container type."""
+        with self.assertRaises(TypeError):
+            self.lc.select_bands({"V": 1})
+
+    def test_raises_for_generator_input(self):
+        """A generator expression is not an accepted container type."""
+        with self.assertRaises(TypeError):
+            self.lc.select_bands(x for x in ["V"])
+
+    def test_list_input_accepted(self):
+        """list is an accepted container type."""
+        result = self.lc.select_bands(["V"])
+        self.assertIsInstance(result, Lightcurve)
+
+    def test_tuple_input_accepted(self):
+        """tuple is an accepted container type."""
+        result = self.lc.select_bands(("V",))
+        self.assertIsInstance(result, Lightcurve)
+
+    def test_ndarray_input_accepted(self):
+        """numpy.ndarray is an accepted container type."""
+        result = self.lc.select_bands(np.array(["V"]))
+        self.assertIsInstance(result, Lightcurve)
 
 
 class TestSelectBandsBandPreservation(unittest.TestCase):

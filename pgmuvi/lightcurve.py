@@ -2288,10 +2288,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Parameters
         ----------
         bands : list, tuple, or numpy.ndarray
-            A sequence of string band labels to select.  Each element is
-            coerced to ``str`` before comparison, so string-like labels
-            (e.g. ``numpy.str_``) are accepted.  ``None`` and NaN-like
-            floating values are rejected.
+            A sequence of string band labels to select.  Each element must
+            be a ``str`` or ``numpy.str_``; the value is coerced to ``str``
+            before comparison so numpy string scalars are handled naturally.
+            ``bytes``, numeric types, and ``None`` are rejected.
 
         Returns
         -------
@@ -2305,10 +2305,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Raises
         ------
         TypeError
-            If *bands* is a bare string rather than a sequence of selectors.
+            If *bands* is not a ``list``, ``tuple``, or ``numpy.ndarray``.
         TypeError
-            If any element of *bands* is not string-like (e.g. a list,
-            float, or int).
+            If *bands* is a bare string (use ``["label"]`` instead).
+        TypeError
+            If any element of *bands* is not a ``str`` or ``numpy.str_``
+            (e.g. ``bytes``, ``int``, ``float``, ``None``, or a nested list).
         ValueError
             If :attr:`band` is ``None``.
         ValueError
@@ -2320,6 +2322,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "numpy.ndarray), not a bare string. "
                 "To select a single band wrap it in a list: "
                 f"select_bands([{bands!r}])"
+            )
+
+        if not isinstance(bands, (list, tuple, np.ndarray)):
+            raise TypeError(
+                f"'bands' must be a list, tuple, or numpy.ndarray; "
+                f"got {type(bands).__name__!r}."
             )
 
         if self.band is None:
@@ -2340,7 +2348,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"got {type(b).__name__!r} ({b!r}). "
                     "Use a string band label instead."
                 )
-            if not isinstance(b, (str, np.str_, bytes)):
+            if not isinstance(b, (str, np.str_)):
                 raise TypeError(
                     f"Each element of 'bands' must be a string band label; "
                     f"got {type(b).__name__!r}."
