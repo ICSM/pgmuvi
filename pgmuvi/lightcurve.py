@@ -2390,6 +2390,97 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band=new_band,
         )
 
+    def drop_bands(
+        self, bands: list | tuple | np.ndarray
+    ) -> "Lightcurve":
+        """Return a new Lightcurve with the specified bands removed.
+
+        This is the logical complement of :meth:`select_bands`: every row
+        whose :attr:`band` label appears in *bands* is excluded from the
+        returned object.
+
+        Parameters
+        ----------
+        bands : list, tuple, or numpy.ndarray
+            Band labels to remove.  Each element must be a string
+            (``str`` or ``numpy.str_``).  Numeric selectors, ``bytes``,
+            ``None``, and nested containers are not accepted.
+
+        Returns
+        -------
+        Lightcurve
+            A new :class:`Lightcurve` built from the rows whose
+            :attr:`band` label is **not** in *bands*.  The
+            :attr:`name`, :attr:`xtransform`, and :attr:`ytransform`
+            attributes are inherited from the original light curve.
+            If none of the requested labels are present in the data
+            the returned object is a copy of the original (no-op).
+
+        Raises
+        ------
+        TypeError
+            If *bands* is a bare string rather than a sequence.
+        TypeError
+            If any element of *bands* is not a string.
+        ValueError
+            If :attr:`band` is ``None``.
+        ValueError
+            If all rows are removed (no data would remain).
+        """
+        if isinstance(bands, str):
+            raise TypeError(
+                "'bands' must be a sequence of labels (list, tuple, or "
+                "numpy.ndarray), not a bare string. "
+                "To drop a single band wrap it in a list: "
+                f"drop_bands([{bands!r}])"
+            )
+
+        if not isinstance(bands, (list, tuple, np.ndarray)):
+            raise TypeError(
+                "'bands' must be a list, tuple, or numpy.ndarray; "
+                f"got {type(bands).__name__!r}."
+            )
+
+        for b in bands:
+            if not isinstance(b, (str, np.str_)):
+                raise TypeError(
+                    "Each element of 'bands' must be a string; "
+                    f"got {type(b).__name__!r}."
+                )
+
+        if self.band is None:
+            raise ValueError(
+                "drop_bands requires the 'band' attribute to be set, "
+                "but this Lightcurve has band=None."
+            )
+
+        band_arr = self.band.astype(str)
+        requested = {str(b) for b in bands}
+        mask = ~np.isin(band_arr, list(requested))
+
+        if not mask.any():
+            raise ValueError(
+                "All rows were removed by drop_bands; no data remains."
+            )
+
+        xdata_raw = self._xdata_raw
+        new_x = xdata_raw[mask]
+        new_y = self._ydata_raw[mask]
+        new_yerr = (
+            self._yerr_raw[mask] if hasattr(self, "_yerr_raw") else None
+        )
+        new_band = self.band[mask]
+
+        return Lightcurve(
+            new_x,
+            new_y,
+            yerr=new_yerr,
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+            band=new_band,
+        )
+
     def transform_x(self, values):
         if self.xtransform is None:
             return values
