@@ -10202,7 +10202,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If a conflict is detected and *on_conflict* is ``"raise"``.
         """
         # Treat a bare Lightcurve, str, or Path as a single-element list
-        if isinstance(items, (Lightcurve, str, Path)):
+        if isinstance(items, (cls, str, Path)):
             items = [items]
 
         items = list(items)
