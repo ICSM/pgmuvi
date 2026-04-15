@@ -9839,6 +9839,56 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "Each wavelength must correspond to exactly one band."
                 )
 
+    @staticmethod
+    def _get_scalar_wavelength_for_1d(lc):
+        """Extract a scalar wavelength from a 1-D :class:`Lightcurve`.
+
+        Checks the attributes ``wavelength``, ``wave``, and ``lambda_`` in
+        priority order.  The first one found is used.
+
+        Parameters
+        ----------
+        lc : Lightcurve
+            A 1-D lightcurve whose wavelength metadata should be read.
+
+        Returns
+        -------
+        float
+            The scalar wavelength value.
+
+        Raises
+        ------
+        ValueError
+            If none of the expected attributes exists, if the value is
+            non-scalar, or if it cannot be converted to :class:`float`.
+        """
+        for attr in ("wavelength", "wave", "lambda_"):
+            val = getattr(lc, attr, None)
+            if val is None:
+                continue
+            # Reject non-scalar array-like values
+            try:
+                import numpy as _np
+
+                arr = _np.asarray(val)
+                if arr.ndim != 0 and arr.size != 1:
+                    raise ValueError(
+                        f"1-D input to concat(): attribute {attr!r} "
+                        f"is non-scalar ({arr.shape}). "
+                        "A single numeric wavelength value is required."
+                    )
+                return float(arr.flat[0])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"1-D input to concat(): attribute {attr!r} "
+                    f"cannot be converted to a float: {val!r}."
+                ) from exc
+        raise ValueError(
+            "1-D input to concat() cannot be promoted to 2-D: no wavelength "
+            "metadata is available. Set lc.wavelength, lc.wave, or "
+            "lc.lambda_ to a scalar numeric value before calling concat()."
+        )
+
     # ------------------------------------------------------------------
     # merge
     # ------------------------------------------------------------------
@@ -10185,7 +10235,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         resolved = []  # list of (x_2d, y, yerr, band_arr)
         for lc in lcs:
             if lc.ndim < 2:
-                # 1-D input: validate band info, then check for wavelength.
+                # 1-D input: validate band info, then recover scalar wavelength.
                 band_arr = np.asarray(lc.band).astype(str)
                 unique_b = np.unique(band_arr)
                 if len(unique_b) != 1:
@@ -10193,14 +10243,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "A 1-D input to concat() must map to exactly one "
                         f"band label; got {unique_b.tolist()}."
                     )
-                # 1-D lightcurves have no numeric wavelength column, so we
-                # cannot promote them to 2-D unambiguously.
-                raise ValueError(
-                    f"1-D input with band {unique_b[0]!r} cannot be promoted "
-                    "to 2-D: no numeric wavelength column is stored on this "
-                    "lightcurve. Assign a wavelength first (e.g. via "
-                    "merge(band=..., wavelength=...)) before calling concat()."
+                # Recover scalar wavelength from lc.wavelength / .wave / .lambda_
+                wl_scalar = cls._get_scalar_wavelength_for_1d(lc)
+                # Build 2D xdata: (N, 2) with col0=time, col1=wavelength
+                t_col = lc._xdata_raw  # shape (N,)
+                wl_col = torch.full(
+                    (t_col.shape[0],), wl_scalar, dtype=t_col.dtype
                 )
+                x_2d = torch.stack([t_col, wl_col], dim=1)
+                y = lc._ydata_raw
+                yerr = lc._yerr_raw if hasattr(lc, "_yerr_raw") else None
+                # Expand single-label band to one entry per data row
+                n_rows = lc._xdata_raw.shape[0]
+                band_arr = np.full(n_rows, unique_b[0], dtype=str)
+                resolved.append((x_2d, y, yerr, band_arr))
             else:
                 # 2-D
                 x_2d = lc._xdata_raw

@@ -449,16 +449,15 @@ class TestConcatOneDInput(unittest.TestCase):
     """1D inputs are validated, not blindly rejected."""
 
     def test_1d_input_without_wavelength_raises_clear_error(self):
-        """1D input with band but no wavelength → clear ValueError about wavelength."""
+        """1D input with band but no wavelength attr → clear ValueError."""
         t = torch.linspace(0, 10, 20)
         y = torch.sin(t)
         ye = torch.full_like(y, 0.1)
-        # 1D lightcurve with band info but no wavelength column
+        # 1D lightcurve with band info but no wavelength attribute
         lc_1d = Lightcurve(t, y, yerr=ye, band=["V"])
         lc_2d = _make_2d_lc([2.0], band_labels=["R"])
         with self.assertRaises(ValueError) as ctx:
             Lightcurve.concat([lc_2d, lc_1d])
-        # Error message must explain the wavelength issue
         self.assertIn("wavelength", str(ctx.exception).lower())
 
     def test_1d_input_no_band_raises(self):
@@ -467,6 +466,119 @@ class TestConcatOneDInput(unittest.TestCase):
         lc_2d = _make_2d_lc([1.0], band_labels=["V"])
         with self.assertRaises(ValueError):
             Lightcurve.concat([lc_2d, lc_1d])
+
+    # --- successful 1D promotion -------------------------------------------
+
+    def _make_1d_with_band(self, n=12, seed=7):
+        """Return a 1D Lightcurve with a single band label."""
+        rng = np.random.default_rng(seed)
+        t = torch.tensor(
+            np.sort(rng.uniform(0, 10, n)), dtype=torch.float32
+        )
+        y = torch.tensor(rng.normal(0, 1, n), dtype=torch.float32)
+        ye = torch.tensor(rng.uniform(0.05, 0.15, n), dtype=torch.float32)
+        # 1D Lightcurve requires band of length 1 (one label per 1D lc)
+        return Lightcurve(t, y, yerr=ye, band=["V"])
+
+    def test_1d_promotion_via_wavelength_attr(self):
+        """1D lc with lc.wavelength=<float> is promoted successfully."""
+        lc_1d = self._make_1d_with_band()
+        lc_1d.wavelength = 1.25
+        lc_2d = _make_2d_lc([2.0], band_labels=["R"])
+        result = Lightcurve.concat([lc_2d, lc_1d])
+        self.assertIsInstance(result, Lightcurve)
+        self.assertEqual(result.ndim, 2)
+        unique_bands = set(np.unique(result.band))
+        self.assertIn("V", unique_bands)
+        self.assertIn("R", unique_bands)
+        v_mask = torch.as_tensor(result.band == "V", dtype=torch.bool)
+        wl_vals = result._xdata_raw[v_mask, 1]
+        self.assertTrue((wl_vals == 1.25).all())
+
+    def test_1d_promotion_via_wave_attr(self):
+        """1D lc with lc.wave=<float> is promoted successfully."""
+        lc_1d = self._make_1d_with_band()
+        lc_1d.wave = 2.2
+        lc_2d = _make_2d_lc([3.0], band_labels=["R"])
+        result = Lightcurve.concat([lc_2d, lc_1d])
+        self.assertEqual(result.ndim, 2)
+        v_mask = torch.as_tensor(result.band == "V", dtype=torch.bool)
+        wl_vals = result._xdata_raw[v_mask, 1]
+        self.assertTrue(
+            torch.allclose(wl_vals, torch.full_like(wl_vals, 2.2))
+        )
+
+    def test_1d_promotion_via_lambda_attr(self):
+        """1D lc with lc.lambda_=<float> is promoted successfully."""
+        lc_1d = self._make_1d_with_band()
+        lc_1d.lambda_ = 3.5
+        lc_2d = _make_2d_lc([4.0], band_labels=["R"])
+        result = Lightcurve.concat([lc_2d, lc_1d])
+        self.assertEqual(result.ndim, 2)
+        v_mask = torch.as_tensor(result.band == "V", dtype=torch.bool)
+        wl_vals = result._xdata_raw[v_mask, 1]
+        self.assertTrue(
+            torch.allclose(wl_vals, torch.full_like(wl_vals, 3.5))
+        )
+
+    def test_1d_non_scalar_wavelength_raises(self):
+        """Non-scalar wavelength metadata raises ValueError."""
+        lc_1d = self._make_1d_with_band()
+        lc_1d.wavelength = [1.0, 2.0]
+        lc_2d = _make_2d_lc([3.0], band_labels=["R"])
+        with self.assertRaises(ValueError):
+            Lightcurve.concat([lc_2d, lc_1d])
+
+    def test_1d_non_scalar_wave_array_raises(self):
+        """np.array wavelength metadata with shape (2,) raises ValueError."""
+        lc_1d = self._make_1d_with_band()
+        lc_1d.wave = np.array([1.0, 2.0])
+        lc_2d = _make_2d_lc([3.0], band_labels=["R"])
+        with self.assertRaises(ValueError):
+            Lightcurve.concat([lc_2d, lc_1d])
+
+    def test_1d_non_numeric_wavelength_raises(self):
+        """String wavelength metadata raises ValueError."""
+        lc_1d = self._make_1d_with_band()
+        lc_1d.wavelength = "J-band"
+        lc_2d = _make_2d_lc([3.0], band_labels=["R"])
+        with self.assertRaises(ValueError):
+            Lightcurve.concat([lc_2d, lc_1d])
+
+    def test_1d_duplicate_wavelength_raises(self):
+        """Promoted 1D with wavelength matching existing 2D → ValueError."""
+        lc_1d = self._make_1d_with_band()
+        lc_1d.wavelength = 1.0  # same as lc_2d
+        lc_2d = _make_2d_lc([1.0], band_labels=["R"])
+        with self.assertRaises(ValueError):
+            Lightcurve.concat([lc_2d, lc_1d])
+
+    def test_1d_duplicate_band_raises(self):
+        """Promoted 1D whose band is already present → ValueError."""
+        lc_1d = self._make_1d_with_band()  # band="V"
+        lc_1d.wavelength = 5.0
+        lc_2d = _make_2d_lc([1.0], band_labels=["V"])  # also "V"
+        with self.assertRaises(ValueError):
+            Lightcurve.concat([lc_2d, lc_1d])
+
+    def test_1d_conflict_skip_skips_whole_band(self):
+        """on_conflict='skip' with a conflicting promotable 1D skips it."""
+        lc_1d = self._make_1d_with_band()
+        lc_1d.wavelength = 1.0  # conflicts with lc_2d
+        lc_2d = _make_2d_lc([1.0], band_labels=["R"])
+        lc_3 = _make_2d_lc([2.0], band_labels=["I"])
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = Lightcurve.concat(
+                [lc_2d, lc_1d, lc_3], on_conflict="skip"
+            )
+        # 1D "V" band should be absent (entire constituent skipped)
+        self.assertNotIn("V", set(np.unique(result.band)))
+        # "R" and "I" should be present
+        self.assertIn("R", set(np.unique(result.band)))
+        self.assertIn("I", set(np.unique(result.band)))
+        # A warning must have been emitted
+        self.assertTrue(any(w))
 
 
 # ===========================================================================
