@@ -116,6 +116,12 @@ class TestDropBandsEdgeCases(unittest.TestCase):
         self.assertEqual(len(result.xdata), len(lc.xdata))
         np.testing.assert_array_equal(result.band, lc.band)
 
+    def test_drop_nonexistent_band_returns_new_object(self):
+        """No-op drop must still return a new object, not self."""
+        lc = _make_2d()
+        result = lc.drop_bands(["Z"])
+        self.assertIsNot(result, lc)
+
     def test_drop_mix_existing_and_nonexistent(self):
         lc = _make_2d()
         # "Z" does not exist; only "V" rows should be removed.
@@ -177,6 +183,12 @@ class TestDropBandsInputValidation(unittest.TestCase):
 
     def test_ndarray_string_input_accepted(self):
         result = self.lc.drop_bands(np.array(["V"]))
+        self.assertEqual(len(result.xdata), 5)
+
+    def test_np_str_element_accepted(self):
+        """A numpy.str_ element must be accepted and drop the correct rows."""
+        result = self.lc.drop_bands([np.str_("V")])
+        self.assertTrue(np.all(result.band == "R"))
         self.assertEqual(len(result.xdata), 5)
 
     def test_float_element_raises_type_error(self):
