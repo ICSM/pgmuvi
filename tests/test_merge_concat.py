@@ -76,12 +76,15 @@ def _make_csv(wavelengths, n_per_band=8, band_labels=None, seed=1):
     if band_labels is None:
         band_labels = [f"B{i}" for i in range(len(wavelengths))]
 
-    # Ensure at least two distinct wavelengths for 2-D auto-detection
+    # Ensure at least two distinct wavelengths for 2-D auto-detection.
+    # from_csv only creates a 2-D lightcurve when more than one unique
+    # wavelength value is present; if the caller only needs one real band,
+    # we add a sentinel band at a well-separated wavelength.
+    _DUMMY_WL_OFFSET = 1000.0  # large enough to never collide with real bands
     all_wls = list(wavelengths)
     all_bls = list(band_labels)
     if len(all_wls) < 2:
-        # Append a dummy extra band at a distinct wavelength
-        _dummy_wl = max(all_wls) + 1000.0
+        _dummy_wl = max(all_wls) + _DUMMY_WL_OFFSET
         _dummy_bl = "_dummy_"
         all_wls.append(_dummy_wl)
         all_bls.append(_dummy_bl)

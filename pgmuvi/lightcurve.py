@@ -9811,6 +9811,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         wavelength_arr : numpy.ndarray of float
             Per-row wavelength values (from ``xdata[:, 1]``).
 
+        Returns
+        -------
+        None
+            Raises :class:`ValueError` if any mapping violation is found;
+            returns without a value when all mappings are consistent.
+
         Raises
         ------
         ValueError
@@ -10224,7 +10230,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         final_x_parts = []
         final_y_parts = []
-        final_yerr_parts: list | None = []
+        final_yerr_parts: list = []
         have_yerr = True  # set to False the moment any band lacks yerr
         final_band_parts = []
 
