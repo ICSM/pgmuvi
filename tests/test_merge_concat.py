@@ -355,6 +355,24 @@ class TestConcatMixedInputs(unittest.TestCase):
         finally:
             os.unlink(csv_path)
 
+    def test_concat_bare_path_single_item(self):
+        """A bare pathlib.Path is treated as one CSV item, not iterated."""
+        from pathlib import Path as _Path
+
+        csv_path = _make_csv([1.0], band_labels=["V"])
+        try:
+            result = Lightcurve.concat(_Path(csv_path))
+            self.assertIsInstance(result, Lightcurve)
+        finally:
+            os.unlink(csv_path)
+
+    def test_concat_bare_lightcurve_single_item(self):
+        """A bare Lightcurve is treated as a single-item input."""
+        lc = _make_2d_lc([1.0], band_labels=["V"])
+        result = Lightcurve.concat(lc)
+        self.assertIsInstance(result, Lightcurve)
+        self.assertEqual(result.ndim, 2)
+
     def test_concat_result_is_new_object(self):
         lc1 = _make_2d_lc([1.0], band_labels=["V"])
         lc2 = _make_2d_lc([2.0], band_labels=["R"])
@@ -397,6 +415,58 @@ class TestConcatDuplicateBands(unittest.TestCase):
     def test_wrong_type_raises(self):
         with self.assertRaises(TypeError):
             Lightcurve.concat([42])
+
+
+class TestConcatBandRequirement(unittest.TestCase):
+    """Band is required; no auto-synthesis from wavelength."""
+
+    def test_no_band_raises(self):
+        """If no inputs have band, concat() raises ValueError."""
+        rng = np.random.default_rng(99)
+        t = np.sort(rng.uniform(0, 10, 10))
+        wl = np.full(10, 1.0)
+        x = torch.tensor(np.column_stack([t, wl]), dtype=torch.float32)
+        y = torch.tensor(rng.normal(0, 1, 10), dtype=torch.float32)
+        # 2D lightcurve without band attribute
+        lc_no_band = Lightcurve(x, y)
+        with self.assertRaises(ValueError):
+            Lightcurve.concat([lc_no_band])
+
+    def test_mixed_band_no_band_raises(self):
+        """One input with band + one without → ValueError."""
+        lc_with_band = _make_2d_lc([1.0], band_labels=["V"])
+        rng = np.random.default_rng(99)
+        t = np.sort(rng.uniform(0, 10, 10))
+        wl = np.full(10, 2.0)
+        x = torch.tensor(np.column_stack([t, wl]), dtype=torch.float32)
+        y = torch.tensor(rng.normal(0, 1, 10), dtype=torch.float32)
+        lc_no_band = Lightcurve(x, y)
+        with self.assertRaises(ValueError):
+            Lightcurve.concat([lc_with_band, lc_no_band])
+
+
+class TestConcatOneDInput(unittest.TestCase):
+    """1D inputs are validated, not blindly rejected."""
+
+    def test_1d_input_without_wavelength_raises_clear_error(self):
+        """1D input with band but no wavelength → clear ValueError about wavelength."""
+        t = torch.linspace(0, 10, 20)
+        y = torch.sin(t)
+        ye = torch.full_like(y, 0.1)
+        # 1D lightcurve with band info but no wavelength column
+        lc_1d = Lightcurve(t, y, yerr=ye, band=["V"])
+        lc_2d = _make_2d_lc([2.0], band_labels=["R"])
+        with self.assertRaises(ValueError) as ctx:
+            Lightcurve.concat([lc_2d, lc_1d])
+        # Error message must explain the wavelength issue
+        self.assertIn("wavelength", str(ctx.exception).lower())
+
+    def test_1d_input_no_band_raises(self):
+        """1D input without band → ValueError (band required)."""
+        lc_1d = _make_1d_lc()  # no band
+        lc_2d = _make_2d_lc([1.0], band_labels=["V"])
+        with self.assertRaises(ValueError):
+            Lightcurve.concat([lc_2d, lc_1d])
 
 
 # ===========================================================================

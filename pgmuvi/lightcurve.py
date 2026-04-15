@@ -10149,8 +10149,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ValueError
             If a conflict is detected and *on_conflict* is ``"raise"``.
         """
-        # Treat a bare string as a single-element list
-        if isinstance(items, (str, Path)):
+        # Treat a bare Lightcurve, str, or Path as a single-element list
+        if isinstance(items, (Lightcurve, str, Path)):
             items = [items]
 
         items = list(items)
@@ -10165,15 +10165,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lcs = [cls._resolve_lc_input(item) for item in items]
 
         # ------------------------------------------------------------------
-        # Global band requirement: all-or-nothing
+        # Global band requirement: all inputs must carry band information.
         # ------------------------------------------------------------------
         has_band = [lc.band is not None for lc in lcs]
+        if not any(has_band):
+            raise ValueError(
+                "concat() requires band information on all inputs; "
+                "none of the supplied inputs has a 'band' attribute."
+            )
         if any(has_band) and not all(has_band):
             raise ValueError(
                 "All inputs must have band information if any one of them "
                 "does. Found a mix of inputs with and without 'band'."
             )
-        all_have_band = all(has_band)
 
         # ------------------------------------------------------------------
         # Promote each lightcurve to 2-D + resolve band arrays
@@ -10181,12 +10185,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         resolved = []  # list of (x_2d, y, yerr, band_arr)
         for lc in lcs:
             if lc.ndim < 2:
-                # 1-D: must have exactly one band and one wavelength
-                if not all_have_band:
-                    raise ValueError(
-                        "concat() requires band information on all inputs. "
-                        "A 1-D input with no band attribute was found."
-                    )
+                # 1-D input: validate band info, then check for wavelength.
                 band_arr = np.asarray(lc.band).astype(str)
                 unique_b = np.unique(band_arr)
                 if len(unique_b) != 1:
@@ -10194,13 +10193,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "A 1-D input to concat() must map to exactly one "
                         f"band label; got {unique_b.tolist()}."
                     )
-                # No wavelength column available for 1-D inputs in concat
-                # We cannot infer wavelength from band alone; raise an error.
+                # 1-D lightcurves have no numeric wavelength column, so we
+                # cannot promote them to 2-D unambiguously.
                 raise ValueError(
-                    "1-D inputs to concat() are not supported unless they "
-                    "already carry a numeric wavelength column (ndim == 2). "
-                    "Promote the 1-D lightcurve to 2-D first (e.g. via "
-                    "merge()) or supply a wavelength."
+                    f"1-D input with band {unique_b[0]!r} cannot be promoted "
+                    "to 2-D: no numeric wavelength column is stored on this "
+                    "lightcurve. Assign a wavelength first (e.g. via "
+                    "merge(band=..., wavelength=...)) before calling concat()."
                 )
             else:
                 # 2-D
@@ -10208,22 +10207,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 y = lc._ydata_raw
                 yerr = lc._yerr_raw if hasattr(lc, "_yerr_raw") else None
 
-                if all_have_band:
-                    band_arr = np.asarray(lc.band).astype(str)
-                else:
-                    # No band on any input — synthesise labels from wavelength
-                    wl_col = x_2d[:, 1].numpy()
-                    band_arr = np.array(
-                        [str(float(w)) for w in wl_col], dtype=str
-                    )
+                band_arr = np.asarray(lc.band).astype(str)
 
                 cls._validate_band_wavelength_mapping(
                     band_arr, x_2d[:, 1].numpy()
                 )
                 resolved.append((x_2d, y, yerr, band_arr))
-
-        # ------------------------------------------------------------------
-        # Conflict detection across all inputs
         # ------------------------------------------------------------------
         global_bands: set[str] = set()
         global_wls: set[float] = set()
