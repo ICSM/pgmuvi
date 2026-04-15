@@ -9764,3 +9764,581 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         t = self.to_table()
         t.write(filename, format="votable", overwrite=True)
+
+    # ------------------------------------------------------------------
+    # Private helpers for merge / concat
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _resolve_lc_input(cls, item):
+        """Resolve *item* to a :class:`Lightcurve`.
+
+        Accepts a :class:`Lightcurve`, or a ``str``/``pathlib.Path``
+        pointing to a CSV file.  Any other type raises :class:`TypeError`.
+
+        Parameters
+        ----------
+        item : Lightcurve, str, or pathlib.Path
+            The input to resolve.
+
+        Returns
+        -------
+        Lightcurve
+
+        Raises
+        ------
+        TypeError
+            If *item* is not a :class:`Lightcurve`, ``str``, or
+            ``pathlib.Path``.
+        """
+        if isinstance(item, cls):
+            return item
+        if isinstance(item, (str, Path)):
+            return cls.from_csv(item)
+        raise TypeError(
+            f"Expected a Lightcurve, str, or pathlib.Path; "
+            f"got {type(item).__name__!r}."
+        )
+
+    @staticmethod
+    def _validate_band_wavelength_mapping(band_arr, wavelength_arr):
+        """Check that band↔wavelength mapping is strictly one-to-one.
+
+        Parameters
+        ----------
+        band_arr : numpy.ndarray of str
+            Per-row band labels.
+        wavelength_arr : numpy.ndarray of float
+            Per-row wavelength values (from ``xdata[:, 1]``).
+
+        Returns
+        -------
+        None
+            Raises :class:`ValueError` if any mapping violation is found;
+            returns without a value when all mappings are consistent.
+
+        Raises
+        ------
+        ValueError
+            If any band maps to more than one wavelength, or any wavelength
+            maps to more than one band.
+        """
+        for b in np.unique(band_arr):
+            wls = np.unique(wavelength_arr[band_arr == b])
+            if len(wls) != 1:
+                raise ValueError(
+                    f"Band {b!r} maps to multiple wavelengths: {wls.tolist()}. "
+                    "Each band must correspond to exactly one wavelength."
+                )
+        for wl in np.unique(wavelength_arr):
+            bs = np.unique(band_arr[wavelength_arr == wl])
+            if len(bs) != 1:
+                raise ValueError(
+                    f"Wavelength {wl} maps to multiple bands: "
+                    f"{bs.tolist()}. "
+                    "Each wavelength must correspond to exactly one band."
+                )
+
+    @staticmethod
+    def _get_scalar_wavelength_for_1d(lc):
+        """Extract a scalar wavelength from a 1-D :class:`Lightcurve`.
+
+        Checks the attributes ``wavelength``, ``wave``, and ``lambda_`` in
+        priority order.  The first one found is used.
+
+        Parameters
+        ----------
+        lc : Lightcurve
+            A 1-D lightcurve whose wavelength metadata should be read.
+
+        Returns
+        -------
+        float
+            The scalar wavelength value.
+
+        Raises
+        ------
+        ValueError
+            If none of the expected attributes exists, if the value is
+            non-scalar, or if it cannot be converted to :class:`float`.
+        """
+        for attr in ("wavelength", "wave", "lambda_"):
+            val = getattr(lc, attr, None)
+            if val is None:
+                continue
+            # Reject non-scalar array-like values
+            try:
+                import numpy as _np
+
+                arr = _np.asarray(val)
+                if arr.ndim != 0 and arr.size != 1:
+                    raise ValueError(
+                        f"1-D input to concat(): attribute {attr!r} "
+                        f"is non-scalar ({arr.shape}). "
+                        "A single numeric wavelength value is required."
+                    )
+                return float(arr.flat[0])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"1-D input to concat(): attribute {attr!r} "
+                    f"cannot be converted to a float: {val!r}."
+                ) from exc
+        raise ValueError(
+            "1-D input to concat() cannot be promoted to 2-D: no wavelength "
+            "metadata is available. Set lc.wavelength, lc.wave, or "
+            "lc.lambda_ to a scalar numeric value before calling concat()."
+        )
+
+    # ------------------------------------------------------------------
+    # merge
+    # ------------------------------------------------------------------
+
+    def merge(self, other, *, band=None, wavelength=None, on_conflict="raise"):
+        """Merge *other* into this light curve, appending new band(s).
+
+        Parameters
+        ----------
+        other : Lightcurve, str, or pathlib.Path
+            The light curve (or CSV path) to merge.  Must not be a list;
+            for multiple inputs use :meth:`concat`.
+        band : str or array-like of str, optional
+            Band label(s) to assign to *other* when *other* has no
+            ``band`` attribute set.  For a 1-D *other* this must be a
+            scalar string; for a 2-D *other* this must have the same
+            length as *other*.
+        wavelength : float, optional
+            Wavelength to assign when *other* is 1-D.  Must not be
+            provided for 2-D inputs.
+        on_conflict : {"raise", "skip"}, optional
+            Action taken when a band label or wavelength in *other*
+            already exists in ``self``.  ``"raise"`` (default) raises a
+            :class:`ValueError`; ``"skip"`` silently drops that
+            constituent band and emits a :class:`UserWarning`.
+
+        Returns
+        -------
+        Lightcurve
+            A new 2-D :class:`Lightcurve` containing the rows of
+            ``self`` followed by the non-conflicting rows from *other*.
+            The result is always unfitted (no model or posterior state).
+
+        Raises
+        ------
+        TypeError
+            If *other* is a list (use :meth:`concat` instead), or if
+            *other* is not a :class:`Lightcurve`, ``str``, or
+            ``pathlib.Path``.
+        ValueError
+            If ``self`` is not 2-D.
+        ValueError
+            If a conflict is detected and *on_conflict* is ``"raise"``.
+        ValueError
+            If *wavelength* is provided for a 2-D *other*.
+        ValueError
+            If *other* is 1-D and *wavelength* is not provided.
+        ValueError
+            If *other* is 1-D but *band* does not resolve to exactly
+            one unique label.
+        """
+        if isinstance(other, list):
+            raise TypeError(
+                "'other' must be a single Lightcurve or CSV path, not a list. "
+                "To merge multiple inputs use Lightcurve.concat()."
+            )
+
+        if self.ndim < 2:
+            raise ValueError(
+                "merge() requires 'self' to be a 2-D lightcurve "
+                "(xdata must have shape (N, 2))."
+            )
+
+        other = self._resolve_lc_input(other)
+
+        # ------------------------------------------------------------------
+        # 1-D vs 2-D promotion of *other*
+        # ------------------------------------------------------------------
+        if other.ndim < 2:
+            if wavelength is None:
+                raise ValueError(
+                    "When 'other' is a 1-D lightcurve, 'wavelength' must be "
+                    "provided as a scalar float."
+                )
+            if not np.isscalar(wavelength):
+                raise ValueError(
+                    "'wavelength' must be a scalar when 'other' is 1-D; "
+                    f"got {type(wavelength).__name__!r}."
+                )
+            # Determine band label for the 1-D input
+            if other.band is not None:
+                if band is not None:
+                    warnings.warn(
+                        "'band' was supplied but 'other' already has a band "
+                        "attribute; the supplied value will be ignored.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                resolved_band = np.asarray(other.band).astype(str)
+            else:
+                if band is None:
+                    raise ValueError(
+                        "'band' must be supplied when 'other' is 1-D and has "
+                        "no band attribute."
+                    )
+                resolved_band = np.atleast_1d(
+                    np.asarray(band).astype(str)
+                )
+
+            unique_bands = np.unique(resolved_band)
+            if len(unique_bands) != 1:
+                raise ValueError(
+                    "A 1-D 'other' must map to exactly one band label; "
+                    f"got {unique_bands.tolist()}."
+                )
+            n_other = len(other._xdata_raw)
+            if len(resolved_band) == 1:
+                resolved_band = np.full(n_other, resolved_band[0], dtype=str)
+            elif len(resolved_band) != n_other:
+                raise ValueError(
+                    f"Length of 'band' ({len(resolved_band)}) does not match "
+                    f"the number of rows in 'other' ({n_other})."
+                )
+
+            # Promote to 2-D by stacking time + wavelength
+            wl_col = torch.full(
+                (n_other,),
+                float(wavelength),
+                dtype=other._xdata_raw.dtype,
+                device=other._xdata_raw.device,
+            )
+            other_x = torch.stack([other._xdata_raw, wl_col], dim=1)
+            other_y = other._ydata_raw
+            other_yerr = (
+                other._yerr_raw if hasattr(other, "_yerr_raw") else None
+            )
+            other_band = resolved_band
+
+        else:
+            # other is already 2-D
+            if wavelength is not None:
+                raise ValueError(
+                    "'wavelength' must not be provided when 'other' is "
+                    "already a 2-D lightcurve."
+                )
+            other_x = other._xdata_raw
+            other_y = other._ydata_raw
+            other_yerr = (
+                other._yerr_raw if hasattr(other, "_yerr_raw") else None
+            )
+
+            # Resolve band for 2-D other
+            if other.band is not None:
+                if band is not None:
+                    warnings.warn(
+                        "'band' was supplied but 'other' already has a band "
+                        "attribute; the supplied value will be ignored.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                other_band = np.asarray(other.band).astype(str)
+            else:
+                if band is None:
+                    raise ValueError(
+                        "'band' must be supplied when 'other' is 2-D and has "
+                        "no band attribute."
+                    )
+                other_band = np.asarray(band).astype(str)
+                if len(other_band) == 1:
+                    other_band = np.full(
+                        len(other_x), other_band[0], dtype=str
+                    )
+                elif len(other_band) != len(other_x):
+                    raise ValueError(
+                        f"Length of 'band' ({len(other_band)}) does not match "
+                        f"the number of rows in 'other' ({len(other_x)})."
+                    )
+
+        # ------------------------------------------------------------------
+        # Validate band arrays on self
+        # ------------------------------------------------------------------
+        if self.band is None:
+            raise ValueError(
+                "'self' must have a 'band' attribute set for merge()."
+            )
+        self_band = np.asarray(self.band).astype(str)
+        self_x = self._xdata_raw
+
+        # Validate band↔wavelength mapping on self
+        self._validate_band_wavelength_mapping(
+            self_band, self_x[:, 1].detach().cpu().numpy()
+        )
+
+        # Validate band↔wavelength mapping on other
+        self._validate_band_wavelength_mapping(
+            other_band, other_x[:, 1].detach().cpu().numpy()
+        )
+
+        # ------------------------------------------------------------------
+        # Build per-band groups from self (for conflict checking)
+        # ------------------------------------------------------------------
+        self_bands_set = set(np.unique(self_band).tolist())
+        self_wl_set = set(np.unique(self_x[:, 1].detach().cpu().numpy()).tolist())
+
+        # ------------------------------------------------------------------
+        # Process each constituent band in other
+        # ------------------------------------------------------------------
+        keep_x = [self_x]
+        keep_y = [self._ydata_raw]
+        keep_yerr = (
+            [self._yerr_raw] if hasattr(self, "_yerr_raw") else None
+        )
+        keep_band = [self_band]
+
+        other_constituent_bands = {}
+        for b in np.unique(other_band):
+            other_constituent_bands[b] = np.where(other_band == b)[0]
+
+        for b, idx in other_constituent_bands.items():
+            b_wl = float(other_x[idx[0], 1].item())
+            conflict_reason = None
+            if b in self_bands_set:
+                conflict_reason = (
+                    f"band {b!r} already exists in 'self'."
+                )
+            elif b_wl in self_wl_set:
+                conflict_reason = (
+                    f"wavelength {b_wl} already exists in 'self'."
+                )
+
+            if conflict_reason is not None:
+                if on_conflict == "raise":
+                    raise ValueError(
+                        f"Conflict detected: {conflict_reason} "
+                        "Use on_conflict='skip' to skip conflicting bands."
+                    )
+                else:
+                    warnings.warn(
+                        f"Skipping band {b!r} from 'other': {conflict_reason}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    continue
+
+            keep_x.append(other_x[idx])
+            keep_y.append(other_y[idx])
+            if keep_yerr is not None and other_yerr is not None:
+                keep_yerr.append(other_yerr[idx])
+            elif keep_yerr is not None:
+                keep_yerr = None
+            keep_band.append(other_band[idx])
+
+            # Track newly added band/wavelength to avoid double-merging
+            self_bands_set.add(b)
+            self_wl_set.add(b_wl)
+
+        # ------------------------------------------------------------------
+        # Assemble output arrays
+        # ------------------------------------------------------------------
+        new_x = torch.cat(keep_x, dim=0)
+        new_y = torch.cat(keep_y, dim=0)
+        new_yerr = (
+            torch.cat(keep_yerr, dim=0) if keep_yerr is not None else None
+        )
+        new_band = np.concatenate(keep_band, axis=0)
+
+        return Lightcurve(
+            new_x,
+            new_y,
+            yerr=new_yerr,
+            band=new_band,
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+        )
+
+    # ------------------------------------------------------------------
+    # concat
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def concat(cls, items, on_conflict="raise", **kwargs):
+        """Concatenate multiple light curves into one 2-D :class:`Lightcurve`.
+
+        Parameters
+        ----------
+        items : iterable of Lightcurve, str, or pathlib.Path
+            Input light curves (or CSV paths) to concatenate.  A bare
+            ``str`` is treated as a single item, **not** as an iterable
+            of characters.
+        on_conflict : {"raise", "skip"}, optional
+            Action taken when a band label or wavelength appears in more
+            than one input.  ``"raise"`` (default) raises a
+            :class:`ValueError`; ``"skip"`` drops the offending
+            constituent and emits a :class:`UserWarning`.
+        **kwargs
+            Additional keyword arguments forwarded to the
+            :class:`Lightcurve` constructor (e.g. ``xtransform``,
+            ``ytransform``, ``name``).  They are **not** forwarded to
+            :meth:`from_csv`.
+
+        Returns
+        -------
+        Lightcurve
+            A new 2-D :class:`Lightcurve` built from all non-conflicting
+            constituent bands across *items*, in input order.  Always
+            unfitted.
+
+        Raises
+        ------
+        TypeError
+            If any element of *items* is not a :class:`Lightcurve`,
+            ``str``, or ``pathlib.Path``.
+        ValueError
+            If *items* is empty.
+        ValueError
+            If some inputs have band information but others do not.
+        ValueError
+            If a 1-D input maps to more than one band or wavelength.
+        ValueError
+            If a conflict is detected and *on_conflict* is ``"raise"``.
+        """
+        # Treat a bare Lightcurve, str, or Path as a single-element list
+        if isinstance(items, (cls, str, Path)):
+            items = [items]
+
+        items = list(items)
+        if not items:
+            raise ValueError(
+                "concat() requires at least one item; got an empty iterable."
+            )
+
+        # ------------------------------------------------------------------
+        # Resolve all inputs to Lightcurve objects
+        # ------------------------------------------------------------------
+        lcs = [cls._resolve_lc_input(item) for item in items]
+
+        # ------------------------------------------------------------------
+        # Global band requirement: all inputs must carry band information.
+        # ------------------------------------------------------------------
+        has_band = [lc.band is not None for lc in lcs]
+        if not any(has_band):
+            raise ValueError(
+                "concat() requires band information on all inputs; "
+                "none of the supplied inputs has a 'band' attribute."
+            )
+        if any(has_band) and not all(has_band):
+            raise ValueError(
+                "All inputs must have band information if any one of them "
+                "does. Found a mix of inputs with and without 'band'."
+            )
+
+        # ------------------------------------------------------------------
+        # Promote each lightcurve to 2-D + resolve band arrays
+        # ------------------------------------------------------------------
+        resolved = []  # list of (x_2d, y, yerr, band_arr)
+        for lc in lcs:
+            if lc.ndim < 2:
+                # 1-D input: validate band info, then recover scalar wavelength.
+                band_arr = np.asarray(lc.band).astype(str)
+                unique_b = np.unique(band_arr)
+                if len(unique_b) != 1:
+                    raise ValueError(
+                        "A 1-D input to concat() must map to exactly one "
+                        f"band label; got {unique_b.tolist()}."
+                    )
+                # Recover scalar wavelength from lc.wavelength / .wave / .lambda_
+                wl_scalar = cls._get_scalar_wavelength_for_1d(lc)
+                # Build 2D xdata: (N, 2) with col0=time, col1=wavelength
+                t_col = lc._xdata_raw  # shape (N,)
+                wl_col = torch.full(
+                    (t_col.shape[0],), wl_scalar, dtype=t_col.dtype
+                )
+                x_2d = torch.stack([t_col, wl_col], dim=1)
+                y = lc._ydata_raw
+                yerr = lc._yerr_raw if hasattr(lc, "_yerr_raw") else None
+                # Expand single-label band to one entry per data row
+                n_rows = lc._xdata_raw.shape[0]
+                band_arr = np.full(n_rows, unique_b[0], dtype=str)
+                resolved.append((x_2d, y, yerr, band_arr))
+            else:
+                # 2-D
+                x_2d = lc._xdata_raw
+                y = lc._ydata_raw
+                yerr = lc._yerr_raw if hasattr(lc, "_yerr_raw") else None
+
+                band_arr = np.asarray(lc.band).astype(str)
+
+                cls._validate_band_wavelength_mapping(
+                    band_arr, x_2d[:, 1].detach().cpu().numpy()
+                )
+                resolved.append((x_2d, y, yerr, band_arr))
+        # ------------------------------------------------------------------
+        global_bands: set[str] = set()
+        global_wls: set[float] = set()
+
+        final_x_parts = []
+        final_y_parts = []
+        final_yerr_parts: list = []
+        have_yerr = True  # set to False the moment any band lacks yerr
+        final_band_parts = []
+
+        for x_2d, y, yerr, band_arr in resolved:
+            # Process each constituent band within this input
+            for b in np.unique(band_arr):
+                idx = np.where(band_arr == b)[0]
+                b_wl = float(x_2d[idx[0], 1].item())
+
+                conflict_reason = None
+                if b in global_bands:
+                    conflict_reason = (
+                        f"band {b!r} appears in more than one input."
+                    )
+                elif b_wl in global_wls:
+                    conflict_reason = (
+                        f"wavelength {b_wl} appears in more than one input."
+                    )
+
+                if conflict_reason is not None:
+                    if on_conflict == "raise":
+                        raise ValueError(
+                            f"Conflict detected: {conflict_reason} "
+                            "Use on_conflict='skip' to skip conflicting "
+                            "bands."
+                        )
+                    else:
+                        warnings.warn(
+                            f"Skipping band {b!r}: {conflict_reason}",
+                            UserWarning,
+                            stacklevel=2,
+                        )
+                        continue
+
+                final_x_parts.append(x_2d[idx])
+                final_y_parts.append(y[idx])
+                if have_yerr:
+                    if yerr is not None:
+                        final_yerr_parts.append(yerr[idx])
+                    else:
+                        # First band without yerr — drop all collected so far
+                        have_yerr = False
+                        final_yerr_parts = None
+                final_band_parts.append(band_arr[idx])
+
+                global_bands.add(b)
+                global_wls.add(b_wl)
+
+        if not final_x_parts:
+            raise ValueError(
+                "All constituent bands were skipped due to conflicts; "
+                "the resulting lightcurve would be empty."
+            )
+
+        new_x = torch.cat(final_x_parts, dim=0)
+        new_y = torch.cat(final_y_parts, dim=0)
+        new_yerr = (
+            torch.cat(final_yerr_parts, dim=0)
+            if final_yerr_parts is not None
+            else None
+        )
+        new_band = np.concatenate(final_band_parts, axis=0)
+
+        return cls(new_x, new_y, yerr=new_yerr, band=new_band, **kwargs)
