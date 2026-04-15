@@ -62,6 +62,12 @@ _REQUIRED_KEYS = {
     "kernel_family",
     "time_kernel_family",
     "has_stochastic_background",
+    # Physical-ranking fields (added in peak-ranking patch)
+    "primary_peak_rank",
+    "largest_area_peak_rank",
+    "largest_area_period",
+    "largest_area_frequency",
+    "largest_area_fraction",
 }
 
 
@@ -925,11 +931,24 @@ class TestPeakMassInterval(unittest.TestCase):
         self.assertTrue(np.isfinite(period_hi))
         self.assertGreater(period_hi, period_lo)
 
-    def test_peak_mass_q_factor_is_none(self):
-        """q_factor must be None for peak_mass mode."""
+    def test_peak_mass_q_factor_computed_from_primary(self):
+        """q_factor is now derived from the primary peak's interval_frequency.
+
+        It is no longer None for peak_mass mode; it is a positive finite
+        number equal to frequency / (f_hi - f_lo) for the primary peak.
+        """
         lc = self._make_sm_lc()
         summary = lc.get_period_summary(uncertainty="peak_mass")
-        self.assertIsNone(summary["q_factor"])
+        q = summary["q_factor"]
+        # q_factor should now be finite and positive (computed from interval)
+        self.assertIsNotNone(q)
+        self.assertTrue(np.isfinite(q))
+        self.assertGreater(q, 0.0)
+        # Must match frequency / width of primary peak's interval_frequency
+        primary = summary.get_primary_peak()
+        f_lo, f_hi = primary.interval_frequency
+        expected_q = primary.frequency / (f_hi - f_lo)
+        self.assertAlmostEqual(q, expected_q, places=10)
 
     def test_peak_mass_interval_definition_key(self):
         """interval_definition is 'peak_centered_68pct_mass_interval' for peak_mass."""

@@ -60,15 +60,20 @@ def _make_summary(peaks=None, **kwargs):
 
 
 class TestPeakSorting(unittest.TestCase):
-    """Peaks are sorted by descending significance at init time.
+    """Peaks are sorted by physical ranking at init time.
 
-    Significance order: descending area_fraction (NaN last), then
-    descending height, then ascending original rank as tie-breaker.
+    Physical ranking order: descending prominence, then descending
+    coherence_proxy, then descending area_fraction, then descending height,
+    then ascending original rank as stable tie-breaker.
     After sorting, ranks are reassigned sequentially (1, 2, 3 …).
+
+    When all peaks have equal prominence and NaN coherence_proxy the sort
+    falls back to area_fraction, which means these tests still exercise the
+    expected ordering while remaining numerically well-defined.
     """
 
-    def test_peaks_sorted_by_significance_desc(self):
-        """After construction, peaks[0] has the highest area_fraction."""
+    def test_peaks_sorted_by_area_fraction_when_equal_prominence(self):
+        """When prominence/coherence equal, peaks sort by descending area_fraction."""
         p_low = _make_peak(rank=1, area_fraction=0.30, period=200.0)
         p_mid = _make_peak(rank=2, area_fraction=0.55, period=150.0)
         p_high = _make_peak(rank=3, area_fraction=0.80, period=100.0)
@@ -78,15 +83,15 @@ class TestPeakSorting(unittest.TestCase):
         self.assertEqual(areas, sorted(areas, reverse=True))
 
     def test_ranks_reassigned_sequentially(self):
-        """After significance sort, ranks are reassigned 1, 2, 3 …"""
+        """After physical sort, ranks are reassigned 1, 2, 3 …"""
         p_low = _make_peak(rank=1, area_fraction=0.30, period=200.0)
         p_high = _make_peak(rank=2, area_fraction=0.80, period=100.0)
         summary = _make_summary(peaks=[p_low, p_high])
         ranks = [p.rank for p in summary.peaks]
         self.assertEqual(ranks, list(range(1, len(ranks) + 1)))
 
-    def test_primary_is_highest_significance(self):
-        """peaks[0] is the peak with the highest area_fraction."""
+    def test_primary_is_highest_area_fraction_tiebreak(self):
+        """When prominence/coherence equal, peaks[0] has the highest area_fraction."""
         p_low = _make_peak(rank=2, area_fraction=0.20, period=300.0)
         p_high = _make_peak(rank=1, area_fraction=0.75, period=100.0)
         # Pass low-significance peak first to confirm it is reordered
@@ -114,11 +119,12 @@ class TestGetPrimaryPeak(unittest.TestCase):
         summary = _make_summary(peaks=[pk])
         self.assertIs(summary.get_primary_peak(), summary.peaks[0])
 
-    def test_returns_highest_significance_peak(self):
-        """get_primary_peak() returns the peak with the highest area_fraction."""
+    def test_returns_rank1_peak_physically_dominant(self):
+        """get_primary_peak() returns rank-1 peak (physically dominant)."""
         p_low = _make_peak(rank=2, area_fraction=0.75, period=200.0)
         p_high = _make_peak(rank=1, area_fraction=0.20, period=100.0)
-        # p_low has higher area_fraction, so it becomes the primary
+        # p_low has higher area_fraction; with equal prominence/coherence_proxy
+        # it still becomes rank-1 (area_fraction is the third sort key).
         summary = _make_summary(peaks=[p_low, p_high])
         self.assertEqual(summary.get_primary_peak().rank, 1)
         self.assertAlmostEqual(summary.get_primary_peak().area_fraction, 0.75)
