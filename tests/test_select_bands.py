@@ -1,4 +1,9 @@
-"""Tests for :meth:`Lightcurve.select_bands`."""
+"""Tests for :meth:`Lightcurve.select_bands`.
+
+These tests reflect the redesigned API where bands are identified exclusively
+through the ``band`` attribute.  Wavelength-based selection is no longer
+supported.
+"""
 
 import unittest
 
@@ -47,37 +52,30 @@ def _make_3band(n_per_band=4):
 # ---------------------------------------------------------------------------
 
 class TestSelectBandsBasic(unittest.TestCase):
-    """Basic single-band selection by string and float."""
+    """Basic single-band selection by string label."""
 
     def setUp(self):
         self.lc = _make_2d()
 
-    def test_select_by_string_returns_lightcurve(self):
+    def test_select_single_band_returns_lightcurve(self):
         result = self.lc.select_bands(["V"])
         self.assertIsInstance(result, Lightcurve)
 
-    def test_select_by_string_correct_rows(self):
-        result = self.lc.select_bands(["V"])
-        # All returned wavelength values must equal wl1 (550 nm).
-        wl = result.xdata[:, 1]
-        self.assertTrue((wl == 550.0).all())
-
-    def test_select_by_string_correct_length(self):
+    def test_select_single_band_correct_length(self):
         result = self.lc.select_bands(["V"])
         self.assertEqual(len(result.xdata), 5)
 
-    def test_select_by_float_correct_rows(self):
-        result = self.lc.select_bands([650.0])
-        wl = result.xdata[:, 1]
-        self.assertTrue((wl == 650.0).all())
-        self.assertEqual(len(result.xdata), 5)
+    def test_select_single_band_uses_band_not_wavelength(self):
+        """Selection is based on self.band, not on wavelength values."""
+        # Both "V" and "R" rows have different wavelengths (550 vs 650).
+        # Selecting by label "V" must return exactly the V-band rows.
+        result = self.lc.select_bands(["V"])
+        np.testing.assert_array_equal(result.band, np.array(["V"] * 5))
 
-    def test_select_by_int_correct_rows(self):
-        """Integer values should be promoted to float for matching."""
-        lc = _make_2d(wl1=1.0, wl2=2.0)
-        result = lc.select_bands([1])
+    def test_select_other_band(self):
+        result = self.lc.select_bands(["R"])
         self.assertEqual(len(result.xdata), 5)
-        self.assertTrue((result.xdata[:, 1] == 1.0).all())
+        np.testing.assert_array_equal(result.band, np.array(["R"] * 5))
 
     def test_band_attribute_preserved(self):
         result = self.lc.select_bands(["V"])
@@ -103,41 +101,32 @@ class TestSelectBandsBasic(unittest.TestCase):
         result = self.lc.select_bands(["V"])
         self.assertEqual(result.name, "MyStar")
 
+    def test_xtransform_inherited(self):
+        result = self.lc.select_bands(["V"])
+        self.assertEqual(result.xtransform, self.lc.xtransform)
 
-class TestSelectBandsInputTypes(unittest.TestCase):
-    """Verify that tuple, ndarray and np.integer/np.float64 inputs work."""
+    def test_ytransform_inherited(self):
+        result = self.lc.select_bands(["V"])
+        self.assertEqual(result.ytransform, self.lc.ytransform)
+
+
+class TestSelectBandsInputContainerTypes(unittest.TestCase):
+    """Verify that tuple and numpy.ndarray string inputs work."""
 
     def setUp(self):
         self.lc = _make_2d()
 
     def test_tuple_input(self):
-        """A tuple of selectors should work identically to a list."""
+        """A tuple of string labels should work identically to a list."""
         result = self.lc.select_bands(("V",))
         self.assertEqual(len(result.xdata), 5)
-        self.assertTrue((result.xdata[:, 1] == 550.0).all())
+        np.testing.assert_array_equal(result.band, np.array(["V"] * 5))
 
     def test_ndarray_string_input(self):
-        """A numpy string array of selectors should work."""
+        """A numpy string array of labels should work."""
         result = self.lc.select_bands(np.array(["V"]))
         self.assertEqual(len(result.xdata), 5)
-
-    def test_ndarray_float_input(self):
-        """A numpy float array of selectors should work."""
-        result = self.lc.select_bands(np.array([550.0]))
-        self.assertEqual(len(result.xdata), 5)
-        self.assertTrue((result.xdata[:, 1] == 550.0).all())
-
-    def test_np_float64_element(self):
-        """numpy.float64 scalar elements should be accepted."""
-        result = self.lc.select_bands([np.float64(650.0)])
-        self.assertEqual(len(result.xdata), 5)
-        self.assertTrue((result.xdata[:, 1] == 650.0).all())
-
-    def test_np_int_element(self):
-        """numpy.int64 scalar elements should be accepted."""
-        lc = _make_2d(wl1=1.0, wl2=2.0)
-        result = lc.select_bands([np.int64(1)])
-        self.assertEqual(len(result.xdata), 5)
+        np.testing.assert_array_equal(result.band, np.array(["V"] * 5))
 
 
 class TestSelectBandsMultiple(unittest.TestCase):
@@ -146,22 +135,15 @@ class TestSelectBandsMultiple(unittest.TestCase):
     def setUp(self):
         self.lc = _make_3band()
 
-    def test_select_two_strings(self):
+    def test_select_two_bands(self):
         result = self.lc.select_bands(["g", "r"])
         self.assertEqual(len(result.xdata), 8)  # 2 × 4
 
-    def test_select_two_floats(self):
-        result = self.lc.select_bands([1.0, 3.0])
-        unique_wl = result.xdata[:, 1].unique().sort().values.tolist()
-        self.assertEqual(unique_wl, [1.0, 3.0])
-        self.assertEqual(len(result.xdata), 8)
-
-    def test_select_mixed_string_and_float(self):
-        """Mix one string selector and one float selector."""
-        result = self.lc.select_bands(["g", 3.0])
-        unique_wl = result.xdata[:, 1].unique().sort().values.tolist()
-        self.assertEqual(unique_wl, [1.0, 3.0])
-        self.assertEqual(len(result.xdata), 8)
+    def test_select_two_bands_correct_labels(self):
+        result = self.lc.select_bands(["g", "r"])
+        np.testing.assert_array_equal(
+            np.unique(result.band), np.array(["g", "r"])
+        )
 
     def test_select_all_bands_returns_full_lc(self):
         result = self.lc.select_bands(["g", "r", "i"])
@@ -173,34 +155,22 @@ class TestSelectBandsMultiple(unittest.TestCase):
             np.unique(result.band), np.array(["i", "r"])
         )
 
+    def test_select_is_or_based(self):
+        """OR semantics: rows matching any requested label are included."""
+        result_single_g = self.lc.select_bands(["g"])
+        result_single_r = self.lc.select_bands(["r"])
+        result_both = self.lc.select_bands(["g", "r"])
+        self.assertEqual(
+            len(result_both.xdata),
+            len(result_single_g.xdata) + len(result_single_r.xdata),
+        )
+
 
 class TestSelectBandsErrors(unittest.TestCase):
     """Error conditions."""
 
-    def test_raises_for_1d_lightcurve(self):
-        t = torch.linspace(0, 10, 20)
-        y = torch.sin(t)
-        lc = Lightcurve(t, y)
-        with self.assertRaises(ValueError):
-            lc.select_bands(["V"])
-
-    def test_raises_for_string_when_band_none(self):
-        lc = _make_2d()
-        lc.band = None
-        with self.assertRaises(ValueError):
-            lc.select_bands(["V"])
-
-    def test_raises_for_unsupported_type(self):
-        lc = _make_2d()
-        with self.assertRaises(TypeError):
-            lc.select_bands([["V"]])  # nested list element
-
     def test_raises_for_bare_string_input(self):
-        """A bare string like bands='V' must raise TypeError.
-
-        Without this guard the string would be iterated as characters,
-        silently giving wrong results.
-        """
+        """A bare string like bands='V' must raise TypeError."""
         lc = _make_2d()
         with self.assertRaises(TypeError):
             lc.select_bands("V")
@@ -211,53 +181,106 @@ class TestSelectBandsErrors(unittest.TestCase):
         with self.assertRaises(TypeError):
             lc.select_bands("W1")
 
-    def test_raises_for_nan_selector(self):
-        """np.nan as a float selector is not meaningful and must raise ValueError."""
+    def test_raises_when_band_is_none(self):
+        """select_bands requires self.band to be set."""
         lc = _make_2d()
+        lc.band = None
         with self.assertRaises(ValueError):
-            lc.select_bands([np.nan])
+            lc.select_bands(["V"])
 
-    def test_raises_for_float_nan_selector(self):
-        """float('nan') must also raise ValueError."""
-        lc = _make_2d()
+    def test_raises_for_1d_lightcurve_no_band(self):
+        """1-D lightcurve with band=None raises ValueError."""
+        t = torch.linspace(0, 10, 20)
+        y = torch.sin(t)
+        lc = Lightcurve(t, y)
         with self.assertRaises(ValueError):
-            lc.select_bands([float("nan")])
+            lc.select_bands(["V"])
 
-    def test_nonexistent_band_raises_value_error(self):
-        """Selecting a label that is not present raises ValueError (no rows match)."""
+    def test_raises_for_nonexistent_label(self):
+        """Requesting a label that is not in band raises ValueError."""
         lc = _make_2d()
-        # "Z" is not in the data — no rows match → ValueError from __init__.
         with self.assertRaises(ValueError):
             lc.select_bands(["Z"])
 
-    def test_negative_wavelength_no_match_raises(self):
-        """A negative wavelength not in the data yields no rows → ValueError."""
+    def test_raises_for_float_selector(self):
+        """Numeric float selectors are rejected with TypeError."""
+        lc = _make_2d()
+        with self.assertRaises(TypeError):
+            lc.select_bands([650.0])
+
+    def test_raises_for_int_selector(self):
+        """Numeric int selectors are rejected with TypeError."""
+        lc = _make_2d(wl1=1.0, wl2=2.0)
+        with self.assertRaises(TypeError):
+            lc.select_bands([1])
+
+    def test_raises_for_np_float64_selector(self):
+        """numpy.float64 selectors are rejected with TypeError."""
+        lc = _make_2d()
+        with self.assertRaises(TypeError):
+            lc.select_bands([np.float64(650.0)])
+
+    def test_raises_for_np_int64_selector(self):
+        """numpy.int64 selectors are rejected with TypeError."""
+        lc = _make_2d(wl1=1.0, wl2=2.0)
+        with self.assertRaises(TypeError):
+            lc.select_bands([np.int64(1)])
+
+    def test_raises_for_nan_selector(self):
+        """np.nan as a selector is rejected with TypeError (float)."""
+        lc = _make_2d()
+        with self.assertRaises(TypeError):
+            lc.select_bands([np.nan])
+
+    def test_raises_for_float_nan_selector(self):
+        """float('nan') is also rejected with TypeError."""
+        lc = _make_2d()
+        with self.assertRaises(TypeError):
+            lc.select_bands([float("nan")])
+
+    def test_raises_for_nested_list_element(self):
+        """A nested list element raises TypeError."""
+        lc = _make_2d()
+        with self.assertRaises(TypeError):
+            lc.select_bands([["V"]])
+
+    def test_raises_for_none_element(self):
+        """None element raises TypeError."""
+        lc = _make_2d()
+        with self.assertRaises(TypeError):
+            lc.select_bands([None])
+
+    def test_raises_for_mixed_string_and_float(self):
+        """Mixed string and float selectors are rejected."""
+        lc = _make_3band()
+        with self.assertRaises(TypeError):
+            lc.select_bands(["g", 3.0])
+
+    def test_all_missing_labels_raises_value_error(self):
+        """All selectors present but none matching raises ValueError."""
         lc = _make_2d()
         with self.assertRaises(ValueError):
-            lc.select_bands([-1.0])
+            lc.select_bands(["Z", "X"])
 
-    def test_float_selector_no_band_required(self):
-        """Float selection works even when self.band is None."""
+
+class TestSelectBandsBandPreservation(unittest.TestCase):
+    """Verify that the returned Lightcurve correctly preserves band."""
+
+    def test_returned_band_is_subset_of_original(self):
+        lc = _make_3band()
+        result = lc.select_bands(["g", "i"])
+        # Only "g" and "i" labels should appear
+        self.assertTrue(all(b in ("g", "i") for b in result.band))
+
+    def test_returned_band_matches_xdata_length(self):
         lc = _make_2d()
-        lc.band = None
-        result = lc.select_bands([550.0])
-        self.assertEqual(len(result.xdata), 5)
-        self.assertIsNone(result.band)
+        result = lc.select_bands(["V"])
+        self.assertEqual(len(result.band), len(result.xdata))
 
-
-class TestSelectBandsNoBand(unittest.TestCase):
-    """select_bands when the Lightcurve has no band attribute."""
-
-    def test_float_select_no_band_attr(self):
-        """Float-only selector works when band is None."""
-        t = torch.linspace(0, 10, 10)
-        wl = torch.cat([torch.ones(5), torch.full((5,), 2.0)])
-        x = torch.stack([t, wl], dim=1)
-        y = torch.zeros(10)
-        lc = Lightcurve(x, y)
-        result = lc.select_bands([1.0])
-        self.assertEqual(len(result.xdata), 5)
-        self.assertIsNone(result.band)
+    def test_band_attribute_type_preserved(self):
+        lc = _make_2d()
+        result = lc.select_bands(["V"])
+        self.assertIsInstance(result.band, np.ndarray)
 
 
 if __name__ == "__main__":
