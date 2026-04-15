@@ -9791,7 +9791,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If *item* is not a :class:`Lightcurve`, ``str``, or
             ``pathlib.Path``.
         """
-        if isinstance(item, Lightcurve):
+        if isinstance(item, cls):
             return item
         if isinstance(item, (str, Path)):
             return cls.from_csv(item)
@@ -10068,18 +10068,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self_x = self._xdata_raw
 
         # Validate band↔wavelength mapping on self
-        self._validate_band_wavelength_mapping(self_band, self_x[:, 1].numpy())
+        self._validate_band_wavelength_mapping(
+            self_band, self_x[:, 1].detach().cpu().numpy()
+        )
 
         # Validate band↔wavelength mapping on other
         self._validate_band_wavelength_mapping(
-            other_band, other_x[:, 1].numpy()
+            other_band, other_x[:, 1].detach().cpu().numpy()
         )
 
         # ------------------------------------------------------------------
         # Build per-band groups from self (for conflict checking)
         # ------------------------------------------------------------------
         self_bands_set = set(np.unique(self_band).tolist())
-        self_wl_set = set(np.unique(self_x[:, 1].numpy()).tolist())
+        self_wl_set = set(np.unique(self_x[:, 1].detach().cpu().numpy()).tolist())
 
         # ------------------------------------------------------------------
         # Process each constituent band in other
@@ -10266,7 +10268,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 band_arr = np.asarray(lc.band).astype(str)
 
                 cls._validate_band_wavelength_mapping(
-                    band_arr, x_2d[:, 1].numpy()
+                    band_arr, x_2d[:, 1].detach().cpu().numpy()
                 )
                 resolved.append((x_2d, y, yerr, band_arr))
         # ------------------------------------------------------------------
