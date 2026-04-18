@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import unittest
 import warnings
@@ -957,6 +958,9 @@ class TestToCSV(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_to_csv_roundtrip_with_optional_columns(self):
         """2-D lightcurve with yerr+band should round-trip through CSV."""

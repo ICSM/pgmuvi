@@ -9760,7 +9760,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         The output always includes ``time``, ``wavelength``, and ``flux``
         columns.  ``flux_error`` and ``band`` are included when present on the
-        instance.
+        instance. For 1-D lightcurves (time-only ``xdata``), ``wavelength`` is
+        written as ``0.0`` for each row.
 
         Parameters
         ----------
@@ -9790,7 +9791,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             wavelength_np = x_np[:, 1]
         else:
             raise ValueError(
-                "xdata must be shape (N,) or (N, 2+) to export to CSV."
+                "xdata must be 1-dimensional (N,) or 2-dimensional "
+                "(N, 2) or higher to export to CSV."
             )
 
         n_rows = len(time_np)
