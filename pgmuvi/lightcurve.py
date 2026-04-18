@@ -554,11 +554,12 @@ class InputHelpers:
             ``"filter"`` containing values like ``"V"``, ``"R"``) are
             resolved *independently* of the numeric wavelength column.  When
             the CSV contains a string-typed column whose name matches one of
-            the entries in :attr:`_WAVELENGTH_ID_COLUMN_NAMES` **and** the
-            resulting lightcurve is 2-D, the unique labels are stored
-            automatically in :attr:`Lightcurve.band`.  For 1-D lightcurves,
-            ``band`` is left as ``None`` unless supplied explicitly via
-            ``**kwargs``.  Numeric wavelength columns are used directly and
+            the entries in :attr:`_WAVELENGTH_ID_COLUMN_NAMES`, those labels
+            are stored automatically in :attr:`Lightcurve.band` when
+            ``band`` is not supplied explicitly in ``**kwargs``.  For 1-D
+            lightcurves this stores a single-element array containing the
+            first row label from that column (matching the 1-D constructor
+            contract). Numeric wavelength columns are used directly and
             :attr:`Lightcurve.band` is left as ``None`` unless the caller
             provides ``band=`` explicitly in ``**kwargs``.
 
@@ -587,8 +588,8 @@ class InputHelpers:
             2-D ``xdata``.  Ignored when ``xcol`` is a list.
         **kwargs
             Additional keyword arguments passed to the Lightcurve constructor.
-            If ``band`` is not provided and the wavelength/band column is
-            string-typed, it is populated automatically.
+            If ``band`` is not provided and a string band-ID column exists,
+            it is populated automatically.
 
         Returns
         -------
@@ -788,11 +789,13 @@ class InputHelpers:
                 x = time_tensor
 
             # Independently populate band from the string band-ID column.
-            # Only auto-populate when xdata is 2-D, matching from_table
-            # behaviour (band labels per-row are meaningless for 1-D).
-            if x.dim() == 2 and "band" not in kwargs and band_id_col is not None:
+            if "band" not in kwargs and band_id_col is not None:
                 if _is_str_col(band_id_col):
-                    kwargs["band"] = np.asarray(clean[band_id_col], dtype=np.str_)
+                    band_vals = np.asarray(clean[band_id_col], dtype=np.str_)
+                    if x.dim() == 2:
+                        kwargs["band"] = band_vals
+                    elif band_vals.size > 0:
+                        kwargs["band"] = np.array([band_vals[0]], dtype=np.str_)
 
         y = _to_float_tensor(clean[ycol])
         yerr = _to_float_tensor(clean[yerrcol]) if yerrcol else None
