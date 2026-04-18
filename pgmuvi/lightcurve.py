@@ -9755,7 +9755,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return t
 
-    def to_csv(self, filename: str | Path = "lightcurve.csv") -> Path:
+    def to_csv(self, filepath: str | Path = "lightcurve.csv") -> Path:
         """Write lightcurve data to a CSV file.
 
         The output always includes ``time``, ``wavelength``, and ``flux``
@@ -9765,7 +9765,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Parameters
         ----------
-        filename : str or pathlib.Path, optional
+        filepath : str or pathlib.Path, optional
             Destination CSV path. The file is created or overwritten.
             Default is ``"lightcurve.csv"``.
 
@@ -9774,7 +9774,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         pathlib.Path
             The written file path.
         """
-        path = Path(filename)
+        path = Path(filepath)
         x_np = self._xdata_raw.detach().cpu().numpy()
         y_np = self._ydata_raw.detach().cpu().numpy()
         yerr_np = (
@@ -9785,20 +9785,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if x_np.ndim == 1:
             time_np = x_np
-            wavelength_np = np.zeros_like(time_np, dtype=np.float64)
+            wavelength_np = np.zeros_like(time_np)
         elif x_np.ndim == 2 and x_np.shape[1] >= 2:
             time_np = x_np[:, 0]
             wavelength_np = x_np[:, 1]
         else:
             raise ValueError(
                 "xdata must be 1-dimensional (N,) or 2-dimensional "
-                "(N, 2) or higher to export to CSV."
+                "with at least two columns (N, 2+) to export to CSV."
             )
 
         n_rows = len(time_np)
         band_np = None
         if self.band is not None:
-            band_np = np.asarray(self.band, dtype=np.str_)
+            band_np = np.asarray(self.band, dtype=str)
             if band_np.size == 1 and n_rows > 1:
                 band_np = np.repeat(band_np, n_rows)
             elif band_np.size != n_rows:

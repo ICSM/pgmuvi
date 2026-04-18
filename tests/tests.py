@@ -1020,7 +1020,7 @@ class TestToCSV(unittest.TestCase):
             os.chdir(old_cwd)
 
         expected = os.path.join(self.tmpdir, "lightcurve.csv")
-        self.assertEqual(str(out), "lightcurve.csv")
+        self.assertEqual(out.name, "lightcurve.csv")
         self.assertTrue(os.path.exists(expected))
 
 
