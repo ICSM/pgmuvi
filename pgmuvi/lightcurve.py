@@ -2277,6 +2277,186 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def append_data(self, new_values_x, new_values_y):
         pass
 
+    def merge(self, other, **kwargs) -> "Lightcurve":
+        """Merge this lightcurve with another lightcurve or CSV file.
+
+        Parameters
+        ----------
+        other : Lightcurve, str, or pathlib.Path
+            Source to merge with this lightcurve.  If a CSV path is provided,
+            :meth:`from_csv` is used to load it.
+        **kwargs
+            Extra keyword arguments forwarded to :meth:`from_csv` when *other*
+            is a CSV path.
+
+        Returns
+        -------
+        Lightcurve
+            A new merged :class:`Lightcurve`.
+        """
+        if isinstance(other, str | Path):
+            csv_kwargs = dict(kwargs)
+            if "band" not in csv_kwargs:
+                raw = np.genfromtxt(
+                    Path(other),
+                    delimiter=",",
+                    names=True,
+                    dtype=None,
+                    encoding=None,
+                )
+                if raw.dtype.names is not None:
+                    band_col = self._find_column(
+                        list(raw.dtype.names),
+                        self._WAVELENGTH_ID_COLUMN_NAMES,
+                    )
+                    if band_col is not None:
+                        col_data = np.asarray(raw[band_col])
+                        if col_data.ndim == 0:
+                            col_data = np.asarray([col_data.item()])
+                        if (
+                            np.issubdtype(col_data.dtype, np.str_)
+                            or np.issubdtype(col_data.dtype, np.bytes_)
+                            or col_data.dtype.kind == "O"
+                        ):
+                            labels = np.asarray(col_data, dtype=np.str_)
+                            unique_labels = np.unique(labels)
+                            if unique_labels.size == 1:
+                                csv_kwargs["band"] = [str(unique_labels[0])]
+            other = Lightcurve.from_csv(other, **csv_kwargs)
+        elif kwargs:
+            raise TypeError(
+                "Keyword arguments are only supported when merging from a CSV path."
+            )
+
+        if not isinstance(other, Lightcurve):
+            raise TypeError(
+                "'other' must be a Lightcurve instance or a CSV filepath."
+            )
+
+        self_x = self._xdata_raw
+        other_x = other._xdata_raw
+        self_y = self._ydata_raw
+        other_y = other._ydata_raw
+
+        self_yerr = self._yerr_raw if hasattr(self, "_yerr_raw") else None
+        other_yerr = other._yerr_raw if hasattr(other, "_yerr_raw") else None
+        if (self_yerr is None) != (other_yerr is None):
+            raise ValueError(
+                "Cannot merge lightcurves when only one has yerr values."
+            )
+
+        if self.ndim == 1 and other.ndim == 1:
+            merged_x = torch.cat([self_x, other_x], dim=0)
+            merged_y = torch.cat([self_y, other_y], dim=0)
+            merged_yerr = (
+                torch.cat([self_yerr, other_yerr], dim=0)
+                if self_yerr is not None
+                else None
+            )
+            merged_band = None
+            if self.band is not None or other.band is not None:
+                left = (
+                    np.asarray(self.band, dtype=np.str_)
+                    if self.band is not None
+                    else np.asarray([], dtype=np.str_)
+                )
+                right = (
+                    np.asarray(other.band, dtype=np.str_)
+                    if other.band is not None
+                    else np.asarray([], dtype=np.str_)
+                )
+                merged_band = np.concatenate([left, right]).astype(np.str_)
+            return Lightcurve(
+                merged_x,
+                merged_y,
+                yerr=merged_yerr,
+                name=self.name,
+                xtransform=self.xtransform,
+                ytransform=self.ytransform,
+                band=merged_band,
+            )
+
+        if self.ndim == 2 and other.ndim == 1:
+            band_label = None
+            if other.band is not None:
+                labels = np.asarray(other.band, dtype=np.str_)
+                unique_labels = np.unique(labels)
+                if unique_labels.size == 1:
+                    band_label = str(unique_labels[0])
+            if band_label is None:
+                raise ValueError(
+                    "Merging 1-D data into a 2-D lightcurve requires a single "
+                    "band label."
+                )
+
+            next_wavelength = float(torch.max(self_x[:, 1]).item()) + 1.0
+            wl = torch.full_like(other_x, next_wavelength)
+            other_x = torch.stack([other_x, wl], dim=1)
+
+            merged_x = torch.cat([self_x, other_x], dim=0)
+            merged_y = torch.cat([self_y, other_y], dim=0)
+            merged_yerr = (
+                torch.cat([self_yerr, other_yerr], dim=0)
+                if self_yerr is not None
+                else None
+            )
+
+            if self.band is None:
+                left_band = np.asarray([], dtype=np.str_)
+            else:
+                left_band = np.asarray(self.band, dtype=np.str_)
+            right_band = np.full(other_x.shape[0], band_label, dtype=np.str_)
+            merged_band = np.concatenate([left_band, right_band]).astype(np.str_)
+
+            return Lightcurve(
+                merged_x,
+                merged_y,
+                yerr=merged_yerr,
+                name=self.name,
+                xtransform=self.xtransform,
+                ytransform=self.ytransform,
+                band=merged_band,
+            )
+
+        if self.ndim == 2 and other.ndim == 2:
+            merged_x = torch.cat([self_x, other_x], dim=0)
+            merged_y = torch.cat([self_y, other_y], dim=0)
+            merged_yerr = (
+                torch.cat([self_yerr, other_yerr], dim=0)
+                if self_yerr is not None
+                else None
+            )
+
+            if self.band is None and other.band is None:
+                merged_band = None
+            else:
+                left_band = (
+                    np.asarray(self.band, dtype=np.str_)
+                    if self.band is not None
+                    else np.asarray([], dtype=np.str_)
+                )
+                right_band = (
+                    np.asarray(other.band, dtype=np.str_)
+                    if other.band is not None
+                    else np.asarray([], dtype=np.str_)
+                )
+                merged_band = np.concatenate([left_band, right_band]).astype(np.str_)
+
+            return Lightcurve(
+                merged_x,
+                merged_y,
+                yerr=merged_yerr,
+                name=self.name,
+                xtransform=self.xtransform,
+                ytransform=self.ytransform,
+                band=merged_band,
+            )
+
+        raise ValueError(
+            "Cannot merge a 2-D lightcurve into a 1-D lightcurve. "
+            "Convert the target to 2-D first."
+        )
+
     def select_bands(
         self, bands: list | tuple | np.ndarray
     ) -> "Lightcurve":

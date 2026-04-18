@@ -454,5 +454,36 @@ class TestBandFromTable(unittest.TestCase):
         self.assertIsNone(lc.band)
 
 
+class TestMergeBandReplication(unittest.TestCase):
+    """Regression tests for band-label replication in Lightcurve.merge()."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self._csv_path = os.path.join(self._tmpdir, "single_band.csv")
+        with open(self._csv_path, "w") as f:
+            f.write("time,flux,err,band\n")
+            for i in range(5):
+                f.write(f"{float(i)},{float(i)},0.1,band 3\n")
+
+        t = torch.linspace(0, 4, 5)
+        t2 = torch.cat([t, t])
+        wl = torch.cat([torch.full((5,), 1.0), torch.full((5,), 2.0)])
+        x = torch.stack([t2, wl], dim=1)
+        y = torch.sin(t2)
+        yerr = torch.full_like(y, 0.1)
+        band = np.array(["band 1"] * 5 + ["band 2"] * 5, dtype=np.str_)
+        self._base = Lightcurve(x, y, yerr=yerr, band=band)
+
+    def test_merge_csv_1d_replicates_full_band_label(self):
+        """Merging 1-D CSV rows preserves full band labels (not first char)."""
+        merged = self._base.merge(self._csv_path)
+        self.assertIsNotNone(merged.band)
+        self.assertIn("band 3", np.unique(merged.band))
+        self.assertNotIn("b", np.unique(merged.band))
+
+        new_band_mask = merged.band == "band 3"
+        self.assertEqual(int(np.sum(new_band_mask)), 5)
+
+
 if __name__ == "__main__":
     unittest.main()
