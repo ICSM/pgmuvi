@@ -519,6 +519,15 @@ class TestPlotPeriodSummary(unittest.TestCase):
         lc = _make_1d_lc_no_transform()
         fig, ax = lc.plot_period_summary(show=False, log_freq=False)
         self.assertNotEqual(ax.get_xscale(), "log")
+        self.assertEqual(ax.get_yscale(), "log")
+        plt.close(fig)
+
+    def test_sm_default_log_y_axis(self):
+        import matplotlib.pyplot as plt
+
+        lc = _make_1d_lc_no_transform()
+        fig, ax = lc.plot_period_summary(show=False)
+        self.assertEqual(ax.get_yscale(), "log")
         plt.close(fig)
 
     def test_qp_returns_fig_ax(self):
