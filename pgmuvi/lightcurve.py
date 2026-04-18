@@ -9774,11 +9774,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         pathlib.Path
             The written file path.
         """
+        def _to_numpy(tensor):
+            return tensor.detach().cpu().numpy()
+
         path = Path(filepath)
-        x_np = self._xdata_raw.detach().cpu().numpy()
-        y_np = self._ydata_raw.detach().cpu().numpy()
+        x_np = _to_numpy(self._xdata_raw)
+        y_np = _to_numpy(self._ydata_raw)
         yerr_np = (
-            self._yerr_raw.detach().cpu().numpy()
+            _to_numpy(self._yerr_raw)
             if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
             else None
         )
@@ -9786,13 +9789,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if x_np.ndim == 1:
             time_np = x_np
             wavelength_np = np.zeros_like(time_np)
-        elif x_np.ndim == 2 and x_np.shape[1] >= 2:
+        elif x_np.ndim == 2 and x_np.shape[1] == 2:
             time_np = x_np[:, 0]
             wavelength_np = x_np[:, 1]
         else:
             raise ValueError(
                 "xdata must be 1-dimensional (N,) or 2-dimensional "
-                "with at least two columns (N, 2+) to export to CSV."
+                "with exactly two columns (N, 2) to export to CSV."
             )
 
         n_rows = len(time_np)
