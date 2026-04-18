@@ -464,7 +464,7 @@ class TestMergeBandReplication(unittest.TestCase):
         with open(self._csv_path, "w") as f:
             f.write("time,flux,err,band\n")
             for i in range(5):
-                f.write(f"{float(i)},{float(i)},0.1,band 3\n")
+                f.write(f"{i},{i},0.1,band 3\n")
 
         t = torch.linspace(0, 4, 5)
         t2 = torch.cat([t, t])
