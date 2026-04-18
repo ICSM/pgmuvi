@@ -138,6 +138,13 @@ class TestComputeStetsonK(unittest.TestCase):
         K = compute_stetson_k(y, yerr)
         self.assertIsInstance(K, float)
 
+    def test_pathological_inputs_return_nan(self):
+        """Pathological inputs should return NaN rather than raising."""
+        y = np.array([1.0, 1.1, 0.9])
+        yerr = np.array([np.nan, 0.0, -1.0])
+        K = compute_stetson_k(y, yerr)
+        self.assertTrue(np.isnan(K))
+
 
 class TestIsVariable(unittest.TestCase):
     def test_non_variable(self):
@@ -158,7 +165,26 @@ class TestIsVariable(unittest.TestCase):
         yerr = np.full(200, 0.02)
         is_var, diag = is_variable(y, yerr)
         self.assertTrue(is_var)
-        self.assertEqual(diag["decision"], "VARIABLE")
+        self.assertTrue(diag["decision"].startswith("VARIABLE"))
+
+    def test_sinusoidal_variable_not_vetoed_by_stetson(self):
+        """Sinusoidal variability should pass even if stetson_test is False."""
+        np.random.seed(123)
+        t = np.linspace(0, 100, 300)
+        y = 1.0 + 0.3 * np.sin(2 * np.pi * t / 10) + np.random.normal(0, 0.02, 300)
+        yerr = np.full(300, 0.02)
+
+        # Use a strict diagnostic threshold to force stetson_test=False.
+        is_var, diag = is_variable(y, yerr, stetson_k_min=1.2)
+
+        self.assertTrue(diag["tests_passed"]["chi2_test"])
+        self.assertTrue(diag["tests_passed"]["fvar_test"])
+        self.assertFalse(diag["tests_passed"]["stetson_test"])
+        self.assertTrue(is_var)
+        self.assertIn("VARIABLE", diag["decision"])
+        self.assertIn("DIAGNOSTIC", diag["decision"])
+        self.assertIn("stetson_k", diag)
+        self.assertIn("stetson_test", diag["tests_passed"])
 
     def test_insufficient_points(self):
         """Data with fewer than min_points should fail variability check."""
