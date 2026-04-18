@@ -2294,7 +2294,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Lightcurve
             A new merged :class:`Lightcurve`.
         """
-        if isinstance(other, str | Path):
+        if isinstance(other, (str, Path)):
             csv_kwargs = dict(kwargs)
             if "band" not in csv_kwargs:
                 raw = np.genfromtxt(
@@ -2389,6 +2389,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "band label."
                 )
 
+            # Assign a new numeric wavelength ID above the existing maximum.
             next_wavelength = float(torch.max(self_x[:, 1]).item()) + 1.0
             wl = torch.full_like(other_x, next_wavelength)
             other_x = torch.stack([other_x, wl], dim=1)
