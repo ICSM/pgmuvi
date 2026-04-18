@@ -1703,17 +1703,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"'band' must be a 1-D array-like of strings (shape (n,)); "
                     f"got shape {band_arr.shape}."
                 )
-            # Determine the expected length: one label per observation row for
-            # 2-D data, or 1 for 1-D data (single-band lightcurve).
+            # Determine the expected length.  For 2-D data every observation
+            # row must have exactly one label.  For 1-D data the band may be
+            # a single shared label (length 1) or one label per observation.
             if self.ndim > 1:
                 n_rows = len(self._xdata_raw)
+                if len(band_arr) != n_rows:
+                    raise ValueError(
+                        f"Length of 'band' ({len(band_arr)}) does not match "
+                        f"the expected number of rows ({n_rows})."
+                    )
             else:
-                n_rows = 1
-            if len(band_arr) != n_rows:
-                raise ValueError(
-                    f"Length of 'band' ({len(band_arr)}) does not match the "
-                    f"expected number of rows ({n_rows})."
-                )
+                n_obs = len(self._xdata_raw)
+                if len(band_arr) != 1 and len(band_arr) != n_obs:
+                    raise ValueError(
+                        f"Length of 'band' ({len(band_arr)}) does not match "
+                        f"the number of observations ({n_obs}) or 1 "
+                        f"(single-band label)."
+                    )
             self.band = band_arr
 
         self.__SET_LIKELIHOOD_CALLED = False
@@ -2355,16 +2362,37 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             merged_band = None
             if self.band is not None or other.band is not None:
-                left = (
-                    np.asarray(self.band, dtype=np.str_)
-                    if self.band is not None
-                    else np.asarray([], dtype=np.str_)
-                )
-                right = (
-                    np.asarray(other.band, dtype=np.str_)
-                    if other.band is not None
-                    else np.asarray([], dtype=np.str_)
-                )
+                n_left = len(self_x)
+                n_right = len(other_x)
+                if self.band is not None and other.band is not None:
+                    # Both have band labels: expand a single shared label to
+                    # one entry per observation so the merged array has one
+                    # label per row.
+                    _left = np.asarray(self.band, dtype=np.str_)
+                    left = (
+                        np.full(n_left, str(_left[0]))
+                        if len(_left) == 1
+                        else _left
+                    )
+                    _right = np.asarray(other.band, dtype=np.str_)
+                    right = (
+                        np.full(n_right, str(_right[0]))
+                        if len(_right) == 1
+                        else _right
+                    )
+                else:
+                    # Only one side has a label; keep the single-label
+                    # semantics (length-1 array).
+                    left = (
+                        np.asarray(self.band, dtype=np.str_)
+                        if self.band is not None
+                        else np.asarray([], dtype=np.str_)
+                    )
+                    right = (
+                        np.asarray(other.band, dtype=np.str_)
+                        if other.band is not None
+                        else np.asarray([], dtype=np.str_)
+                    )
                 merged_band = np.concatenate([left, right]).astype(np.str_)
             return Lightcurve(
                 merged_x,

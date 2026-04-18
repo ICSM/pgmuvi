@@ -488,6 +488,64 @@ class TestMergeBandReplication(unittest.TestCase):
         new_band_mask = merged.band == "band 3"
         self.assertEqual(int(np.sum(new_band_mask)), 5)
 
+    def test_merge_1d_1d_preserves_full_band_labels(self):
+        """1-D + 1-D merge correctly transfers multi-word band labels."""
+        t = torch.linspace(0, 4, 5)
+        y = torch.sin(t)
+        lc1 = Lightcurve(t, y, band=["band 1"])
+        lc2 = Lightcurve(t + 5, y, band=["band 2"])
+        merged = lc1.merge(lc2)
+
+        self.assertIsNotNone(merged.band)
+        unique = np.unique(merged.band)
+        self.assertIn("band 1", unique)
+        self.assertIn("band 2", unique)
+        # First character of "band 1" must not appear as a standalone label.
+        self.assertNotIn("b", unique)
+        # Each source contributes 5 observations.
+        self.assertEqual(int(np.sum(merged.band == "band 1")), 5)
+        self.assertEqual(int(np.sum(merged.band == "band 2")), 5)
+
+    def test_merge_1d_1d_same_band_label(self):
+        """1-D + 1-D merge with identical band labels keeps a single label."""
+        t = torch.linspace(0, 4, 5)
+        y = torch.sin(t)
+        lc1 = Lightcurve(t, y, band=["V"])
+        lc2 = Lightcurve(t + 5, y, band=["V"])
+        merged = lc1.merge(lc2)
+
+        self.assertIsNotNone(merged.band)
+        # The merged label array covers all 10 observations.
+        self.assertTrue(np.all(merged.band == "V"))
+
+    def test_merge_1d_1d_one_none_band(self):
+        """1-D + 1-D merge when only one side has a band keeps that label."""
+        t = torch.linspace(0, 4, 5)
+        y = torch.sin(t)
+        lc1 = Lightcurve(t, y, band=["V"])
+        lc2 = Lightcurve(t + 5, y)
+        merged = lc1.merge(lc2)
+
+        self.assertIsNotNone(merged.band)
+        np.testing.assert_array_equal(merged.band, np.array(["V"]))
+
+
+class TestBand1DPerRow(unittest.TestCase):
+    """1-D lightcurves may carry one band label per observation."""
+
+    def test_per_row_band_accepted(self):
+        """A band array with one entry per observation is valid for 1-D data."""
+        t, y, yerr = _make_1d()  # 20 observations
+        per_row = np.array(["V"] * 10 + ["R"] * 10)
+        lc = Lightcurve(t, y, yerr=yerr, band=per_row)
+        np.testing.assert_array_equal(lc.band, per_row)
+
+    def test_wrong_intermediate_length_raises(self):
+        """A band array whose length is neither 1 nor n_obs raises ValueError."""
+        t, y, yerr = _make_1d()  # 20 observations
+        with self.assertRaises(ValueError):
+            Lightcurve(t, y, yerr=yerr, band=["V", "R"])  # len 2, not 1 or 20
+
 
 if __name__ == "__main__":
     unittest.main()
