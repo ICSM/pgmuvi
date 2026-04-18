@@ -166,7 +166,7 @@ class TestBandFromCsvStringBandNoWavelength(unittest.TestCase):
 
     The float wavelength column (from _WAVELENGTH_COLUMN_NAMES) is required
     to create a 2-D lightcurve.  A string band-ID column alone produces a
-    1-D lightcurve with band=None (not auto-populated for 1-D data).
+    1-D lightcurve with a single stored band label from the file.
     """
 
     def setUp(self):
@@ -185,13 +185,13 @@ class TestBandFromCsvStringBandNoWavelength(unittest.TestCase):
         lc = Lightcurve.from_csv(self._csv_path)
         self.assertEqual(lc.ndim, 1)
 
-    def test_string_band_no_auto_populate_for_1d(self):
-        """band is NOT auto-populated for 1-D lightcurves."""
+    def test_string_band_auto_populates_for_1d(self):
+        """band is auto-populated for 1-D lightcurves when a band-ID column exists."""
         lc = Lightcurve.from_csv(self._csv_path)
-        self.assertIsNone(lc.band)
+        np.testing.assert_array_equal(lc.band, np.array(["V"]))
 
     def test_single_string_band_still_1d(self):
-        """A string band column with one unique value → 1-D, band=None."""
+        """A string band column with one unique value → 1-D, band populated."""
         csv_path = os.path.join(self._tmpdir, "lc_single.csv")
         with open(csv_path, "w") as f:
             f.write("time,band,flux\n")
@@ -199,7 +199,7 @@ class TestBandFromCsvStringBandNoWavelength(unittest.TestCase):
                 f.write(f"{float(i)},V,{float(i)}\n")
         lc = Lightcurve.from_csv(csv_path)
         self.assertEqual(lc.ndim, 1)
-        self.assertIsNone(lc.band)
+        np.testing.assert_array_equal(lc.band, np.array(["V"]))
 
 
 class TestBandFromCsvBothColumnsIndependent(unittest.TestCase):
@@ -301,7 +301,7 @@ class TestWavelengthIdColumnNames(unittest.TestCase):
         np.testing.assert_array_equal(lc.band, np.array(bands))
 
     def test_string_band_id_col_not_used_for_xdata(self):
-        """String band-ID column alone (no numeric wavelength) → 1-D, band=None."""
+        """String band-ID column alone (no numeric wavelength) → 1-D, band set."""
         path = os.path.join(self._tmpdir, "id_only.csv")
         with open(path, "w") as f:
             f.write("time,band,flux\n")
@@ -311,8 +311,8 @@ class TestWavelengthIdColumnNames(unittest.TestCase):
         lc = Lightcurve.from_csv(path)
         # No numeric wavelength column → 1-D
         self.assertEqual(lc.ndim, 1)
-        # band not auto-populated for 1-D
-        self.assertIsNone(lc.band)
+        # 1-D from_csv stores one label from the band-ID column.
+        np.testing.assert_array_equal(lc.band, np.array(["V"]))
 
     def test_band_id_names_not_in_wavelength_column_names(self):
         """'band' and 'filter' are NOT in _WAVELENGTH_COLUMN_NAMES."""
