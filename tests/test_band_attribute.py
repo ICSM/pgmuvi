@@ -1,6 +1,7 @@
 """Tests for the optional ``band`` attribute of :class:`Lightcurve`."""
 
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -473,6 +474,9 @@ class TestMergeBandReplication(unittest.TestCase):
         yerr = torch.full_like(y, 0.1)
         band = np.array(["band 1"] * 5 + ["band 2"] * 5, dtype=np.str_)
         self._base = Lightcurve(x, y, yerr=yerr, band=band)
+
+    def tearDown(self):
+        shutil.rmtree(self._tmpdir)
 
     def test_merge_csv_1d_replicates_full_band_label(self):
         """Merging 1-D CSV rows preserves full band labels (not first char)."""

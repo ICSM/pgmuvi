@@ -2405,7 +2405,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 left_band = np.asarray([], dtype=np.str_)
             else:
                 left_band = np.asarray(self.band, dtype=np.str_)
-            right_band = np.full(other_x.shape[0], band_label)
+            right_band = np.full(
+                other_x.shape[0], band_label, dtype=f"<U{max(1, len(band_label))}"
+            )
             merged_band = np.concatenate([left_band, right_band]).astype(np.str_)
 
             return Lightcurve(
