@@ -2370,13 +2370,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     # label per row.
                     _left = np.asarray(self.band, dtype=np.str_)
                     left = (
-                        np.full(n_left, str(_left[0]))
+                        np.full(n_left, _left[0])
                         if len(_left) == 1
                         else _left
                     )
                     _right = np.asarray(other.band, dtype=np.str_)
                     right = (
-                        np.full(n_right, str(_right[0]))
+                        np.full(n_right, _right[0])
                         if len(_right) == 1
                         else _right
                     )
