@@ -1,4 +1,5 @@
 import contextlib
+import csv
 from pathlib import Path
 from typing import ClassVar
 import numpy as np
@@ -9753,6 +9754,74 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # with torch.no_grad():
 
         return t
+
+    def to_csv(self, filename: str | Path = "lightcurve.csv") -> Path:
+        """Write lightcurve data to a CSV file.
+
+        The output always includes ``time``, ``wavelength``, and ``flux``
+        columns.  ``flux_error`` and ``band`` are included when present on the
+        instance.
+
+        Parameters
+        ----------
+        filename : str or pathlib.Path, optional
+            Destination CSV path. The file is created or overwritten.
+            Default is ``"lightcurve.csv"``.
+
+        Returns
+        -------
+        pathlib.Path
+            The written file path.
+        """
+        path = Path(filename)
+        x_np = self._xdata_raw.detach().cpu().numpy()
+        y_np = self._ydata_raw.detach().cpu().numpy()
+        yerr_np = (
+            self._yerr_raw.detach().cpu().numpy()
+            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
+            else None
+        )
+
+        if x_np.ndim == 1:
+            time_np = x_np
+            wavelength_np = np.zeros_like(time_np, dtype=np.float64)
+        elif x_np.ndim == 2 and x_np.shape[1] >= 2:
+            time_np = x_np[:, 0]
+            wavelength_np = x_np[:, 1]
+        else:
+            raise ValueError(
+                "xdata must be shape (N,) or (N, 2+) to export to CSV."
+            )
+
+        n_rows = len(time_np)
+        band_np = None
+        if self.band is not None:
+            band_np = np.asarray(self.band, dtype=np.str_)
+            if band_np.size == 1 and n_rows > 1:
+                band_np = np.repeat(band_np, n_rows)
+            elif band_np.size != n_rows:
+                raise ValueError(
+                    f"Length of 'band' ({band_np.size}) does not match "
+                    f"number of rows ({n_rows})."
+                )
+
+        headers = ["time", "wavelength", "flux"]
+        if yerr_np is not None:
+            headers.append("flux_error")
+        if band_np is not None:
+            headers.append("band")
+
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(headers)
+            for i in range(n_rows):
+                row = [time_np[i], wavelength_np[i], y_np[i]]
+                if yerr_np is not None:
+                    row.append(yerr_np[i])
+                if band_np is not None:
+                    row.append(band_np[i])
+                writer.writerow(row)
+        return path
 
     def write_votable(self, filename):
         """Write the results to a votable file.
