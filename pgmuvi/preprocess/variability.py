@@ -188,11 +188,12 @@ def compute_fvar(y, yerr) -> float:
 
 def compute_stetson_k(y, yerr) -> float:
     """
-    Compute Stetson K index for robustness assessment.
+    Compute Stetson K index for shape/coherence diagnostics.
 
     K = (1/N) * sum(|delta_i|) / np.sqrt((1/N) * sum(delta_i**2))
 
-    where delta_i = np.sqrt(N/(N-1)) * (y_i - ybar) / sig_i
+    where delta_i = sqrt(N/(N-1)) * (y_i - ybar) / sig_i and N is the number
+    of valid points used in the statistic.
 
     Parameters
     ----------
@@ -206,38 +207,76 @@ def compute_stetson_k(y, yerr) -> float:
     K : float
         Stetson K index.
         ~0.798 for pure Gaussian noise
-        >0.95 indicates peaked/heavy-tailed distribution (typical of variability)
+        Larger values indicate more coherent/peaked residual structure.
+        Returns ``np.nan`` when the statistic is not well-defined.
 
     Notes
     -----
-    More robust to outliers than simple chi-square.
-    Recommended threshold: K >= 0.95
+    This implementation keeps the classic Stetson K form while handling
+    pathological inputs robustly.
+
+    - If finite, positive uncertainties are available, ``ybar`` is a weighted
+      mean using 1/sigma^2.
+    - If weighted averaging is not possible, ``ybar`` falls back to the
+      unweighted mean of finite flux points.
+    - ``delta_i`` uses the finite-sample factor sqrt(N/(N-1)) for N > 1.
+    - For invalid/pathological cases (N < 2, invalid denominators, etc.),
+      ``np.nan`` is returned instead of raising.
 
     References
     ----------
     Stetson, P. B. 1996, PASP, 108, 851
 
-    Raises
-    ------
-    ValueError
-        If inputs are not 1-D, have mismatched shapes, have fewer than 2
-        points, contain non-finite values, or have non-positive yerr.
+    The public API and return type are preserved for backward compatibility.
     """
     y = _to_numpy(y)
     yerr = _to_numpy(yerr)
-    _validate_inputs(y, yerr)
+    if y.shape != yerr.shape:
+        return float("nan")
 
-    n = len(y)
-    ybar = np.mean(y)
-    delta = np.sqrt(n / (n - 1)) * (y - ybar) / yerr
+    finite_y = np.isfinite(y)
+    finite_pos_err = np.isfinite(yerr) & (yerr > 0)
+    valid_for_weighting = finite_y & finite_pos_err
+
+    # Center the residuals with a weighted mean when possible.
+    ybar = float("nan")
+    if np.any(valid_for_weighting):
+        weights = 1.0 / yerr[valid_for_weighting] ** 2
+        wsum = np.sum(weights)
+        if np.isfinite(wsum) and wsum > 0:
+            ybar = np.sum(weights * y[valid_for_weighting]) / wsum
+
+    # Fallback: use an unweighted finite mean if weighted centering failed.
+    if not np.isfinite(ybar):
+        finite_vals = y[finite_y]
+        if finite_vals.size == 0:
+            return float("nan")
+        ybar = np.mean(finite_vals)
+        if not np.isfinite(ybar):
+            return float("nan")
+
+    # K is defined from normalized residuals that require finite positive
+    # uncertainties, so only those points contribute.
+    y_valid = y[valid_for_weighting]
+    yerr_valid = yerr[valid_for_weighting]
+    n = y_valid.size
+    if n < 2:
+        return float("nan")
+
+    delta = np.sqrt(n / (n - 1)) * (y_valid - ybar) / yerr_valid
+    if not np.all(np.isfinite(delta)):
+        return float("nan")
 
     mean_abs = np.mean(np.abs(delta))
     mean_sq = np.mean(delta**2)
+    if not np.isfinite(mean_sq) or mean_sq <= 0:
+        return float("nan")
 
-    if mean_sq == 0:
-        return 0.0
+    k_value = mean_abs / np.sqrt(mean_sq)
+    if not np.isfinite(k_value):
+        return float("nan")
 
-    return float(mean_abs / np.sqrt(mean_sq))
+    return float(k_value)
 
 
 def is_variable(
@@ -250,7 +289,7 @@ def is_variable(
     verbose: bool = False,
 ) -> tuple[bool, dict]:
     """
-    Comprehensive variability assessment using three statistical tests.
+    Comprehensive variability assessment using required and diagnostic tests.
 
     Parameters
     ----------
@@ -263,7 +302,9 @@ def is_variable(
     fvar_min : float, default=0.05
         Minimum fractional excess variance (5%)
     stetson_k_min : float, default=0.95
-        Minimum Stetson K for robustness
+        Diagnostic Stetson-K reference threshold used only to set
+        ``tests_passed['stetson_test']`` and reporting notes.
+        It is not required for the overall VARIABLE/NOT VARIABLE decision.
     min_points : int, default=6
         Minimum number of data points required
     verbose : bool, default=False
@@ -272,7 +313,8 @@ def is_variable(
     Returns
     -------
     is_var : bool
-        True if lightcurve passes ALL variability tests
+        True if lightcurve passes the required variability gates
+        (min_points, chi2, and F_var).
     diagnostics : dict
         {
             'n_points': int,
@@ -292,11 +334,14 @@ def is_variable(
 
     Notes
     -----
-    Decision logic (ALL must pass):
+    Decision logic (required gates):
     1. N >= min_points
     2. p_value < alpha (statistically significant)
     3. F_var >= fvar_min (astrophysically significant)
-    4. K >= stetson_k_min (robust to outliers)
+
+    Stetson K is retained as a shape/coherence diagnostic and reported in
+    diagnostics, but does not veto a lightcurve that already passes the
+    required gates.
 
     Both numpy arrays and torch tensors (including CUDA tensors) are accepted.
 
@@ -352,7 +397,15 @@ def is_variable(
         "min_points": True,
     }
 
-    is_var = chi2_passed and fvar_passed and stetson_passed
+    is_var = chi2_passed and fvar_passed
+
+    diagnostic_notes = []
+    if not np.isfinite(stetson_k):
+        diagnostic_notes.append("stetson_k=nan")
+    elif not stetson_passed:
+        diagnostic_notes.append(
+            f"stetson_k={stetson_k:.3f}<ref={stetson_k_min:.3f}"
+        )
 
     if is_var:
         decision = "VARIABLE"
@@ -362,9 +415,9 @@ def is_variable(
             reasons.append(f"p_value={p_value:.4f} >= alpha={alpha}")
         if not fvar_passed:
             reasons.append(f"F_var={fvar:.4f} < fvar_min={fvar_min}")
-        if not stetson_passed:
-            reasons.append(f"K={stetson_k:.3f} < stetson_k_min={stetson_k_min}")
         decision = "NOT VARIABLE: " + "; ".join(reasons)
+    if diagnostic_notes:
+        decision += "; DIAGNOSTIC: " + ", ".join(diagnostic_notes)
 
     diagnostics = {
         "n_points": n,
@@ -384,7 +437,10 @@ def is_variable(
             f"  chi2={chi2:.2f}, dof={dof}, p-value={p_value:.4e} [{pass_str}]"
         )
         print(f"  F_var={fvar:.4f} [{'PASS' if fvar_passed else 'FAIL'}]")
-        print(f"  Stetson K={stetson_k:.3f} [{'PASS' if stetson_passed else 'FAIL'}]")
+        print(
+            f"  Stetson K={stetson_k:.3f} "
+            f"[{'PASS' if stetson_passed else 'FAIL'} | DIAGNOSTIC]"
+        )
         print(f"  Decision: {decision}")
 
     return is_var, diagnostics

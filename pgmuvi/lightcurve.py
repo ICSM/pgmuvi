@@ -1641,7 +1641,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             is ``False``.
         variability_kwargs : dict or None, optional
             Keyword arguments forwarded to the variability tests (``alpha``,
-            ``fvar_min``, ``stetson_k_min``).  Only used when
+            ``fvar_min``, ``stetson_k_min``; diagnostic reference). Only used
+            when
             *check_variability* is ``True``.
         band : array-like of str or None, optional
             Optional per-row labels for a 2-D light curve.  Each element
@@ -4648,7 +4649,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Arguments passed to is_variable():
             - alpha: float (default 0.01)
             - fvar_min: float (default 0.05)
-            - stetson_k_min: float (default 0.95)
+            - stetson_k_min: float diagnostic reference (default 0.95)
             - verbose: bool (default False)
 
         Returns
@@ -4774,7 +4775,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if results["summary"]["n_variable"] == 0:
             raise ValueError(
                 "No bands passed variability tests. "
-                "Consider relaxing criteria (alpha, fvar_min, stetson_k_min)"
+                "Consider relaxing criteria (alpha, fvar_min); "
+                "stetson_k_min is diagnostic"
             )
 
         keep_wl = results["summary"]["variable_wavelengths"]
