@@ -165,7 +165,7 @@ class TestIsVariable(unittest.TestCase):
         yerr = np.full(200, 0.02)
         is_var, diag = is_variable(y, yerr)
         self.assertTrue(is_var)
-        self.assertIn("VARIABLE", diag["decision"])
+        self.assertTrue(diag["decision"].startswith("VARIABLE"))
 
     def test_sinusoidal_variable_not_vetoed_by_stetson(self):
         """Sinusoidal variability should pass even if stetson_test is False."""

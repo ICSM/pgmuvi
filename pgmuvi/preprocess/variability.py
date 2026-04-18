@@ -237,14 +237,16 @@ def compute_stetson_k(y, yerr) -> float:
     finite_y = np.isfinite(y)
     finite_pos_err = np.isfinite(yerr) & (yerr > 0)
     valid_for_weighting = finite_y & finite_pos_err
+    y_valid = y[valid_for_weighting]
+    yerr_valid = yerr[valid_for_weighting]
 
     # Center the residuals with a weighted mean when possible.
     ybar = float("nan")
-    if np.any(valid_for_weighting):
-        weights = 1.0 / yerr[valid_for_weighting] ** 2
+    if y_valid.size > 0:
+        weights = 1.0 / np.square(yerr_valid)
         wsum = np.sum(weights)
         if np.isfinite(wsum) and wsum > 0:
-            ybar = np.sum(weights * y[valid_for_weighting]) / wsum
+            ybar = np.sum(weights * y_valid) / wsum
 
     # Fallback: use an unweighted finite mean if weighted centering failed.
     if not np.isfinite(ybar):
@@ -257,8 +259,6 @@ def compute_stetson_k(y, yerr) -> float:
 
     # K is defined from normalized residuals that require finite positive
     # uncertainties, so only those points contribute.
-    y_valid = y[valid_for_weighting]
-    yerr_valid = yerr[valid_for_weighting]
     n = y_valid.size
     if n < 2:
         return float("nan")
