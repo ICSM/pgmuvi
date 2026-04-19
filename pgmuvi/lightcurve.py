@@ -834,6 +834,7 @@ class PeriodPeakResult:
     period_ratio_to_primary: float = 1.0
     is_candidate_lsp: bool = False
     notes: str = ""
+    coherence_proxy: float = float("nan")
 
     def as_dict(self) -> dict:
         return {
@@ -848,6 +849,7 @@ class PeriodPeakResult:
             "period_ratio_to_primary": self.period_ratio_to_primary,
             "is_candidate_lsp": self.is_candidate_lsp,
             "notes": self.notes,
+            "coherence_proxy": self.coherence_proxy,
         }
 
 
@@ -978,21 +980,34 @@ class PeriodSummaryResult:
         self.dominant_period = dominant_period
         self.dominant_frequency = dominant_frequency
         self.q_factor = q_factor
-        # Sort peaks once by descending significance so that peaks[0] is
-        # always the highest-significance peak regardless of insertion order.
-        # Sort key: (1) descending area_fraction (NaN sorts last),
-        #           (2) descending height (NaN sorts last),
-        #           (3) ascending original rank as tie-breaker.
+        # Sort peaks by physical ranking so that peaks[0] is the primary
+        # pulsation candidate, not the largest-area feature.
+        #
+        # Sort key (ascending tuple, NaN treated as worst):
+        #   1. descending prominence  — most distinct peak first
+        #   2. descending coherence_proxy — narrower/more coherent peak first
+        #   3. descending area_fraction  — larger integrated power next
+        #   4. descending height         — absolute amplitude tie-breaker
+        #   5. ascending original rank   — deterministic final tie-breaker
+        #
         # After sorting, ranks are reassigned sequentially (1, 2, 3 …) so
         # that peak.rank reliably reflects position in the sorted list.
         _raw_peaks = peaks if peaks is not None else []
 
-        def _significance_key(p):
+        def _physical_rank_key(p):
+            prom = (
+                p.prominence if np.isfinite(p.prominence) else -np.inf
+            )
+            coh = (
+                p.coherence_proxy
+                if np.isfinite(p.coherence_proxy)
+                else -np.inf
+            )
             af = p.area_fraction if np.isfinite(p.area_fraction) else -np.inf
             h = p.height if np.isfinite(p.height) else -np.inf
-            return (-af, -h, p.rank)
+            return (-prom, -coh, -af, -h, p.rank)
 
-        _sorted = sorted(_raw_peaks, key=_significance_key)
+        _sorted = sorted(_raw_peaks, key=_physical_rank_key)
         # Reassign ranks sequentially and update period_ratio_to_primary so
         # that the new rank-1 peak always has ratio=1.0 and the other peaks
         # are relative to it.
@@ -1009,6 +1024,64 @@ class PeriodSummaryResult:
             )
             for i, p in enumerate(_sorted)
         ]
+        # Track which peak in the sorted list carries the largest area_fraction.
+        # This is the "largest integrated-power feature", which may differ from
+        # the primary pulsation candidate (peaks[0]).
+        if self.peaks:
+            self.largest_area_peak_index = max(
+                range(len(self.peaks)),
+                key=lambda i: (
+                    self.peaks[i].area_fraction
+                    if np.isfinite(self.peaks[i].area_fraction)
+                    else -np.inf
+                ),
+            )
+            self.primary_peak_index = 0
+        else:
+            self.largest_area_peak_index = None
+            self.primary_peak_index = None
+        # Keep dominant_period / dominant_frequency in sync with the
+        # post-sort primary peak so that direct attribute access is also
+        # consistent (not just as_dict() which already prefers peaks[0]).
+        if self.peaks:
+            _primary = self.peaks[0]
+            self.dominant_period = _primary.period
+            self.dominant_frequency = _primary.frequency
+            # Compute q_factor from the post-sort primary peak's
+            # interval_frequency so that summary.q_factor is always correct
+            # at the object level, not just inside as_dict().
+            # Formula: q_factor = frequency / (f_hi - f_lo)
+            _f_lo, _f_hi = _primary.interval_frequency
+            _width = _f_hi - _f_lo
+            if (
+                np.isfinite(_width)
+                and _width > 0
+                and np.isfinite(_primary.frequency)
+            ):
+                self.q_factor = _primary.frequency / _width
+            else:
+                # Invalid interval (e.g. explicit-period backend with no RBF
+                # lengthscale): set to None so that self.q_factor always
+                # describes the post-sort primary peak, never a stale
+                # upstream value.
+                self.q_factor = None
+        else:
+            # No peaks — pass the constructor-provided value through
+            # unchanged, since there is no primary peak to override it.
+            self.q_factor = q_factor
+        # Validate internal consistency: dominant attributes must agree with
+        # peaks[0] whenever peaks exist.
+        if self.peaks:
+            assert self.dominant_period == self.peaks[0].period, (
+                f"PeriodSummaryResult internal error: dominant_period "
+                f"({self.dominant_period!r}) != peaks[0].period "
+                f"({self.peaks[0].period!r})"
+            )
+            assert self.dominant_frequency == self.peaks[0].frequency, (
+                f"PeriodSummaryResult internal error: dominant_frequency "
+                f"({self.dominant_frequency!r}) != peaks[0].frequency "
+                f"({self.peaks[0].frequency!r})"
+            )
         self.freq_grid = freq_grid
         self.psd = psd
         self.notes = notes
@@ -1023,19 +1096,25 @@ class PeriodSummaryResult:
         primary_area = (
             primary.area_fraction if primary is not None else float("nan")
         )
-        # Prefer primary-peak values for dominant_period/frequency so that
-        # all reported quantities (period, interval, area) consistently
-        # describe the same peak.  Fall back to the constructor-provided
-        # values if no peaks are present (non-periodic / explicit-period
-        # backends that set dominant_period directly).
-        dominant_period = (
-            primary.period if primary is not None else self.dominant_period
-        )
-        dominant_frequency = (
-            primary.frequency if primary is not None else self.dominant_frequency
-        )
         _sig_peaks = self.get_significant_peaks()
         significant_periods = np.array([p.period for p in _sig_peaks])
+
+        # Largest-area-fraction peak (may differ from the primary).
+        _la_peak = (
+            self.peaks[self.largest_area_peak_index]
+            if self.peaks
+            else None
+        )
+        _la_rank = _la_peak.rank if _la_peak is not None else None
+        _la_period = _la_peak.period if _la_peak is not None else float("nan")
+        _la_freq = (
+            _la_peak.frequency if _la_peak is not None else float("nan")
+        )
+        _la_frac = (
+            _la_peak.area_fraction
+            if _la_peak is not None
+            else float("nan")
+        )
 
         return {
             "component_diagnostics": (
@@ -1045,8 +1124,10 @@ class PeriodSummaryResult:
             ),
             "freq_grid": self.freq_grid,
             "psd": self.psd,
-            "dominant_frequency": dominant_frequency,
-            "dominant_period": dominant_period,
+            # self.dominant_frequency/dominant_period/q_factor are set in
+            # __init__() from peaks[0] and are already authoritative.
+            "dominant_frequency": self.dominant_frequency,
+            "dominant_period": self.dominant_period,
             # Backward-compatible interval keys (both alias the same value).
             "period_interval_fwhm_like": primary_interval,
             "period_interval": primary_interval,
@@ -1065,6 +1146,13 @@ class PeriodSummaryResult:
             "kernel_family": self.kernel_family,
             "time_kernel_family": self.time_kernel_family,
             "has_stochastic_background": self.has_stochastic_background,
+            # Physical-ranking indices
+            "primary_peak_rank": primary.rank if primary is not None else None,
+            "largest_area_peak_rank": _la_rank,
+            # Largest-area-fraction feature (diagnostic)
+            "largest_area_period": _la_period,
+            "largest_area_frequency": _la_freq,
+            "largest_area_fraction": _la_frac,
         }
 
     def __getitem__(self, key):
@@ -1280,8 +1368,10 @@ class PeriodSummaryResult:
         if include_peaks and self.peaks:
             primary = self.peaks[0]
 
-            # ---- Primary peak (full detail) ------------------------------
-            lines.append("PRIMARY PEAK  (literature-comparable output)")
+            # ---- Primary pulsation candidate (full detail) ---------------
+            lines.append(
+                "PRIMARY PEAK  (primary pulsation candidate)"
+            )
             lines.append("=" * 44)
             lines.append(
                 f"    Period                     : {_fmt(primary.period)}"
@@ -1296,7 +1386,12 @@ class PeriodSummaryResult:
                 f"    Prominence                 : {_fmt(primary.prominence)}"
             )
             lines.append(
-                f"    Area fraction              : {_fmt(primary.area_fraction)}"
+                f"    Coherence proxy            : "
+                f"{_fmt(primary.coherence_proxy)}"
+            )
+            lines.append(
+                f"    Area fraction              : "
+                f"{_fmt(primary.area_fraction)}"
             )
             lines.append(
                 f"    Interval (frequency)       : "
@@ -1315,6 +1410,46 @@ class PeriodSummaryResult:
                 )
             lines.append("")
 
+            # ---- Largest integrated-power feature (when different) -------
+            _la_idx = self.largest_area_peak_index
+            if _la_idx != 0 and _la_idx < len(self.peaks):
+                la_peak = self.peaks[_la_idx]
+                lines.append(
+                    "LARGEST INTEGRATED-POWER FEATURE  "
+                    "(diagnostic — differs from primary)"
+                )
+                lines.append("=" * 51)
+                lines.append(
+                    f"    Rank                       : {la_peak.rank}"
+                )
+                lines.append(
+                    f"    Period                     : "
+                    f"{_fmt(la_peak.period)}"
+                )
+                lines.append(
+                    f"    Frequency                  : "
+                    f"{_fmt(la_peak.frequency)}"
+                )
+                lines.append(
+                    f"    Area fraction              : "
+                    f"{_fmt(la_peak.area_fraction)}"
+                )
+                lines.append(
+                    f"    Prominence                 : "
+                    f"{_fmt(la_peak.prominence)}"
+                )
+                lines.append(
+                    f"    Coherence proxy            : "
+                    f"{_fmt(la_peak.coherence_proxy)}"
+                )
+                lines.append("")
+            elif self.peaks:
+                # Primary peak is also the largest-area feature
+                lines.append(
+                    "  (Primary peak also has the largest area fraction.)"
+                )
+                lines.append("")
+
             # ---- Additional peaks (compact) ------------------------------
             extra_peaks = self.peaks[1:]
             if extra_peaks:
@@ -1327,11 +1462,18 @@ class PeriodSummaryResult:
                     lines.append("=" * 16)
                     for pk in shown:
                         _int_str = _fmt_interval(pk.interval_period)
+                        _la_tag = (
+                            " [largest-area]"
+                            if pk.rank - 1 == _la_idx
+                            else ""
+                        )
                         lines.append(
                             f"  #{pk.rank}  period={_fmt(pk.period)}"
                             f"  freq={_fmt(pk.frequency)}"
                             f"  area={_fmt(pk.area_fraction)}"
+                            f"  prom={_fmt(pk.prominence)}"
                             f"  interval={_int_str}"
+                            f"{_la_tag}"
                         )
                     if n_hidden > 0:
                         lines.append(
@@ -7667,6 +7809,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             p_lo = 1.0 / f_hi if f_hi > 0 else float("nan")
             p_hi = 1.0 / f_lo if f_lo > 0 else float("nan")
             ratio = p_pk / dominant_period if dominant_period > 0 else 1.0
+            # Coherence proxy: ratio of peak frequency to frequency-interval
+            # width.  A narrow, well-localized peak yields a large value; a
+            # broad diffuse structure yields a small value.  Non-finite or
+            # non-positive widths produce NaN (treated as worst in ranking).
+            _width = f_hi - f_lo
+            if np.isfinite(_width) and _width > 0:
+                _coherence_proxy = f_pk / _width
+            else:
+                _coherence_proxy = float("nan")
             peak_objects.append(
                 PeriodPeakResult(
                     rank=rank_idx + 1,
@@ -7680,6 +7831,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     period_ratio_to_primary=ratio,
                     is_candidate_lsp=False,
                     notes="",
+                    coherence_proxy=_coherence_proxy,
                 )
             )
 
@@ -7701,7 +7853,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         _note_parts = [
             "Interval is based on the integrated PSD mass within the "
-            "dominant peak basin (peak-centered shortest-mass interval). "
+            "primary peak basin (peak-centered shortest-mass interval). "
             "The interval is guaranteed to contain the peak frequency. "
             "Integration is performed in log-frequency space to avoid "
             "high-frequency bias on a log-spaced grid. "
@@ -8173,11 +8325,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ):
                 f_lo_int = 1.0 / p_hi
                 f_hi_int = 1.0 / p_lo
-                if (
-                    f_lo_int < f_hi_int
-                    and f_lo_int >= f_win_lo
-                    and f_hi_int <= f_win_hi
-                ):
+                # Always draw the span when the interval is valid; matplotlib
+                # clips it to the axes automatically, so there is no need to
+                # check whether it fits inside the zoom window.
+                if f_lo_int < f_hi_int:
                     panel_ax.axvspan(
                         f_lo_int, f_hi_int,
                         alpha=0.25, color=col,
