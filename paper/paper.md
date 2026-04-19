@@ -54,7 +54,7 @@ The volume of time-series data is increasing dramatically as new surveys come on
 Historically, astronomers have worked with Fourier-based techniques such as the Lomb-Scargle periodogram or information-theoretic approaches; however, in recent years Bayesian and data-driven approaches such as Gaussian Process Regression (GPR) have gained traction.
 However, the computational complexity and steep learning curve of GPR has limited its adoption.
 `pgmuvi` makes GPR of multi-band timeseries accessible to astronomers by building on cutting-edge open-source machine-learning libraries, and hence `pgmuvi` retains the speed and flexibility of GPR while being easy to use.
-It provides easy access to GPU acceleration and Bayesian inference of the hyperparameters (e.g. the periods), and is able to scale to large datasets.
+It provides easy access to GPU acceleration and scalable Gaussian Process modelling for multi-wavelength time series. While the current implementation focuses on efficient maximum a posteriori estimation, future versions will extend this framework to full Bayesian inference of the hyperparameters (e.g. the periods), enabling full posterior characterization of the variability.
 
 
 # Statement of need
@@ -128,9 +128,9 @@ For small datasets, the exact GPs can be used to scale to datasets of up to $\si
 Future work will include implementing approximations for even larger datasets: `pgmuvi` can in principle exploit the Sparse Variational GP (SVGP) or Variational Nearest Neighbour (VNN) approximations [@hensman2013gaussian; @wu2022variational] to scale to datasets of arbitrary size.
 `pgmuvi` can employ also GPU computing for both exact and variational GPs.
 
-For exact GPs and SKI, `pgmuvi` performs maximum a posteriori (MAP) estimation of the hyperparameters, or full Bayesian inference.
-MAP estimation can exploit any PyTorch optimizer, but by default it uses ADAM [@kingma2014adam].
-Bayesian inference uses the `pyro` [@bingham2018pyro] implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
+# For exact GPs and SKI, `pgmuvi` performs maximum a posteriori (MAP) estimation of the hyperparameters, or full Bayesian inference.
+# MAP estimation can exploit any PyTorch optimizer, but by default it uses ADAM [@kingma2014adam].
+# Bayesian inference uses the `pyro` [@bingham2018pyro] implementation of the No-U-Turn Sampler (NUTS) [@hoffman2014no], which is a Hamiltonian Monte Carlo (HMC) sampler.
 
 Finally, by allowing arbitrary GPyTorch likelihoods to be used, `pgmuvi` can be extended to a wide range of problems.
 For example, an instance of `gpytorch.likelihoods.StudentTLikelihood` can be dropped in to turn `pgmuvi` into a T-Process regressor, or missing data can be handled using `gpytorch.likelihoods.GaussianLikelihoodWithMissingObs`.
@@ -140,10 +140,11 @@ To summarise, the key features of `pgmuvi` are:
 - Highly flexible kernel, able to model a wide range of multiwavelength signals
 - Able to exploit multiple strategies to scale to large datasets
 - GPU acceleration for both exact and variational GPs
-- Fully Bayesian inference using HMC
+# - Fully Bayesian inference using HMC
 - Initialisation of kernel hyperparameters using Lomb-Scargle periodogram
 - Automated creation of diagnostic and summary plots
-- Automated reporting of kernel hyperparameters and their uncertainties, and summary of MCMC chains.
+$ - Automated reporting of kernel hyperparameters and their uncertainties, and summary of MCMC chains.
+- Automated reporting and visualization of fitted kernel hyperparameters
 
 
 
