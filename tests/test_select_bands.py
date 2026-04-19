@@ -196,6 +196,28 @@ class TestSelectBandsErrors(unittest.TestCase):
         with self.assertRaises(ValueError):
             lc.select_bands(["V"])
 
+    def test_selects_full_1d_lightcurve_with_single_band_label(self):
+        """A 1-D lightcurve with band=['V'] is returned in full for ['V']."""
+        t = torch.linspace(0, 10, 20)
+        y = torch.sin(t)
+        yerr = torch.full_like(y, 0.1)
+        lc = Lightcurve(t, y, yerr=yerr, band=["V"])
+
+        selected = lc.select_bands(["V"])
+
+        self.assertTrue(torch.equal(selected.xdata, lc.xdata))
+        self.assertTrue(torch.equal(selected.ydata, lc.ydata))
+        self.assertTrue(torch.equal(selected.yerr, lc.yerr))
+        self.assertEqual(list(selected.band), ["V"])
+
+    def test_raises_for_nonmatching_label_on_1d_single_band_lightcurve(self):
+        """A non-matching label on a 1-D single-band lightcurve raises."""
+        t = torch.linspace(0, 10, 20)
+        y = torch.sin(t)
+        lc = Lightcurve(t, y, band=["V"])
+        with self.assertRaises(ValueError):
+            lc.select_bands(["R"])
+
     def test_raises_for_nonexistent_label(self):
         """Requesting a label that is not in band raises ValueError."""
         lc = _make_2d()

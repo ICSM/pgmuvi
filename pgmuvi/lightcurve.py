@@ -2357,6 +2357,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         xdata_raw = self._xdata_raw
         n = xdata_raw.shape[0]
+
+        # 1-D lightcurves store a single band label (len(self.band) == 1)
+        # that applies to all observations.  Build the mask differently to
+        # avoid a length-1 vs length-N boolean-index mismatch.
+        if len(self.band) == 1:
+            single_label = str(self.band[0])
+            if single_label not in str_labels:
+                raise ValueError(
+                    f"None of the requested band labels {str_labels!r} were "
+                    "found in this Lightcurve's 'band' attribute."
+                )
+            # The whole lightcurve belongs to this band — return it unchanged.
+            return Lightcurve(
+                xdata_raw,
+                self._ydata_raw,
+                yerr=(
+                    self._yerr_raw
+                    if hasattr(self, "_yerr_raw")
+                    else None
+                ),
+                xtransform=self.xtransform,
+                ytransform=self.ytransform,
+                name=self.name,
+                band=self.band,
+            )
+
         band_str = self.band.astype(str)
         mask = np.zeros(n, dtype=bool)
         for label in str_labels:
@@ -2368,8 +2394,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "found in this Lightcurve's 'band' attribute."
             )
 
-        mask_tensor = torch.as_tensor(mask, dtype=torch.bool,
-                                      device=xdata_raw.device)
+        mask_tensor = torch.as_tensor(
+            mask, dtype=torch.bool, device=xdata_raw.device
+        )
         new_x = xdata_raw[mask_tensor]
         new_y = self._ydata_raw[mask_tensor]
         new_yerr = (
