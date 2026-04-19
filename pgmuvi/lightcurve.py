@@ -8347,6 +8347,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             if log_freq:
                 panel_ax.set_xscale("log")
+            panel_ax.set_yscale("log")
             panel_ax.set_xlabel("Frequency")
             panel_ax.set_ylabel("PSD")
             panel_ax.legend(fontsize=7, loc="upper left")
@@ -8426,6 +8427,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             )
                     if log_freq:
                         ax_full.set_xscale("log")
+                    ax_full.set_yscale("log")
                     ax_full.set_ylabel("PSD")
                     ax_full.set_title(
                         f"Period summary - full PSD ({method})"
@@ -8480,6 +8482,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             )
                 if log_freq:
                     ax.set_xscale("log")
+                ax.set_yscale("log")
                 ax.set_ylabel("PSD")
                 ax.set_title(f"Period summary - full PSD ({method})")
                 ax.legend(fontsize=7, loc="upper left", ncol=2)
@@ -8608,6 +8611,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if log_freq:
             ax.set_xscale("log")
+        if has_psd:
+            ax.set_yscale("log")
         ax.set_xlabel("Frequency")
         ax.set_ylabel("PSD" if has_psd else "")
         ax.set_title(f"Period summary ({method})")

@@ -1342,6 +1342,20 @@ class TestSinglePeakPlotCentering(unittest.TestCase):
         self.assertEqual(len(fig.axes), 2)
         plt.close(fig)
 
+    def test_single_peak_show_full_psd_panels_use_log_yscale(self):
+        """Single-peak and optional full-PSD panels use log y-scale."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_single_peak_lc()
+        summary = lc.get_period_summary(n_peaks=1)
+        fig, ax = lc.plot_period_summary(
+            summary=summary, show=False, show_full_psd=True
+        )
+        self.assertEqual(ax.get_yscale(), "log")
+        self.assertEqual(fig.axes[1].get_yscale(), "log")
+        plt.close(fig)
+
     def test_multi_peak_still_has_full_psd_top_panel(self):
         """Multi-peak summary still uses full PSD as top panel."""
         import matplotlib
@@ -1358,6 +1372,20 @@ class TestSinglePeakPlotCentering(unittest.TestCase):
                            msg="Multi-peak should have >1 panel")
         title = ax.get_title().lower()
         self.assertIn("full psd", title)
+        plt.close(fig)
+
+    def test_multi_peak_all_panels_use_log_yscale(self):
+        """All PSD panels in multi-peak mode use log y-scale."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_two_peak_lc()
+        summary = lc.get_period_summary()
+        if summary.n_peaks_analyzed < 2:
+            self.skipTest("Not enough peaks for multi-peak test")
+        fig, _ = lc.plot_period_summary(summary=summary, show=False)
+        for panel_ax in fig.axes:
+            self.assertEqual(panel_ax.get_yscale(), "log")
         plt.close(fig)
 
 
