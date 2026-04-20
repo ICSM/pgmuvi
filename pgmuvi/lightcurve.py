@@ -4776,7 +4776,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise ValueError(
                 "No bands passed variability tests. "
                 "Consider relaxing criteria (alpha, fvar_min); "
-                "stetson_k_min is diagnostic"
+                "stetson_k_min is diagnostic."
             )
 
         keep_wl = results["summary"]["variable_wavelengths"]
