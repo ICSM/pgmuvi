@@ -586,7 +586,7 @@ class TestMultibandFAP(unittest.TestCase):
         _orig_fap = mls.MultibandLSWithSignificance.false_alarm_probability
         called_methods = []
 
-        def _recording_fap(self_, power_values, method="analytical", **kw):
+        def _recording_fap(self_, power_values, method="phase_scramble", **kw):
             called_methods.append(method)
             return _orig_fap(self_, power_values, method=method, **kw)
 
