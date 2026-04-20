@@ -2454,22 +2454,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "but this Lightcurve has band=None."
             )
 
+        xdata_raw = self._xdata_raw
         band_arr = self.band.astype(str)
         requested = {str(b) for b in bands}
-        mask = ~np.isin(band_arr, list(requested))
 
-        if not mask.any():
+        if len(band_arr) == len(xdata_raw):
+            mask = ~np.isin(band_arr, list(requested))
+            if not mask.any():
+                raise ValueError(
+                    "All rows were removed by drop_bands; no data remains."
+                )
+            new_band = self.band[mask]
+        elif len(band_arr) == 1:
+            if band_arr[0] in requested:
+                raise ValueError(
+                    "All rows were removed by drop_bands; no data remains."
+                )
+            mask = np.ones(len(xdata_raw), dtype=bool)
+            new_band = self.band.copy()
+        else:
             raise ValueError(
-                "All rows were removed by drop_bands; no data remains."
+                "drop_bands requires 'band' to have either one label "
+                "for the whole lightcurve or one label per observation row."
             )
 
-        xdata_raw = self._xdata_raw
-        new_x = xdata_raw[mask]
-        new_y = self._ydata_raw[mask]
-        new_yerr = (
-            self._yerr_raw[mask] if hasattr(self, "_yerr_raw") else None
+        tensor_mask = torch.as_tensor(
+            mask, dtype=torch.bool, device=xdata_raw.device
         )
-        new_band = self.band[mask]
+        new_x = xdata_raw[tensor_mask]
+        new_y = self._ydata_raw[tensor_mask]
+        new_yerr = (
+            self._yerr_raw[tensor_mask] if hasattr(self, "_yerr_raw") else None
+        )
 
         return Lightcurve(
             new_x,
