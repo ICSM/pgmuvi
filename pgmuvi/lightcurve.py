@@ -1842,6 +1842,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if yerr is not None:
             yerr = self._ensure_tensor(yerr)
 
+        _valid_rows_mask = None
+        if ydata.dim() == 1 and band is not None and xdata.dim() > 1:
+            _valid_rows_mask = torch.isfinite(ydata)
+            _valid_rows_mask &= torch.isfinite(xdata).all(dim=1)
+            if yerr is not None:
+                _valid_rows_mask &= torch.isfinite(yerr)
+
         # Drop rows that contain NaN or Inf in any of the data arrays so that
         # all subsequent operations (transforms, GP training, LS) see only
         # finite values.  Only applied when ydata is 1-D (the standard case
@@ -1870,6 +1877,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"'band' must be a 1-D array-like of strings (shape (n,)); "
                     f"got shape {band_arr.shape}."
                 )
+            if (
+                _valid_rows_mask is not None
+                # Keep this as a defensive guard: if caller supplied a
+                # mis-sized band array, length validation below should still
+                # raise the existing ValueError with the expected message.
+                and len(band_arr) == len(_valid_rows_mask)
+            ):
+                band_arr = band_arr[_valid_rows_mask.detach().cpu().numpy()]
             # Determine the expected length: one label per observation row for
             # 2-D data, or 1 for 1-D data (single-band lightcurve).
             if self.ndim > 1:

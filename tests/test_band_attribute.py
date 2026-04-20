@@ -108,6 +108,14 @@ class TestBandAttribute2D(unittest.TestCase):
         with self.assertRaises(ValueError):
             Lightcurve(x, y, yerr=yerr, band=[["V", "R"]])
 
+    def test_nonfinite_rows_are_dropped_from_band(self):
+        x, y, yerr = _make_2d()
+        x[3, 0] = torch.nan
+        y[12] = torch.inf
+        lc = Lightcurve(x, y, yerr=yerr, band=_BAND_2D_VR)
+        expected = np.delete(_BAND_2D_VR, [3, 12])
+        np.testing.assert_array_equal(lc.band, expected)
+
 
 class TestBandFromCsvNumericWavelength(unittest.TestCase):
     """from_csv with a numeric 'wavelength' column: 2-D xdata, band=None."""
