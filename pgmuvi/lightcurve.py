@@ -557,9 +557,12 @@ class InputHelpers:
             the entries in :attr:`_WAVELENGTH_ID_COLUMN_NAMES`, those labels
             are stored automatically in :attr:`Lightcurve.band` when
             ``band`` is not supplied explicitly in ``**kwargs``.  For 1-D
-            lightcurves this stores a single-element array containing the
-            first row label from that column (matching the 1-D constructor
-            contract). Numeric wavelength columns are used directly and
+            lightcurves, auto-population occurs only when the band-ID column
+            contains exactly one distinct non-empty label (matching the 1-D
+            constructor contract, which expects a single band label). If
+            multiple distinct labels are present for 1-D input, ``band`` is
+            left unset and a warning is emitted. Numeric wavelength columns are
+            used directly and
             :attr:`Lightcurve.band` is left as ``None`` unless the caller
             provides ``band=`` explicitly in ``**kwargs``.
 
@@ -795,7 +798,24 @@ class InputHelpers:
                     if x.dim() == 2:
                         kwargs["band"] = band_vals
                     elif band_vals.size > 0:
-                        kwargs["band"] = np.array([band_vals[0]], dtype=np.str_)
+                        stripped_band_vals = np.char.strip(band_vals)
+                        unique_band_labels = [
+                            lbl
+                            for lbl in dict.fromkeys(stripped_band_vals.tolist())
+                            if lbl
+                        ]
+                        if len(unique_band_labels) == 1:
+                            kwargs["band"] = np.array(
+                                [unique_band_labels[0]], dtype=np.str_
+                            )
+                        elif len(unique_band_labels) > 1:
+                            _msg = (
+                                f"Column '{band_id_col}' contains multiple "
+                                "distinct non-empty labels for 1-D input; "
+                                "leaving 'band' unset. Provide wavelcol or "
+                                "2-D input for mixed-band data."
+                            )
+                            warnings.warn(_msg, UserWarning, stacklevel=2)
 
         y = _to_float_tensor(clean[ycol])
         yerr = _to_float_tensor(clean[yerrcol]) if yerrcol else None
