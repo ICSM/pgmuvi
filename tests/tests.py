@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import unittest
 import warnings
@@ -950,6 +951,112 @@ class TestFromCSV(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             Lightcurve.from_csv(path)
+
+
+class TestToCSV(unittest.TestCase):
+    """Tests for the Lightcurve.to_csv method."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_to_csv_roundtrip_with_optional_columns(self):
+        """2-D lightcurve with yerr+band should round-trip through CSV."""
+        time = torch.as_tensor([1.0, 2.0, 1.0, 2.0], dtype=torch.float32)
+        wavelength = torch.as_tensor([550.0, 550.0, 650.0, 650.0], dtype=torch.float32)
+        x = torch.stack([time, wavelength], dim=1)
+        y = torch.as_tensor([10.0, 20.0, 30.0, 40.0], dtype=torch.float32)
+        yerr = torch.as_tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float32)
+        band = np.array(["V", "V", "R", "R"])
+        lc = Lightcurve(x, y, yerr=yerr, band=band)
+
+        path = os.path.join(self.tmpdir, "with_optional.csv")
+        self.assertIsNone(lc.to_csv(path))
+
+        with open(path) as fh:
+            header = fh.readline().strip()
+        self.assertEqual(header, "time,wavelength,flux,flux_error,band")
+
+        lc2 = Lightcurve.from_csv(path)
+        self.assertEqual(lc2.ndim, 2)
+        self.assertTrue(torch.allclose(lc2.xdata, x))
+        self.assertTrue(torch.allclose(lc2.ydata, y))
+        self.assertTrue(torch.allclose(lc2.yerr, yerr))
+        np.testing.assert_array_equal(lc2.band, band)
+
+    def test_to_csv_roundtrip_without_optional_columns(self):
+        """1-D lightcurve without yerr/band should omit optional columns."""
+        x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        y = torch.as_tensor([10.0, 20.0, 30.0], dtype=torch.float32)
+        lc = Lightcurve(x, y)
+
+        path = os.path.join(self.tmpdir, "minimal.csv")
+        lc.to_csv(path)
+
+        with open(path) as fh:
+            header = fh.readline().strip()
+        self.assertEqual(header, "time,wavelength,flux")
+
+        lc2 = Lightcurve.from_csv(path)
+        self.assertEqual(lc2.ndim, 1)
+        self.assertTrue(torch.allclose(lc2.xdata, x))
+        self.assertTrue(torch.allclose(lc2.ydata, y))
+        self.assertFalse(hasattr(lc2, "_yerr_raw"))
+
+    def test_to_csv_default_filename(self):
+        """Default output name should be lightcurve.csv."""
+        x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        y = torch.as_tensor([4.0, 5.0, 6.0], dtype=torch.float32)
+        lc = Lightcurve(x, y)
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(self.tmpdir)
+            self.assertIsNone(lc.to_csv())
+        finally:
+            os.chdir(old_cwd)
+
+        expected = os.path.join(self.tmpdir, "lightcurve.csv")
+        self.assertTrue(os.path.exists(expected))
+
+    def test_to_csv_raises_for_multidimensional_y(self):
+        """CSV export requires 1-D ydata."""
+        x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        y = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        lc = Lightcurve(x, y)
+        lc.register_buffer(
+            "_ydata_raw",
+            torch.as_tensor([[1.0, 2.0, 3.0]], dtype=torch.float32),
+        )
+        path = os.path.join(self.tmpdir, "bad_y_shape.csv")
+        with self.assertRaises(ValueError):
+            lc.to_csv(path)
+        self.assertFalse(os.path.exists(path))
+
+    def test_to_csv_raises_for_mismatched_y_length(self):
+        """CSV export requires matching x/y lengths."""
+        x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        y = torch.as_tensor([4.0, 5.0, 6.0], dtype=torch.float32)
+        lc = Lightcurve(x, y)
+        lc.register_buffer("_ydata_raw", torch.as_tensor([4.0, 5.0], dtype=torch.float32))
+        path = os.path.join(self.tmpdir, "bad_y_len.csv")
+        with self.assertRaises(ValueError):
+            lc.to_csv(path)
+        self.assertFalse(os.path.exists(path))
+
+    def test_to_csv_raises_for_mismatched_yerr_length(self):
+        """CSV export requires matching x/yerr lengths."""
+        x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        y = torch.as_tensor([4.0, 5.0, 6.0], dtype=torch.float32)
+        yerr = torch.as_tensor([0.1, 0.2, 0.3], dtype=torch.float32)
+        lc = Lightcurve(x, y, yerr=yerr)
+        lc.register_buffer("_yerr_raw", torch.as_tensor([0.1, 0.2], dtype=torch.float32))
+        path = os.path.join(self.tmpdir, "bad_yerr_len.csv")
+        with self.assertRaises(ValueError):
+            lc.to_csv(path)
+        self.assertFalse(os.path.exists(path))
 
 
 class TestFromTable(unittest.TestCase):
