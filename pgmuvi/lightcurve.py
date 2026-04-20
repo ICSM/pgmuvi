@@ -9946,6 +9946,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "To merge multiple inputs use Lightcurve.concat()."
             )
 
+        if on_conflict not in ("raise", "skip"):
+            raise ValueError(
+                f"on_conflict must be 'raise' or 'skip'; got {on_conflict!r}."
+            )
+
         if self.ndim < 2:
             raise ValueError(
                 "merge() requires 'self' to be a 2-D lightcurve "
@@ -10010,7 +10015,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 dtype=other._xdata_raw.dtype,
                 device=other._xdata_raw.device,
             )
-            other_x = torch.stack([other._xdata_raw, wl_col], dim=1)
+            other_x = torch.stack([other._xdata_raw.reshape(-1), wl_col], dim=1)
             other_y = other._ydata_raw
             other_yerr = (
                 other._yerr_raw if hasattr(other, "_yerr_raw") else None
@@ -10145,7 +10150,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         new_band = np.concatenate(keep_band, axis=0)
 
-        return Lightcurve(
+        return type(self)(
             new_x,
             new_y,
             yerr=new_yerr,
@@ -10211,6 +10216,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "concat() requires at least one item; got an empty iterable."
             )
 
+        if on_conflict not in ("raise", "skip"):
+            raise ValueError(
+                f"on_conflict must be 'raise' or 'skip'; got {on_conflict!r}."
+            )
         # ------------------------------------------------------------------
         # Resolve all inputs to Lightcurve objects
         # ------------------------------------------------------------------
@@ -10248,9 +10257,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # Recover scalar wavelength from lc.wavelength / .wave / .lambda_
                 wl_scalar = cls._get_scalar_wavelength_for_1d(lc)
                 # Build 2D xdata: (N, 2) with col0=time, col1=wavelength
-                t_col = lc._xdata_raw  # shape (N,)
+                t_col = lc._xdata_raw.reshape(-1)
                 wl_col = torch.full(
-                    (t_col.shape[0],), wl_scalar, dtype=t_col.dtype
+                    (t_col.shape[0],),
+                    wl_scalar,
+                    dtype=t_col.dtype,
+                    device=t_col.device,
                 )
                 x_2d = torch.stack([t_col, wl_col], dim=1)
                 y = lc._ydata_raw
