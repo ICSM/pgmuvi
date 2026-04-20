@@ -16,8 +16,6 @@ User Guide
 .. toctree::
    :maxdepth: 2
 
-   # notebooks/pgmuvi_tutorial
-   # notebooks/pgmuvi_tutorial_mcmc
    notebooks/PGMUVI_Lightcurve
    notebooks/PGMUVI_Lomb_Scargle
    notebooks/PGMUVI_Gaussian_Process_fitting
