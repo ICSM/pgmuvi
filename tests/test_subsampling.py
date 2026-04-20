@@ -198,7 +198,7 @@ class TestSubsampleExportedFromPreprocess(unittest.TestCase):
 
 
 class TestFitLSSubsampling1D(unittest.TestCase):
-    """fit_LS should auto-subsample oversized 1-D lightcurves."""
+    """Lightcurve with max_samples set at __init__ should produce correct fit_LS."""
 
     def setUp(self):
         lc = make_simple_sinusoid_1d(
@@ -208,10 +208,14 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         self.lc = lc
 
     def test_no_warning_below_limit(self):
-        """No subsampling warning when N <= max_samples."""
+        """No subsampling warning when N <= max_samples at init."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            self.lc.fit_LS(max_samples=5000)
+            Lightcurve(
+                xdata=self.lc.xdata,
+                ydata=self.lc.ydata,
+                max_samples=5000,
+            )
         sub_warns = [
             w for w in caught
             if issubclass(w.category, UserWarning)
@@ -220,19 +224,18 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         self.assertEqual(len(sub_warns), 0)
 
     def test_warning_when_above_default_limit(self):
-        """A UserWarning should be issued when N exceeds the default max_samples."""
-        # Build a lightcurve large enough to trigger the default limit (3000)
+        """A UserWarning should be issued when N exceeds max_samples at init."""
         rng = np.random.default_rng(42)
         n = 4000
         t = np.sort(rng.uniform(0, 100, n))
         y = np.sin(2 * np.pi * t / 5)
-        lc_large = Lightcurve(
-            xdata=torch.tensor(t, dtype=torch.float32),
-            ydata=torch.tensor(y, dtype=torch.float32),
-        )
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            lc_large.fit_LS()  # default max_samples=3000
+            Lightcurve(
+                xdata=torch.tensor(t, dtype=torch.float32),
+                ydata=torch.tensor(y, dtype=torch.float32),
+                max_samples=3000,
+            )
         sub_warns = [
             w for w in caught
             if issubclass(w.category, UserWarning)
@@ -244,7 +247,11 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         """A UserWarning about subsampling should be issued when N > max_samples."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            self.lc.fit_LS(max_samples=50)
+            Lightcurve(
+                xdata=self.lc.xdata,
+                ydata=self.lc.ydata,
+                max_samples=50,
+            )
         sub_warns = [
             w for w in caught
             if issubclass(w.category, UserWarning)
@@ -254,10 +261,14 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         self.assertIn("max_samples", str(sub_warns[0].message))
 
     def test_no_warning_when_disabled(self):
-        """max_samples=None should disable subsampling entirely."""
+        """max_samples=None (default) should not trigger a subsampling warning."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            self.lc.fit_LS(max_samples=None)
+            Lightcurve(
+                xdata=self.lc.xdata,
+                ydata=self.lc.ydata,
+                max_samples=None,
+            )
         sub_warns = [
             w for w in caught
             if issubclass(w.category, UserWarning)
@@ -269,8 +280,20 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         """Same subsample_seed should produce identical periodogram peaks."""
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            freq1, mask1 = self.lc.fit_LS(max_samples=50, subsample_seed=7)
-            freq2, mask2 = self.lc.fit_LS(max_samples=50, subsample_seed=7)
+            lc1 = Lightcurve(
+                xdata=self.lc.xdata,
+                ydata=self.lc.ydata,
+                max_samples=50,
+                subsample_seed=7,
+            )
+            lc2 = Lightcurve(
+                xdata=self.lc.xdata,
+                ydata=self.lc.ydata,
+                max_samples=50,
+                subsample_seed=7,
+            )
+            freq1, mask1 = lc1.fit_LS()
+            freq2, mask2 = lc2.fit_LS()
         self.assertTrue(torch.allclose(freq1, freq2))
         self.assertTrue(torch.equal(mask1, mask2))
 
@@ -278,36 +301,51 @@ class TestFitLSSubsampling1D(unittest.TestCase):
         """Subsampling should not change the shape/type of fit_LS return values."""
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            freq_sub, mask_sub = self.lc.fit_LS(max_samples=50, subsample_seed=0)
-        freq_full, mask_full = self.lc.fit_LS(max_samples=None)
+            lc_sub = Lightcurve(
+                xdata=self.lc.xdata,
+                ydata=self.lc.ydata,
+                max_samples=50,
+                subsample_seed=0,
+            )
+            freq_sub, mask_sub = lc_sub.fit_LS()
+        freq_full, mask_full = self.lc.fit_LS()
         # Both should return 1D tensors
         self.assertEqual(freq_sub.ndim, 1)
         self.assertEqual(mask_sub.ndim, 1)
         self.assertEqual(freq_full.ndim, 1)
         self.assertEqual(mask_full.ndim, 1)
 
-    def test_original_data_unaffected(self):
-        """Lightcurve data must be unchanged after fit_LS with subsampling."""
-        orig_n = self.lc.xdata.shape[0]
+    def test_data_permanently_subsampled(self):
+        """Lightcurve data is permanently subsampled when max_samples is set."""
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            self.lc.fit_LS(max_samples=50, subsample_seed=0)
-        self.assertEqual(self.lc.xdata.shape[0], orig_n)
-        self.assertEqual(self.lc.ydata.shape[0], orig_n)
+            lc_sub = Lightcurve(
+                xdata=self.lc.xdata,
+                ydata=self.lc.ydata,
+                max_samples=50,
+                subsample_seed=0,
+            )
+        self.assertLessEqual(lc_sub.xdata.shape[0], 50)
+        self.assertLessEqual(lc_sub.ydata.shape[0], 50)
 
     def test_freq_only_with_subsampling(self):
-        """freq_only=True should work together with max_samples."""
+        """freq_only=True should work with a subsampled lightcurve."""
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            freq, power = self.lc.fit_LS(freq_only=True, max_samples=50,
-                                          subsample_seed=0)
+            lc_sub = Lightcurve(
+                xdata=self.lc.xdata,
+                ydata=self.lc.ydata,
+                max_samples=50,
+                subsample_seed=0,
+            )
+            freq, power = lc_sub.fit_LS(freq_only=True)
         self.assertEqual(freq.ndim, 1)
         self.assertEqual(power.ndim, 1)
         self.assertEqual(freq.shape, power.shape)
 
 
 class TestFitLSSubsampling2D(unittest.TestCase):
-    """fit_LS should auto-subsample oversized multiband lightcurves."""
+    """Multiband Lightcurve with max_samples set at __init__ should work."""
 
     def setUp(self):
         lc_2d = make_chromatic_sinusoid_2d(
@@ -325,7 +363,12 @@ class TestFitLSSubsampling2D(unittest.TestCase):
         """A UserWarning should be issued when the 2D lightcurve is too large."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            self.lc_2d.fit_LS(max_samples=50)
+            # max_samples triggers the advisory total-size warning for 2D.
+            Lightcurve(
+                xdata=self.lc_2d.xdata,
+                ydata=self.lc_2d.ydata,
+                max_samples=50,
+            )
         sub_warns = [
             w for w in caught
             if issubclass(w.category, UserWarning)
@@ -337,17 +380,95 @@ class TestFitLSSubsampling2D(unittest.TestCase):
         """Same seed should produce identical results for 2D lightcurves."""
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            freq1, mask1 = self.lc_2d.fit_LS(max_samples=50, subsample_seed=3)
-            freq2, mask2 = self.lc_2d.fit_LS(max_samples=50, subsample_seed=3)
+            lc1 = Lightcurve(
+                xdata=self.lc_2d.xdata,
+                ydata=self.lc_2d.ydata,
+                max_samples_per_band=50,
+                subsample_seed=3,
+            )
+            lc2 = Lightcurve(
+                xdata=self.lc_2d.xdata,
+                ydata=self.lc_2d.ydata,
+                max_samples_per_band=50,
+                subsample_seed=3,
+            )
+            freq1, mask1 = lc1.fit_LS()
+            freq2, mask2 = lc2.fit_LS()
         self.assertTrue(torch.allclose(freq1, freq2))
 
-    def test_original_data_unaffected(self):
-        """Lightcurve data must be unchanged after fit_LS with subsampling."""
+    def test_data_permanently_subsampled(self):
+        """Each band is subsampled independently to at most max_samples_per_band."""
         orig_n = self.lc_2d.xdata.shape[0]
+        max_samples_per_band = 50
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            self.lc_2d.fit_LS(max_samples=50, subsample_seed=0)
-        self.assertEqual(self.lc_2d.xdata.shape[0], orig_n)
+            lc_sub = Lightcurve(
+                xdata=self.lc_2d.xdata,
+                ydata=self.lc_2d.ydata,
+                max_samples_per_band=max_samples_per_band,
+                subsample_seed=0,
+            )
+        # Overall size is reduced
+        self.assertLess(lc_sub.xdata.shape[0], orig_n)
+        # Each band should have at most max_samples_per_band points
+        unique_bands = torch.unique(lc_sub.xdata[:, 1])
+        for band in unique_bands:
+            band_count = (lc_sub.xdata[:, 1] == band).sum().item()
+            self.assertLessEqual(band_count, max_samples_per_band)
+
+    def test_band_below_limit_not_reduced(self):
+        """A band whose count is already <= max_samples_per_band is preserved."""
+        # Create a 2D lightcurve with two bands of very different sizes:
+        # band A has 30 points (below limit), band B has 120 points (above).
+        lc_big = make_chromatic_sinusoid_2d(
+            n_per_band=120,
+            period=2.0,
+            wavelengths=[0.5, 1.5],
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            seed=99,
+        )
+        lc_small = make_chromatic_sinusoid_2d(
+            n_per_band=30,
+            period=2.0,
+            wavelengths=[2.5],
+            amplitude_slope=0.0,
+            noise_level=0.1,
+            t_span=10.0,
+            seed=99,
+        )
+        # Combine: band 0.5 and 1.5 have 120 pts; band 2.5 has 30 pts.
+        xdata_combined = torch.cat(
+            [lc_big.xdata, lc_small.xdata], dim=0
+        )
+        ydata_combined = torch.cat(
+            [lc_big.ydata, lc_small.ydata], dim=0
+        )
+        max_samples_per_band = 50
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            lc_sub = Lightcurve(
+                xdata=xdata_combined,
+                ydata=ydata_combined,
+                max_samples_per_band=max_samples_per_band,
+                subsample_seed=0,
+            )
+        # Band 2.5 had 30 points (< 50), so it must remain at 30.
+        band_val = torch.tensor(2.5, dtype=lc_sub.xdata.dtype)
+        small_band_count = (
+            torch.abs(lc_sub.xdata[:, 1] - band_val) < 1e-5
+        ).sum().item()
+        self.assertEqual(small_band_count, 30)
+        # The two large bands produce one combined subsampling warning.
+        sub_warns = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "max_samples_per_band" in str(w.message)
+        ]
+        self.assertGreaterEqual(len(sub_warns), 1)
+
+
 def _make_lightcurve(n):
     """Create a simple 1-D Lightcurve with *n* uniformly-spaced points."""
     rng = np.random.default_rng(42)
@@ -362,7 +483,7 @@ def _make_lightcurve(n):
 
 
 class TestSubsampleLightcurveWarning(unittest.TestCase):
-    """Lightcurve.fit should warn and subsample when N > max_samples."""
+    """Lightcurve.__init__ should warn and subsample when N > max_samples."""
 
     def test_no_warning_when_below_limit(self):
         """No UserWarning should be issued when N <= max_samples."""
@@ -370,12 +491,11 @@ class TestSubsampleLightcurveWarning(unittest.TestCase):
         max_samples = 3000  # Larger than N, so no subsampling should occur.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", UserWarning)
-            lc.fit(
-                model="1D",
-                training_iter=1,
-                miniter=1,
+            Lightcurve(
+                xdata=lc.xdata,
+                ydata=lc.ydata,
+                yerr=lc.yerr,
                 max_samples=max_samples,
-                subsample_seed=0,
             )
         subsample_warnings = [
             w for w in caught if issubclass(w.category, UserWarning)
@@ -388,10 +508,10 @@ class TestSubsampleLightcurveWarning(unittest.TestCase):
         max_samples = 100  # Smaller than N, so subsampling should occur.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", UserWarning)
-            lc.fit(
-                model="1D",
-                training_iter=1,
-                miniter=1,
+            lc_sub = Lightcurve(
+                xdata=lc.xdata,
+                ydata=lc.ydata,
+                yerr=lc.yerr,
                 max_samples=max_samples,
                 subsample_seed=0,
             )
@@ -402,23 +522,25 @@ class TestSubsampleLightcurveWarning(unittest.TestCase):
         first_msg = str(subsample_warnings[0].message)
         self.assertIn("max_samples", first_msg)
         self.assertIn("subsample", first_msg.lower())
+        # Data is permanently subsampled.
+        self.assertLessEqual(lc_sub._xdata_raw.shape[0], max_samples)
 
-    def test_buffers_restored_after_subsampling(self):
-        """After fit() with subsampling, original data buffers must be restored."""
+    def test_data_permanently_subsampled(self):
+        """After __init__ with subsampling, data size is permanently reduced."""
         lc = _make_lightcurve(200)
         orig_n = lc._xdata_raw.shape[0]
-
-        # Call fit() with subsampling enabled; internal buffers should be restored.
-        lc.fit(
-            model="1D",
-            training_iter=1,
-            miniter=1,
-            max_samples=50,
-            subsample_seed=0,
-        )
-
-        # Buffers should be back to the original size after fit().
-        self.assertEqual(lc._xdata_raw.shape[0], orig_n)
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            lc_sub = Lightcurve(
+                xdata=lc.xdata,
+                ydata=lc.ydata,
+                yerr=lc.yerr,
+                max_samples=50,
+                subsample_seed=0,
+            )
+        # Data should be permanently reduced.
+        self.assertLess(lc_sub._xdata_raw.shape[0], orig_n)
+        self.assertLessEqual(lc_sub._xdata_raw.shape[0], 50)
 
 
 if __name__ == "__main__":

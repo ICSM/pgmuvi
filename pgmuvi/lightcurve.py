@@ -1,4 +1,5 @@
 import contextlib
+import csv
 from pathlib import Path
 from typing import ClassVar
 import numpy as np
@@ -39,12 +40,15 @@ from .priors import (
     NormalPeriodPrior,
     get_prior_set,
 )
-import pyro
-from pyro.infer.mcmc import NUTS, MCMC, HMC
+# import pyro
+# from pyro.infer.mcmc import NUTS, MCMC, HMC
 from inspect import isclass
-import xarray as xr
-import arviz as az
+# import xarray as xr
+# import arviz as az
 import warnings
+import dataclasses
+import json
+import math
 
 
 def _reraise_with_note(e, note):
@@ -355,11 +359,17 @@ class InputHelpers:
         Candidate column names used for auto-detecting the uncertainty column,
         checked case-insensitively in order.
     _WAVELENGTH_COLUMN_NAMES : list of str
-        Candidate column names used for auto-detecting the wavelength or band
+        Candidate column names used for auto-detecting a *numeric* wavelength
         column, checked case-insensitively in order.  When such a column is
         found and contains more than one unique value, the data are loaded as
         a 2-D lightcurve whose ``xdata`` has shape ``(N, 2)`` with the time
-        values in column 0 and the wavelength/band values in column 1.
+        values in column 0 and the wavelength values in column 1.
+    _WAVELENGTH_ID_COLUMN_NAMES : list of str
+        Candidate column names used for auto-detecting a *string* band
+        identifier column (e.g. ``"V"``, ``"R"``, ``"W1"``), checked
+        case-insensitively in order.  When such a column is found it is
+        ingested as the ``band`` attribute of the resulting
+        :class:`Lightcurve`.
     """
 
     _X_COLUMN_NAMES: ClassVar[list[str]] = [
@@ -390,11 +400,15 @@ class InputHelpers:
         "wave",
         "wl",
         "lambda",
-        "band",
-        "filter",
         "freq",
         "frequency",
         "channel",
+    ]
+    _WAVELENGTH_ID_COLUMN_NAMES: ClassVar[list[str]] = [
+        "band",
+        "filter",
+        "filtername",
+        "filter_name",
     ]
 
     @classmethod
@@ -425,8 +439,8 @@ class InputHelpers:
         return None
 
     @staticmethod
-    def _drop_nan_rows(x, y, yerr):
-        """Drop rows that contain NaN in any of the data arrays.
+    def _drop_nonfinite_rows(x, y, yerr):
+        """Drop rows containing non-finite (NaN or Inf) values from data arrays.
 
         Parameters
         ----------
@@ -452,17 +466,18 @@ class InputHelpers:
         A ``UserWarning`` is emitted when one or more rows are dropped.
         A ``ValueError`` is raised when no valid rows remain after filtering.
         """
-        valid_mask = ~torch.isnan(y)
+        valid_mask = torch.isfinite(y)
         if x.dim() > 1:
-            valid_mask &= ~torch.isnan(x).any(dim=1)
+            valid_mask &= torch.isfinite(x).all(dim=1)
         else:
-            valid_mask &= ~torch.isnan(x)
+            valid_mask &= torch.isfinite(x)
         if yerr is not None:
-            valid_mask &= ~torch.isnan(yerr)
+            valid_mask &= torch.isfinite(yerr)
         n_dropped = int((~valid_mask).sum().item())
         if n_dropped > 0:
             warnings.warn(
-                f"Dropped {n_dropped} row(s) containing NaN values.",
+                f"Dropped {n_dropped} row(s) containing non-finite "
+                "(NaN or Inf) values.",
                 stacklevel=3,
             )
             x = x[valid_mask]
@@ -471,7 +486,7 @@ class InputHelpers:
                 yerr = yerr[valid_mask]
         if y.numel() == 0:
             raise ValueError(
-                "No valid data rows remain after dropping NaN-containing rows."
+                "No valid data rows remain after dropping non-finite rows."
             )
         elif y.numel() < 10 and n_dropped > 0:
             warnings.warn(
@@ -480,6 +495,16 @@ class InputHelpers:
                 stacklevel=3,
             )
         return x, y, yerr
+
+    @staticmethod
+    def _drop_nan_rows(x, y, yerr):
+        """Drop rows that contain NaN in any of the data arrays.
+
+        .. deprecated:: 0.3.0
+            Use :meth:`_drop_nonfinite_rows` instead, which also handles
+            infinite values.
+        """
+        return Lightcurve._drop_nonfinite_rows(x, y, yerr)
 
     @classmethod
     def from_csv(
@@ -503,27 +528,44 @@ class InputHelpers:
             resulting ``xdata`` is a 1-D tensor of shape ``(N,)``.
 
         **2-D (multiband) lightcurves**
-            When the CSV contains a wavelength or band column with more than
+            When the CSV contains a *numeric* wavelength column with more than
             one unique value, the resulting ``xdata`` has shape ``(N, 2)``
             where column 0 holds the time values and column 1 holds the
-            wavelength/band values.  The ``ydata`` (and optional ``yerr``)
+            numeric wavelength values.  The ``ydata`` (and optional ``yerr``)
             remain 1-D tensors of shape ``(N,)``.
 
-            The wavelength/band column is selected in one of three ways:
+            The numeric wavelength column is selected in one of three ways:
 
             1. *Explicit ``xcol`` list*: pass ``xcol`` as a list of two
-               column names, e.g. ``xcol=["time", "band"]``.  The first
-               element is the time column and the second is the
-               wavelength/band column.  All subsequent x-axis columns are
-               stacked in the order given.
+               column names, e.g. ``xcol=["time", "wavelength"]``.  The first
+               element is the time column and the second is the wavelength
+               column.  All subsequent x-axis columns are stacked in the
+               order given.
             2. *Explicit ``wavelcol``*: pass the column name as a separate
                ``wavelcol`` keyword argument.
             3. *Auto-detection*: if neither an iterable ``xcol`` nor a
                ``wavelcol`` is supplied, the method searches for a column
                whose name matches one of the entries in
-               :attr:`_WAVELENGTH_COLUMN_NAMES`.  If such a column is found
-               *and* it contains more than one unique value, a 2-D lightcurve
-               is returned automatically.
+               :attr:`_WAVELENGTH_COLUMN_NAMES` (e.g. ``"wavelength"``,
+               ``"wl"``).  If such a column is found and contains more than
+               one unique value, a 2-D lightcurve is returned automatically.
+
+        **Band labels**
+            String band-identifier columns (e.g. one named ``"band"`` or
+            ``"filter"`` containing values like ``"V"``, ``"R"``) are
+            resolved *independently* of the numeric wavelength column.  When
+            the CSV contains a string-typed column whose name matches one of
+            the entries in :attr:`_WAVELENGTH_ID_COLUMN_NAMES`, those labels
+            are stored automatically in :attr:`Lightcurve.band` when
+            ``band`` is not supplied explicitly in ``**kwargs``.  For 1-D
+            lightcurves, auto-population occurs only when the band-ID column
+            contains exactly one distinct non-empty label (matching the 1-D
+            constructor contract, which expects a single band label). If
+            multiple distinct labels are present for 1-D input, ``band`` is
+            left unset and a warning is emitted. Numeric wavelength columns are
+            used directly and
+            :attr:`Lightcurve.band` is left as ``None`` unless the caller
+            provides ``band=`` explicitly in ``**kwargs``.
 
         Parameters
         ----------
@@ -550,6 +592,8 @@ class InputHelpers:
             2-D ``xdata``.  Ignored when ``xcol`` is a list.
         **kwargs
             Additional keyword arguments passed to the Lightcurve constructor.
+            If ``band`` is not provided and a string band-ID column exists,
+            it is populated automatically.
 
         Returns
         -------
@@ -566,10 +610,20 @@ class InputHelpers:
             present in the file.
         """
         filepath = Path(filepath)
+        # Use dtype=None so that NumPy auto-detects each column's type.
+        # This allows string/bytes band columns (e.g. "V", "R") to be read
+        # as-is rather than being silently coerced to NaN.
         data = np.genfromtxt(
-            filepath, delimiter=",", names=True, dtype=float, encoding=None
+            filepath, delimiter=",", names=True, dtype=None, encoding=None
         )
         columns = list(data.dtype.names)
+
+        # ------------------------------------------------------------------
+        # Helper: is a structured-array column string-typed?
+        # ------------------------------------------------------------------
+        def _is_str_col(col_name):
+            dt = data.dtype[col_name]
+            return np.issubdtype(dt, np.str_) or np.issubdtype(dt, np.bytes_)
 
         # ------------------------------------------------------------------
         # Resolve all column names (no tensor building yet)
@@ -614,8 +668,10 @@ class InputHelpers:
             )
 
         # ------------------------------------------------------------------
-        # Resolve the x (time + optional band) columns
+        # Resolve the x (time + optional numeric wavelength) columns.
+        # The string band-ID column is resolved independently below.
         # ------------------------------------------------------------------
+        band_id_col = None  # set in the else branch when applicable
         if isinstance(xcol, list):
             # Explicit multi-column x specification
             for col in xcol:
@@ -627,23 +683,42 @@ class InputHelpers:
             # Build NaN mask across all columns before stacking
             xcol_names = xcol
         else:
-            # Resolve wavelength/band column (explicit or auto-detected)
-            if wavelcol is None:
+            # Resolve numeric wavelength column for xdata[:, 1].
+            # Only _WAVELENGTH_COLUMN_NAMES is consulted; string band-ID
+            # columns are handled separately and independently.
+            if wavelcol is not None:
+                # Explicit: validate it exists before proceeding.
+                if wavelcol not in columns:
+                    raise ValueError(
+                        f"Column '{wavelcol}' not found in CSV. "
+                        f"Available columns: {columns}"
+                    )
+            else:
                 wavelcol = cls._find_column(columns, cls._WAVELENGTH_COLUMN_NAMES)
-            elif wavelcol not in columns:
-                raise ValueError(
-                    f"Column '{wavelcol}' not found in CSV. "
-                    f"Available columns: {columns}"
-                )
+
+            # Independently resolve string band-ID column for lc.band.
+            # This is always attempted, regardless of whether a numeric
+            # wavelength column was found.
+            band_id_col = cls._find_column(columns, cls._WAVELENGTH_ID_COLUMN_NAMES)
+
             xcol_names = [xcol] + ([wavelcol] if wavelcol is not None else [])
 
         # ------------------------------------------------------------------
-        # Build NaN mask from ALL relevant columns before creating tensors
+        # Build NaN / validity mask from ALL relevant columns.
+        # With dtype=None, integer and string columns cannot be NaN, so only
+        # check floating-point columns for non-finite values.
         # ------------------------------------------------------------------
         relevant_cols = xcol_names + [ycol] + ([yerrcol] if yerrcol else [])
         valid_mask = np.ones(len(data), dtype=bool)
         for col in relevant_cols:
-            valid_mask &= ~np.isnan(data[col])
+            col_dtype = data.dtype[col]
+            if np.issubdtype(col_dtype, np.floating):
+                valid_mask &= ~np.isnan(data[col])
+            elif _is_str_col(col):
+                # Treat empty strings as missing; convert once outside the
+                # per-element comparison.
+                valid_mask &= np.asarray(data[col], dtype=np.str_) != ""
+            # Integer columns cannot contain NaN; no filtering needed.
 
         n_dropped = int((~valid_mask).sum())
         if n_dropped > 0:
@@ -660,19 +735,56 @@ class InputHelpers:
         clean = data[valid_mask]
 
         # ------------------------------------------------------------------
+        # Helper: convert a structured-array column to a float32 tensor.
+        # Boolean-indexing a structured array with dtype=None can produce
+        # non-contiguous strides; np.array() (not np.asarray) forces a copy.
+        # ------------------------------------------------------------------
+        def _to_float_tensor(arr):
+            return torch.as_tensor(
+                np.array(arr, dtype=np.float64), dtype=torch.float32
+            )
+
+        # ------------------------------------------------------------------
+        # Helper: map string band labels to float indices and record them.
+        # Returns (wave_tensor, unique_labels_array).
+        # ------------------------------------------------------------------
+        def _str_col_to_wave(arr):
+            str_vals = np.asarray(arr, dtype=np.str_)
+            # Preserve first-appearance order via dict.fromkeys.
+            unique_labels = list(dict.fromkeys(str_vals.tolist()))
+            label_to_idx = {lbl: float(i) for i, lbl in enumerate(unique_labels)}
+            indices = np.array([label_to_idx[v] for v in str_vals], dtype=np.float64)
+            return (
+                torch.as_tensor(indices, dtype=torch.float32),
+                np.array(unique_labels, dtype=np.str_),
+            )
+
+        # ------------------------------------------------------------------
         # Build tensors from clean data
         # ------------------------------------------------------------------
         if isinstance(xcol, list):
-            x_tensors = [
-                torch.as_tensor(clean[col], dtype=torch.float32) for col in xcol
-            ]
+            x_tensors = []
+            for col in xcol:
+                if _is_str_col(col):
+                    wave_t, _unique = _str_col_to_wave(clean[col])
+                    x_tensors.append(wave_t)
+                    if "band" not in kwargs:
+                        kwargs["band"] = np.asarray(clean[col], dtype=np.str_)
+                else:
+                    x_tensors.append(_to_float_tensor(clean[col]))
             x = torch.stack(x_tensors, dim=1) if len(x_tensors) > 1 else x_tensors[0]
         else:
-            time_tensor = torch.as_tensor(clean[xcol], dtype=torch.float32)
+            time_tensor = _to_float_tensor(clean[xcol])
             if wavelcol is not None:
-                wave_tensor = torch.as_tensor(clean[wavelcol], dtype=torch.float32)
+                if _is_str_col(wavelcol):
+                    # Explicitly-provided string wavelcol: map labels → indices.
+                    wave_tensor, _unique = _str_col_to_wave(clean[wavelcol])
+                    if "band" not in kwargs:
+                        kwargs["band"] = np.asarray(clean[wavelcol], dtype=np.str_)
+                else:
+                    wave_tensor = _to_float_tensor(clean[wavelcol])
                 if wave_tensor.unique().numel() > 1:
-                    # Multiple wavelengths/bands → 2-D lightcurve
+                    # Multiple wavelengths → 2-D lightcurve
                     x = torch.stack([time_tensor, wave_tensor], dim=1)
                 else:
                     # Single wavelength → treat as 1-D
@@ -680,11 +792,36 @@ class InputHelpers:
             else:
                 x = time_tensor
 
-        y = torch.as_tensor(clean[ycol], dtype=torch.float32)
-        yerr = torch.as_tensor(clean[yerrcol], dtype=torch.float32) if yerrcol else None
+            # Independently populate band from the string band-ID column.
+            if "band" not in kwargs and band_id_col is not None:
+                if _is_str_col(band_id_col):
+                    band_vals = np.asarray(clean[band_id_col], dtype=np.str_)
+                    if x.dim() == 2:
+                        kwargs["band"] = band_vals
+                    elif band_vals.size > 0:
+                        stripped_band_vals = np.char.strip(band_vals)
+                        unique_band_labels = [
+                            lbl
+                            for lbl in dict.fromkeys(stripped_band_vals.tolist())
+                            if lbl
+                        ]
+                        if len(unique_band_labels) == 1:
+                            kwargs["band"] = np.array(
+                                [unique_band_labels[0]], dtype=np.str_
+                            )
+                        elif len(unique_band_labels) > 1:
+                            _msg = (
+                                f"Column '{band_id_col}' contains multiple "
+                                "distinct non-empty labels for 1-D input; "
+                                "leaving 'band' unset. Provide wavelcol or "
+                                "2-D input for mixed-band data."
+                            )
+                            warnings.warn(_msg, UserWarning, stacklevel=2)
 
+        y = _to_float_tensor(clean[ycol])
+        yerr = _to_float_tensor(clean[yerrcol]) if yerrcol else None
 
-        return cls(xdata=x, ydata=y, yerr=yerr)
+        return cls(xdata=x, ydata=y, yerr=yerr, **kwargs)
 
 
 # Spectral-mixture model names that support MLS-based initialisation in fit().
@@ -706,13 +843,844 @@ _SM_MODELS: frozenset[str] = frozenset(
 )
 
 
+@dataclasses.dataclass(frozen=True)
+class PeriodPeakResult:
+    """A single PSD peak from :meth:`Lightcurve.get_period_summary`."""
+
+    rank: int = 1
+    frequency: float = float("nan")
+    period: float = float("nan")
+    height: float = float("nan")
+    prominence: float = float("nan")
+    area_fraction: float = float("nan")
+    interval_frequency: tuple = (float("nan"), float("nan"))
+    interval_period: tuple = (float("nan"), float("nan"))
+    period_ratio_to_primary: float = 1.0
+    is_candidate_lsp: bool = False
+    notes: str = ""
+    coherence_proxy: float = float("nan")
+
+    def as_dict(self) -> dict:
+        return {
+            "rank": self.rank,
+            "frequency": self.frequency,
+            "period": self.period,
+            "height": self.height,
+            "prominence": self.prominence,
+            "area_fraction": self.area_fraction,
+            "interval_frequency": list(self.interval_frequency),
+            "interval_period": list(self.interval_period),
+            "period_ratio_to_primary": self.period_ratio_to_primary,
+            "is_candidate_lsp": self.is_candidate_lsp,
+            "notes": self.notes,
+            "coherence_proxy": self.coherence_proxy,
+        }
+
+
+class ComponentDiagnosticsResult:
+    """Kernel-component diagnostic information for a spectral-mixture GP.
+
+    These values are extracted directly from GP hyperparameters and are
+    provided for diagnostic purposes only.  They must **not** be interpreted
+    as independent physical periods.  The literature-comparable period
+    estimates are the summed-PSD peaks stored in
+    :attr:`PeriodSummaryResult.peaks`.
+
+    Attributes
+    ----------
+    component_periods : numpy.ndarray
+        Centre period of each mixture component (1/frequency).
+    component_frequencies : numpy.ndarray
+        Centre frequency of each mixture component.
+    component_weights : numpy.ndarray
+        Relative amplitude weight of each mixture component.
+    component_period_scales : numpy.ndarray
+        Width (sigma) of each Gaussian component in period units.
+    component_frequency_scales : numpy.ndarray
+        Width (sigma) of each Gaussian component in frequency units.
+    n_components : int
+        Number of mixture components.
+    kernel_family : str
+        Name of the spectral-mixture kernel family.
+    notes : str
+        Diagnostic notes for this component set.
+    component_labels : list of str
+        Human-readable label for each component,
+        e.g. ``["SM component 1", "SM component 2"]``.
+    """
+
+    def __init__(
+        self,
+        component_periods=None,
+        component_frequencies=None,
+        component_weights=None,
+        component_period_scales=None,
+        component_frequency_scales=None,
+        n_components=0,
+        kernel_family="",
+        notes="",
+        component_labels=None,
+    ):
+        self.component_periods = (
+            component_periods
+            if component_periods is not None
+            else np.array([])
+        )
+        self.component_frequencies = (
+            component_frequencies
+            if component_frequencies is not None
+            else np.array([])
+        )
+        self.component_weights = (
+            component_weights
+            if component_weights is not None
+            else np.array([])
+        )
+        self.component_period_scales = (
+            component_period_scales
+            if component_period_scales is not None
+            else np.array([])
+        )
+        self.component_frequency_scales = (
+            component_frequency_scales
+            if component_frequency_scales is not None
+            else np.array([])
+        )
+        self.n_components = n_components
+        self.kernel_family = kernel_family
+        self.notes = notes
+        self.component_labels = component_labels or [
+            f"SM component {i + 1}" for i in range(n_components)
+        ]
+
+    def as_dict(self) -> dict:
+        """Return a plain-dict representation of this diagnostics object."""
+        return {
+            "n_components": self.n_components,
+            "kernel_family": self.kernel_family,
+            "notes": self.notes,
+            "component_labels": self.component_labels,
+            "component_periods": self.component_periods,
+            "component_frequencies": self.component_frequencies,
+            "component_weights": self.component_weights,
+            "component_period_scales": self.component_period_scales,
+            "component_frequency_scales": self.component_frequency_scales,
+        }
+
+
+class PeriodSummaryResult:
+    """Structured result from :meth:`Lightcurve.get_period_summary`."""
+
+    def __init__(
+        self,
+        method="",
+        model_name="",
+        n_peaks_detected=0,
+        n_peaks_analyzed=0,
+        n_peaks_requested=None,
+        dominant_period=None,
+        dominant_frequency=None,
+        peaks=None,
+        freq_grid=None,
+        psd=None,
+        notes="",
+        component_diagnostics=None,
+        interval_definition="peak_centered_68pct_mass_interval",
+        backend="",
+        kernel_family="",
+        time_kernel_family="",
+        has_stochastic_background=False,
+        q_factor=None,
+    ):
+        self.method = method
+        self.model_name = model_name
+        self.backend = backend
+        self.kernel_family = kernel_family
+        self.time_kernel_family = time_kernel_family
+        self.has_stochastic_background = has_stochastic_background
+        self.n_peaks_detected = n_peaks_detected
+        self.n_peaks_analyzed = n_peaks_analyzed
+        self.n_peaks_requested = n_peaks_requested
+        self.dominant_period = dominant_period
+        self.dominant_frequency = dominant_frequency
+        self.q_factor = q_factor
+        # Sort peaks by physical ranking so that peaks[0] is the primary
+        # pulsation candidate, not the largest-area feature.
+        #
+        # Sort key (ascending tuple, NaN treated as worst):
+        #   1. descending prominence  — most distinct peak first
+        #   2. descending coherence_proxy — narrower/more coherent peak first
+        #   3. descending area_fraction  — larger integrated power next
+        #   4. descending height         — absolute amplitude tie-breaker
+        #   5. ascending original rank   — deterministic final tie-breaker
+        #
+        # After sorting, ranks are reassigned sequentially (1, 2, 3 …) so
+        # that peak.rank reliably reflects position in the sorted list.
+        _raw_peaks = peaks if peaks is not None else []
+
+        def _physical_rank_key(p):
+            prom = (
+                p.prominence if np.isfinite(p.prominence) else -np.inf
+            )
+            coh = (
+                p.coherence_proxy
+                if np.isfinite(p.coherence_proxy)
+                else -np.inf
+            )
+            af = p.area_fraction if np.isfinite(p.area_fraction) else -np.inf
+            h = p.height if np.isfinite(p.height) else -np.inf
+            return (-prom, -coh, -af, -h, p.rank)
+
+        _sorted = sorted(_raw_peaks, key=_physical_rank_key)
+        # Reassign ranks sequentially and update period_ratio_to_primary so
+        # that the new rank-1 peak always has ratio=1.0 and the other peaks
+        # are relative to it.
+        _primary_period = _sorted[0].period if _sorted else 1.0
+        self.peaks = [
+            dataclasses.replace(
+                p,
+                rank=i + 1,
+                period_ratio_to_primary=(
+                    p.period / _primary_period
+                    if _primary_period > 0 and np.isfinite(p.period)
+                    else float("nan")
+                ),
+            )
+            for i, p in enumerate(_sorted)
+        ]
+        # Track which peak in the sorted list carries the largest area_fraction.
+        # This is the "largest integrated-power feature", which may differ from
+        # the primary pulsation candidate (peaks[0]).
+        if self.peaks:
+            self.largest_area_peak_index = max(
+                range(len(self.peaks)),
+                key=lambda i: (
+                    self.peaks[i].area_fraction
+                    if np.isfinite(self.peaks[i].area_fraction)
+                    else -np.inf
+                ),
+            )
+            self.primary_peak_index = 0
+        else:
+            self.largest_area_peak_index = None
+            self.primary_peak_index = None
+        # Keep dominant_period / dominant_frequency in sync with the
+        # post-sort primary peak so that direct attribute access is also
+        # consistent (not just as_dict() which already prefers peaks[0]).
+        if self.peaks:
+            _primary = self.peaks[0]
+            self.dominant_period = _primary.period
+            self.dominant_frequency = _primary.frequency
+            # Compute q_factor from the post-sort primary peak's
+            # interval_frequency so that summary.q_factor is always correct
+            # at the object level, not just inside as_dict().
+            # Formula: q_factor = frequency / (f_hi - f_lo)
+            _f_lo, _f_hi = _primary.interval_frequency
+            _width = _f_hi - _f_lo
+            if (
+                np.isfinite(_width)
+                and _width > 0
+                and np.isfinite(_primary.frequency)
+            ):
+                self.q_factor = _primary.frequency / _width
+            else:
+                # Invalid interval (e.g. explicit-period backend with no RBF
+                # lengthscale): set to None so that self.q_factor always
+                # describes the post-sort primary peak, never a stale
+                # upstream value.
+                self.q_factor = None
+        else:
+            # No peaks — pass the constructor-provided value through
+            # unchanged, since there is no primary peak to override it.
+            self.q_factor = q_factor
+        # Validate internal consistency: dominant attributes must agree with
+        # peaks[0] whenever peaks exist.
+        if self.peaks:
+            assert self.dominant_period == self.peaks[0].period, (
+                f"PeriodSummaryResult internal error: dominant_period "
+                f"({self.dominant_period!r}) != peaks[0].period "
+                f"({self.peaks[0].period!r})"
+            )
+            assert self.dominant_frequency == self.peaks[0].frequency, (
+                f"PeriodSummaryResult internal error: dominant_frequency "
+                f"({self.dominant_frequency!r}) != peaks[0].frequency "
+                f"({self.peaks[0].frequency!r})"
+            )
+        self.freq_grid = freq_grid
+        self.psd = psd
+        self.notes = notes
+        self.interval_definition = interval_definition
+        self.component_diagnostics = component_diagnostics
+
+    def as_dict(self) -> dict:
+        # Derive primary-peak quantities once so they can be reused for
+        # the backward-compatible alias keys without repeating the logic.
+        primary = self.get_primary_peak()
+        primary_interval = primary.interval_period if primary is not None else None
+        primary_area = (
+            primary.area_fraction if primary is not None else float("nan")
+        )
+        _sig_peaks = self.get_significant_peaks()
+        significant_periods = np.array([p.period for p in _sig_peaks])
+
+        # Largest-area-fraction peak (may differ from the primary).
+        _la_peak = (
+            self.peaks[self.largest_area_peak_index]
+            if self.peaks
+            else None
+        )
+        _la_rank = _la_peak.rank if _la_peak is not None else None
+        _la_period = _la_peak.period if _la_peak is not None else float("nan")
+        _la_freq = (
+            _la_peak.frequency if _la_peak is not None else float("nan")
+        )
+        _la_frac = (
+            _la_peak.area_fraction
+            if _la_peak is not None
+            else float("nan")
+        )
+
+        return {
+            "component_diagnostics": (
+                self.component_diagnostics.as_dict()
+                if self.component_diagnostics is not None
+                else None
+            ),
+            "freq_grid": self.freq_grid,
+            "psd": self.psd,
+            # self.dominant_frequency/dominant_period/q_factor are set in
+            # __init__() from peaks[0] and are already authoritative.
+            "dominant_frequency": self.dominant_frequency,
+            "dominant_period": self.dominant_period,
+            # Backward-compatible interval keys (both alias the same value).
+            "period_interval_fwhm_like": primary_interval,
+            "period_interval": primary_interval,
+            "interval_definition": self.interval_definition,
+            "q_factor": self.q_factor,
+            "peak_fraction": primary_area,
+            "n_peaks": len(self.peaks),
+            "n_peaks_detected": self.n_peaks_detected,
+            "n_significant_peaks": len(_sig_peaks),
+            "significant_periods": significant_periods,
+            "peaks": [p.as_dict() for p in self.peaks],
+            "method": self.method,
+            "notes": self.notes,
+            # Kernel-dispatch metadata
+            "backend": self.backend,
+            "kernel_family": self.kernel_family,
+            "time_kernel_family": self.time_kernel_family,
+            "has_stochastic_background": self.has_stochastic_background,
+            # Physical-ranking indices
+            "primary_peak_rank": primary.rank if primary is not None else None,
+            "largest_area_peak_rank": _la_rank,
+            # Largest-area-fraction feature (diagnostic)
+            "largest_area_period": _la_period,
+            "largest_area_frequency": _la_freq,
+            "largest_area_fraction": _la_frac,
+        }
+
+    def __getitem__(self, key):
+        return self.as_dict()[key]
+
+    def __contains__(self, key):
+        return key in self.as_dict()
+
+    def get(self, key, default=None):
+        return self.as_dict().get(key, default)
+
+    def keys(self):
+        return self.as_dict().keys()
+
+    def items(self):
+        return self.as_dict().items()
+
+    def values(self):
+        return self.as_dict().values()
+
+    # ------------------------------------------------------------------
+    # Multi-peak accessors
+    # ------------------------------------------------------------------
+
+    def get_primary_peak(self):
+        """Return the primary (rank-1) peak, or ``None`` if none exist.
+
+        Returns
+        -------
+        PeriodPeakResult or None
+            The first entry in :attr:`peaks` (sorted by ascending rank,
+            so rank 1 is always first), or ``None`` when :attr:`peaks`
+            is empty.
+        """
+        return self.peaks[0] if self.peaks else None
+
+    def get_top_n_peaks(self, n):
+        """Return up to *n* peaks in ascending rank order.
+
+        Parameters
+        ----------
+        n : int
+            Maximum number of peaks to return.
+
+        Returns
+        -------
+        list of PeriodPeakResult
+            A slice of :attr:`peaks` of length ``min(n, len(peaks))``.
+        """
+        return self.peaks[:n]
+
+    def get_significant_peaks(self, threshold=0.68):
+        """Return peaks whose area fraction meets or exceeds *threshold*.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Minimum ``area_fraction`` to qualify as significant.
+            Default is ``0.68`` (~1 sigma).
+
+        Returns
+        -------
+        list of PeriodPeakResult
+            Peaks from :attr:`peaks` (in rank order) for which
+            ``peak.area_fraction >= threshold``.  Peaks with NaN area
+            fraction are excluded.
+        """
+        return [
+            p for p in self.peaks
+            if np.isfinite(p.area_fraction) and p.area_fraction >= threshold
+        ]
+
+    def to_table(self) -> list:
+        return [
+            {
+                "peak_rank": p.rank,
+                "period": p.period,
+                "frequency": p.frequency,
+                "height": p.height,
+                "prominence": p.prominence,
+                "area_fraction": p.area_fraction,
+                "period_interval_lo": p.interval_period[0],
+                "period_interval_hi": p.interval_period[1],
+                "period_ratio_to_primary": p.period_ratio_to_primary,
+                "is_candidate_lsp": p.is_candidate_lsp,
+                "notes": p.notes,
+            }
+            for p in self.peaks
+        ]
+
+    def to_text(
+        self,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+        max_peaks_to_show=3,
+    ) -> str:
+        """Return a human-readable text summary of this period result.
+
+        The text is plain UTF-8 text, suitable for writing to a ``.txt``
+        file, reading in a terminal, or storing alongside analysis outputs.
+        It clearly separates **analyzed peak results** (the
+        literature-comparable outputs) from **kernel component diagnostics**
+        (internal quantities derived directly from GP hyperparameters).
+
+        Parameters
+        ----------
+        include_components : bool, optional
+            If ``True`` (default), include a section listing the kernel
+            component periods, frequencies, and weights.  These are
+            **diagnostic quantities** and should not be cited as final
+            period determinations.
+        include_peaks : bool, optional
+            If ``True`` (default), include one block per analyzed peak.
+        include_psd_info : bool, optional
+            If ``True``, include a short summary of the PSD grid
+            (existence, length, frequency range, PSD range).  The full
+            arrays are never dumped.  Default is ``False``.
+        max_peaks_to_show : int, optional
+            Maximum number of peaks to show in detail.  The primary peak
+            is always shown first; up to ``max_peaks_to_show - 1``
+            additional peaks follow.  If more peaks exist, a count line
+            is appended.  Default is ``3``.
+
+        Returns
+        -------
+        str
+            Formatted text summary.
+        """
+
+        def _fmt(v, precision=6):
+            """Format a scalar value for display."""
+            if v is None:
+                return "N/A"
+            try:
+                if np.isnan(v):
+                    return "nan"
+                if np.isinf(v):
+                    return "inf" if v > 0 else "-inf"
+            except (TypeError, ValueError):
+                pass
+            try:
+                return f"{v:.{precision}g}"
+            except (TypeError, ValueError):
+                return str(v)
+
+        def _fmt_interval(pair, precision=6):
+            """Format a (lo, hi) interval pair."""
+            if pair is None:
+                return "N/A"
+            lo, hi = pair
+            return f"[{_fmt(lo, precision)}, {_fmt(hi, precision)}]"
+
+        def _arr_summary(arr, label, precision=6):
+            """One-line summary of a 1-D array."""
+            if arr is None or len(arr) == 0:
+                return f"  {label}: (none)"
+            vals = ", ".join(_fmt(v, precision) for v in arr)
+            return f"  {label}: {vals}"
+
+        lines = []
+
+        # ------------------------------------------------------------------
+        # Header
+        # ------------------------------------------------------------------
+        # Use the same dominant-period/frequency logic as as_dict(): prefer
+        # the primary peak's values so that to_text() and as_dict() always
+        # describe the same dominant peak.
+        _primary = self.get_primary_peak()
+        _display_period = (
+            _primary.period if _primary is not None else self.dominant_period
+        )
+        _display_frequency = (
+            _primary.frequency
+            if _primary is not None
+            else self.dominant_frequency
+        )
+
+        lines.append("PERIOD SUMMARY")
+        lines.append("==============")
+        lines.append(f"  Model name          : {self.model_name or 'N/A'}")
+        lines.append(f"  Method              : {self.method or 'N/A'}")
+        lines.append(f"  Backend             : {self.backend or 'N/A'}")
+        lines.append(
+            f"  Kernel family       : {self.kernel_family or 'N/A'}"
+        )
+        _tkf = self.time_kernel_family or "N/A"
+        lines.append(f"  Time-kernel family  : {_tkf}")
+        _hsb = str(self.has_stochastic_background)
+        lines.append(f"  Stochastic bg       : {_hsb}")
+        lines.append(
+            f"  Interval definition : {self.interval_definition or 'N/A'}"
+        )
+        lines.append(f"  Dominant period     : {_fmt(_display_period)}")
+        lines.append(
+            f"  Dominant frequency  : {_fmt(_display_frequency)}"
+        )
+        lines.append(f"  Peaks detected      : {self.n_peaks_detected}")
+        lines.append(f"  Peaks analyzed      : {self.n_peaks_analyzed}")
+        _req = (
+            str(self.n_peaks_requested)
+            if self.n_peaks_requested is not None
+            else "N/A"
+        )
+        lines.append(f"  Peaks requested     : {_req}")
+        if self.notes:
+            lines.append(f"  Notes               : {self.notes}")
+        lines.append("")
+
+        # ------------------------------------------------------------------
+        # Analyzed peaks (literature-comparable outputs)
+        # ------------------------------------------------------------------
+        if include_peaks and self.peaks:
+            primary = self.peaks[0]
+
+            # ---- Primary pulsation candidate (full detail) ---------------
+            lines.append(
+                "PRIMARY PEAK  (primary pulsation candidate)"
+            )
+            lines.append("=" * 44)
+            lines.append(
+                f"    Period                     : {_fmt(primary.period)}"
+            )
+            lines.append(
+                f"    Frequency                  : {_fmt(primary.frequency)}"
+            )
+            lines.append(
+                f"    Height                     : {_fmt(primary.height)}"
+            )
+            lines.append(
+                f"    Prominence                 : {_fmt(primary.prominence)}"
+            )
+            lines.append(
+                f"    Coherence proxy            : "
+                f"{_fmt(primary.coherence_proxy)}"
+            )
+            lines.append(
+                f"    Area fraction              : "
+                f"{_fmt(primary.area_fraction)}"
+            )
+            lines.append(
+                f"    Interval (frequency)       : "
+                f"{_fmt_interval(primary.interval_frequency)}"
+            )
+            lines.append(
+                f"    Interval (period)          : "
+                f"{_fmt_interval(primary.interval_period)}"
+            )
+            lines.append(
+                f"    LSP candidate              : {primary.is_candidate_lsp}"
+            )
+            if primary.notes:
+                lines.append(
+                    f"    Notes                      : {primary.notes}"
+                )
+            lines.append("")
+
+            # ---- Largest integrated-power feature (when different) -------
+            _la_idx = self.largest_area_peak_index
+            if _la_idx != 0 and _la_idx < len(self.peaks):
+                la_peak = self.peaks[_la_idx]
+                lines.append(
+                    "LARGEST INTEGRATED-POWER FEATURE  "
+                    "(diagnostic — differs from primary)"
+                )
+                lines.append("=" * 51)
+                lines.append(
+                    f"    Rank                       : {la_peak.rank}"
+                )
+                lines.append(
+                    f"    Period                     : "
+                    f"{_fmt(la_peak.period)}"
+                )
+                lines.append(
+                    f"    Frequency                  : "
+                    f"{_fmt(la_peak.frequency)}"
+                )
+                lines.append(
+                    f"    Area fraction              : "
+                    f"{_fmt(la_peak.area_fraction)}"
+                )
+                lines.append(
+                    f"    Prominence                 : "
+                    f"{_fmt(la_peak.prominence)}"
+                )
+                lines.append(
+                    f"    Coherence proxy            : "
+                    f"{_fmt(la_peak.coherence_proxy)}"
+                )
+                lines.append("")
+            elif self.peaks:
+                # Primary peak is also the largest-area feature
+                lines.append(
+                    "  (Primary peak also has the largest area fraction.)"
+                )
+                lines.append("")
+
+            # ---- Additional peaks (compact) ------------------------------
+            extra_peaks = self.peaks[1:]
+            if extra_peaks:
+                n_to_show = max(0, max_peaks_to_show - 1)
+                shown = extra_peaks[:n_to_show]
+                n_hidden = len(extra_peaks) - len(shown)
+
+                if shown:
+                    lines.append("ADDITIONAL PEAKS")
+                    lines.append("=" * 16)
+                    for pk in shown:
+                        _int_str = _fmt_interval(pk.interval_period)
+                        _la_tag = (
+                            " [largest-area]"
+                            if pk.rank - 1 == _la_idx
+                            else ""
+                        )
+                        lines.append(
+                            f"  #{pk.rank}  period={_fmt(pk.period)}"
+                            f"  freq={_fmt(pk.frequency)}"
+                            f"  area={_fmt(pk.area_fraction)}"
+                            f"  prom={_fmt(pk.prominence)}"
+                            f"  interval={_int_str}"
+                            f"{_la_tag}"
+                        )
+                    if n_hidden > 0:
+                        lines.append(
+                            f"  (+{n_hidden} additional peak"
+                            f"{'s' if n_hidden != 1 else ''} not shown)"
+                        )
+                    lines.append("")
+
+        # ------------------------------------------------------------------
+        # Kernel component diagnostics (NOT final periods)
+        # ------------------------------------------------------------------
+        if include_components and self.component_diagnostics is not None:
+            diag = self.component_diagnostics
+            lines.append(
+                "KERNEL COMPONENT DIAGNOSTICS  "
+                "(internal quantities -- not final periods)"
+            )
+            lines.append("=" * 60)
+            lines.append(
+                "  These values are derived directly from GP kernel"
+                " hyperparameters."
+            )
+            lines.append(
+                "  They are provided for diagnostics only and should not"
+                " be cited"
+            )
+            lines.append(
+                "  as literature-comparable period determinations."
+            )
+            lines.append("")
+            lines.append(
+                _arr_summary(diag.component_periods, "Component periods")
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_frequencies,
+                    "Component frequencies",
+                )
+            )
+            lines.append(
+                _arr_summary(diag.component_weights, "Component weights")
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_period_scales,
+                    "Component period scales",
+                )
+            )
+            lines.append(
+                _arr_summary(
+                    diag.component_frequency_scales,
+                    "Component frequency scales",
+                )
+            )
+            lines.append("")
+
+        # ------------------------------------------------------------------
+        # Optional PSD grid summary (never dumps full arrays)
+        # ------------------------------------------------------------------
+        if include_psd_info:
+            lines.append("PSD GRID INFORMATION")
+            lines.append("====================")
+            has_freq = self.freq_grid is not None
+            has_psd = self.psd is not None
+            lines.append(
+                f"  Frequency grid present : {has_freq}"
+            )
+            lines.append(f"  PSD array present      : {has_psd}")
+            if has_freq:
+                try:
+                    lines.append(
+                        f"  Grid length            : {len(self.freq_grid)}"
+                    )
+                    lines.append(
+                        f"  Frequency min          : "
+                        f"{_fmt(float(self.freq_grid[0]))}"
+                    )
+                    lines.append(
+                        f"  Frequency max          : "
+                        f"{_fmt(float(self.freq_grid[-1]))}"
+                    )
+                except Exception:
+                    pass
+            if has_psd:
+                try:
+                    _psd_min = float(np.min(self.psd))
+                    _psd_max = float(np.max(self.psd))
+                    lines.append(f"  PSD min                : {_fmt(_psd_min)}")
+                    lines.append(f"  PSD max                : {_fmt(_psd_max)}")
+                except Exception:
+                    pass
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def write_text(
+        self,
+        filename,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+    ):
+        """Write a human-readable text summary to *filename*.
+
+        Calls :meth:`to_text` and writes the result to disk.
+
+        Parameters
+        ----------
+        filename : str or Path-like
+            Destination file path.  The file is created or overwritten.
+        include_components : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``True``.
+        include_peaks : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``True``.
+        include_psd_info : bool, optional
+            Forwarded to :meth:`to_text`.  Default is ``False``.
+
+        Returns
+        -------
+        pathlib.Path
+            The path to the file that was written, constructed from
+            *filename* via :class:`pathlib.Path`.  If *filename* is a
+            relative path, the returned value is also relative.
+        """
+        from pathlib import Path
+
+        path = Path(filename)
+        text = self.to_text(
+            include_components=include_components,
+            include_peaks=include_peaks,
+            include_psd_info=include_psd_info,
+        )
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def _json_serialize(self, obj):
+        """Recursively convert *obj* to a JSON-serializable Python object.
+
+        Handles nested dicts, lists/tuples, numpy arrays and scalars, and
+        the standard JSON primitives.  Raises ``TypeError`` for any
+        unrecognised type so that serialization bugs are caught immediately
+        rather than silently corrupted via ``str()``.
+        """
+        if obj is None or isinstance(obj, (bool, str)):
+            return obj
+        if isinstance(obj, int):
+            return obj
+        if isinstance(obj, float):
+            return None if not math.isfinite(obj) else obj
+        if isinstance(obj, dict):
+            return {k: self._json_serialize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._json_serialize(item) for item in obj]
+        if isinstance(obj, np.ndarray):
+            return self._json_serialize(obj.tolist())
+        if isinstance(obj, np.floating):
+            scalar = obj.item()
+            return None if not math.isfinite(scalar) else scalar
+        if isinstance(obj, np.integer):
+            return obj.item()
+        raise TypeError(
+            f"Cannot JSON-serialize object of type {type(obj).__name__}"
+        )
+
+    def write_json(self, filename, include_psd=False):
+        d = self.as_dict()
+        # Handle freq_grid/psd before general serialization: omit them
+        # unless the caller explicitly requests PSD data.
+        if not include_psd or d.get("freq_grid") is None:
+            d = {**d, "freq_grid": None, "psd": None}
+        data = self._json_serialize(d)
+        with open(filename, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, allow_nan=False)
+
+
 class Lightcurve(InputHelpers, gpytorch.Module):
     """A class for storing, manipulating and fitting light curves
 
     This class is designed to be a convenient way to store and manipulate
     light curve data, and to fit Gaussian Processes to that data. It is
-    designed to be used with the GPyTorch library, and to be compatible with
-    the Pyro library for MCMC fitting.
+    designed to be used with the GPyTorch library, and in future will be
+    compatible with the Pyro library for MCMC fitting.
 
     Parameters
     ----------
@@ -730,6 +1698,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Units of the time axis.  Time values are converted to days
         internally.  If *None* (default) the data are assumed to already
         be in days.
+    band : array-like of str or None, optional
+        Optional per-row band labels for a 2-D light curve.  Each element
+        must be a string identifier (e.g. ``"V"``, ``"R"``, ``"W1"``), and
+        there must be exactly one label per observation row — i.e.
+        ``len(band) == len(xdata)`` for 2-D data.  For 1-D light curves a
+        single-element array ``["V"]`` is accepted.  ``None`` (default)
+        means no band labels are stored.
+
+    Attributes
+    ----------
+    band : numpy.ndarray of str or None
+        Per-row string labels aligned with ``xdata``, or ``None``
+        if no labels were provided.
 
 
     Examples
@@ -749,6 +1730,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ytransform=None,
         name=None,
         time_units=None,
+        max_samples: int | None = 1000,
+        max_samples_per_band: int | None = None,
+        subsample_seed: int | None = None,
+        check_sampling: bool = False,
+        sampling_kwargs: dict | None = None,
+        check_variability: bool = False,
+        variability_kwargs: dict | None = None,
+        band=None,
         **kwargs,
     ):
         """Initialize a Lightcurve.
@@ -775,6 +1764,58 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             or an ``astropy.units`` unit object.  If *None* (default) the
             data are assumed to already be in days and no conversion is
             performed.
+        max_samples_per_band : int or None, optional
+            Maximum number of observations to retain per band for 2-D
+            (multiband) lightcurves.  Each band is checked independently:
+            only bands that exceed `max_samples_per_band` are subsampled;
+            bands already at or below the limit are left untouched.  For
+            1-D lightcurves this parameter has no effect.  Set to ``None``
+            (default) to disable per-band subsampling entirely.  A
+            :class:`UserWarning` is issued whenever subsampling occurs
+            (see :func:`~pgmuvi.preprocess.subsample_lightcurve`).
+        max_samples : int or None, optional
+            Maximum number of observations to retain.  For 1-D lightcurves,
+            when the total number of points exceeds `max_samples`, a
+            gap-preserving random subsample of `max_samples` points is
+            drawn and stored permanently.  For 2-D lightcurves, this
+            parameter does **not** trigger subsampling; use
+            `max_samples_per_band` for that.  Instead, a
+            :class:`UserWarning` is issued if the total point count exceeds
+            `max_samples`, as a compute-budget advisory.  Default is
+            ``1000``.  Set to ``None`` to disable all automatic subsampling
+            (1-D) or to suppress the advisory warning (2-D).
+        subsample_seed : int or None, optional
+            Random seed for the subsampler.  Provide an integer for
+            reproducible results; ``None`` (default) gives a non-deterministic
+            subsample.  Only used when *max_samples* is set.
+        check_sampling : bool, optional
+            If ``True``, assess temporal sampling quality after storing the
+            data.  For 1-D lightcurves a :class:`ValueError` is raised if
+            sampling is poor.  For 2-D (multiband) lightcurves each band is
+            checked independently: bands that fail are removed from the stored
+            data with a :class:`UserWarning`, and a :class:`ValueError` is
+            raised only if no bands pass.  Default is ``False``.
+        sampling_kwargs : dict or None, optional
+            Keyword arguments forwarded to the sampling quality gates
+            (``min_points``, ``max_gap_fraction``, ``min_baseline_factor``,
+            ``min_snr``, ``min_fraction_good_snr``).  Only used when
+            *check_sampling* is ``True``.
+        check_variability : bool, optional
+            If ``True``, verify that the lightcurve shows significant
+            variability after storing the data.  Raises :class:`ValueError`
+            if not variable.  Only supported for 1-D lightcurves.  Default
+            is ``False``.
+        variability_kwargs : dict or None, optional
+            Keyword arguments forwarded to the variability tests (``alpha``,
+            ``fvar_min``, ``stetson_k_min``; diagnostic reference). Only used
+            when
+            *check_variability* is ``True``.
+        band : array-like of str or None, optional
+            Optional per-row labels for a 2-D light curve.  Each element
+            should be a string identifier (e.g. ``"V"``, ``"R"``,
+            ``"W1"``).  The length must match the number of observation rows
+            (``len(band) == len(xdata)`` for 2-D data, or 1 for 1-D data).
+            ``None`` (default) means no band labels are stored.
         """
         super().__init__()
 
@@ -794,12 +1835,68 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         else:
             self.ytransform = transform_dic[ytransform]()
 
-        self.xdata = _convert_time_to_days(xdata, time_units)
+        # Convert time units and coerce to tensors before non-finite filtering.
+        xdata = _convert_time_to_days(xdata, time_units)
+        xdata = self._ensure_tensor(xdata)
+        ydata = self._ensure_tensor(ydata)
+        if yerr is not None:
+            yerr = self._ensure_tensor(yerr)
+
+        _valid_rows_mask = None
+        if ydata.dim() == 1 and band is not None and xdata.dim() > 1:
+            _valid_rows_mask = torch.isfinite(ydata)
+            _valid_rows_mask &= torch.isfinite(xdata).all(dim=1)
+            if yerr is not None:
+                _valid_rows_mask &= torch.isfinite(yerr)
+
+        # Drop rows that contain NaN or Inf in any of the data arrays so that
+        # all subsequent operations (transforms, GP training, LS) see only
+        # finite values.  Only applied when ydata is 1-D (the standard case
+        # for all supported GP models).  Non-standard multi-dimensional ydata
+        # (e.g. legacy test fixtures with shape (D, N)) bypass this step;
+        # those cases rely on the existing per-setter NaN validation.
+        if ydata.dim() == 1:
+            xdata, ydata, yerr = self._drop_nonfinite_rows(xdata, ydata, yerr)
+
+        self.xdata = xdata
         self.ydata = ydata
         if yerr is not None:
             self.yerr = yerr
 
         self.name = "Lightcurve" if name is None else name
+
+        # ------------------------------------------------------------------
+        # Band labels
+        # ------------------------------------------------------------------
+        if band is None:
+            self.band = None
+        else:
+            band_arr = np.asarray(band, dtype=np.str_)
+            if band_arr.ndim != 1:
+                raise ValueError(
+                    f"'band' must be a 1-D array-like of strings (shape (n,)); "
+                    f"got shape {band_arr.shape}."
+                )
+            if (
+                _valid_rows_mask is not None
+                # Keep this as a defensive guard: if caller supplied a
+                # mis-sized band array, length validation below should still
+                # raise the existing ValueError with the expected message.
+                and len(band_arr) == len(_valid_rows_mask)
+            ):
+                band_arr = band_arr[_valid_rows_mask.detach().cpu().numpy()]
+            # Determine the expected length: one label per observation row for
+            # 2-D data, or 1 for 1-D data (single-band lightcurve).
+            if self.ndim > 1:
+                n_rows = len(self._xdata_raw)
+            else:
+                n_rows = 1
+            if len(band_arr) != n_rows:
+                raise ValueError(
+                    f"Length of 'band' ({len(band_arr)}) does not match the "
+                    f"expected number of rows ({n_rows})."
+                )
+            self.band = band_arr
 
         self.__SET_LIKELIHOOD_CALLED = False
         self.__SET_MODEL_CALLED = False
@@ -808,9 +1905,308 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.__FITTED_MAP = False
         self.__FITTED_MCMC = False
 
+        # ------------------------------------------------------------------
+        # Sampling quality check
+        # ------------------------------------------------------------------
+        if check_sampling:
+            sk = sampling_kwargs or {}
+            if self.ndim > 1:
+                xdata_raw = self._xdata_raw
+                if xdata_raw.dim() != 2 or xdata_raw.shape[1] != 2:
+                    raise ValueError(
+                        "For 2D/multiband light curves, xdata must have shape "
+                        "(N, 2) with wavelength values in column 1. Received "
+                        f"shape {tuple(xdata_raw.shape)}. Please ensure "
+                        "that your input is not transposed or otherwise "
+                        "malformed."
+                    )
+                results = self.assess_sampling_quality_per_band(
+                    verbose=False, **sk
+                )
+                failing = results["summary"]["failing_wavelengths"]
+                passing = results["summary"]["passing_wavelengths"]
+
+                for wl in failing:
+                    diag = results[float(wl)]
+                    warnings_str = ", ".join(diag["warnings"])
+                    warnings.warn(
+                        f"Skipping band \u03bb={wl} due to poor "
+                        f"temporal sampling: {warnings_str}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+
+                if not passing:
+                    raise ValueError(
+                        "No wavelength bands passed sampling quality checks. "
+                        "GP fitting is not recommended.\n"
+                        "To force fitting anyway, use: "
+                        "Lightcurve(..., check_sampling=False)"
+                    )
+
+                if failing:
+                    n_pass = len(passing)
+                    n_total = results["summary"]["n_bands"]
+                    skipped = [round(w, 4) for w in failing]
+                    _msg = (
+                        f"Retaining {n_pass}/{n_total} wavelength bands after "
+                        f"sampling-quality filtering (skipping \u03bb = "
+                        f"{skipped})."
+                    )
+                    warnings.warn(_msg, UserWarning, stacklevel=2)
+                    keep_mask = torch.isin(
+                        xdata_raw[:, 1],
+                        torch.tensor(
+                            passing,
+                            dtype=xdata_raw.dtype,
+                            device=xdata_raw.device,
+                        ),
+                    )
+                    self.xdata = xdata_raw[keep_mask].clone()
+                    self.ydata = self._ydata_raw[keep_mask].clone()
+                    if hasattr(self, "_yerr_raw"):
+                        self.yerr = self._yerr_raw[keep_mask].clone()
+                    if self.band is not None:
+                        self.band = self.band[keep_mask.detach().cpu().numpy()]
+            else:
+                from pgmuvi.preprocess.quality import assess_sampling_quality
+
+                t = self._xdata_raw.detach().cpu().numpy()
+                if t.ndim > 1:
+                    t = t[:, 0]
+                y_np = (
+                    self._ydata_raw.detach().cpu().numpy()
+                    if hasattr(self, "_ydata_raw")
+                    else None
+                )
+                yerr_np = (
+                    self._yerr_raw.detach().cpu().numpy()
+                    if hasattr(self, "_yerr_raw")
+                    else None
+                )
+                passes, diag = assess_sampling_quality(
+                    t, y_np, yerr_np, verbose=False, **sk
+                )
+                if not passes:
+                    warnings_str = "\n".join(
+                        f"  \u2022 {w}" for w in diag["warnings"]
+                    )
+                    raise ValueError(
+                        f"Lightcurve has poor temporal sampling:\n"
+                        f"{warnings_str}\n\n"
+                        f"Recommendation: {diag['recommendation']}\n"
+                        "GP fitting not recommended for poorly sampled data.\n"
+                        "To force fitting anyway, use: "
+                        "Lightcurve(..., check_sampling=False)"
+                    )
+
+        # ------------------------------------------------------------------
+        # Variability check
+        # ------------------------------------------------------------------
+        if check_variability:
+            from pgmuvi.preprocess.variability import is_variable
+
+            if self.ndim > 1:
+                raise ValueError(
+                    "check_variability=True is not supported for multiband "
+                    "(ndim > 1) lightcurves, because pooling bands may produce "
+                    "misleading variability results. Use "
+                    "check_variability_per_band() or filter_variable_bands() "
+                    "to assess each band independently."
+                )
+
+            vkwargs = variability_kwargs or {}
+            y_v, yerr_v = self._get_variability_arrays()
+            is_var, diag = is_variable(y_v, yerr_v, **vkwargs)
+
+            if not is_var:
+                raise ValueError(
+                    f"Lightcurve shows NO significant variability:\n"
+                    f"  p-value: {diag['p_value']:.4f} "
+                    f"[{'PASS' if diag['tests_passed']['chi2_test'] else 'FAIL'}]\n"
+                    f"  F_var: {diag['fvar']:.4f} "
+                    f"[{'PASS' if diag['tests_passed']['fvar_test'] else 'FAIL'}]\n"
+                    f"  Stetson K: {diag['stetson_k']:.3f} "
+                    f"[{'PASS' if diag['tests_passed']['stetson_test'] else 'FAIL'}]\n"
+                    f"Decision: {diag['decision']}\n\n"
+                    "GP fitting not recommended for non-variable sources.\n"
+                    "To force fitting anyway, use: "
+                    "Lightcurve(..., check_variability=False)"
+                )
+
+        # ------------------------------------------------------------------
+        # Subsampling: permanently reduce the stored data while preserving
+        # the temporal baseline and the max-gap constraint.
+        #
+        # 1D: subsample the whole array when it exceeds max_samples.
+        # 2D: subsample each band independently when it exceeds
+        #     max_samples_per_band (max_samples is used only as an advisory
+        #     threshold to warn about total compute budget).
+        # ------------------------------------------------------------------
+        _do_2d = self.ndim > 1 and max_samples_per_band is not None
+        _do_1d = self.ndim == 1 and max_samples is not None
+        if _do_1d or _do_2d:
+            from pgmuvi.preprocess import subsample_lightcurve
+
+            # Subsampling is only valid for the standard (N,) or (N,2) shapes
+            # where observations lie along dimension 0.  Non-standard
+            # multi-dimensional ydata (e.g. shape (D, N)) would subsample the
+            # wrong axis; raise a clear error rather than silently misbehaving.
+            if self._ydata_raw.dim() != 1:
+                raise ValueError(
+                    "max_samples is only supported for standard 1-D "
+                    "ydata (shape (N,)). The supplied ydata has shape "
+                    f"{tuple(self._ydata_raw.shape)}."
+                )
+
+            mgf = (sampling_kwargs or {}).get("max_gap_fraction", 0.3)
+            _buffer_names = (
+                "_xdata_raw",
+                "_xdata_transformed",
+                "_ydata_raw",
+                "_ydata_transformed",
+                "_yerr_raw",
+                "_yerr_transformed",
+            )
+
+            if _do_2d:
+                # 2D (multiband): subsample each band independently using
+                # max_samples_per_band.  Bands already at or below the limit
+                # are left untouched.  The second column of xdata holds the
+                # numeric wavelength/band identifier for standard 2-D
+                # lightcurves.
+                if (
+                    self._xdata_raw.dim() != 2
+                    or self._xdata_raw.shape[1] != 2
+                ):
+                    raise ValueError(
+                        "Per-band subsampling requires xdata of shape "
+                        "(N, 2) with time in column 0 and wavelength in "
+                        "column 1. Received shape "
+                        f"{tuple(self._xdata_raw.shape)}. Please ensure "
+                        "that your input is not transposed or otherwise "
+                        "malformed."
+                    )
+                xdata_np = self._xdata_raw.detach().cpu().numpy()
+                band_ids = xdata_np[:, 1]
+                unique_bands = np.unique(band_ids)
+                global_keep = []
+                subsampled_bands = []
+                for bval in unique_bands:
+                    band_mask = np.where(band_ids == bval)[0]
+                    n_band = len(band_mask)
+                    if n_band > max_samples_per_band:
+                        t_band = xdata_np[band_mask, 0]
+                        local_idx = subsample_lightcurve(
+                            t_band,
+                            max_samples=max_samples_per_band,
+                            max_gap_fraction=mgf,
+                            random_seed=subsample_seed,
+                        )
+                        global_keep.append(band_mask[local_idx])
+                        subsampled_bands.append(bval)
+                    else:
+                        global_keep.append(band_mask)
+                if subsampled_bands:
+                    _band_str = ", ".join(
+                        f"\u03bb={b}" for b in subsampled_bands
+                    )
+                    _struct_lines = "\n".join(
+                        f"    \u03bb={bval}: {len(keep)} points"
+                        for bval, keep in zip(
+                            unique_bands, global_keep, strict=True
+                        )
+                    )
+                    _msg = (
+                        "The following bands exceed "
+                        f"max_samples_per_band={max_samples_per_band}"
+                        f" and were randomly subsampled: {_band_str}. "
+                        "Set max_samples_per_band=None to disable "
+                        "subsampling.\nThe subsampled 2D light curve has "
+                        f"the following structure:\n{_struct_lines}"
+                    )
+                    warnings.warn(_msg, UserWarning, stacklevel=2)
+                    idx = np.concatenate(global_keep)
+                    # Sort by time column to preserve temporal ordering.
+                    idx = idx[
+                        np.argsort(xdata_np[idx, 0], kind="stable")
+                    ]
+                    idx_t = torch.as_tensor(
+                        idx,
+                        dtype=torch.long,
+                        device=self._xdata_raw.device,
+                    )
+                    for bname in _buffer_names:
+                        if (
+                            hasattr(self, bname)
+                            and getattr(self, bname) is not None
+                        ):
+                            self.register_buffer(
+                                bname, getattr(self, bname)[idx_t]
+                            )
+                    if self.band is not None:
+                        self.band = self.band[idx]
+            else:
+                # 1D light curve: subsample the whole array if it exceeds the
+                # limit.
+                n_total = self._xdata_raw.shape[0]
+                if n_total > max_samples:
+                    t_np = self._xdata_raw.detach().cpu().numpy()
+                    idx = subsample_lightcurve(
+                        t_np,
+                        max_samples=max_samples,
+                        max_gap_fraction=mgf,
+                        random_seed=subsample_seed,
+                    )
+                    warnings.warn(
+                        f"Lightcurve has {n_total} points, which exceeds "
+                        f"max_samples={max_samples}. Retaining a random "
+                        f"subsample of {len(idx)} points. "
+                        "Set max_samples=None to disable subsampling.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    idx_t = torch.as_tensor(
+                        idx,
+                        dtype=torch.long,
+                        device=self._xdata_raw.device,
+                    )
+                    for bname in _buffer_names:
+                        if (
+                            hasattr(self, bname)
+                            and getattr(self, bname) is not None
+                        ):
+                            self.register_buffer(
+                                bname, getattr(self, bname)[idx_t]
+                            )
+
+        # Advisory warning for 2D lightcurves: notify if the total point
+        # count exceeds max_samples, regardless of whether per-band
+        # subsampling was performed.
+        if (
+            self.ndim > 1
+            and max_samples is not None
+            and self._xdata_raw.shape[0] > max_samples
+        ):
+            _msg = (
+                f"Lightcurve has {self._xdata_raw.shape[0]} points, "
+                f"which exceeds max_samples={max_samples}. "
+                "Execution may be slow. Consider setting "
+                "max_samples_per_band to reduce the total size of "
+                "the lightcurve."
+            )
+            warnings.warn(_msg, UserWarning, stacklevel=2)
+
     @classmethod
     def from_table(
-        cls, tab, file_format="votable", xcol="x", ycol="y", yerrcol="yerr", **kwargs
+        cls,
+        tab,
+        file_format="votable",
+        xcol="x",
+        ycol="y",
+        yerrcol="yerr",
+        bandcol=None,
+        **kwargs,
     ):
         """Instantiate a Lightcurve object with
         data read in from a VOTable.
@@ -830,6 +2226,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Name of column in table that contains the y data
         yerrcol: str
             Name of column in table that contains the yerr data
+        bandcol: str or None, optional
+            Name of the column containing string band labels (e.g. ``"V"``,
+            ``"R"``, ``"W1"``).  When provided, the per-row labels are read
+            from this column and stored in :attr:`Lightcurve.band`.  If
+            ``None`` (default), the method attempts to auto-detect a
+            string-typed column whose name matches one of the entries in
+            :attr:`_WAVELENGTH_ID_COLUMN_NAMES` (e.g. ``"band"``,
+            ``"filter"``); if found it is used as the band-label column.
+            The ``band`` kwarg in ``kwargs`` always takes precedence.
         kwargs:
             Arguments to be passed to the Lightcurve constructor, including
             ``time_units`` (str or ``astropy.units`` unit, default *None*).
@@ -881,7 +2286,42 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if yerr.shape[0] != nsamples and yerr.shape[1] == nsamples:
                 yerr = yerr.transpose(0, 1)
 
-        x, y, yerr = cls._drop_nan_rows(x, y, yerr)
+        # Compute the finite-row mask before calling _drop_nonfinite_rows so
+        # that we can apply the same filter to the ancillary band column below.
+        _valid = torch.isfinite(y)
+        if x.dim() > 1:
+            _valid &= torch.isfinite(x).all(dim=1)
+        else:
+            _valid &= torch.isfinite(x)
+        if yerr is not None:
+            _valid &= torch.isfinite(yerr)
+        _valid_np = _valid.numpy().astype(bool)
+
+        x, y, yerr = cls._drop_nonfinite_rows(x, y, yerr)
+
+        # ------------------------------------------------------------------
+        # Band labels: only relevant when xdata is already 2-D (multiband).
+        # For 1-D lightcurves there is no wavelength axis, so band labels
+        # from an ancillary string column would be meaningless.
+        # One label per row is stored (same length as xdata).
+        # ------------------------------------------------------------------
+        if "band" not in kwargs and x.dim() == 2:
+            # Prefer the explicit bandcol; fall back to auto-detection.
+            if bandcol is None:
+                bandcol = cls._find_column(c, cls._WAVELENGTH_ID_COLUMN_NAMES)
+            if bandcol is not None and bandcol in c:
+                col_data = np.asarray(data[bandcol])
+                col_dtype = col_data.dtype
+                if (
+                    np.issubdtype(col_dtype, np.str_)
+                    or np.issubdtype(col_dtype, np.bytes_)
+                    or col_dtype.kind == "O"
+                ):
+                    # String column found — store per-row labels (filtered to
+                    # the same valid rows as x/y/yerr).
+                    kwargs["band"] = np.array(
+                        col_data[_valid_np].astype(str), dtype=np.str_
+                    )
 
         return cls(x, y, yerr, **kwargs)
 
@@ -1018,6 +2458,250 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def append_data(self, new_values_x, new_values_y):
         pass
+
+    def select_bands(
+        self, bands: list | tuple | np.ndarray
+    ) -> "Lightcurve":
+        """Return a new Lightcurve containing only the requested bands.
+
+        Bands are identified exclusively through the :attr:`band` attribute.
+        Wavelength values play no role in selection.
+
+        Parameters
+        ----------
+        bands : list, tuple, or numpy.ndarray
+            A sequence of string band labels to select.  Each element must
+            be a ``str`` or ``numpy.str_``; the value is coerced to ``str``
+            before comparison so numpy string scalars are handled naturally.
+            ``bytes``, numeric types, and ``None`` are rejected.
+
+        Returns
+        -------
+        Lightcurve
+            A new :class:`Lightcurve` object built from the subset of rows
+            whose :attr:`band` matches at least one of the requested labels.
+            The :attr:`name`, :attr:`xtransform`, and :attr:`ytransform`
+            attributes are inherited from the original light curve, and the
+            subsetted :attr:`band` array is preserved.
+
+        Raises
+        ------
+        TypeError
+            If *bands* is not a ``list``, ``tuple``, or ``numpy.ndarray``.
+        TypeError
+            If *bands* is a bare string (use ``["label"]`` instead).
+        TypeError
+            If any element of *bands* is not a ``str`` or ``numpy.str_``
+            (e.g. ``bytes``, ``int``, ``float``, ``None``, or a nested list).
+        ValueError
+            If :attr:`band` is ``None``.
+        ValueError
+            If none of the requested labels are present in :attr:`band`.
+        """
+        if isinstance(bands, str):
+            raise TypeError(
+                "'bands' must be a sequence of band labels (list, tuple, or "
+                "numpy.ndarray), not a bare string. "
+                "To select a single band wrap it in a list: "
+                f"select_bands([{bands!r}])"
+            )
+
+        if not isinstance(bands, (list, tuple, np.ndarray)):
+            raise TypeError(
+                f"'bands' must be a list, tuple, or numpy.ndarray; "
+                f"got {type(bands).__name__!r}."
+            )
+
+        if self.band is None:
+            raise ValueError(
+                "select_bands requires the 'band' attribute to be set, "
+                "but this Lightcurve has band=None."
+            )
+
+        str_labels = []
+        for b in bands:
+            if b is None:
+                raise TypeError(
+                    "None is not a valid band selector in 'bands'."
+                )
+            if isinstance(b, (float, int, np.floating, np.integer)):
+                raise TypeError(
+                    f"Numeric selectors are not supported by select_bands; "
+                    f"got {type(b).__name__!r} ({b!r}). "
+                    "Use a string band label instead."
+                )
+            if not isinstance(b, (str, np.str_)):
+                raise TypeError(
+                    f"Each element of 'bands' must be a string band label; "
+                    f"got {type(b).__name__!r}."
+                )
+            str_labels.append(str(b))
+
+        xdata_raw = self._xdata_raw
+        n = xdata_raw.shape[0]
+
+        # 1-D lightcurves store a single band label (len(self.band) == 1)
+        # that applies to all observations.  Build the mask differently to
+        # avoid a length-1 vs length-N boolean-index mismatch.
+        if len(self.band) == 1:
+            single_label = str(self.band[0])
+            if single_label not in str_labels:
+                raise ValueError(
+                    f"None of the requested band labels {str_labels!r} were "
+                    "found in this Lightcurve's 'band' attribute."
+                )
+            # The whole lightcurve belongs to this band — return it unchanged.
+            return Lightcurve(
+                xdata_raw,
+                self._ydata_raw,
+                yerr=(
+                    self._yerr_raw
+                    if hasattr(self, "_yerr_raw")
+                    else None
+                ),
+                xtransform=self.xtransform,
+                ytransform=self.ytransform,
+                name=self.name,
+                band=self.band,
+            )
+
+        band_str = self.band.astype(str)
+        mask = np.zeros(n, dtype=bool)
+        for label in str_labels:
+            mask |= band_str == label
+
+        if not mask.any():
+            raise ValueError(
+                f"None of the requested band labels {str_labels!r} were "
+                "found in this Lightcurve's 'band' attribute."
+            )
+
+        mask_tensor = torch.as_tensor(
+            mask, dtype=torch.bool, device=xdata_raw.device
+        )
+        new_x = xdata_raw[mask_tensor]
+        new_y = self._ydata_raw[mask_tensor]
+        new_yerr = (
+            self._yerr_raw[mask_tensor] if hasattr(self, "_yerr_raw") else None
+        )
+        new_band = self.band[mask]
+
+        return Lightcurve(
+            new_x,
+            new_y,
+            yerr=new_yerr,
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+            band=new_band,
+        )
+
+    def drop_bands(
+        self, bands: list | tuple | np.ndarray
+    ) -> "Lightcurve":
+        """Return a new Lightcurve with the specified bands removed.
+
+        This complements the string band-label behavior of
+        :meth:`select_bands`: every row whose :attr:`band` label appears
+        in *bands* is excluded from the returned object.
+
+        Parameters
+        ----------
+        bands : list, tuple, or numpy.ndarray
+            Band labels to remove.  Each element must be a string
+            (``str`` or ``numpy.str_``). Numeric selectors, ``bytes``,
+            ``None``, and nested containers are not accepted.
+
+        Returns
+        -------
+        Lightcurve
+            A new :class:`Lightcurve` built from the rows whose
+            :attr:`band` label is **not** in *bands*.  The
+            :attr:`name`, :attr:`xtransform`, and :attr:`ytransform`
+            attributes are inherited from the original light curve.
+            If none of the requested labels are present in the data
+            the returned object is a copy of the original (no-op).
+
+        Raises
+        ------
+        TypeError
+            If *bands* is a bare string rather than a sequence.
+        TypeError
+            If any element of *bands* is not a string.
+        ValueError
+            If :attr:`band` is ``None``.
+        ValueError
+            If all rows are removed (no data would remain).
+        """
+        if isinstance(bands, str):
+            raise TypeError(
+                "'bands' must be a sequence of labels (list, tuple, or "
+                "numpy.ndarray), not a bare string. "
+                "To drop a single band wrap it in a list: "
+                f"drop_bands([{bands!r}])"
+            )
+
+        if not isinstance(bands, (list, tuple, np.ndarray)):
+            raise TypeError(
+                "'bands' must be a list, tuple, or numpy.ndarray; "
+                f"got {type(bands).__name__!r}."
+            )
+
+        for b in bands:
+            if not isinstance(b, (str, np.str_)):
+                raise TypeError(
+                    "Each element of 'bands' must be a string; "
+                    f"got {type(b).__name__!r}."
+                )
+
+        if self.band is None:
+            raise ValueError(
+                "drop_bands requires the 'band' attribute to be set, "
+                "but this Lightcurve has band=None."
+            )
+
+        xdata_raw = self._xdata_raw
+        band_arr = self.band.astype(str)
+        requested = {str(b) for b in bands}
+
+        if len(band_arr) == len(xdata_raw):
+            mask = ~np.isin(band_arr, list(requested))
+            if not mask.any():
+                raise ValueError(
+                    "All rows were removed by drop_bands; no data remains."
+                )
+            new_band = self.band[mask]
+        elif len(band_arr) == 1:
+            if band_arr[0] in requested:
+                raise ValueError(
+                    "All rows were removed by drop_bands; no data remains."
+                )
+            mask = np.ones(len(xdata_raw), dtype=bool)
+            new_band = self.band.copy()
+        else:
+            raise ValueError(
+                "drop_bands requires 'band' to have either one label "
+                "for the whole lightcurve or one label per observation row."
+            )
+
+        tensor_mask = torch.as_tensor(
+            mask, dtype=torch.bool, device=xdata_raw.device
+        )
+        new_x = xdata_raw[tensor_mask]
+        new_y = self._ydata_raw[tensor_mask]
+        new_yerr = (
+            self._yerr_raw[tensor_mask] if hasattr(self, "_yerr_raw") else None
+        )
+
+        return Lightcurve(
+            new_x,
+            new_y,
+            yerr=new_yerr,
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+            band=new_band,
+        )
 
     def transform_x(self, values):
         if self.xtransform is None:
@@ -1212,6 +2896,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._model_str = None
             self._model_instance = None
         self._model_num_mixtures = num_mixtures
+        self._fit_num_mixtures_effective = num_mixtures
+        self._fit_num_mixtures_requested = num_mixtures
         model_dic_1 = {
             "2D": TwoDSpectralMixtureGPModel,
             "1D": SpectralMixtureGPModel,
@@ -2533,8 +4219,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Nyquist_factor: int = 5,
         fap_method: str | None = None,
         use_best_band_init: bool = False,
-        max_samples: int | None = 3000,
-        subsample_seed: int | None = None,
+        return_full: bool = False,
         **kwargs,
     ) -> tuple:
         """
@@ -2578,10 +4263,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (a warning is issued and ``'baluev'`` is used instead); it is
             however used internally as the per-frequency p-value when
             applying the Benjamini-Hochberg correction.
-            For multi-band lightcurves the default is ``'analytical'`` (fast
-            Baluev-style approximation).  Slower but more accurate options
-            are ``'bootstrap'``, ``'phase_scramble'``, and ``'calibrated'``
-            (see
+            For multi-band lightcurves the default is ``'phase_scramble'``.
+            Slower but more accurate options are ``'bootstrap'``, ``'calibrated'``,
+            and ``'analytical'``  (fast Baluev-style approximation) (see
             :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`).
         - use_best_band_init: bool, optional, default=False
             If True and the lightcurve is multiband (ndim > 1), the
@@ -2591,30 +4275,47 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             informative band, which can speed up and improve the
             periodogram search when sampling is highly heterogeneous
             across bands.  Has no effect for 1D lightcurves.
-        - max_samples : int or None, optional, default=3000
-            Maximum number of observations to use when computing the
-            Lomb-Scargle periodogram.  When the lightcurve contains more
-            than *max_samples* points a random subsample is drawn
-            automatically (see :func:`~pgmuvi.preprocess.subsample_lightcurve`
-            for details of the gap-preserving algorithm).  Set to ``None``
-            to disable subsampling entirely.
-        - subsample_seed : int or None, optional, default=None
-            Seed for the random number generator used when subsampling.
-            Provide an integer for reproducible results.
+        - return_full: bool, optional, default=False
+            If True and ``freq_only=False``, also return the complete
+            frequency grid and power spectrum alongside the peak frequencies
+            and significance mask (see return values below).  Ignored when
+            ``freq_only=True``.  The periodogram itself is not recomputed,
+            but returning the full grid may still allocate and/or copy the
+            frequency and power tensors before returning them.
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
 
         Returns:
         ----------------
-        - freq: torch.Tensor of floats
-          frequencies corresponding to the num_peaks periodogram peaks.
-          If freq_only is set, the entire frequency grid is returned.
-        - mask: torch.Tensor of bool
-          identifies statistically significant peaks. Only returned if
-          freq_only is not set.
-        - power: torch.Tensor of floats
-          PSD for the entire frequency grid. Returned if freq_only is set.
+        The return value depends on the combination of ``freq_only`` and
+        ``return_full``:
+
+        * ``freq_only=True`` (``return_full`` is ignored):
+          ``(freq_grid, power_grid)``
+
+          - freq_grid: torch.Tensor of floats — the full frequency grid.
+          - power_grid: torch.Tensor of floats — periodogram power at each
+            frequency.
+
+        * ``freq_only=False, return_full=False`` (default):
+          ``(peak_freqs, significance_mask)``
+
+          - peak_freqs: torch.Tensor of floats — frequencies of the
+            ``num_peaks`` highest periodogram peaks.
+          - significance_mask: torch.Tensor of bool — True for peaks that
+            are statistically significant after Benjamini-Hochberg FDR
+            correction.
+
+        * ``freq_only=False, return_full=True``:
+          ``(peak_freqs, significance_mask, freq_grid, power_grid)``
+
+          - peak_freqs: torch.Tensor of floats — as above.
+          - significance_mask: torch.Tensor of bool — as above.
+          - freq_grid: torch.Tensor of floats — the full frequency grid
+            (already computed internally; returned at no extra cost).
+          - power_grid: torch.Tensor of floats — periodogram power at each
+            frequency (already computed internally).
         """
         from astropy.timeseries import LombScargle
         from scipy.signal import find_peaks
@@ -2663,79 +4364,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 result = np.zeros(N, dtype=bool)
             return result
 
-        # ------------------------------------------------------------------
-        # Build working arrays: apply finite-value mask first, then subsample.
-        # Masking before subsampling ensures the subsampler only sees finite
-        # times and the effective sample count is not diluted by NaN/inf rows.
-        # ------------------------------------------------------------------
+        # Build working arrays from the stored (already finite) data.
         _has_yerr = (
             hasattr(self, "_yerr_transformed")
             and self._yerr_transformed is not None
         )
-        xdata_all = self.xdata
-        ydata_all = self.ydata
-        yerr_all = self.yerr if _has_yerr else None
-
-        # Step 1: build a finite-value mask and discard non-finite observations.
-        if self.ndim > 1:
-            t_all = xdata_all[:, 0]
-            bands_all = xdata_all[:, 1]
-            if yerr_all is not None:
-                finite_mask = (
-                    torch.isfinite(t_all)
-                    & torch.isfinite(bands_all)
-                    & torch.isfinite(ydata_all)
-                    & torch.isfinite(yerr_all)
-                )
-            else:
-                finite_mask = (
-                    torch.isfinite(t_all)
-                    & torch.isfinite(bands_all)
-                    & torch.isfinite(ydata_all)
-                )
-        else:
-            if yerr_all is not None:
-                finite_mask = (
-                    torch.isfinite(xdata_all)
-                    & torch.isfinite(ydata_all)
-                    & torch.isfinite(yerr_all)
-                )
-            else:
-                finite_mask = (
-                    torch.isfinite(xdata_all) & torch.isfinite(ydata_all)
-                )
-        _xdata = xdata_all[finite_mask]
-        _ydata = ydata_all[finite_mask]
-        _yerr = yerr_all[finite_mask] if _has_yerr else None
-
-        # Step 2: optional subsampling on finite data only.
-        if max_samples is not None:
-            from pgmuvi.preprocess import subsample_lightcurve
-
-            t_for_sub = _xdata[:, 0] if self.ndim > 1 else _xdata
-            t_np = t_for_sub.detach().cpu().numpy()
-            if len(t_np) > max_samples:
-                warnings.warn(
-                    f"Lightcurve has {len(t_np)} finite points, which exceeds "
-                    f"max_samples={max_samples}. Computing the Lomb-Scargle "
-                    f"periodogram on a random subsample of {max_samples} "
-                    f"points. Set max_samples=None to disable subsampling.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                idx = subsample_lightcurve(
-                    t_np,
-                    max_samples=max_samples,
-                    random_seed=subsample_seed,
-                )
-                idx_t = torch.as_tensor(
-                    idx,
-                    dtype=torch.long,
-                    device=_xdata.device,
-                )
-                _xdata = _xdata[idx_t]
-                _ydata = _ydata[idx_t]
-                _yerr = _yerr[idx_t] if _has_yerr else None
+        _xdata = self.xdata
+        _ydata = self.ydata
+        _yerr = self.yerr if _has_yerr else None
 
         if self.ndim > 1:
             # Multi-band case: _xdata[:, 0] is time, _xdata[:, 1] is band/wavelength
@@ -2743,8 +4379,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             bands = _xdata[:, 1]
             y = _ydata
 
-            # Default FAP method for multiband: analytical (fast)
-            _fap_method = fap_method if fap_method is not None else 'analytical'
+            # Default FAP method for multiband: phase_scramble
+            _fap_method = fap_method if fap_method is not None else 'phase_scramble'
 
             if _yerr is not None:
                 yerr = _yerr
@@ -2771,9 +4407,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 else:
                     _ls_1d_best = LombScargle(_t_best, _y_best)
                 freq = _ls_1d_best.autofrequency(nyquist_factor=Nyquist_factor)
+                power = _ls_1d_best.power(freq)
             else:
                 freq = LS.autofrequency(nyquist_factor=Nyquist_factor)
-            power = LS.power(freq)
+                power = LS.power(freq)
 
             if freq_only:
                 return (
@@ -2785,18 +4422,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                 )
 
+            # Build full-grid tensors only when they are requested to avoid
+            # unnecessary allocation/copy on the default path.
+            if return_full:
+                _freq_t = torch.as_tensor(
+                    freq, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+                _power_t = torch.as_tensor(
+                    power, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+
             # Find peaks in the multiband periodogram
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
             peaks = peaks[np.argsort(power[peaks])][::-1]
 
             # Handle case when no peaks found
             if len(peaks) == 0:
-                return (
-                    torch.as_tensor(
-                        [], dtype=self.xdata.dtype, device=self.xdata.device
-                    ),
-                    torch.as_tensor([], dtype=torch.bool, device=self.xdata.device),
+                _pf = torch.as_tensor(
+                    [], dtype=self.xdata.dtype, device=self.xdata.device
                 )
+                _sm = torch.as_tensor(
+                    [], dtype=torch.bool, device=self.xdata.device
+                )
+                # return_full=True exposes already-computed LS intermediates
+                if return_full:
+                    return (_pf, _sm, _freq_t, _power_t)
+                return (_pf, _sm)
 
             # Compute FAP for multiband periodogram
             fap_max = LS.false_alarm_probability(power.max(),
@@ -2806,14 +4457,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if fap_max > single_threshold:
                 # Highest peak is not significant, mark all as insignificant
-                return (
-                    torch.as_tensor(freq[peaks[:n_return]],
-                                    dtype=self.xdata.dtype,
-                                    device=self.xdata.device),
-                    torch.as_tensor(np.array([False] * n_return),
-                                    dtype=torch.bool,
-                                    device=self.xdata.device)
+                _pf = torch.as_tensor(
+                    freq[peaks[:n_return]],
+                    dtype=self.xdata.dtype,
+                    device=self.xdata.device,
                 )
+                _sm = torch.as_tensor(
+                    np.array([False] * n_return),
+                    dtype=torch.bool,
+                    device=self.xdata.device,
+                )
+                # return_full=True exposes already-computed LS intermediates
+                if return_full:
+                    return (_pf, _sm, _freq_t, _power_t)
+                return (_pf, _sm)
 
             # Calculate FAP for each peak independently
             fap_single = LS.false_alarm_probability(power[peaks],
@@ -2824,18 +4481,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
             significant_mask[0] = True  # since fap_max <= single_threshold
 
-            return (
-                torch.as_tensor(
-                    freq[peaks[:n_return]],
-                    dtype=self.xdata.dtype,
-                    device=self.xdata.device
-                ),
-                torch.as_tensor(
-                    significant_mask[:n_return],
-                    dtype=torch.bool,
-                    device=self.xdata.device
-                )
+            _pf = torch.as_tensor(
+                freq[peaks[:n_return]],
+                dtype=self.xdata.dtype,
+                device=self.xdata.device,
             )
+            _sm = torch.as_tensor(
+                significant_mask[:n_return],
+                dtype=torch.bool,
+                device=self.xdata.device,
+            )
+            # return_full=True exposes already-computed LS intermediates
+            if return_full:
+                return (_pf, _sm, _freq_t, _power_t)
+            return (_pf, _sm)
         else:
             t, y = _xdata, _ydata
 
@@ -2862,6 +4521,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         power, dtype=self.xdata.dtype, device=self.xdata.device
                     ),
                 )
+
+            # Build full-grid tensors only when they are requested to avoid
+            # unnecessary allocation/copy on the default path.
+            if return_full:
+                _freq_t = torch.as_tensor(
+                    freq, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+                _power_t = torch.as_tensor(
+                    power, dtype=self.xdata.dtype, device=self.xdata.device
+                )
+
             # distance set to Nyquist_factor for LS frequency grid computation
             peaks, _ = find_peaks(power, distance=Nyquist_factor)
             # sort by decreasing power
@@ -2870,12 +4540,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Handle case when no peaks or fewer peaks than requested
             if len(peaks) == 0:
                 # No peaks found, return empty tensors
-                return (
-                    torch.as_tensor(
-                        [], dtype=self.xdata.dtype, device=self.xdata.device
-                    ),
-                    torch.as_tensor([], dtype=torch.bool, device=self.xdata.device),
+                _pf = torch.as_tensor(
+                    [], dtype=self.xdata.dtype, device=self.xdata.device
                 )
+                _sm = torch.as_tensor(
+                    [], dtype=torch.bool, device=self.xdata.device
+                )
+                # return_full=True exposes already-computed LS intermediates
+                if return_full:
+                    return (_pf, _sm, _freq_t, _power_t)
+                return (_pf, _sm)
 
             # Calculate the false alarm probability for the highest peak.
             # 'single' is not appropriate for fap_max (it computes the FAP
@@ -2896,18 +4570,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:
-                return (
-                    torch.as_tensor(
-                        freq[peaks[:n_return]],
-                        dtype=self.xdata.dtype,
-                        device=self.xdata.device,
-                    ),
-                    torch.as_tensor(
-                        np.array([False] * n_return),
-                        dtype=torch.bool,
-                        device=self.xdata.device,
-                    ),
+                _pf = torch.as_tensor(
+                    freq[peaks[:n_return]],
+                    dtype=self.xdata.dtype,
+                    device=self.xdata.device,
                 )
+                _sm = torch.as_tensor(
+                    np.array([False] * n_return),
+                    dtype=torch.bool,
+                    device=self.xdata.device,
+                )
+                # return_full=True exposes already-computed LS intermediates
+                if return_full:
+                    return (_pf, _sm, _freq_t, _power_t)
+                return (_pf, _sm)
             # Per-peak FAP for the Benjamini-Hochberg correction.
             # We use method='single' here: it gives the single-frequency FAP
             # (probability that one pre-specified frequency shows at least
@@ -2919,18 +4595,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Apply the FDR (Benjamini-Hochberg) correction
             significant_mask = fdr_bh(fap_single, alpha=single_threshold)
             significant_mask[0] = True  # since fap_max <= single_threshold
-            return (
-                torch.as_tensor(
-                    freq[peaks[:n_return]],
-                    dtype=self.xdata.dtype,
-                    device=self.xdata.device,
-                ),
-                torch.as_tensor(
-                    significant_mask[:n_return],
-                    dtype=torch.bool,
-                    device=self.xdata.device,
-                ),
+            _pf = torch.as_tensor(
+                freq[peaks[:n_return]],
+                dtype=self.xdata.dtype,
+                device=self.xdata.device,
             )
+            _sm = torch.as_tensor(
+                significant_mask[:n_return],
+                dtype=torch.bool,
+                device=self.xdata.device,
+            )
+            # return_full=True exposes already-computed LS intermediates
+            if return_full:
+                return (_pf, _sm, _freq_t, _power_t)
+            return (_pf, _sm)
 
     def compute_sampling_metrics(self) -> dict:
         """
@@ -2977,7 +4655,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Quality gate thresholds (see
             preprocess.quality.assess_sampling_quality):
 
-            - min_points: int (default 6)
+            - min_points: int (default 15)
             - max_gap_fraction: float (default 0.3)
             - min_baseline_factor: float (default 3.0)
             - min_snr: float (default 3.0)
@@ -3221,11 +4899,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             xdata[:, 1],
             torch.tensor(keep_wl, dtype=xdata.dtype, device=xdata.device),
         )
+        new_band = self.band[keep_mask.cpu().numpy()] if self.band is not None else None
 
         return Lightcurve(
             xdata[keep_mask].clone(),
             self._ydata_raw[keep_mask].clone(),
             self._yerr_raw[keep_mask].clone() if hasattr(self, "_yerr_raw") else None,
+            band=new_band
         )
 
     def _get_best_sampled_band_lc(self) -> "Lightcurve":
@@ -3281,7 +4961,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Arguments passed to is_variable():
             - alpha: float (default 0.01)
             - fvar_min: float (default 0.05)
-            - stetson_k_min: float (default 0.95)
+            - stetson_k_min: float diagnostic reference (default 0.95)
             - verbose: bool (default False)
 
         Returns
@@ -3407,7 +5087,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if results["summary"]["n_variable"] == 0:
             raise ValueError(
                 "No bands passed variability tests. "
-                "Consider relaxing criteria (alpha, fvar_min, stetson_k_min)"
+                "Consider relaxing criteria (alpha, fvar_min); "
+                "stetson_k_min is diagnostic."
             )
 
         keep_wl = results["summary"]["variable_wavelengths"]
@@ -3547,12 +5228,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lr=0.1,
         stopavg=30,
         variance=False,
-        check_sampling: bool = True,
-        sampling_kwargs: dict | None = None,
-        check_variability: bool = False,
-        variability_kwargs: dict | None = None,
-        max_samples: int | None = 3000,
-        subsample_seed: int | None = None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -3694,45 +5369,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         stopavg : int, optional
             The number of iterations to use for the stopping criterion, by
             default 30.
-        check_sampling : bool, default=True
-            If True, verify lightcurve has adequate temporal sampling before
-            fitting. For 1D lightcurves, raises ValueError if sampling is
-            poor. For 2D (multiband) lightcurves, checks each wavelength band
-            independently: bands that fail are removed from the data with a
-            printed warning, and the fit proceeds with the remaining bands.
-            Raises ValueError only if no bands pass. Set to False to force
-            fitting without any sampling quality check.
-        sampling_kwargs : dict, optional
-            Keyword arguments for sampling quality gates (min_points,
-            max_gap_fraction, min_baseline_factor, min_snr,
-            min_fraction_good_snr). See assess_sampling_quality().
-        check_variability : bool, default=False
-            If True, verify lightcurve shows significant variability before
-            fitting. Raises ValueError if not variable. Set to False to force
-            fitting.
-        variability_kwargs : dict, optional
-            Keyword arguments for variability tests (alpha, fvar_min,
-            stetson_k_min). Only used when check_variability=True.
         variance : bool, optional
             If False (default), stored uncertainties are treated as errors
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
-        max_samples : int or None, default 3000
-            Maximum number of time-axis points used for GP fitting.  When the
-            lightcurve has more than *max_samples* observations, a random
-            subsample of *max_samples* points is drawn before model setup and
-            training.  The subsample always includes the earliest and latest
-            observations (preserving the full temporal baseline) and is
-            repaired to satisfy the *max_gap_fraction* constraint taken from
-            *sampling_kwargs* (default 0.3).  A :class:`UserWarning` is issued
-            whenever subsampling occurs.  Set to ``None`` to disable
-            subsampling entirely.
-        subsample_seed : int or None, default None
-            Random seed passed to :func:`subsample_lightcurve` when
-            subsampling is performed.  Use a fixed integer for reproducible
-            subsamples; ``None`` (default) produces a non-deterministic
-            subsample.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -3745,673 +5386,500 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Raises
         ------
         ValueError
-            If check_sampling is True and the lightcurve (1D) has poor
-            temporal sampling, or all 2D bands fail sampling checks, or if
-            no model is provided.
+            If no model is provided.
+
+        Notes
+        -----
+        Data validation, quality checks, and subsampling are performed at
+        object construction time (see :meth:`__init__`).  Use the
+        ``check_sampling``, ``check_variability``, and ``max_samples``
+        parameters of :meth:`__init__` to control pre-processing.
         """
-        if check_sampling:
-            sk = sampling_kwargs or {}
-            if self.ndim > 1:
-                # 2D multiband: check each wavelength band independently and
-                # skip (filter out) any bands that fail the quality gates.
-                # Ensure xdata has the expected (N, 2) shape with wavelength
-                # in column 1 before running per-band diagnostics.
-                xdata = self._xdata_raw
-                if xdata.dim() != 2 or xdata.shape[1] != 2:
-                    raise ValueError(
-                        "For 2D/multiband light curves, xdata must have shape "
-                        "(N, 2) with wavelength values in column 1. Received "
-                        f"shape {tuple(xdata.shape)}. Please ensure "
-                        "that your input is not transposed or otherwise malformed."
-                    )
-                results = self.assess_sampling_quality_per_band(
-                    verbose=False, **sk
+        # Capture the caller's original num_mixtures argument before any
+        # mutation (MLS init / fallback default).  Used later to decide
+        # whether to substitute the stored _model_num_mixtures.
+        _num_mixtures_arg = num_mixtures
+
+        if not hasattr(self, "likelihood"):
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
+        elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
+            # if no likelihood is passed, we only want to set the likelihood
+            # if it hasn't already been set
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
+        elif likelihood is not None:
+            self.set_likelihood(likelihood, variance=variance, **kwargs)
+        # if likelihood is None and not hasattr(self, 'likelihood'):
+        #     raise ValueError("""You must provide a likelihood function""")
+        # elif likelihood is not None:
+        #     self.set_likelihood(likelihood, **kwargs)
+
+        # Validate explicitly-provided num_mixtures early.
+        if num_mixtures is not None:
+            # Must be a (non-bool) integer and strictly positive.
+            if isinstance(num_mixtures, bool) or not isinstance(
+                num_mixtures, int
+            ):
+                raise TypeError(
+                    "`num_mixtures` must be a positive integer or None, "
+                    f"got {num_mixtures!r} of type {type(num_mixtures)!r}."
                 )
-                failing = results["summary"]["failing_wavelengths"]
-                passing = results["summary"]["passing_wavelengths"]
-
-                for wl in failing:
-                    diag = results[float(wl)]
-                    warnings_str = ", ".join(diag["warnings"])
-                    warnings.warn(
-                        f"Skipping band \u03bb={wl} due to poor "
-                        f"temporal sampling: {warnings_str}",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-
-                if not passing:
-                    raise ValueError(
-                        "No wavelength bands passed sampling quality checks. "
-                        "GP fitting is not recommended.\n"
-                        "To force fitting anyway, use: fit(check_sampling=False)"
-                    )
-
-                if failing:
-                    n_pass = len(passing)
-                    n_total = results["summary"]["n_bands"]
-                    skipped = [round(w, 4) for w in failing]
-                    warnings.warn(
-                        f"Fitting with {n_pass}/{n_total} wavelength bands "
-                        f"(skipping \u03bb = {skipped}).",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-                    # Filter data in-place to only well-sampled bands.
-                    keep_mask = torch.isin(
-                        xdata[:, 1],
-                        torch.tensor(
-                            passing, dtype=xdata.dtype, device=xdata.device
-                        ),
-                    )
-                    self.xdata = xdata[keep_mask].clone()
-                    self.ydata = self._ydata_raw[keep_mask].clone()
-                    if hasattr(self, "_yerr_raw"):
-                        self.yerr = self._yerr_raw[keep_mask].clone()
-                    # Filtering bands mutates the training data; ensure any
-                    # existing GP model and likelihood bound to the old data
-                    # are discarded so that fresh instances are created with
-                    # the filtered data.
-                    if hasattr(self, "model"):
-                        self.model = None
-                    if hasattr(self, "likelihood"):
-                        self.likelihood = None
-                    self.__SET_LIKELIHOOD_CALLED = False
-                    self.__CONTRAINTS_SET = False
-                    # Priors registered on the old model are no longer valid;
-                    # ensure they are re-applied when a new model is created.
-                    self.__PRIORS_SET = False
-            else:
-                # 1D: raise ValueError if sampling is poor
-                from pgmuvi.preprocess.quality import assess_sampling_quality
-
-                t = self._xdata_raw.detach().cpu().numpy()
-                y = (
-                    self._ydata_raw.detach().cpu().numpy()
-                    if hasattr(self, "_ydata_raw")
-                    else None
-                )
-                yerr = (
-                    self._yerr_raw.detach().cpu().numpy()
-                    if hasattr(self, "_yerr_raw")
-                    else None
-                )
-                passes, diag = assess_sampling_quality(
-                    t, y, yerr, verbose=False, **sk
-                )
-                if not passes:
-                    warnings_str = "\n".join(
-                        f"  • {w}" for w in diag["warnings"]
-                    )
-                    raise ValueError(
-                        f"Lightcurve has poor temporal sampling:\n"
-                        f"{warnings_str}\n\n"
-                        f"Recommendation: {diag['recommendation']}\n"
-                        "GP fitting not recommended for poorly sampled data.\n"
-                        "To force fitting anyway, use: fit(check_sampling=False)"
-                    )
-        if check_variability:
-            from pgmuvi.preprocess.variability import is_variable
-
-            if self.ndim > 1:
+            if num_mixtures < 1:
                 raise ValueError(
-                    "fit(check_variability=True) is not supported for multiband "
-                    "(ndim > 1) lightcurves, because pooling bands may produce "
-                    "misleading variability results. Use "
-                    "check_variability_per_band() or filter_variable_bands() to "
-                    "assess each band independently before fitting."
+                    "`num_mixtures` must be a positive integer or None, "
+                    f"got {num_mixtures}."
                 )
 
-            vkwargs = variability_kwargs or {}
-            y, yerr = self._get_variability_arrays()
-            is_var, diag = is_variable(y, yerr, **vkwargs)
+        # --- MLS-based initialisation ---
+        _init_freqs = None  # frequencies (raw units) to seed the SM kernel
 
-            if not is_var:
+        # Minimum frequency in raw data units: the period cannot exceed the
+        # total span of the data.  Used to filter obviously unphysical MLS
+        # peaks and to generate padding frequencies when not enough peaks are
+        # available.
+        _t_raw = (
+            self._xdata_raw[:, 0] if self.ndim > 1 else self._xdata_raw
+        )
+        _t_span = float(_t_raw.max() - _t_raw.min())
+        _freq_lower = 1.0 / _t_span if _t_span > 0 else 0.0
+        _t_sorted = _t_raw.sort().values
+        _t_diffs = _t_sorted[1:] - _t_sorted[:-1]
+        _pos_diffs = _t_diffs[_t_diffs > 0]
+        _freq_upper = (
+            1.0 / (2.0 * float(_pos_diffs.min()))
+            if len(_pos_diffs) > 0
+            else float("inf")
+        )
+
+        if periods is not None:
+            # User supplied explicit period guesses — skip MLS entirely.
+            _periods_tensor = torch.as_tensor(
+                periods, dtype=self._xdata_raw.dtype
+            ).flatten()
+
+            # Validate user-supplied periods: must be non-empty, finite, and > 0
+            if _periods_tensor.numel() == 0:
                 raise ValueError(
-                    f"Lightcurve shows NO significant variability:\n"
-                    f"  p-value: {diag['p_value']:.4f} "
-                    f"[{'PASS' if diag['tests_passed']['chi2_test'] else 'FAIL'}]\n"
-                    f"  F_var: {diag['fvar']:.4f} "
-                    f"[{'PASS' if diag['tests_passed']['fvar_test'] else 'FAIL'}]\n"
-                    f"  Stetson K: {diag['stetson_k']:.3f} "
-                    f"[{'PASS' if diag['tests_passed']['stetson_test'] else 'FAIL'}]\n"
-                    f"Decision: {diag['decision']}\n\n"
-                    "GP fitting not recommended for non-variable sources.\n"
-                    "To force fitting anyway, use: fit(check_variability=False)"
+                    "When providing explicit `periods`, the sequence must be "
+                    "non-empty."
                 )
-
-        # ------------------------------------------------------------------
-        # Subsampling: if the lightcurve has more points than max_samples,
-        # temporarily replace the data buffers with a random subsample that
-        # still honours the temporal-baseline and max-gap constraints.
-        # The original buffers are restored in the finally block below so
-        # that the Lightcurve object retains its full data after fitting.
-        # ------------------------------------------------------------------
-        _orig_buffers: dict | None = None
-        n_total = self._xdata_raw.shape[0]
-        if max_samples is not None and n_total > max_samples:
-            from pgmuvi.preprocess import subsample_lightcurve
-
-            t_np = self._xdata_raw.detach().cpu().numpy()
-            if t_np.ndim > 1:
-                t_np = t_np[:, 0]
-            sk = sampling_kwargs or {}
-            mgf = sk.get("max_gap_fraction", 0.3)
-            idx = subsample_lightcurve(
-                t_np,
-                max_samples=max_samples,
-                max_gap_fraction=mgf,
-                random_seed=subsample_seed,
-            )
-            warnings.warn(
-                f"Lightcurve has {n_total} points, which exceeds "
-                f"max_samples={max_samples}. Fitting on a random subsample "
-                f"of {len(idx)} points. "
-                "Set max_samples=None to disable subsampling.",
-                UserWarning,
-                stacklevel=2,
-            )
-            # Save original buffers (only those that exist).
-            _buffer_names = (
-                "_xdata_raw",
-                "_xdata_transformed",
-                "_ydata_raw",
-                "_ydata_transformed",
-                "_yerr_raw",
-                "_yerr_transformed",
-              )
-            _orig_buffers = {
-                name: getattr(self, name)
-                for name in _buffer_names
-                if hasattr(self, name) and getattr(self, name) is not None
-            }
-            idx_t = torch.as_tensor(idx, dtype=torch.long)
-            for name, buf in _orig_buffers.items():
-                self.register_buffer(name, buf[idx_t])
-
-
-        try:
-            # Capture the caller's original num_mixtures argument before any
-            # mutation (MLS init / fallback default).  Used later to decide
-            # whether to substitute the stored _model_num_mixtures.
-            _num_mixtures_arg = num_mixtures
-
-            if not hasattr(self, "likelihood"):
-                self.set_likelihood(likelihood, variance=variance, **kwargs)
-            elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
-                # if no likelihood is passed, we only want to set the likelihood
-                # if it hasn't already been set
-                self.set_likelihood(likelihood, variance=variance, **kwargs)
-            elif likelihood is not None:
-                self.set_likelihood(likelihood, variance=variance, **kwargs)
-            # if likelihood is None and not hasattr(self, 'likelihood'):
-            #     raise ValueError("""You must provide a likelihood function""")
-            # elif likelihood is not None:
-            #     self.set_likelihood(likelihood, **kwargs)
-
-            # Validate explicitly-provided num_mixtures early.
-            if num_mixtures is not None:
-                # Must be a (non-bool) integer and strictly positive.
-                if isinstance(num_mixtures, bool) or not isinstance(
-                    num_mixtures, int
-                ):
-                    raise TypeError(
-                        "`num_mixtures` must be a positive integer or None, "
-                        f"got {num_mixtures!r} of type {type(num_mixtures)!r}."
-                    )
-                if num_mixtures < 1:
-                    raise ValueError(
-                        "`num_mixtures` must be a positive integer or None, "
-                        f"got {num_mixtures}."
-                    )
-
-            # --- MLS-based initialisation ---
-            _init_freqs = None  # frequencies (raw units) to seed the SM kernel
-
-            # Minimum frequency in raw data units: the period cannot exceed the
-            # total span of the data.  Used to filter obviously unphysical MLS
-            # peaks and to generate padding frequencies when not enough peaks are
-            # available.
-            _t_raw = (
-                self._xdata_raw[:, 0] if self.ndim > 1 else self._xdata_raw
-            )
-            _t_span = float(_t_raw.max() - _t_raw.min())
-            _freq_lower = 1.0 / _t_span if _t_span > 0 else 0.0
-            _t_sorted = _t_raw.sort().values
-            _t_diffs = _t_sorted[1:] - _t_sorted[:-1]
-            _pos_diffs = _t_diffs[_t_diffs > 0]
-            _freq_upper = (
-                1.0 / (2.0 * float(_pos_diffs.min()))
-                if len(_pos_diffs) > 0
-                else float("inf")
-            )
-
-            if periods is not None:
-                # User supplied explicit period guesses — skip MLS entirely.
-                _periods_tensor = torch.as_tensor(
-                    periods, dtype=self._xdata_raw.dtype
-                ).flatten()
-
-                # Validate user-supplied periods: must be non-empty, finite, and > 0
-                if _periods_tensor.numel() == 0:
-                    raise ValueError(
-                        "When providing explicit `periods`, the sequence must be "
-                        "non-empty."
-                    )
-                if not torch.isfinite(_periods_tensor).all():
-                    raise ValueError(
-                        "All values in `periods` must be finite (no NaN or inf)."
-                    )
-                if not (_periods_tensor > 0).all():
-                    raise ValueError(
-                        "All values in `periods` must be strictly positive."
-                    )
-                _init_freqs = 1.0 / _periods_tensor
-                num_mixtures = len(_init_freqs)
-            elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
-                # Compute constraint-set frequency bounds in raw data units.
-                # These are used in addition to the data-span bounds to exclude
-                # MLS peaks that would lie outside user-requested period limits.
-                # Note: fit_LS uses Nyquist_factor > 1, so its frequencies can
-                # exceed the standard Nyquist.  We therefore only apply an upper
-                # frequency limit when the constraint_set explicitly demands one
-                # (via a minimum-period specification); otherwise the upper bound
-                # is left unrestricted (inf).
-                _cs_freq_lower = _freq_lower  # default: data-span lower bound
-                _cs_freq_upper = float("inf")  # no upper cap unless constraint_set
-                if constraint_set is not None:
-                    try:
-                        cs = get_constraint_set(constraint_set)
-                        if "period" in cs:
-                            _pb = cs["period"]
-                            _p_lower_val, _p_lower_active = _pb["lower"]
-                            _p_upper_val, _p_upper_active = _pb["upper"]
-                            # Period lower limit → max allowed frequency
-                            if _p_lower_active and _p_lower_val is not None:
-                                _cs_freq_upper = min(
-                                    _cs_freq_upper, 1.0 / _p_lower_val
-                                )
-                            # Period upper limit → min allowed frequency
-                            if _p_upper_active and _p_upper_val is not None:
-                                _cs_freq_lower = max(
-                                    _cs_freq_lower, 1.0 / _p_upper_val
-                                )
-                    except (ValueError, KeyError):
-                        warnings.warn(
-                            f"constraint_set={constraint_set!r} is not recognised "
-                            "and will be ignored for MLS peak filtering. "
-                            "Only the data-span frequency bounds will be applied.",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
-                        # Normalise invalid constraint_set so that later code does not
-                        # attempt to apply or validate an unknown set again.
-                        constraint_set = None
-
-                # Run the MLS periodogram to choose num_mixtures and seed frequencies.
+            if not torch.isfinite(_periods_tensor).all():
+                raise ValueError(
+                    "All values in `periods` must be finite (no NaN or inf)."
+                )
+            if not (_periods_tensor > 0).all():
+                raise ValueError(
+                    "All values in `periods` must be strictly positive."
+                )
+            _init_freqs = 1.0 / _periods_tensor
+            num_mixtures = len(_init_freqs)
+        elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
+            # Compute constraint-set frequency bounds in raw data units.
+            # These are used in addition to the data-span bounds to exclude
+            # MLS peaks that would lie outside user-requested period limits.
+            # Note: fit_LS uses Nyquist_factor > 1, so its frequencies can
+            # exceed the standard Nyquist.  We therefore only apply an upper
+            # frequency limit when the constraint_set explicitly demands one
+            # (via a minimum-period specification); otherwise the upper bound
+            # is left unrestricted (inf).
+            _cs_freq_lower = _freq_lower  # default: data-span lower bound
+            _cs_freq_upper = float("inf")  # no upper cap unless constraint_set
+            if constraint_set is not None:
                 try:
-                    _max_peaks = max(num_mixtures or 1, 10)
-                    if use_best_band_init and self.ndim > 1:
-                        # Use a 1D LS on the most-sampled band to get reliable
-                        # temporal frequency estimates instead of the multiband LS.
-                        # This is beneficial when sampling is highly heterogeneous
-                        # across bands: the best-sampled band provides the most
-                        # accurate period constraints.
-                        _best_band_lc = self._get_best_sampled_band_lc()
-                        ls_freqs, ls_sig = _best_band_lc.fit_LS(
-                            num_peaks=_max_peaks
-                        )
-                        # Compute the best-band's own Nyquist as the upper
-                        # frequency bound.  The best-band 1D LS may find alias
-                        # peaks above this Nyquist (when Nyquist_factor > 1);
-                        # cap at the Nyquist to avoid out-of-range initialisation.
-                        _bb_t = _best_band_lc._xdata_raw.sort().values
-                        _bb_diffs = _bb_t[1:] - _bb_t[:-1]
-                        _bb_pos = _bb_diffs[_bb_diffs > 0]
-                        _bb_nyquist = (
-                            float(1.0 / (2.0 * _bb_pos.min()))
-                            if len(_bb_pos) > 0
-                            else float("inf")
-                        )
-                    else:
-                        ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
-                        _bb_nyquist = float("inf")
-
-                    # Filter peaks whose period exceeds the data span or falls
-                    # outside user-specified constraint-set period bounds.
-                    # When use_best_band_init=True also cap at the best-band
-                    # Nyquist to remove alias peaks that exceed the true sampling
-                    # limit of the best-sampled band.
-                    _eff_upper = min(_cs_freq_upper, _bb_nyquist)
-                    # Ensure that any subsequent use of the frequency upper bound
-                    # (e.g. for padding when num_mixtures exceeds the number of
-                    # LS peaks) also respects the best-band Nyquist cap.
-                    if use_best_band_init and self.ndim > 1:
-                        _cs_freq_upper = _eff_upper
-                        _freq_upper = _eff_upper
-                    if len(ls_freqs) > 0 and _cs_freq_lower > 0:
-                        _valid = (ls_freqs >= _cs_freq_lower) & (
-                            ls_freqs <= _eff_upper
-                        )
-                        if not _valid.all():
-                            _n_filtered = int((~_valid).sum().item())
-                            warnings.warn(
-                                f"{_n_filtered} MLS peak(s) fell outside the "
-                                f"allowed frequency range "
-                                f"[{_cs_freq_lower:.4g}, {_eff_upper:.4g}] "
-                                "(derived from data span"
-                                + (
-                                    f" and constraint_set={constraint_set!r}"
-                                    if constraint_set is not None
-                                    else ""
-                                )
-                                + ") and were excluded from the initialisation.",
-                                RuntimeWarning,
-                                stacklevel=2,
+                    cs = get_constraint_set(constraint_set)
+                    if "period" in cs:
+                        _pb = cs["period"]
+                        _p_lower_val, _p_lower_active = _pb["lower"]
+                        _p_upper_val, _p_upper_active = _pb["upper"]
+                        # Period lower limit → max allowed frequency
+                        if _p_lower_active and _p_lower_val is not None:
+                            _cs_freq_upper = min(
+                                _cs_freq_upper, 1.0 / _p_lower_val
                             )
-                            ls_freqs = ls_freqs[_valid]
-                            ls_sig = ls_sig[_valid]
-
-                    if len(ls_freqs) > 0:
-                        ls_sig_freqs = ls_freqs[ls_sig]
-                        ls_insig_freqs = ls_freqs[~ls_sig]
-
-                        if num_mixtures is None:
-                            # Default: use only the statistically significant peaks.
-                            if len(ls_sig_freqs) > 0:
-                                num_mixtures = len(ls_sig_freqs)
-                                _init_freqs = ls_sig_freqs
-                            else:
-                                # No significant peaks; fall back to the strongest one.
-                                num_mixtures = 1
-                                _init_freqs = ls_freqs[:1]
-                        else:
-                            # User specified num_mixtures: fill with significant peaks
-                            # first, then non-significant ones, then pad with
-                            # evenly-spaced frequencies if still not enough.
-                            n_sig = len(ls_sig_freqs)
-                            if num_mixtures <= n_sig:
-                                _init_freqs = ls_sig_freqs[:num_mixtures]
-                            else:
-                                _extra = num_mixtures - n_sig
-                                _available_insig = ls_insig_freqs[:_extra]
-                                _init_freqs = torch.cat(
-                                    [ls_sig_freqs, _available_insig]
-                                )
-                                # Pad with additional frequencies if still short.
-                                _n_pad = num_mixtures - len(_init_freqs)
-                                if _n_pad > 0:
-                                    # Determine padding interval as the intersection of
-                                    # the data-based frequency range and any
-                                    # constraint-set bounds.
-                                    _pad_lower = _freq_lower
-                                    _pad_upper = _freq_upper
-                                    if _cs_freq_lower > 0:
-                                        _pad_lower = max(_pad_lower, _cs_freq_lower)
-                                        _pad_upper = min(_pad_upper, _cs_freq_upper)
-                                    if _pad_upper > _pad_lower:
-                                        _msg = (
-                                            f"Only {len(_init_freqs)} MLS peak(s)"
-                                            f" found but {num_mixtures} were"
-                                            f" requested. Padding with {_n_pad}"
-                                            " evenly-spaced frequencies in"
-                                            f" [{_pad_lower:.4g},"
-                                            f" {_pad_upper:.4g}]."
-                                        )
-                                        warnings.warn(
-                                            _msg,
-                                            RuntimeWarning,
-                                            stacklevel=2,
-                                        )
-                                        _pad = torch.linspace(
-                                            _pad_lower,
-                                            _pad_upper,
-                                            _n_pad + 2,
-                                            dtype=_init_freqs.dtype,
-                                        )[1:-1]
-                                    else:
-                                        _msg = (
-                                            "Could not construct a valid"
-                                            " frequency range for padding MLS"
-                                            " initialisation; repeating the last"
-                                            " available MLS frequency to reach"
-                                            f" num_mixtures={num_mixtures}."
-                                        )
-                                        warnings.warn(
-                                            _msg,
-                                            RuntimeWarning,
-                                            stacklevel=2,
-                                        )
-                                        _last_freq = _init_freqs[-1]
-                                        _pad = _init_freqs.new_full(
-                                            (_n_pad,), _last_freq
-                                        )
-                                    _init_freqs = torch.cat([_init_freqs, _pad])
-                    else:
-                        # MLS found no peaks at all; warn and fall back.
-
-                        if num_mixtures is None:
-                            num_mixtures = 4
-                        # This Warning has to be raised after the if, so that the
-                        # user-defined number of mixtures is used and they still see
-                        # the warning if they set a value.
-                        warnings.warn(
-                            "MLS periodogram returned no peaks; falling back to "
-                            f"num_mixtures={num_mixtures} with default initialisation.",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
-                except Exception as exc:
-                    # MLS failed for any reason; fall back gracefully but warn the user.
-
-                    if num_mixtures is None:
-                        num_mixtures = 4
+                        # Period upper limit → min allowed frequency
+                        if _p_upper_active and _p_upper_val is not None:
+                            _cs_freq_lower = max(
+                                _cs_freq_lower, 1.0 / _p_upper_val
+                            )
+                except (ValueError, KeyError):
                     warnings.warn(
-                        "MLS-based initialisation failed; falling back to "
-                        f"num_mixtures={num_mixtures}. Original error was: "
-                        f"{exc}",
+                        f"constraint_set={constraint_set!r} is not recognised "
+                        "and will be ignored for MLS peak filtering. "
+                        "Only the data-span frequency bounds will be applied.",
                         RuntimeWarning,
                         stacklevel=2,
                     )
+                    # Normalise invalid constraint_set so that later code does not
+                    # attempt to apply or validate an unknown set again.
+                    constraint_set = None
 
-            # Final fallback when MLS init is disabled or not applicable.
-            if num_mixtures is None:
-                num_mixtures = 4
-
-            if model is None and not hasattr(self, "model"):
-                raise ValueError("""You must provide a model""")
-            elif model is None and self.model is None:
-                # The model was discarded (e.g. after band filtering). Re-create
-                # it with the updated training data.
-                _stored_instance = getattr(self, "_model_instance", None)
-                _stored_str = getattr(self, "_model_str", None)
-                # Preserve the originally configured num_mixtures when the
-                # caller did not explicitly provide a value (i.e. passed None).
-                # If the caller explicitly supplied num_mixtures, honour that
-                # value even if it happens to equal the stored one.
-                if _num_mixtures_arg is None and hasattr(self, "_model_num_mixtures"):
-                    stored_nm = self._model_num_mixtures
-                    _effective_num_mixtures = (
-                        stored_nm if stored_nm is not None else num_mixtures
+            # Run the MLS periodogram to choose num_mixtures and seed frequencies.
+            try:
+                _max_peaks = max(num_mixtures or 1, 10)
+                if use_best_band_init and self.ndim > 1:
+                    # Use a 1D LS on the most-sampled band to get reliable
+                    # temporal frequency estimates instead of the multiband LS.
+                    # This is beneficial when sampling is highly heterogeneous
+                    # across bands: the best-sampled band provides the most
+                    # accurate period constraints.
+                    _best_band_lc = self._get_best_sampled_band_lc()
+                    ls_freqs, ls_sig = _best_band_lc.fit_LS(
+                        num_peaks=_max_peaks
+                    )
+                    # Compute the best-band's own Nyquist as the upper
+                    # frequency bound.  The best-band 1D LS may find alias
+                    # peaks above this Nyquist (when Nyquist_factor > 1);
+                    # cap at the Nyquist to avoid out-of-range initialisation.
+                    _bb_t = _best_band_lc._xdata_raw.sort().values
+                    _bb_diffs = _bb_t[1:] - _bb_t[:-1]
+                    _bb_pos = _bb_diffs[_bb_diffs > 0]
+                    _bb_nyquist = (
+                        float(1.0 / (2.0 * _bb_pos.min()))
+                        if len(_bb_pos) > 0
+                        else float("inf")
                     )
                 else:
-                    _effective_num_mixtures = num_mixtures
-                if _stored_instance is not None:
-                    # User originally provided a GP instance. Re-bind it to the
-                    # new (filtered) training data via set_train_data() if the
-                    # model supports it (ExactGP), otherwise recreate via
-                    # set_model() which will use the same underlying class.
-                    self.set_likelihood(likelihood, variance=variance, **kwargs)
-                    if hasattr(_stored_instance, "set_train_data"):
-                        _stored_instance.set_train_data(
-                            inputs=self._xdata_transformed,
-                            targets=self._ydata_transformed,
-                            strict=False,
+                    ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
+                    _bb_nyquist = float("inf")
+
+                # Filter peaks whose period exceeds the data span or falls
+                # outside user-specified constraint-set period bounds.
+                # When use_best_band_init=True also cap at the best-band
+                # Nyquist to remove alias peaks that exceed the true sampling
+                # limit of the best-sampled band.
+                _eff_upper = min(_cs_freq_upper, _bb_nyquist)
+                # Ensure that any subsequent use of the frequency upper bound
+                # (e.g. for padding when num_mixtures exceeds the number of
+                # LS peaks) also respects the best-band Nyquist cap.
+                if use_best_band_init and self.ndim > 1:
+                    _cs_freq_upper = _eff_upper
+                    _freq_upper = _eff_upper
+                if len(ls_freqs) > 0 and _cs_freq_lower > 0:
+                    _valid = (ls_freqs >= _cs_freq_lower) & (
+                        ls_freqs <= _eff_upper
+                    )
+                    if not _valid.all():
+                        _n_filtered = int((~_valid).sum().item())
+                        warnings.warn(
+                            f"{_n_filtered} MLS peak(s) fell outside the "
+                            f"allowed frequency range "
+                            f"[{_cs_freq_lower:.4g}, {_eff_upper:.4g}] "
+                            "(derived from data span"
+                            + (
+                                f" and constraint_set={constraint_set!r}"
+                                if constraint_set is not None
+                                else ""
+                            )
+                            + ") and were excluded from the initialisation.",
+                            RuntimeWarning,
+                            stacklevel=2,
                         )
-                        self.model = _stored_instance
-                        self._make_parameter_dict()
+                        ls_freqs = ls_freqs[_valid]
+                        ls_sig = ls_sig[_valid]
+
+                if len(ls_freqs) > 0:
+                    ls_sig_freqs = ls_freqs[ls_sig]
+                    ls_insig_freqs = ls_freqs[~ls_sig]
+
+                    if num_mixtures is None:
+                        # Default: use only the statistically significant peaks.
+                        if len(ls_sig_freqs) > 0:
+                            num_mixtures = len(ls_sig_freqs)
+                            _init_freqs = ls_sig_freqs
+                        else:
+                            # No significant peaks; fall back to the strongest one.
+                            num_mixtures = 1
+                            _init_freqs = ls_freqs[:1]
                     else:
-                        # Approximate GP (e.g. SparseSpectralMixtureGPModel):
-                        # cannot cheaply rebind, so fall back to raising an
-                        # informative error.
-                        raise ValueError(
-                            "The model instance does not support set_train_data(). "
-                            "Please pass model= explicitly to fit() after band "
-                            "filtering, or use a string model identifier."
-                        )
-                elif _stored_str is not None:
-                    self.set_model(
-                        _stored_str,
-                        self.likelihood,
-                        num_mixtures=_effective_num_mixtures,
-                        variance=variance,
-                        **kwargs,
-                    )
+                        # User specified num_mixtures: fill with significant peaks
+                        # first, then non-significant ones, then pad with
+                        # evenly-spaced frequencies if still not enough.
+                        n_sig = len(ls_sig_freqs)
+                        if num_mixtures <= n_sig:
+                            _init_freqs = ls_sig_freqs[:num_mixtures]
+                        else:
+                            _extra = num_mixtures - n_sig
+                            _available_insig = ls_insig_freqs[:_extra]
+                            _init_freqs = torch.cat(
+                                [ls_sig_freqs, _available_insig]
+                            )
+                            # Pad with additional frequencies if still short.
+                            _n_pad = num_mixtures - len(_init_freqs)
+                            if _n_pad > 0:
+                                # Determine padding interval as the intersection of
+                                # the data-based frequency range and any
+                                # constraint-set bounds.
+                                _pad_lower = _freq_lower
+                                _pad_upper = _freq_upper
+                                if _cs_freq_lower > 0:
+                                    _pad_lower = max(_pad_lower, _cs_freq_lower)
+                                    _pad_upper = min(_pad_upper, _cs_freq_upper)
+                                if _pad_upper > _pad_lower:
+                                    _msg = (
+                                        f"Only {len(_init_freqs)} MLS peak(s)"
+                                        f" found but {num_mixtures} were"
+                                        f" requested. Padding with {_n_pad}"
+                                        " evenly-spaced frequencies in"
+                                        f" [{_pad_lower:.4g},"
+                                        f" {_pad_upper:.4g}]."
+                                    )
+                                    warnings.warn(
+                                        _msg,
+                                        RuntimeWarning,
+                                        stacklevel=2,
+                                    )
+                                    _pad = torch.linspace(
+                                        _pad_lower,
+                                        _pad_upper,
+                                        _n_pad + 2,
+                                        dtype=_init_freqs.dtype,
+                                    )[1:-1]
+                                else:
+                                    _msg = (
+                                        "Could not construct a valid"
+                                        " frequency range for padding MLS"
+                                        " initialisation; repeating the last"
+                                        " available MLS frequency to reach"
+                                        f" num_mixtures={num_mixtures}."
+                                    )
+                                    warnings.warn(
+                                        _msg,
+                                        RuntimeWarning,
+                                        stacklevel=2,
+                                    )
+                                    _last_freq = _init_freqs[-1]
+                                    _pad = _init_freqs.new_full(
+                                        (_n_pad,), _last_freq
+                                    )
+                                _init_freqs = torch.cat([_init_freqs, _pad])
                 else:
-                    raise ValueError("""You must provide a model""")
-            elif model is not None:
+                    # MLS found no peaks at all; warn and fall back.
+
+                    if num_mixtures is None:
+                        num_mixtures = 4
+                    # This Warning has to be raised after the if, so that the
+                    # user-defined number of mixtures is used and they still see
+                    # the warning if they set a value.
+                    warnings.warn(
+                        "MLS periodogram returned no peaks; falling back to "
+                        f"num_mixtures={num_mixtures} with default initialisation.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception as exc:
+                # MLS failed for any reason; fall back gracefully but warn the
+                # user.  Ensure num_mixtures is set before issuing the warning.
+                if num_mixtures is None:
+                    inferred_count = None
+                    if hasattr(self, "model") and self.model is not None:
+                        inferred_count = self._infer_num_mixtures_from_model()
+                    num_mixtures = (
+                        inferred_count if inferred_count is not None else 4
+                    )
+                # Store the authoritative mixture counts now that we know the
+                # fallback value.
+                self._fit_num_mixtures_requested = _num_mixtures_arg
+                self._fit_num_mixtures_effective = num_mixtures
+                warnings.warn(
+                    "MLS-based initialisation failed; falling back to "
+                    f"num_mixtures={num_mixtures}. Original error was: "
+                    f"{exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+        # Final fallback when MLS init is disabled or not applicable.
+        if num_mixtures is None:
+            num_mixtures = 4
+
+        if model is None and not hasattr(self, "model"):
+            raise ValueError("""You must provide a model""")
+        elif model is None and self.model is None:
+            # The model was discarded (e.g. after band filtering). Re-create
+            # it with the updated training data.
+            _stored_instance = getattr(self, "_model_instance", None)
+            _stored_str = getattr(self, "_model_str", None)
+            # Preserve the originally configured num_mixtures when the
+            # caller did not explicitly provide a value (i.e. passed None).
+            # If the caller explicitly supplied num_mixtures, honour that
+            # value even if it happens to equal the stored one.
+            if _num_mixtures_arg is None and hasattr(self, "_model_num_mixtures"):
+                stored_nm = self._model_num_mixtures
+                _effective_num_mixtures = (
+                    stored_nm if stored_nm is not None else num_mixtures
+                )
+            else:
+                _effective_num_mixtures = num_mixtures
+            if _stored_instance is not None:
+                # User originally provided a GP instance. Re-bind it to the
+                # new (filtered) training data via set_train_data() if the
+                # model supports it (ExactGP), otherwise recreate via
+                # set_model() which will use the same underlying class.
+                self.set_likelihood(likelihood, variance=variance, **kwargs)
+                if hasattr(_stored_instance, "set_train_data"):
+                    _stored_instance.set_train_data(
+                        inputs=self._xdata_transformed,
+                        targets=self._ydata_transformed,
+                        strict=False,
+                    )
+                    self.model = _stored_instance
+                    self._make_parameter_dict()
+                else:
+                    # Approximate GP (e.g. SparseSpectralMixtureGPModel):
+                    # cannot cheaply rebind, so fall back to raising an
+                    # informative error.
+                    raise ValueError(
+                        "The model instance does not support set_train_data(). "
+                        "Please pass model= explicitly to fit() after band "
+                        "filtering, or use a string model identifier."
+                    )
+            elif _stored_str is not None:
                 self.set_model(
-                    model,
+                    _stored_str,
                     self.likelihood,
-                    num_mixtures=num_mixtures,
+                    num_mixtures=_effective_num_mixtures,
                     variance=variance,
                     **kwargs,
                 )
+            else:
+                raise ValueError("""You must provide a model""")
+        elif model is not None:
+            self.set_model(
+                model,
+                self.likelihood,
+                num_mixtures=num_mixtures,
+                variance=variance,
+                **kwargs,
+            )
 
-            # Validate 2D setup if we have 2D data
-            if self.ndim > 1:
-                self._validate_2d_setup()
-            if not self.__CONTRAINTS_SET:
-                self.set_default_constraints(constraint_set=constraint_set)
+        # Validate 2D setup if we have 2D data
+        if self.ndim > 1:
+            self._validate_2d_setup()
+        if not self.__CONTRAINTS_SET:
+            self.set_default_constraints(constraint_set=constraint_set)
 
-            if not self.__CONTRAINTS_SET:
-                self.set_default_constraints()
+        if not self.__CONTRAINTS_SET:
+            self.set_default_constraints()
 
-            if cuda:
-                self.cuda()
-            # Build the combined hyperparameter initialisation dict.
-            # MLS-derived (or user-supplied) period frequencies act as the base;
-            # any explicit `guess` entries take priority on top.
-            _hypers_to_set = {}
-            if (
-                _init_freqs is not None
-                and hasattr(self, "model")
-                and hasattr(self.model, "covar_module")
-                and hasattr(self.model.covar_module, "mixture_means")
-                and getattr(self.model.covar_module, "ard_num_dims", 1) == 1
-            ):
-                _hypers_to_set["covar_module.mixture_means"] = _init_freqs
-            elif (
-                use_best_band_init
-                and _init_freqs is not None
-                and self.ndim > 1
-                and hasattr(self, "model")
-                and hasattr(self.model, "covar_module")
-                and hasattr(self.model.covar_module, "mixture_means")
-                and getattr(self.model.covar_module, "ard_num_dims", 1) == 2
-            ):
-                # For 2D SM models: initialise the temporal dimension (dim 0)
-                # from the best-band 1D LS frequencies and use the minimum
-                # wavelength frequency (1/wavelength_span) as a placeholder for
-                # the wavelength dimension (dim 1), which encodes approximately
-                # achromatic variability.  This avoids leaving all mixture means
-                # at GPyTorch defaults while still seeding the most informative
-                # (temporal) dimension from the best-sampled band.
-                _bands_raw = self._xdata_raw[:, 1]
-                _wl_span = float(_bands_raw.max() - _bands_raw.min())
-                _default_wl_freq = 1.0 / _wl_span if _wl_span > 0 else 1e-6
-                _n_mix = len(_init_freqs)
-                # Build a [num_mixtures, 2] tensor: col 0 = temporal frequencies
-                # from the best-band LS, col 1 = default wavelength frequency.
-                # Using new_full preserves device and dtype of _init_freqs.
-                _init_freqs_2d = torch.stack(
-                    [
-                        _init_freqs,
-                        _init_freqs.new_full((_n_mix,), _default_wl_freq),
-                    ],
-                    dim=1,  # shape: [num_mixtures, 2]
+        if cuda:
+            self.cuda()
+        # Build the combined hyperparameter initialisation dict.
+        # MLS-derived (or user-supplied) period frequencies act as the base;
+        # any explicit `guess` entries take priority on top.
+        _hypers_to_set = {}
+        if (
+            _init_freqs is not None
+            and hasattr(self, "model")
+            and hasattr(self.model, "covar_module")
+            and hasattr(self.model.covar_module, "mixture_means")
+            and getattr(self.model.covar_module, "ard_num_dims", 1) == 1
+        ):
+            _hypers_to_set["covar_module.mixture_means"] = _init_freqs
+        elif (
+            use_best_band_init
+            and _init_freqs is not None
+            and self.ndim > 1
+            and hasattr(self, "model")
+            and hasattr(self.model, "covar_module")
+            and hasattr(self.model.covar_module, "mixture_means")
+            and getattr(self.model.covar_module, "ard_num_dims", 1) == 2
+        ):
+            # For 2D SM models: initialise the temporal dimension (dim 0)
+            # from the best-band 1D LS frequencies and use the minimum
+            # wavelength frequency (1/wavelength_span) as a placeholder for
+            # the wavelength dimension (dim 1), which encodes approximately
+            # achromatic variability.  This avoids leaving all mixture means
+            # at GPyTorch defaults while still seeding the most informative
+            # (temporal) dimension from the best-sampled band.
+            _bands_raw = self._xdata_raw[:, 1]
+            _wl_span = float(_bands_raw.max() - _bands_raw.min())
+            _default_wl_freq = 1.0 / _wl_span if _wl_span > 0 else 1e-6
+            _n_mix = len(_init_freqs)
+            # Build a [num_mixtures, 2] tensor: col 0 = temporal frequencies
+            # from the best-band LS, col 1 = default wavelength frequency.
+            # Using new_full preserves device and dtype of _init_freqs.
+            _init_freqs_2d = torch.stack(
+                [
+                    _init_freqs,
+                    _init_freqs.new_full((_n_mix,), _default_wl_freq),
+                ],
+                dim=1,  # shape: [num_mixtures, 2]
+            )
+            # The mixture_means constraint is derived from the temporal
+            # dimension and is applied element-wise to all entries,
+            # including the wavelength dimension.  The wavelength
+            # frequency (1/wavelength_span) may fall below the
+            # temporal-based lower bound, causing a RuntimeError.
+            # Clamp to the constraint bounds only when xtransform is None
+            # (i.e. raw and transformed spaces are identical).  When an
+            # xtransform is active, _init_freqs_2d is still in raw units
+            # but the constraint bounds are in transformed space; clamping
+            # in the wrong space could create new out-of-bounds values
+            # after set_hypers() applies the transform, so we skip
+            # clamping and let set_hypers() handle the transform instead.
+            if self.xtransform is None:
+                _mixture_means_constraint = getattr(
+                    self.model.covar_module,
+                    "raw_mixture_means_constraint",
+                    None,
                 )
-                # The mixture_means constraint is derived from the temporal
-                # dimension and is applied element-wise to all entries,
-                # including the wavelength dimension.  The wavelength
-                # frequency (1/wavelength_span) may fall below the
-                # temporal-based lower bound, causing a RuntimeError.
-                # Clamp to the constraint bounds only when xtransform is None
-                # (i.e. raw and transformed spaces are identical).  When an
-                # xtransform is active, _init_freqs_2d is still in raw units
-                # but the constraint bounds are in transformed space; clamping
-                # in the wrong space could create new out-of-bounds values
-                # after set_hypers() applies the transform, so we skip
-                # clamping and let set_hypers() handle the transform instead.
-                if self.xtransform is None:
-                    _mixture_means_constraint = getattr(
-                        self.model.covar_module,
-                        "raw_mixture_means_constraint",
-                        None,
+                if _mixture_means_constraint is not None and hasattr(
+                    _mixture_means_constraint, "lower_bound"
+                ):
+                    _clamp_lower = float(
+                        _mixture_means_constraint.lower_bound
                     )
-                    if _mixture_means_constraint is not None and hasattr(
-                        _mixture_means_constraint, "lower_bound"
-                    ):
-                        _clamp_lower = float(
-                            _mixture_means_constraint.lower_bound
-                        )
-                        _clamp_upper = (
-                            float(_mixture_means_constraint.upper_bound)
-                            if hasattr(_mixture_means_constraint, "upper_bound")
-                            else float("inf")
-                        )
-                        _init_freqs_2d = _init_freqs_2d.clamp(
-                            min=_clamp_lower, max=_clamp_upper
-                        )
-                _hypers_to_set["covar_module.mixture_means"] = _init_freqs_2d
-            if guess is not None:
-                _hypers_to_set.update(guess)
-            if _hypers_to_set:
-                self.set_hypers(_hypers_to_set)
+                    _clamp_upper = (
+                        float(_mixture_means_constraint.upper_bound)
+                        if hasattr(_mixture_means_constraint, "upper_bound")
+                        else float("inf")
+                    )
+                    _init_freqs_2d = _init_freqs_2d.clamp(
+                        min=_clamp_lower, max=_clamp_upper
+                    )
+            _hypers_to_set["covar_module.mixture_means"] = _init_freqs_2d
+        if guess is not None:
+            _hypers_to_set.update(guess)
+        if _hypers_to_set:
+            self.set_hypers(_hypers_to_set)
 
 #             if guess is not None:
 #                 # self.model.initialize(**guess)
 #                 self.set_hypers(guess)
 
-            if miniter is None:
-                miniter = training_iter
+        if miniter is None:
+            miniter = training_iter
 
-            if max_cg_iterations is None:
-                max_cg_iterations = 10000
+        if max_cg_iterations is None:
+            max_cg_iterations = 10000
 
-            # Next we probably want to report some setup info
-            # later...
+        # Next we probably want to report some setup info
+        # later...
 
-            # Train the model
-            # self.model.train()
-            # self.likelihood.train()
+        # Train the model
+        # self.model.train()
+        # self.likelihood.train()
 
-            # set training mode:
-            self._train()
+        # set training mode:
+        self._train()
 
-            # for param_name, param in self.model.named_parameters():
-            #    print(f'Parameter name: {param_name:42} value = {param.data}')
-            self.print_parameters()
+        # for param_name, param in self.model.named_parameters():
+        #    print(f'Parameter name: {param_name:42} value = {param.data}')
+        self.print_parameters()
 
-            # Now actually call the trainer!
-            with gpytorch.settings.max_cg_iterations(max_cg_iterations):
-                self.results = train(
-                    self,
-                    maxiter=training_iter,
-                    miniter=miniter,
-                    stop=stop,
-                    lr=lr,
-                    optim=optim,
-                    stopavg=stopavg,
-                )
-            self.__FITTED_MAP = True
+        # Now actually call the trainer!
+        with gpytorch.settings.max_cg_iterations(max_cg_iterations):
+            self.results = train(
+                self,
+                maxiter=training_iter,
+                miniter=miniter,
+                stop=stop,
+                lr=lr,
+                optim=optim,
+                stopavg=stopavg,
+            )
+        self.__FITTED_MAP = True
 
-            return self.results
-        finally:
-            # Restore original data buffers if they were replaced for subsampling.
-            if _orig_buffers is not None:
-                for name, buf in _orig_buffers.items():
-                    self.register_buffer(name, buf)
+        return self.results
 
     def mcmc(
         self,
@@ -4453,6 +5921,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             keys are the names of the parameters, and the values are the
             samples of the parameters.
         """
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         if sampler is None:
             sampler = NUTS
         elif isinstance(sampler, str):
@@ -4650,6 +6120,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         if var_names is None:
             var_names = ["mean_module", "covar_module.mixture_weights", "raw"]
         elif var_names == "all":
@@ -4705,6 +6177,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         if var_names is None:
             var_names = ["mean_module", "covar_module.mixture_weights", "raw"]
         if point_estimate is None:
@@ -4731,6 +6205,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         if var_names is None:
             # we carefully choose the default variables to plot
             # we want to plot all parameters relating to the mean function
@@ -4875,6 +6351,2650 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             torch.as_tensor(weights),
             torch.as_tensor(scales),
         )
+
+    def _infer_num_mixtures_from_model(self):
+        """Infer the number of spectral-mixture components from the current model.
+
+        Walks the kernel tree of ``self.model.sci_kernel`` (including SKI
+        and separable-2D wrappers) looking for a ``mixture_means`` attribute
+        and returns ``len(mixture_means)``.  Falls back to inspecting
+        ``mixture_scales`` or ``mixture_weights`` if ``mixture_means`` is
+        unavailable.
+
+        Returns ``None`` if the model does not expose mixture parameters or if
+        ``self.model`` has not been initialised.
+
+        Returns
+        -------
+        n_mix : int or None
+        """
+        if not hasattr(self, "model") or self.model is None:
+            return None
+        if not hasattr(self.model, "sci_kernel"):
+            return None
+        sk = self.model.sci_kernel
+        # Unwrap GridInterpolationKernel (SKI)
+        actual_sk = getattr(sk, "base_kernel", sk)
+        # For separable 2D, look for the time sub-kernel
+        if not hasattr(actual_sk, "mixture_means"):
+            from gpytorch.kernels import ProductKernel
+
+            if isinstance(actual_sk, ProductKernel):
+                for k in actual_sk.kernels:
+                    inner = getattr(k, "base_kernel", k)
+                    if hasattr(inner, "mixture_means"):
+                        actual_sk = inner
+                        break
+        # Try mixture_means first, then fallbacks
+        for attr in ("mixture_means", "mixture_scales", "mixture_weights"):
+            if hasattr(actual_sk, attr):
+                try:
+                    return len(getattr(actual_sk, attr))
+                except (TypeError, RuntimeError):
+                    pass
+        return None
+
+    def _extract_sm_params(self):
+        """Extract raw spectral-mixture parameters in physical (data) units.
+
+        Helper for :meth:`get_period_summary`.  Extracts per-component
+        means, scales, and weights from ``self.model.sci_kernel`` (or its
+        ``base_kernel`` if the sci_kernel is a
+        :class:`~gpytorch.kernels.GridInterpolationKernel`) and converts
+        them from the transformed (normalised) frequency space back to the
+        original data units, following the same convention as
+        :meth:`get_periods`.
+
+        The conversions performed here are scientifically important:
+
+        * If ``self.xtransform is None`` the model operates directly in the
+          raw time units, so ``mixture_mean`` is already the raw frequency
+          and ``mixture_scale`` is already the raw frequency scale.
+        * If ``self.xtransform is not None`` the model was trained in a
+          normalised time coordinate.  Frequencies and scales must be
+          inverse-transformed (with ``shift=False``, i.e. scaling only)
+          to recover quantities in the original time units.
+
+        For both 1-D and 2-D spectral-mixture models the *time* dimension
+        (index 0 of the last axis of ``mixture_means``) is used, consistent
+        with :meth:`get_periods`.  The indexing ``[i, 0, 0]`` selects
+        mixture component ``i``, collapses the redundant size-1 middle
+        dimension, and picks time-dimension index 0 from the last axis.
+        For a 1-D kernel the shape is ``(n_mix, 1, 1)``; for a 2-D kernel
+        the shape is ``(n_mix, 1, 2)``, and index 0 of the last axis is
+        always the time dimension.
+
+        Returns
+        -------
+        params : dict
+            Keys and values (all 1-D :class:`numpy.ndarray` of length
+            ``num_mixtures``):
+
+            * ``component_frequencies``    - raw centre frequencies
+            * ``component_periods``        - raw centre periods
+            * ``component_frequency_scales`` - Gaussian sigma in frequency
+            * ``component_period_scales``  - Gaussian sigma in period units
+            * ``component_weights``        - kernel component weights
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been initialised.
+        ValueError
+            If neither the ``sci_kernel`` nor its ``base_kernel`` expose
+            ``mixture_means`` (i.e. the model is not spectral-mixture).
+        """
+        if not hasattr(self, "model") or self.model is None:
+            raise RuntimeError(
+                "Model not initialised.  Call set_model() first."
+            )
+        # Some SKI variants set sci_kernel to the GridInterpolationKernel
+        # wrapper rather than the SpectralMixtureKernel itself.  Unwrap it.
+        sk = self.model.sci_kernel
+        if not hasattr(sk, "mixture_means") and hasattr(
+            sk, "base_kernel"
+        ):
+            sk = sk.base_kernel
+
+        if not hasattr(sk, "mixture_means"):
+            raise ValueError(
+                "_extract_sm_params() requires a spectral-mixture kernel.  "
+                "The current sci_kernel does not expose mixture_means."
+            )
+
+        n_mix = len(sk.mixture_means)
+
+        freqs = []
+        periods = []
+        freq_scales = []
+        period_scales = []
+        wts = []
+
+        for i in range(n_mix):
+            # -- extract the time-dimension mean and scale ------------------
+            # mixture_means shape is [n_mix, 1, ard_num_dims].
+            # Index [i, 0, 0] selects mixture i, the redundant size-1
+            # dimension, and dimension 0 (time axis).  This is consistent
+            # with the [i, 0] indexing used in get_periods() for 2-D models.
+            mu_t = sk.mixture_means[i, 0, 0]
+            sig_t = sk.mixture_scales[i, 0, 0]
+
+            if self.xtransform is None:
+                # No coordinate transform: mixture_mean IS the raw frequency,
+                # and mixture_scale IS the raw frequency-domain half-width.
+                raw_freq = float(mu_t.detach().cpu())
+                raw_period = 1.0 / raw_freq
+                # Convert frequency-domain scale to period-domain scale.
+                raw_freq_scale = float(sig_t.detach().cpu())
+                raw_period_scale = (
+                    1.0 / (2.0 * np.pi * raw_freq_scale)
+                )
+            else:
+                # The model was trained in normalised time units.
+                # Inverse-transform (shift=False = scale only) to recover
+                # physical (raw) period, then compute frequency from it.
+                raw_period = float(
+                    self.xtransform.inverse(
+                        1.0 / mu_t, shift=False
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .ravel()[0]
+                )
+                raw_freq = 1.0 / raw_period
+                # Same inverse transform for the scale parameter,
+                # converting normalised frequency scale to raw period scale.
+                raw_period_scale = float(
+                    self.xtransform.inverse(
+                        1.0 / (2.0 * torch.pi * sig_t),
+                        shift=False,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .ravel()[0]
+                )
+                raw_freq_scale = (
+                    1.0 / (2.0 * np.pi * raw_period_scale)
+                )
+
+            freqs.append(raw_freq)
+            periods.append(raw_period)
+            freq_scales.append(raw_freq_scale)
+            period_scales.append(raw_period_scale)
+            wts.append(float(sk.mixture_weights[i].detach().cpu()))
+
+        return {
+            "component_frequencies": np.array(freqs),
+            "component_periods": np.array(periods),
+            "component_frequency_scales": np.array(freq_scales),
+            "component_period_scales": np.array(period_scales),
+            "component_weights": np.array(wts),
+        }
+
+    @staticmethod
+    def _sm_psd_on_grid(freq_grid, params):
+        """Evaluate the total spectral-mixture PSD on a frequency grid.
+
+        The PSD is the (non-normalised) sum of weighted Gaussians in
+        frequency space::
+
+            PSD(f) = sum_k  w_k * exp(-0.5 * ((f - mu_k) / sigma_k)^2)
+
+        where ``mu_k``, ``sigma_k`` and ``w_k`` are the raw (physical-unit)
+        component frequencies, frequency scales, and weights returned by
+        :meth:`_extract_sm_params`.  Overall normalisation is not enforced
+        because only the peak *location* matters for period identification.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            1-D positive-frequency evaluation grid in physical units.
+        params : dict
+            Output of :meth:`_extract_sm_params`.
+
+        Returns
+        -------
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``, same shape as ``freq_grid``.
+        """
+        psd = np.zeros_like(freq_grid, dtype=float)
+        mus = params["component_frequencies"]
+        sigs = params["component_frequency_scales"]
+        wts = params["component_weights"]
+        if not (len(mus) == len(sigs) == len(wts)):
+            raise ValueError(
+                f"Spectral-mixture parameter arrays have inconsistent "
+                f"lengths: component_frequencies={len(mus)}, "
+                f"component_frequency_scales={len(sigs)}, "
+                f"component_weights={len(wts)}.  This indicates an "
+                f"internal error in _extract_sm_params()."
+            )
+        for mu_k, sig_k, w_k in zip(mus, sigs, wts, strict=True):
+            psd += w_k * np.exp(
+                -0.5 * ((freq_grid - mu_k) / sig_k) ** 2
+            )
+        return psd
+
+    def _detect_period_summary_backend(self):
+        """Classify the fitted model into a period-summary backend family.
+
+        Inspects the actual kernel objects attached to the model and returns
+        a string label that :meth:`get_period_summary` uses to dispatch to
+        the appropriate extraction routine.
+
+        Returns
+        -------
+        backend : str
+            One of:
+
+            * ``"spectral_mixture"`` - SpectralMixture kernel (or SKI
+              wrapper around one) - use PSD-peak extraction.
+            * ``"explicit_period"`` - kernel tree contains a
+              :class:`~gpytorch.kernels.PeriodicKernel` with a fitted
+              ``period_length`` parameter (e.g. quasi-periodic models).
+            * ``"periodic_plus_stochastic"`` - AdditiveKernel combining a
+              quasi-periodic term with a stochastic (RBF) term.
+            * ``"separable_2d"`` - ProductKernel with per-dimension
+              ``active_dims`` (separable 2D models); the time sub-kernel
+              is inspected independently.
+            * ``"non_periodic"`` - no periodic structure found (e.g.
+              Matérn-only model).
+        """
+        from gpytorch.kernels import AdditiveKernel, ProductKernel
+
+        sk = self.model.sci_kernel
+        # Unwrap GridInterpolationKernel if present
+        actual_sk = getattr(sk, "base_kernel", sk)
+
+        # 1. Spectral-mixture family (includes SKI wrappers)
+        if hasattr(actual_sk, "mixture_means"):
+            return "spectral_mixture"
+
+        # 2. Additive kernel - periodic + stochastic decomposition
+        if isinstance(sk, AdditiveKernel):
+            return "periodic_plus_stochastic"
+
+        # 3. Product kernel with active_dims on sub-kernels - separable 2D
+        if isinstance(sk, ProductKernel):
+            has_active_dims = any(
+                hasattr(k, "active_dims") and k.active_dims is not None
+                for k in sk.kernels
+            )
+            if has_active_dims:
+                return "separable_2d"
+
+        # 4. Any kernel that contains a PeriodicKernel with period_length
+        if self._find_period_length_in_kernel(sk) is not None:
+            return "explicit_period"
+
+        # 5. Non-periodic fallback
+        return "non_periodic"
+
+    @staticmethod
+    def _find_period_length_in_kernel(kernel):
+        """Recursively search a kernel tree for a PeriodicKernel.
+
+        Walks the kernel tree depth-first via ``base_kernel`` and
+        ``kernels`` attributes and returns the first kernel instance that
+        has a ``period_length`` attribute (i.e. a
+        :class:`~gpytorch.kernels.PeriodicKernel`).
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel
+            Root kernel to search.
+
+        Returns
+        -------
+        periodic_kernel : gpytorch.kernels.Kernel or None
+            The first kernel with ``period_length``, or ``None`` if none
+            is found.
+        """
+        if hasattr(kernel, "period_length"):
+            return kernel
+        # Unwrap ScaleKernel / GridInterpolationKernel wrappers
+        if hasattr(kernel, "base_kernel"):
+            result = Lightcurve._find_period_length_in_kernel(
+                kernel.base_kernel
+            )
+            if result is not None:
+                return result
+        # Recurse into ProductKernel / AdditiveKernel sub-kernels
+        if hasattr(kernel, "kernels"):
+            for k in kernel.kernels:
+                result = Lightcurve._find_period_length_in_kernel(k)
+                if result is not None:
+                    return result
+        return None
+
+    def _extract_explicit_period_params(self, kernel):
+        """Extract the dominant period from a kernel containing a PeriodicKernel.
+
+        Finds the first :class:`~gpytorch.kernels.PeriodicKernel` in the
+        kernel tree (via :meth:`_find_period_length_in_kernel`), reads its
+        ``period_length``, and inverse-transforms it back to raw data units
+        using ``self.xtransform`` (with ``shift=False`` - scaling only,
+        since a period is a duration, not an absolute coordinate).
+
+        If an RBF sub-kernel is found alongside the PeriodicKernel (as in
+        the quasi-periodic product), its lengthscale is used to derive a
+        practical coherence-based period interval and Q-factor.
+
+        The scientifically important transforms are:
+
+        * If ``self.xtransform is None``: period is stored in raw units
+          already.
+        * If ``self.xtransform is not None``: ``period_length`` is in the
+          normalised time coordinate; ``xtransform.inverse(..., shift=False)``
+          recovers the raw-unit period (``shift=False`` because a period is a
+          *duration*, not an absolute time, so only the scale factor matters).
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel
+            Kernel tree to search (typically ``self.model.sci_kernel`` or a
+            sub-kernel thereof).
+
+        Returns
+        -------
+        params : dict or None
+            Dictionary with:
+
+            * ``raw_period`` - dominant period in raw data units
+            * ``raw_freq`` - ``1 / raw_period``
+            * ``raw_rbf_lengthscale`` - coherence timescale in raw units, or
+              ``None`` if no RBF kernel was found alongside the periodic one
+            * ``period_lo``, ``period_hi`` - coherence-based interval (or
+              equal to ``raw_period`` when no RBF lengthscale is available)
+            * ``q_factor`` - coherence Q (RBF-based), or ``None``
+
+            Returns ``None`` if no PeriodicKernel is found.
+        """
+        pk = self._find_period_length_in_kernel(kernel)
+        if pk is None:
+            return None
+
+        period_norm = float(
+            pk.period_length.detach().cpu().numpy().ravel()[0]
+        )
+
+        if self.xtransform is None:
+            # period_length is in raw data units already
+            raw_period = period_norm
+        else:
+            # Inverse-transform: shift=False because a period is a duration
+            # (only the scale factor matters, not the origin shift).
+            raw_period = float(
+                self.xtransform.inverse(
+                    torch.as_tensor([period_norm]), shift=False
+                )
+                .detach()
+                .cpu()
+                .numpy()
+                .ravel()[0]
+            )
+
+        raw_period = abs(raw_period)
+        raw_freq = 1.0 / raw_period if raw_period > 0 else np.nan
+
+        # -- RBF lengthscale for coherence estimate (optional) --------------
+        # In a quasi-periodic kernel the RBF lengthscale sets the coherence
+        # time.  We search the same kernel tree for an RBF lengthscale that
+        # lives alongside the PeriodicKernel.
+        raw_rbf_ls = None
+        if hasattr(kernel, "kernels"):
+            # ProductKernel or AdditiveKernel at top level
+            _kernels_to_search = list(kernel.kernels)
+        elif hasattr(kernel, "base_kernel") and hasattr(
+            kernel.base_kernel, "kernels"
+        ):
+            # ScaleKernel wrapping a ProductKernel
+            _kernels_to_search = list(kernel.base_kernel.kernels)
+        else:
+            _kernels_to_search = []
+
+        for k in _kernels_to_search:
+            # Unwrap ScaleKernel wrappers
+            inner = getattr(k, "base_kernel", k)
+            if hasattr(inner, "lengthscale") and not hasattr(
+                inner, "period_length"
+            ):
+                ls_norm = float(
+                    inner.lengthscale.detach().cpu().numpy().ravel()[0]
+                )
+                if self.xtransform is None:
+                    raw_rbf_ls = ls_norm
+                else:
+                    raw_rbf_ls = float(
+                        self.xtransform.inverse(
+                            torch.as_tensor([ls_norm]), shift=False
+                        )
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .ravel()[0]
+                    )
+                break
+
+        # -- period interval and Q from RBF coherence time -----------------
+        if raw_rbf_ls is not None and raw_rbf_ls > 0:
+            # Bandwidth from Gaussian (RBF) envelope: delta_f ~ 1/(2pi*L)
+            # Linearised period uncertainty: delta_p ~ P^2 * delta_f
+            delta_p = raw_period**2 / (2.0 * np.pi * raw_rbf_ls)
+            period_lo = max(raw_period - delta_p / 2.0, 1e-12)
+            period_hi = raw_period + delta_p / 2.0
+            # Q = f_peak / FWHM_f ~ (2*pi * L) / P
+            q_factor = 2.0 * np.pi * raw_rbf_ls / raw_period
+        else:
+            period_lo = raw_period
+            period_hi = raw_period
+            q_factor = None
+
+        return {
+            "raw_period": raw_period,
+            "raw_freq": raw_freq,
+            "raw_rbf_lengthscale": raw_rbf_ls,
+            "period_lo": period_lo,
+            "period_hi": period_hi,
+            "q_factor": q_factor,
+        }
+
+    @staticmethod
+    def _kernel_family_name(kernel):
+        """Return the class name of *kernel*, or ``""`` if not available.
+
+        Used to populate ``kernel_family`` and ``time_kernel_family`` on
+        :class:`PeriodSummaryResult` objects.  If *kernel* is ``None`` an
+        empty string is returned so that callers can fall back gracefully.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None
+            The kernel whose class name should be returned.
+
+        Returns
+        -------
+        str
+            ``type(kernel).__name__`` or ``""``.
+        """
+        if kernel is None:
+            return ""
+        return type(kernel).__name__
+
+    def _get_non_periodic_summary(self, kernel=None):
+        """Return a graceful period summary for a non-periodic kernel.
+
+        Used when the model has no periodic structure (e.g.
+        :class:`~pgmuvi.gps.MaternGPModel`).  All period-related fields
+        are set to ``None`` or empty arrays, and the ``backend`` field is
+        set to ``"non_periodic"`` so that downstream code can
+        distinguish this from a genuine period summary.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None, optional
+            Kernel to report as the family name.  Defaults to
+            ``self.model.sci_kernel`` when available.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+            Consistent structured result with no period information.
+        """
+        _k = (
+            kernel if kernel is not None
+            else getattr(getattr(self, "model", None), "sci_kernel", None)
+        )
+        kf = self._kernel_family_name(_k)
+        return PeriodSummaryResult(
+            method="non_periodic_kernel",
+            backend="non_periodic",
+            kernel_family=kf,
+            time_kernel_family=kf,
+            has_stochastic_background=False,
+            dominant_period=None,
+            dominant_frequency=None,
+            peaks=[],
+            freq_grid=None,
+            psd=None,
+            interval_definition="none",
+            notes=(
+                "This kernel family does not encode a periodic timescale, "
+                "so no dominant period is defined. "
+                f"Kernel: {kf}."
+            ),
+        )
+
+    def _get_explicit_period_summary(self, kernel=None):
+        """Return a period summary for an explicit-period kernel (e.g. QP).
+
+        Extracts the dominant period directly from a
+        :class:`~gpytorch.kernels.PeriodicKernel` embedded in the model's
+        ``sci_kernel``.  This is appropriate for quasi-periodic models
+        (:class:`~pgmuvi.gps.QuasiPeriodicGPModel`,
+        :class:`~pgmuvi.gps.LinearMeanQuasiPeriodicGPModel`) where the
+        period is a directly fitted parameter.
+
+        The uncertainty is a coherence-based proxy derived from the RBF
+        lengthscale that accompanies the PeriodicKernel in the product
+        ``k_periodic * k_rbf``.  It is **not** a posterior credible
+        interval; MCMC-based intervals are not yet implemented.
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None, optional
+            Kernel to search.  Defaults to ``self.model.sci_kernel``.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+            Structured result.  ``freq_grid`` and ``psd`` are ``None``
+            (no PSD is computed for this backend).  The dominant period
+            comes from the kernel's fitted period parameter, not a PSD
+            peak search.  The uncertainty interval, when present, is a
+            coherence proxy from the RBF lengthscale, labelled
+            ``"coherence_proxy_from_rbf_lengthscale"``.
+        """
+        if kernel is None:
+            kernel = self.model.sci_kernel
+
+        kf = self._kernel_family_name(kernel)
+        ep = self._extract_explicit_period_params(kernel)
+        if ep is None:
+            return self._get_non_periodic_summary(kernel=kernel)
+
+        raw_period = ep["raw_period"]
+        raw_freq = ep["raw_freq"]
+        period_lo = ep["period_lo"]
+        period_hi = ep["period_hi"]
+        raw_rbf_ls = ep["raw_rbf_lengthscale"]
+        q_factor = ep["q_factor"]
+
+        if raw_rbf_ls is not None:
+            interval_def = "coherence_proxy_from_rbf_lengthscale"
+            notes = (
+                "Dominant period extracted from the fitted period_length "
+                "parameter of the PeriodicKernel (explicit_period backend). "
+                "The uncertainty interval is a coherence proxy derived from "
+                "the RBF lengthscale; it is NOT a PSD-derived peak interval "
+                "and NOT a posterior credible interval."
+            )
+            # Frequency interval from the period interval
+            f_lo = 1.0 / period_hi if period_hi > 0 else float("nan")
+            f_hi = 1.0 / period_lo if period_lo > 0 else float("nan")
+        else:
+            interval_def = "none"
+            notes = (
+                "Dominant period extracted from the fitted period_length "
+                "parameter of the PeriodicKernel (explicit_period backend). "
+                "No coherence timescale found; no defensible interval is "
+                "reported."
+            )
+            period_lo = float("nan")
+            period_hi = float("nan")
+            f_lo = float("nan")
+            f_hi = float("nan")
+
+        # Represent the single explicit period as a PeriodPeakResult so
+        # that all dict-access keys (period_interval_fwhm_like, n_peaks, …)
+        # remain backward-compatible.  area_fraction=1.0 marks this as the
+        # sole significant period.
+        _peak = PeriodPeakResult(
+            rank=1,
+            frequency=raw_freq,
+            period=raw_period,
+            height=float("nan"),
+            prominence=float("nan"),
+            area_fraction=1.0,
+            interval_frequency=(f_lo, f_hi),
+            interval_period=(period_lo, period_hi),
+            period_ratio_to_primary=1.0,
+            is_candidate_lsp=False,
+            notes=(
+                "Coherence-proxy interval from RBF lengthscale"
+                if raw_rbf_ls is not None
+                else "No interval available"
+            ),
+        )
+
+        return PeriodSummaryResult(
+            method="explicit_period_parameter",
+            backend="explicit_period",
+            kernel_family=kf,
+            time_kernel_family=kf,
+            has_stochastic_background=False,
+            dominant_period=raw_period,
+            dominant_frequency=raw_freq,
+            peaks=[_peak],
+            freq_grid=None,
+            psd=None,
+            notes=notes,
+            interval_definition=interval_def,
+            q_factor=q_factor,
+        )
+
+    def _get_periodic_plus_stochastic_summary(self):
+        """Return a period summary for a periodic-plus-stochastic kernel.
+
+        Used for :class:`~pgmuvi.gps.PeriodicPlusStochasticGPModel`, whose
+        ``sci_kernel`` is an :class:`~gpytorch.kernels.AdditiveKernel`
+        combining a quasi-periodic part (``k_periodic * k_rbf``) with a
+        purely stochastic RBF part.
+
+        The dominant period is extracted from the quasi-periodic sub-kernel
+        using the same logic as :meth:`_get_explicit_period_summary`.
+        The stochastic component is treated as non-periodic background
+        support and is **not** interpreted as an independent period.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+            Structured result.  ``backend == "periodic_plus_stochastic"``,
+            ``has_stochastic_background is True``.
+        """
+        overall_kf = self._kernel_family_name(
+            getattr(self.model, "sci_kernel", None)
+        )
+        # The first sub-kernel of the AdditiveKernel is the QP part.
+        qp_kernel = self.model.sci_kernel.kernels[0]
+        qp_kf = self._kernel_family_name(qp_kernel)
+        ep_summary = self._get_explicit_period_summary(kernel=qp_kernel)
+
+        # Build updated notes that are explicit about periodic vs stochastic
+        _pps_note = (
+            "Periodic-plus-stochastic model (periodic_plus_stochastic "
+            "backend).  The reported period comes from the periodic "
+            "sub-kernel only.  The stochastic (RBF) component is treated "
+            "as non-periodic background support and is NOT interpreted as "
+            "an independent period.  "
+        )
+        return PeriodSummaryResult(
+            method="periodic_plus_stochastic",
+            backend="periodic_plus_stochastic",
+            kernel_family=overall_kf,
+            time_kernel_family=qp_kf,
+            has_stochastic_background=True,
+            dominant_period=ep_summary.dominant_period,
+            dominant_frequency=ep_summary.dominant_frequency,
+            peaks=list(ep_summary.peaks),
+            freq_grid=ep_summary.freq_grid,
+            psd=ep_summary.psd,
+            notes=_pps_note + ep_summary.notes,
+            interval_definition=ep_summary.interval_definition,
+        )
+
+    def _get_separable_2d_period_summary(self, **kwargs):
+        """Return a period summary for a separable-product 2D kernel.
+
+        For separable 2D models (e.g. :class:`~pgmuvi.gps.SeparableGPModel`,
+        :class:`~pgmuvi.gps.AchromaticGPModel`,
+        :class:`~pgmuvi.gps.WavelengthDependentGPModel`,
+        :class:`~pgmuvi.gps.DustMeanGPModel`,
+        :class:`~pgmuvi.gps.PowerLawMeanGPModel`) the ``sci_kernel`` is a
+        :class:`~gpytorch.kernels.ProductKernel` whose sub-kernels each
+        carry an ``active_dims`` attribute that identifies which input
+        dimension (time = 0, wavelength = 1) they act on.
+
+        This method:
+
+        1. Identifies the time sub-kernel (``active_dims`` contains 0).
+        2. Classifies the time kernel into a period-summary backend.
+        3. Delegates to the appropriate backend method.
+        4. Wraps the result in a ``separable_2d``-annotated
+           :class:`PeriodSummaryResult` that explicitly records the
+           time-kernel family used for the summary.
+
+        Parameters
+        ----------
+        **kwargs
+            Forwarded to :meth:`_get_sm_period_summary` when the time
+            kernel is spectral-mixture.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+            Period summary based on the time kernel only.
+            ``backend == "separable_2d"``, ``time_kernel_family`` names
+            the time kernel.  The wavelength kernel does not contribute
+            to the reported period.
+        """
+
+        sk = self.model.sci_kernel
+        overall_kf = self._kernel_family_name(sk)
+        # Identify the time sub-kernel (active_dims contains 0)
+        time_kernel = None
+        for k in sk.kernels:
+            ad = getattr(k, "active_dims", None)
+            if ad is not None and 0 in ad.tolist():
+                time_kernel = k
+                break
+
+        if time_kernel is None:
+            # Cannot identify time kernel; fall back to non-periodic
+            np_summary = self._get_non_periodic_summary()
+            return PeriodSummaryResult(
+                method=np_summary.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family="",
+                has_stochastic_background=False,
+                dominant_period=np_summary.dominant_period,
+                dominant_frequency=np_summary.dominant_frequency,
+                peaks=list(np_summary.peaks),
+                freq_grid=np_summary.freq_grid,
+                psd=np_summary.psd,
+                notes=(
+                    "Separable 2D model: could not identify the time "
+                    "sub-kernel; no period summary is available."
+                ),
+                interval_definition=np_summary.interval_definition,
+            )
+
+        # Classify the time kernel
+        actual_tk = getattr(time_kernel, "base_kernel", time_kernel)
+        tkf = self._kernel_family_name(actual_tk)
+        _2d_prefix = (
+            "Separable 2D model (separable_2d backend): period summary "
+            f"derived from the time kernel ({tkf}) only.  "
+            "The wavelength kernel does not contribute to this period "
+            "determination.  "
+        )
+
+        if hasattr(actual_tk, "mixture_means"):
+            # Spectral-mixture time kernel - use PSD method
+            # Temporarily swap sci_kernel to expose the time kernel
+            # as a stand-alone SM kernel for _extract_sm_params.
+            _orig_sk = self.model.sci_kernel
+            self.model.sci_kernel = actual_tk
+            try:
+                inner = self._get_sm_period_summary(**kwargs)
+            finally:
+                self.model.sci_kernel = _orig_sk
+            return PeriodSummaryResult(
+                method=inner.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family=tkf,
+                has_stochastic_background=inner.has_stochastic_background,
+                dominant_period=inner.dominant_period,
+                dominant_frequency=inner.dominant_frequency,
+                peaks=list(inner.peaks),
+                freq_grid=inner.freq_grid,
+                psd=inner.psd,
+                notes=_2d_prefix + inner.notes,
+                component_diagnostics=inner.component_diagnostics,
+                interval_definition=inner.interval_definition,
+                n_peaks_detected=inner.n_peaks_detected,
+                n_peaks_analyzed=inner.n_peaks_analyzed,
+                n_peaks_requested=inner.n_peaks_requested,
+            )
+
+        if self._find_period_length_in_kernel(time_kernel) is not None:
+            # Explicit-period time kernel (e.g. quasi-periodic)
+            inner = self._get_explicit_period_summary(kernel=time_kernel)
+            return PeriodSummaryResult(
+                method=inner.method,
+                backend="separable_2d",
+                kernel_family=overall_kf,
+                time_kernel_family=tkf,
+                has_stochastic_background=inner.has_stochastic_background,
+                dominant_period=inner.dominant_period,
+                dominant_frequency=inner.dominant_frequency,
+                peaks=list(inner.peaks),
+                freq_grid=inner.freq_grid,
+                psd=inner.psd,
+                notes=_2d_prefix + inner.notes,
+                interval_definition=inner.interval_definition,
+            )
+
+        # Non-periodic time kernel
+        return PeriodSummaryResult(
+            method="non_periodic_kernel",
+            backend="separable_2d",
+            kernel_family=overall_kf,
+            time_kernel_family=tkf,
+            has_stochastic_background=False,
+            dominant_period=None,
+            dominant_frequency=None,
+            peaks=[],
+            freq_grid=None,
+            psd=None,
+            notes=(
+                "Separable 2D model: the time kernel "
+                f"({tkf}) is non-periodic, "
+                "so no dominant period is defined."
+            ),
+            interval_definition="none",
+        )
+
+    @staticmethod
+    def _find_dominant_peak_basin(psd, dominant_idx):
+        """Identify the basin of the dominant PSD peak.
+
+        Starting from the dominant peak index, walk left and right until a
+        local minimum is found or the edge of the array is reached.  The
+        basin is the contiguous region associated with the dominant mode.
+
+        Parameters
+        ----------
+        psd : numpy.ndarray
+            1-D PSD values on a frequency grid.
+        dominant_idx : int
+            Index of the dominant PSD peak in ``psd``.
+
+        Returns
+        -------
+        basin_left : int
+            Index of the left edge of the basin (inclusive).
+        basin_right : int
+            Index of the right edge of the basin (inclusive).
+        left_at_boundary : bool
+            ``True`` if the left edge reached the array boundary without
+            finding a local minimum.
+        right_at_boundary : bool
+            ``True`` if the right edge reached the array boundary without
+            finding a local minimum.
+        """
+        n = len(psd)
+
+        # Walk left: stop at local minimum (psd starts rising)
+        left = dominant_idx
+        while left > 0 and psd[left - 1] < psd[left]:
+            left -= 1
+        left_at_boundary = left == 0
+
+        # Walk right: stop at local minimum (psd starts rising)
+        right = dominant_idx
+        while right < n - 1 and psd[right + 1] < psd[right]:
+            right += 1
+        right_at_boundary = right == n - 1
+
+        return left, right, left_at_boundary, right_at_boundary
+
+    @staticmethod
+    def _integrate_logspace(psd, freq_grid):
+        """Integrate a PSD over a log-spaced frequency grid.
+
+        Computes the integral of ``psd * freq`` with respect to
+        ``log(freq)``, which equals the linear integral of ``psd`` over
+        ``freq`` when the grid is logarithmically spaced.  Using this
+        formulation on a log-spaced grid avoids the strong bias towards
+        high frequencies that arises from naively applying the trapezoidal
+        rule in linear frequency space.
+
+        Formally this implements::
+
+            integral of psd(f) df  ~  integral of (f * psd(f)) d(log f)
+                                   ~  trapz(psd * freq, log(freq))
+
+        Parameters
+        ----------
+        psd : numpy.ndarray
+            1-D PSD values on ``freq_grid``.
+        freq_grid : numpy.ndarray
+            Positive, log-spaced frequency values with the same length as
+            ``psd``.
+
+        Returns
+        -------
+        integral : float
+            Estimated integral value.  Always ≥ 0.
+        """
+        if len(freq_grid) < 2:
+            return 0.0
+        log_f = np.log(freq_grid)
+        weights = psd * freq_grid
+        try:
+            return float(np.trapezoid(weights, log_f))
+        except AttributeError:
+            return float(np.trapz(weights, log_f))
+
+    @staticmethod
+    def _compute_equal_tail_mass_interval(
+        freq_grid, psd, basin_left, basin_right, mass_level=0.68
+    ):
+        """Compute an equal-tail mass interval within the dominant peak basin.
+
+        .. deprecated::
+            This method is retained as a legacy helper.  The default
+            ``uncertainty="peak_mass"`` path now uses
+            :meth:`_compute_peak_centered_mass_interval`, which guarantees
+            that the returned interval contains the peak frequency.
+
+        Integrates the PSD (as a proxy for a probability density) over the
+        basin region and returns the frequency interval that contains a
+        centred fraction ``mass_level`` of the total basin mass, using an
+        equal-tail (symmetric quantile) approach.
+
+        Integration is performed in log-frequency space (``trapz(psd *
+        freq, log_freq)``) to avoid the bias towards high frequencies that
+        arises from naive linear-space integration on a log-spaced grid.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Full frequency evaluation grid (positive, log-spaced).
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        basin_left : int
+            Left edge index of the dominant-peak basin (inclusive).
+        basin_right : int
+            Right edge index of the dominant-peak basin (inclusive).
+        mass_level : float, optional
+            Fraction of the basin mass to enclose (default 0.68 for
+            approximately ``1 sigma`` coverage).  Must be in ``(0, 1)``.
+
+        Returns
+        -------
+        f_lo : float
+            Lower frequency bound of the equal-tail interval.
+        f_hi : float
+            Upper frequency bound of the equal-tail interval.
+        success : bool
+            ``True`` if the interval could be computed; ``False`` if the
+            basin was too narrow (< 2 grid points) or the total mass was
+            numerically zero.
+        """
+        f_basin = freq_grid[basin_left : basin_right + 1]
+        p_basin = psd[basin_left : basin_right + 1]
+
+        if len(f_basin) < 2:
+            return float(f_basin[0]), float(f_basin[0]), False
+
+        # Log-space integration via shared helper
+        total_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
+        if total_mass <= 0:
+            return float(f_basin[0]), float(f_basin[-1]), False
+
+        # Build cumulative mass in log-space
+        log_f = np.log(f_basin)
+        weights = p_basin * f_basin
+        cum = np.zeros(len(f_basin))
+        for i in range(1, len(f_basin)):
+            dlogf = log_f[i] - log_f[i - 1]
+            cum[i] = cum[i - 1] + 0.5 * (
+                weights[i - 1] + weights[i]
+            ) * dlogf
+        cum /= total_mass  # normalise to [0, 1]
+
+        tail = (1.0 - mass_level) / 2.0
+
+        # Interpolate lower quantile
+        f_lo = float(np.interp(tail, cum, f_basin))
+        # Interpolate upper quantile
+        f_hi = float(np.interp(1.0 - tail, cum, f_basin))
+
+        return f_lo, f_hi, True
+
+    @staticmethod
+    def _compute_peak_centered_mass_interval(
+        freq_grid, psd, basin_left, basin_right, peak_idx, mass_level=0.68
+    ):
+        """Compute a peak-centered mass interval within a PSD basin.
+
+        This is the preferred method for ``uncertainty="peak_mass"``.
+
+        Unlike the equal-tail approach, this method **guarantees that the
+        returned interval contains the peak frequency** by growing the
+        interval outward from the peak, always expanding toward the side
+        that contributes more mass per log-frequency unit.  This greedy
+        "grow from the peak" strategy is equivalent to finding the shortest
+        interval (in log-frequency space) that encloses the requested mass
+        fraction and still contains the peak.
+
+        Integration is performed in log-frequency space to avoid the
+        high-frequency bias of naive linear-space trapezoidal integration
+        on a log-spaced grid.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Full frequency evaluation grid (positive, log-spaced).
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        basin_left : int
+            Left edge index of the basin (inclusive).
+        basin_right : int
+            Right edge index of the basin (inclusive).
+        peak_idx : int
+            Index of the peak in the full ``freq_grid``.  Must satisfy
+            ``basin_left <= peak_idx <= basin_right``.
+        mass_level : float, optional
+            Target fraction of basin mass to enclose.  Default 0.68.
+
+        Returns
+        -------
+        f_lo : float
+            Lower frequency bound of the peak-centered interval.
+        f_hi : float
+            Upper frequency bound of the peak-centered interval.
+        success : bool
+            ``True`` if the interval was computed successfully.  ``False``
+            if the basin has fewer than 2 grid points or the total mass is
+            numerically zero.
+        """
+        f_basin = freq_grid[basin_left : basin_right + 1]
+        p_basin = psd[basin_left : basin_right + 1]
+        pk_rel = int(peak_idx) - int(basin_left)
+
+        if len(f_basin) < 2:
+            return float(f_basin[0]), float(f_basin[0]), False
+
+        # Log-space integration weights
+        log_f = np.log(f_basin)
+        weights = p_basin * f_basin
+
+        # Total basin mass via shared helper (avoids duplicating try/except)
+        total_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
+        if total_mass <= 0:
+            return float(f_basin[0]), float(f_basin[-1]), False
+
+        # Per-segment mass in log-space
+        # seg_mass[i] = mass of segment [i, i+1]
+        n = len(f_basin)
+        seg_mass = np.zeros(n - 1)
+        for i in range(n - 1):
+            dlogf = log_f[i + 1] - log_f[i]
+            seg_mass[i] = 0.5 * (weights[i] + weights[i + 1]) * dlogf
+
+        # Greedy grow from the peak: always expand into the denser side
+        left_ptr = pk_rel
+        right_ptr = pk_rel
+        accumulated = 0.0
+
+        while accumulated / total_mass < mass_level:
+            can_go_left = left_ptr > 0
+            can_go_right = right_ptr < n - 1
+
+            if not can_go_left and not can_go_right:
+                break
+
+            if can_go_left and can_go_right:
+                left_seg = seg_mass[left_ptr - 1]
+                right_seg = seg_mass[right_ptr]
+                if left_seg >= right_seg:
+                    accumulated += left_seg
+                    left_ptr -= 1
+                else:
+                    accumulated += right_seg
+                    right_ptr += 1
+            elif can_go_left:
+                accumulated += seg_mass[left_ptr - 1]
+                left_ptr -= 1
+            else:
+                accumulated += seg_mass[right_ptr]
+                right_ptr += 1
+
+        f_lo = float(f_basin[left_ptr])
+        f_hi = float(f_basin[right_ptr])
+        return f_lo, f_hi, True
+
+    @staticmethod
+    def _build_frequency_grid(min_freq, max_freq, n_grid, spacing="log"):
+        """Build a 1-D positive-frequency evaluation grid.
+
+        Parameters
+        ----------
+        min_freq : float
+            Lowest frequency.  Must be strictly positive.
+        max_freq : float
+            Highest frequency.  Must be greater than ``min_freq``.
+        n_grid : int
+            Number of grid points.
+        spacing : str, optional
+            ``"log"`` (default) for logarithmically spaced points;
+            ``"linear"`` for linearly spaced points.  The spectral-mixture
+            summary uses ``"log"`` to ensure adequate low-frequency
+            resolution across wide dynamic ranges.
+
+        Returns
+        -------
+        freq_grid : numpy.ndarray
+            1-D array of ``n_grid`` frequencies in ``[min_freq, max_freq]``.
+
+        Notes
+        -----
+        If ``max_freq <= min_freq`` on entry, ``max_freq`` is automatically
+        adjusted to ``min_freq * 2.0`` so that the grid is always valid.
+
+        Raises
+        ------
+        ValueError
+            If ``min_freq <= 0`` when ``spacing="log"``.
+        """
+        min_freq = float(min_freq)
+        max_freq = float(max_freq)
+        n_grid = int(n_grid)
+
+        if max_freq <= min_freq:
+            max_freq = min_freq * 2.0
+
+        if spacing == "log":
+            if min_freq <= 0:
+                raise ValueError(
+                    f"min_freq must be > 0 for log spacing, "
+                    f"got {min_freq!r}"
+                )
+            return np.logspace(
+                np.log10(min_freq), np.log10(max_freq), n_grid
+            )
+        return np.linspace(min_freq, max_freq, n_grid)
+
+    @staticmethod
+    def _refine_peak_region(
+        freq_grid, psd, params, dominant_idx,
+        f_left_approx, f_right_approx,
+        pad_log_factor=0.2, n_refine=None,
+    ):
+        """Refine the half-max crossing estimate with a denser local grid.
+
+        Builds a fine log-spaced grid over a padded window around the
+        approximate half-max interval ``[f_left_approx, f_right_approx]``,
+        recomputes the PSD, re-finds the dominant peak, and walks the new
+        PSD to locate the bracketing indices for both crossings.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Global log-spaced frequency grid (used for fallback bounds).
+        psd : numpy.ndarray
+            PSD on ``freq_grid``.
+        params : dict
+            Output of :meth:`_extract_sm_params`.
+        dominant_idx : int
+            Index of the dominant peak on ``freq_grid``.
+        f_left_approx, f_right_approx : float
+            Approximate left and right half-max crossing frequencies from
+            the global grid.
+        pad_log_factor : float, optional
+            Fractional padding in log space on each side.  Default 0.2
+            (i.e. widen the local window by 20 % in log units on each side).
+        n_refine : int or None, optional
+            Number of points in the local grid.  Defaults to
+            ``max(4 * len(freq_grid), 2000)``.  The factor of 4 ensures
+            the local grid is at least 4x denser than the global grid;
+            the minimum of 2000 avoids a coarse local grid when the
+            global grid is small.
+
+        Returns
+        -------
+        freq_fine : numpy.ndarray
+            Dense local frequency grid.
+        psd_fine : numpy.ndarray
+            PSD on ``freq_fine``.
+        dominant_idx_fine : int
+            Index of the dominant peak on ``freq_fine``.
+        """
+        from scipy.signal import find_peaks
+
+        if n_refine is None:
+            n_refine = max(4 * len(freq_grid), 2000)
+        n_refine = int(n_refine)
+
+        dom_freq = float(freq_grid[dominant_idx])
+
+        # Pad in log space on both sides
+        log_lo = np.log10(f_left_approx) - pad_log_factor
+        log_hi = np.log10(f_right_approx) + pad_log_factor
+
+        # Clamp within the global grid bounds
+        log_lo = max(log_lo, np.log10(float(freq_grid[0])))
+        log_hi = min(log_hi, np.log10(float(freq_grid[-1])))
+
+        # Ensure the dominant frequency is bracketed
+        if np.log10(dom_freq) < log_lo:
+            log_lo = np.log10(dom_freq) - pad_log_factor
+        if np.log10(dom_freq) > log_hi:
+            log_hi = np.log10(dom_freq) + pad_log_factor
+
+        if log_hi <= log_lo:
+            log_hi = log_lo + 0.1
+
+        freq_fine = np.logspace(log_lo, log_hi, n_refine)
+        psd_fine = Lightcurve._sm_psd_on_grid(freq_fine, params)
+
+        peaks_fine, _ = find_peaks(psd_fine)
+        if len(peaks_fine) == 0:
+            dominant_idx_fine = int(np.argmax(psd_fine))
+        else:
+            dominant_idx_fine = int(
+                peaks_fine[np.argmax(psd_fine[peaks_fine])]
+            )
+
+        return freq_fine, psd_fine, dominant_idx_fine
+
+    @staticmethod
+    def _interpolate_halfmax_crossing(freq_grid, psd, idx, direction, half_max):
+        """Linearly interpolate the frequency where PSD crosses ``half_max``.
+
+        Given that ``psd[idx]`` is the last point **above** (or at) the
+        half-maximum on one side of the dominant peak, and ``psd[idx ±1]``
+        is the first point **below** it, return the linearly interpolated
+        crossing frequency.
+
+        If the neighbouring index is out of range (the crossing was at the
+        very boundary of the grid), the exact grid frequency at ``idx`` is
+        returned as a fallback.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            1-D frequency evaluation grid.
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        idx : int
+            Index of the last point whose PSD is still at or above
+            ``half_max`` on the side being interpolated.
+        direction : str
+            ``"left"`` or ``"right"``.  Determines which neighbour to use
+            for interpolation (``idx - 1`` for left, ``idx + 1`` for right).
+        half_max : float
+            The half-maximum level, i.e. ``0.5 * peak_height``.
+
+        Returns
+        -------
+        f_crossing : float
+            Interpolated crossing frequency.
+        interpolated : bool
+            ``True`` if a proper bracketed interpolation was performed;
+            ``False`` if the boundary fallback was used.
+        """
+        if direction == "left":
+            neighbor = idx - 1
+        else:
+            neighbor = idx + 1
+
+        if neighbor < 0 or neighbor >= len(freq_grid):
+            # Boundary fallback: can't interpolate, return the grid point
+            return float(freq_grid[idx]), False
+
+        f_a = float(freq_grid[idx])
+        f_b = float(freq_grid[neighbor])
+        psd_a = float(psd[idx])
+        psd_b = float(psd[neighbor])
+
+        # Safeguard: if psd values don't bracket half_max (shouldn't happen
+        # given how idx was found, but guard against numerical edge cases)
+        if psd_a == psd_b:
+            return f_a, False
+
+        # Linear interpolation: half_max = psd_a + t * (psd_b - psd_a)
+        t = (half_max - psd_a) / (psd_b - psd_a)
+        f_crossing = f_a + t * (f_b - f_a)
+        return float(f_crossing), True
+
+    @staticmethod
+    def _expand_psd_grid_until_contained(
+        freq_grid, psd, params, dominant_idx, half_max,
+        max_expansions=10, expansion_factor=2.0, n_grid=5000,
+    ):
+        """Expand the frequency grid until both half-max crossings are inside.
+
+        Starting from the already-computed ``freq_grid`` / ``psd``, test
+        whether the half-maximum crossings of the dominant PSD peak are
+        contained within the grid.  If the left crossing is at the first
+        grid point (``psd[0] >= half_max``) the low end of the grid is
+        extended by dividing ``min_freq`` by ``expansion_factor``.  If the
+        right crossing is at the last grid point the high end is extended by
+        multiplying ``max_freq`` by ``expansion_factor``.  The dominant peak
+        position is re-evaluated after each expansion to remain consistent.
+
+        The grid is always rebuilt as a **log-spaced** grid via
+        :meth:`_build_frequency_grid` to ensure adequate low-frequency
+        resolution across wide dynamic ranges.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Initial evaluation grid.
+        psd : numpy.ndarray
+            PSD values on ``freq_grid``.
+        params : dict
+            Output of :meth:`_extract_sm_params`, passed to
+            :meth:`_sm_psd_on_grid` for PSD recomputation.
+        dominant_idx : int
+            Index of the dominant PSD peak on the *current* grid.
+        half_max : float
+            ``0.5 * psd[dominant_idx]``.
+        max_expansions : int, optional
+            Maximum number of expansion iterations.  Default 10.
+        expansion_factor : float, optional
+            Multiplicative factor for grid edge expansion.  Default 2.0.
+        n_grid : int, optional
+            Number of grid points to use when rebuilding.  Default 5000.
+
+        Returns
+        -------
+        freq_grid : numpy.ndarray
+            Possibly expanded frequency grid.
+        psd : numpy.ndarray
+            PSD values on the returned ``freq_grid``.
+        dominant_idx : int
+            Index of the dominant peak on the returned grid.
+        left_truncated : bool
+            ``True`` if the left half-max crossing is still at the boundary
+            after all expansion attempts.
+        right_truncated : bool
+            ``True`` if the right half-max crossing is still at the boundary.
+        n_expansions : int
+            Number of expansions that were performed.
+        """
+        from scipy.signal import find_peaks
+
+        min_freq = float(freq_grid[0])
+        max_freq = float(freq_grid[-1])
+        n_grid = int(n_grid)
+        n_expansions = 0
+
+        for _ in range(max_expansions):
+            left_truncated = psd[0] >= half_max
+            right_truncated = psd[-1] >= half_max
+
+            if not left_truncated and not right_truncated:
+                break  # Both crossings are inside the grid
+
+            if left_truncated:
+                min_freq = max(min_freq / expansion_factor, 1e-12)
+            if right_truncated:
+                max_freq = max_freq * expansion_factor
+
+            freq_grid = Lightcurve._build_frequency_grid(
+                min_freq, max_freq, n_grid, spacing="log"
+            )
+            psd = Lightcurve._sm_psd_on_grid(freq_grid, params)
+
+            # Re-find dominant peak on the new grid
+            peaks, _ = find_peaks(psd)
+            if len(peaks) == 0:
+                dominant_idx = int(np.argmax(psd))
+            else:
+                dominant_idx = int(peaks[np.argmax(psd[peaks])])
+            half_max = 0.5 * float(psd[dominant_idx])
+
+            n_expansions += 1
+
+        left_truncated = bool(psd[0] >= half_max)
+        right_truncated = bool(psd[-1] >= half_max)
+
+        return (
+            freq_grid, psd, dominant_idx,
+            left_truncated, right_truncated, n_expansions,
+        )
+
+    @staticmethod
+    def _find_psd_peaks(freq_grid, psd):
+        """Detect all local maxima in a PSD array, sorted by height.
+
+        Returns ``(peak_indices, prominences)`` where ``peak_indices`` is a
+        1-D numpy int array and ``prominences`` is a 1-D float array of the
+        same length.  If no peaks are detected the global maximum is returned
+        as a single peak with prominence equal to its height.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Frequency evaluation grid (unused directly; kept for API symmetry).
+        psd : numpy.ndarray
+            1-D PSD values.
+
+        Returns
+        -------
+        peak_indices : numpy.ndarray
+            Indices into ``psd`` of the detected peaks, sorted by descending
+            height.
+        prominences : numpy.ndarray
+            Corresponding peak prominences.
+        """
+        from scipy.signal import find_peaks as _scipy_find_peaks
+
+        peaks_idx, props = _scipy_find_peaks(psd, prominence=0)
+        if len(peaks_idx) == 0:
+            dom = int(np.argmax(psd))
+            return np.array([dom]), np.array([float(psd[dom])])
+        proms = props["prominences"]
+        order = np.argsort(psd[peaks_idx])[::-1]
+        return peaks_idx[order], proms[order]
+
+    @staticmethod
+    def _characterize_peak_basin(
+        freq_grid, psd, peak_idx, mass_level=0.68
+    ):
+        """Characterize a single PSD peak basin.
+
+        Finds the basin boundaries by walking left/right from the peak
+        until the PSD stops decreasing, computes the peak-centered mass
+        interval (which always contains the peak), and returns a summary
+        dict.
+
+        Parameters
+        ----------
+        freq_grid : numpy.ndarray
+            Frequency evaluation grid.
+        psd : numpy.ndarray
+            1-D PSD values.
+        peak_idx : int
+            Index of the peak in ``psd``.
+        mass_level : float, optional
+            Fraction of basin mass to enclose.  Default 0.68.
+
+        Returns
+        -------
+        info : dict
+            Keys: ``height``, ``basin_left``, ``basin_right``,
+            ``f_lo``, ``f_hi``, ``area_fraction``, ``mass_ok``.
+        """
+        peak_idx = int(peak_idx)
+        height = float(psd[peak_idx])
+
+        n = len(psd)
+        left = peak_idx
+        while left > 0 and psd[left - 1] < psd[left]:
+            left -= 1
+        right = peak_idx
+        while right < n - 1 and psd[right + 1] < psd[right]:
+            right += 1
+
+        f_lo, f_hi, mass_ok = Lightcurve._compute_peak_centered_mass_interval(
+            freq_grid, psd, left, right, peak_idx, mass_level=mass_level
+        )
+
+        f_basin = freq_grid[left : right + 1]
+        p_basin = psd[left : right + 1]
+        basin_mass = Lightcurve._integrate_logspace(p_basin, f_basin)
+        total_mass = Lightcurve._integrate_logspace(psd, freq_grid)
+        area_fraction = (
+            basin_mass / total_mass if total_mass > 0 else float("nan")
+        )
+
+        return {
+            "height": height,
+            "basin_left": left,
+            "basin_right": right,
+            "f_lo": f_lo,
+            "f_hi": f_hi,
+            "area_fraction": area_fraction,
+            "mass_ok": mass_ok,
+        }
+
+    @staticmethod
+    def _identify_lsp_candidates(
+        peaks_list,
+        ratio_range=(5.0, 15.0),
+        min_area_fraction=0.05,
+    ):
+        """Flag peaks that are candidate Long Secondary Periods (LSPs).
+
+        A peak is flagged as a candidate LSP if its
+        ``period_ratio_to_primary`` lies within ``ratio_range`` and its
+        ``area_fraction`` is at least ``min_area_fraction``.
+
+        Parameters
+        ----------
+        peaks_list : list[PeriodPeakResult]
+            Peaks with ``period_ratio_to_primary`` already set.
+        ratio_range : tuple of float, optional
+            ``(min_ratio, max_ratio)`` for LSP detection.  Default
+            ``(5.0, 15.0)``.
+        min_area_fraction : float, optional
+            Minimum basin area fraction.  Default 0.05.
+
+        Returns
+        -------
+        list[PeriodPeakResult]
+            Same list with ``is_candidate_lsp`` updated via
+            ``dataclasses.replace()``.
+        """
+        updated = []
+        for p in peaks_list:
+            r = p.period_ratio_to_primary
+            is_lsp = (
+                r > 1.0
+                and ratio_range[0] <= r <= ratio_range[1]
+                and p.area_fraction >= min_area_fraction
+            )
+            updated.append(dataclasses.replace(p, is_candidate_lsp=is_lsp))
+        return updated
+
+    def _get_sm_period_summary(
+        self,
+        n_grid=5000,
+        min_freq=None,
+        max_freq=None,
+        peak_threshold_rel=0.2,
+        uncertainty="peak_mass",
+        n_peaks=None,
+        mass_level=0.68,
+        classify_lsp=False,
+    ):
+        """Return the PSD-based period summary for a spectral-mixture model.
+
+        Implements the core PSD-peak extraction logic used when the model
+        (or the time sub-kernel of a separable 2D model) is a
+        :class:`~gpytorch.kernels.SpectralMixtureKernel`.
+
+        Parameters
+        ----------
+        n_grid : int, optional
+            Number of points in the positive-frequency evaluation grid.
+        min_freq, max_freq : float or None, optional
+            Initial grid limits.  If ``None``, defaults are derived from
+            the data time span and the component centres + five sigma.
+            These are treated as *starting* bounds only; the grid may be
+            expanded automatically.
+        peak_threshold_rel : float, optional
+            Relative height threshold for significant peak detection.
+        uncertainty : str, optional
+            Uncertainty method.  Only ``"peak_mass"`` is supported
+            (``"peak_width"`` raises ``NotImplementedError``).
+        n_peaks : int or None, optional
+            Number of peaks to analyse.  If ``None``, defaults to the
+            effective number of mixtures used at fit time.
+        mass_level : float, optional
+            Fraction of basin mass to enclose.  Default 0.68.
+        classify_lsp : bool, optional
+            If ``True``, flag candidate Long Secondary Periods.
+
+        Returns
+        -------
+        summary : PeriodSummaryResult
+        """
+        n_grid = int(n_grid)
+        params = self._extract_sm_params()
+
+        comp_freqs = params["component_frequencies"]
+        comp_scales = params["component_frequency_scales"]
+
+        if min_freq is None:
+            if self.ndim == 1:
+                t_span = (
+                    self._xdata_raw.max() - self._xdata_raw.min()
+                ).item()
+            else:
+                t_col = self._xdata_raw[:, 0]
+                t_span = (t_col.max() - t_col.min()).item()
+            t_span = max(float(t_span), 1e-10)
+            min_freq = 1.0 / t_span
+
+        if max_freq is None:
+            max_freq = float(
+                np.max(comp_freqs + 5.0 * comp_scales)
+            )
+
+        min_freq = max(float(min_freq), 1e-12)
+        max_freq = max(float(max_freq), min_freq * 2.0)
+
+        freq_grid = self._build_frequency_grid(
+            min_freq, max_freq, n_grid, spacing="log"
+        )
+        psd = self._sm_psd_on_grid(freq_grid, params)
+
+        from scipy.signal import find_peaks as _sp_find_peaks
+
+        _peaks, _ = _sp_find_peaks(psd)
+        if len(_peaks) == 0:
+            dominant_idx = int(np.argmax(psd))
+        else:
+            dominant_idx = int(_peaks[np.argmax(psd[_peaks])])
+
+        peak_height = float(psd[dominant_idx])
+        half_max = 0.5 * peak_height
+
+        # -- adaptive grid expansion to contain both half-max crossings ----
+        (
+            freq_grid, psd, dominant_idx,
+            left_truncated, right_truncated, n_expansions,
+        ) = self._expand_psd_grid_until_contained(
+            freq_grid, psd, params, dominant_idx, half_max,
+            max_expansions=10, expansion_factor=2.0, n_grid=n_grid,
+        )
+        peak_height = float(psd[dominant_idx])
+
+        # -- detect all peaks, sorted by height (descending) ---------------
+        all_peak_indices, all_prominences = self._find_psd_peaks(
+            freq_grid, psd
+        )
+
+        # -- determine how many peaks to analyse ---------------------------
+        n_peaks_requested = n_peaks
+        if n_peaks is not None:
+            n_peaks_to_analyze = int(n_peaks)
+        else:
+            n_eff = getattr(self, "_fit_num_mixtures_effective", None)
+            n_peaks_to_analyze = (
+                int(n_eff) if n_eff is not None else len(all_peak_indices)
+            )
+        n_peaks_available = len(all_peak_indices)
+        n_peaks_to_analyze = min(n_peaks_to_analyze, n_peaks_available)
+
+        selected_indices = all_peak_indices[:n_peaks_to_analyze]
+        selected_proms = all_prominences[:n_peaks_to_analyze]
+
+        # -- characterize each selected peak --------------------------------
+        dominant_freq = float(freq_grid[selected_indices[0]])
+        dominant_period = 1.0 / dominant_freq
+
+        peak_objects = []
+        for rank_idx, (pidx, prom) in enumerate(
+            zip(selected_indices, selected_proms, strict=True)
+        ):
+            info = self._characterize_peak_basin(
+                freq_grid, psd, pidx, mass_level=mass_level
+            )
+            f_pk = float(freq_grid[pidx])
+            p_pk = 1.0 / f_pk
+            f_lo = info["f_lo"]
+            f_hi = info["f_hi"]
+            p_lo = 1.0 / f_hi if f_hi > 0 else float("nan")
+            p_hi = 1.0 / f_lo if f_lo > 0 else float("nan")
+            ratio = p_pk / dominant_period if dominant_period > 0 else 1.0
+            # Coherence proxy: ratio of peak frequency to frequency-interval
+            # width.  A narrow, well-localized peak yields a large value; a
+            # broad diffuse structure yields a small value.  Non-finite or
+            # non-positive widths produce NaN (treated as worst in ranking).
+            _width = f_hi - f_lo
+            if np.isfinite(_width) and _width > 0:
+                _coherence_proxy = f_pk / _width
+            else:
+                _coherence_proxy = float("nan")
+            peak_objects.append(
+                PeriodPeakResult(
+                    rank=rank_idx + 1,
+                    frequency=f_pk,
+                    period=p_pk,
+                    height=info["height"],
+                    prominence=float(prom),
+                    area_fraction=info["area_fraction"],
+                    interval_frequency=(f_lo, f_hi),
+                    interval_period=(p_lo, p_hi),
+                    period_ratio_to_primary=ratio,
+                    is_candidate_lsp=False,
+                    notes="",
+                    coherence_proxy=_coherence_proxy,
+                )
+            )
+
+        if classify_lsp:
+            peak_objects = self._identify_lsp_candidates(peak_objects)
+
+        # -- backward-compat: significant peaks via threshold ---------------
+        threshold = peak_threshold_rel * peak_height
+        sig_mask = psd[all_peak_indices] >= threshold
+        n_sig_peaks = int(np.sum(sig_mask))
+
+        # -- notes string ---------------------------------------------------
+        dominant_info = self._characterize_peak_basin(
+            freq_grid, psd, dominant_idx, mass_level=mass_level
+        )
+        _mass_ok = dominant_info["mass_ok"]
+        _basin_l, _basin_r, _basin_left_at_bdy, _basin_right_at_bdy = (
+            self._find_dominant_peak_basin(psd, dominant_idx)
+        )
+        _note_parts = [
+            "Interval is based on the integrated PSD mass within the "
+            "primary peak basin (peak-centered shortest-mass interval). "
+            "The interval is guaranteed to contain the peak frequency. "
+            "Integration is performed in log-frequency space to avoid "
+            "high-frequency bias on a log-spaced grid. "
+            "PSD evaluated on a log-spaced frequency grid."
+        ]
+        if _basin_left_at_bdy:
+            _note_parts.append(
+                "  Basin reached the left grid boundary; "
+                "left edge of the basin may be underestimated."
+            )
+        if _basin_right_at_bdy:
+            _note_parts.append(
+                "  Basin reached the right grid boundary; "
+                "right edge of the basin may be underestimated."
+            )
+        if not _mass_ok:
+            _note_parts.append(
+                "  WARNING: peak-mass interval could not be computed "
+                "(basin too narrow); falling back to basin edges."
+            )
+        if n_expansions > 0:
+            _note_parts.append(
+                f"  Grid expanded {n_expansions} time(s) to contain "
+                "the half-maximum interval."
+            )
+        if left_truncated or right_truncated:
+            _sides = []
+            if left_truncated:
+                _sides.append("left")
+            if right_truncated:
+                _sides.append("right")
+            _note_parts.append(
+                f"  WARNING: half-maximum crossing on the "
+                f"{' and '.join(_sides)} side(s) may still be "
+                "truncated; width estimate is a lower bound."
+            )
+        _sm_psd_note = (
+            "Spectral-mixture model (spectral_mixture backend).  "
+            "Periods are derived from peaks of the SUMMED PSD on a "
+            "frequency grid — this is the literature-comparable output.  "
+            "The component periods/frequencies listed in the kernel "
+            "component diagnostics section are direct kernel hyperparameter "
+            "values and are for diagnostic purposes only; they are NOT "
+            "the reported period determinations.  "
+        )
+        notes = _sm_psd_note + "".join(_note_parts)
+
+        if uncertainty == "peak_width":
+            raise NotImplementedError(
+                "uncertainty='peak_width' is not implemented for the "
+                "spectral_mixture backend because the reported interval is "
+                "still computed using the peak-centered mass method. "
+                "Use uncertainty='peak_mass' instead."
+            )
+        _interval_def = "peak_centered_68pct_mass_interval"
+
+        _kf = self._kernel_family_name(
+            getattr(self.model, "sci_kernel", None)
+        )
+        _diag_notes = (
+            "Spectral-mixture kernel components.  These are internal kernel "
+            "parameters and are NOT independent physical periods.  "
+            "The summed-PSD peaks (see 'peaks') are the "
+            "literature-comparable period estimates."
+        )
+        _diag = ComponentDiagnosticsResult(
+            component_periods=params["component_periods"],
+            component_frequencies=params["component_frequencies"],
+            component_weights=params["component_weights"],
+            component_period_scales=params["component_period_scales"],
+            component_frequency_scales=(
+                params["component_frequency_scales"]
+            ),
+            n_components=len(params["component_periods"]),
+            kernel_family=_kf,
+            notes=_diag_notes,
+        )
+        return PeriodSummaryResult(
+            method="spectral_mixture_psd_peak",
+            backend="spectral_mixture",
+            kernel_family=_kf,
+            time_kernel_family=_kf,
+            has_stochastic_background=False,
+            model_name="",
+            n_peaks_detected=n_sig_peaks,
+            n_peaks_analyzed=len(peak_objects),
+            n_peaks_requested=n_peaks_requested,
+            dominant_period=dominant_period,
+            dominant_frequency=dominant_freq,
+            peaks=peak_objects,
+            freq_grid=freq_grid,
+            psd=psd,
+            notes=notes,
+            component_diagnostics=_diag,
+            interval_definition=_interval_def,
+        )
+
+    def get_period_summary(
+        self,
+        n_grid=5000,
+        min_freq=None,
+        max_freq=None,
+        peak_threshold_rel=0.2,
+        uncertainty="peak_mass",
+        n_peaks=None,
+        mass_level=0.68,
+        classify_lsp=False,
+    ):
+        """Return a literature-comparable period summary for the fitted model.
+
+        Unlike :meth:`get_periods`, which returns the raw kernel-basis
+        parameters of each spectral-mixture component (component centres,
+        scales, and weights), this method aims to produce a *single dominant
+        period* that can be directly compared to published values.
+
+        The method dispatches to the appropriate backend based on the type of
+        kernel used by the model:
+
+        **Spectral-mixture models** (all ``"1D"``, ``"2D"``, ``"SKI"``,
+        ``"PowerLaw"``, ``"Dust"`` variants):
+            Constructs the total positive-frequency PSD as a sum of weighted
+            Gaussians, identifies the highest PSD peak, and returns its
+            location as the dominant period.  The half-maximum width of the
+            peak provides a practical uncertainty interval.
+
+        **Explicit-period models** (``"1DQuasiPeriodic"``,
+        ``"1DLinearQuasiPeriodic"``):
+            Reads the fitted ``period_length`` parameter directly from the
+            :class:`~gpytorch.kernels.PeriodicKernel`.  The RBF lengthscale
+            is used as a coherence proxy to derive a period interval and
+            Q-factor.
+
+        **Periodic-plus-stochastic** (``"1DPeriodicStochastic"``):
+            Extracts the period from the quasi-periodic sub-kernel.  The
+            summary notes flag the mixed periodic/stochastic nature of the
+            model.
+
+        **Separable 2D models** (``"2DSeparable"``, ``"2DAchromatic"``,
+        ``"2DWavelengthDependent"``, ``"2DDustMean"``,
+        ``"2DPowerLawMean"``):
+            Identifies the time sub-kernel (``active_dims = [0]``) and
+            applies the appropriate backend to that sub-kernel only.
+
+        **Non-periodic models** (``"1DMatern"``):
+            Returns a consistent summary dictionary with ``None`` values for
+            all period-related fields rather than raising an exception, so
+            that automated scripts can handle all model types gracefully.
+
+        .. note::
+            All uncertainty estimates are *practical proxies*, not posterior
+            credible intervals.  MCMC-based credible intervals are not yet
+            implemented.
+
+        Parameters
+        ----------
+        n_grid : int, optional
+            Number of points in the positive-frequency evaluation grid
+            (spectral-mixture backend only).  Default 5000.
+        min_freq : float or None, optional
+            Minimum frequency for the evaluation grid (SM backend only).
+            Defaults to ``1 / time_span``.
+        max_freq : float or None, optional
+            Maximum frequency for the evaluation grid (SM backend only).
+            Defaults to the highest component centre plus five sigma.
+        peak_threshold_rel : float, optional
+            Relative height threshold for significant peaks (SM backend).
+            Default 0.2.
+        uncertainty : str, optional
+            Uncertainty method.  Only ``"peak_mass"`` is supported for the
+            spectral-mixture backend (``"peak_width"`` raises
+            ``NotImplementedError``).  Non-SM backends always use their
+            native interval method and ignore this parameter.  Default
+            ``"peak_mass"``.
+        n_peaks : int or None, optional
+            Number of peaks to analyze and return in ``peaks``.  If ``None``
+            (default), defaults to ``_fit_num_mixtures_effective`` when that
+            attribute is available (i.e. after a call to :meth:`fit` or
+            :meth:`set_model`), otherwise all detected peaks are returned.
+            Pass an explicit integer to override.
+        mass_level : float, optional
+            Fraction of basin mass to enclose in the equal-tail interval
+            (``"peak_mass"`` mode only).  Default 0.68 (~1 sigma).
+        classify_lsp : bool, optional
+            If ``True``, flag peaks whose period ratio to the dominant peak
+            falls within the Long Secondary Period range (5-15) and whose
+            basin area fraction exceeds 0.05.  Default ``False``.
+
+        Returns
+        -------
+        summary : dict
+            Dictionary with keys:
+
+            * ``component_periods``          - raw kernel component periods
+            * ``component_weights``          - raw kernel component weights
+            * ``component_period_scales``    - raw kernel period widths
+            * ``component_frequencies``      - raw kernel component freqs
+            * ``component_frequency_scales`` - raw kernel frequency widths
+            * ``freq_grid``  - evaluation grid (``None`` for non-PSD backends)
+            * ``psd``        - PSD values (``None`` for non-PSD backends)
+            * ``dominant_frequency`` - frequency of the dominant peak
+              (``None`` for non-periodic models)
+            * ``dominant_period``    - ``1 / dominant_frequency``
+              (``None`` for non-periodic models)
+            * ``period_interval_fwhm_like`` - ``(period_lo, period_hi)``
+              uncertainty interval (``None`` for non-periodic models;
+              kept for backward compatibility)
+            * ``period_interval`` - same as ``period_interval_fwhm_like``
+              (generic key independent of uncertainty method)
+            * ``interval_definition`` - string describing the interval type
+            * ``q_factor``        - coherence Q (``None`` if not defined)
+            * ``peak_fraction``   - dominant peak height / total weight
+            * ``n_significant_peaks`` - peaks above threshold
+            * ``significant_periods`` - periods of significant peaks
+            * ``method``  - string identifying the backend used
+            * ``notes``   - additional diagnostic notes
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been initialised.
+        NotImplementedError
+            If an unsupported ``uncertainty`` method is requested.
+        """
+        _sm_uncertainties = {"peak_mass"}
+        if uncertainty not in _sm_uncertainties:
+            raise NotImplementedError(
+                f"uncertainty='{uncertainty}' is not yet implemented. "
+                f"Supported values: {sorted(_sm_uncertainties)!r}."
+            )
+
+        if not hasattr(self, "model") or self.model is None:
+            raise RuntimeError(
+                "Model not initialised.  Call set_model() first."
+            )
+
+        backend = self._detect_period_summary_backend()
+
+        if backend == "spectral_mixture":
+            return self._get_sm_period_summary(
+                n_grid=n_grid,
+                min_freq=min_freq,
+                max_freq=max_freq,
+                peak_threshold_rel=peak_threshold_rel,
+                uncertainty=uncertainty,
+                n_peaks=n_peaks,
+                mass_level=mass_level,
+                classify_lsp=classify_lsp,
+            )
+
+        if backend == "explicit_period":
+            return self._get_explicit_period_summary()
+
+        if backend == "periodic_plus_stochastic":
+            return self._get_periodic_plus_stochastic_summary()
+
+        if backend == "separable_2d":
+            return self._get_separable_2d_period_summary(
+                n_grid=n_grid,
+                min_freq=min_freq,
+                max_freq=max_freq,
+                peak_threshold_rel=peak_threshold_rel,
+                uncertainty=uncertainty,
+                n_peaks=n_peaks,
+                mass_level=mass_level,
+                classify_lsp=classify_lsp,
+            )
+
+        # backend == "non_periodic"
+        return self._get_non_periodic_summary()
+
+    def plot_period_summary(
+        self,
+        summary=None,
+        show=True,
+        log_freq=True,
+        show_full_psd=None,
+        max_peaks_to_mark=3,
+        **kwargs,
+    ):
+        """Plot the period summary from :meth:`get_period_summary`.
+
+        Produces a matplotlib figure appropriate for the type of period
+        summary:
+
+        * **Spectral-mixture PSD summary with a single analyzed peak**
+          (``PeriodSummaryResult``, ``n_peaks_analyzed == 1``): generates a
+          **single peak-centered panel** zoomed in on the dominant peak.
+          Pass ``show_full_psd=True`` to add a second full-range PSD panel.
+        * **Spectral-mixture PSD summary with structured peaks**
+          (``PeriodSummaryResult``, ``n_peaks_analyzed > 1``): generates a
+          **multi-panel figure** with the full PSD in the top panel and one
+          zoomed panel per analyzed peak below.  Each peak is labeled
+          P1, P2, … with a distinct color.
+        * **Spectral-mixture PSD summary (plain dict)**: plots the PSD curve
+          with the dominant peak and dotted lines for other significant peaks.
+        * **Explicit-period summary** (e.g. quasi-periodic): plots a single
+          vertical line at the dominant frequency with an annotated period,
+          interval, and Q-factor.  No PSD curve is drawn because none is
+          computed for this backend.
+        * **Non-periodic summary**: produces a simple figure with explanatory
+          text stating that no dominant period is defined for this kernel.
+
+        The figure type is determined by ``summary["method"]`` and by whether
+        ``summary["freq_grid"]`` is ``None``.
+
+        Parameters
+        ----------
+        summary : dict or None, optional
+            Output of :meth:`get_period_summary`.  If ``None``, it is
+            computed automatically.  Extra keyword arguments (``**kwargs``)
+            are forwarded to :meth:`get_period_summary`.
+        show : bool, optional
+            If ``True`` (default), call ``plt.show()``.  If ``False``,
+            return ``(fig, ax)`` for further customisation.
+        log_freq : bool, optional
+            If ``True`` (default), plot the x-axis (frequency) on a log
+            scale.  Ignored for non-periodic summaries.
+        show_full_psd : bool or None, optional
+            Controls whether a full-range PSD panel is included in the
+            single-peak case.  When ``None`` (default), a full-range panel
+            is *not* added in single-peak mode (the main panel is already
+            peak-centered) but *is* included in multi-peak mode.  Set to
+            ``True`` to force a full-range panel even in single-peak mode;
+            set to ``False`` to suppress it even in multi-peak mode.
+        max_peaks_to_mark : int, optional
+            Maximum number of peaks to mark on the plot.  In multi-peak
+            mode this also limits the number of zoom panels created.
+            Default is ``3``.
+        **kwargs
+            Additional keyword arguments forwarded to
+            :meth:`get_period_summary` when ``summary`` is ``None``.
+
+        Returns
+        -------
+        fig, ax : matplotlib.figure.Figure, matplotlib.axes.Axes
+            Returned when ``show=False``; otherwise ``None``.
+            For the multi-panel case ``ax`` is the top axes.
+        """
+        if summary is None:
+            summary = self.get_period_summary(**kwargs)
+
+        method = summary.get("method", "")
+        has_psd = summary["freq_grid"] is not None
+
+        # -- non-periodic: informational plot only -------------------------
+        if method == "non_periodic_kernel" or (
+            summary["dominant_period"] is None
+        ):
+            fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+            ax.text(
+                0.5,
+                0.5,
+                summary.get(
+                    "notes",
+                    "No dominant period defined for this kernel.",
+                ),
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=11,
+                wrap=True,
+            )
+            ax.set_axis_off()
+            ax.set_title("Period summary")
+            if show:
+                plt.show()
+                return None
+            return fig, ax
+
+        # -- common fields -------------------------------------------------
+        f_peak = summary["dominant_frequency"]
+        p_dom = summary["dominant_period"]
+        # Prefer the generic key; fall back to the legacy key for old summaries
+        interval = summary.get(
+            "period_interval", summary.get("period_interval_fwhm_like")
+        )
+        interval_definition = summary.get("interval_definition", "")
+        q = summary["q_factor"]
+        n_sig = summary["n_significant_peaks"]
+
+        # Build a human-readable interval type label for annotations
+        _interval_labels = {
+            "equal_tail_68pct_peak_mass": "68% peak mass interval",
+            "peak_centered_68pct_mass_interval": "68% peak-centered mass interval",
+            "half_maximum_fwhm_like": "half-max interval",
+            "coherence_proxy": "coherence-proxy interval",
+            "coherence_proxy_from_rbf_lengthscale": (
+                "coherence-proxy interval (RBF lengthscale)"
+            ),
+        }
+        interval_label = _interval_labels.get(
+            interval_definition, interval_definition or "interval"
+        )
+
+        # Decide whether we have a structured PeriodSummaryResult with peaks.
+        # Plain-dict summaries (non-SM backends) do not have a .peaks attr.
+        structured_peaks = getattr(summary, "peaks", None)
+        has_structured_peaks = (
+            structured_peaks is not None and len(structured_peaks) > 0
+        )
+
+        # -- colour palette for per-peak markers ---------------------------
+        # crimson = P1 (dominant), then cycling through a friendly palette
+        _peak_colors = [
+            "crimson",
+            "darkorange",
+            "forestgreen",
+            "mediumpurple",
+            "saddlebrown",
+            "deepskyblue",
+        ]
+
+        def _peak_color(rank):
+            """Return the color for a peak by rank (1-indexed)."""
+            idx = max(rank - 1, 0)
+            return _peak_colors[idx % len(_peak_colors)]
+
+        # ------------------------------------------------------------------
+        # Helpers shared by both structured-peak plot paths
+        # ------------------------------------------------------------------
+        def _zoom_window(pk, freq_grid):
+            """Return (f_win_lo, f_win_hi, f_zoom, p_zoom) for one peak.
+
+            The window is centered on the peak and expanded symmetrically
+            around it.  If the interval bounds are finite and sensible the
+            interval half-width is used as the core; otherwise a ±25%
+            fallback is applied.  A ±10% emergency fallback is used when
+            the resulting slice is too narrow.
+            """
+            f_ctr = pk.frequency
+            p_lo, p_hi = pk.interval_period
+            if (
+                np.isfinite(p_lo) and np.isfinite(p_hi)
+                and p_lo > 0 and p_hi > 0
+            ):
+                f_int_lo = 1.0 / p_hi
+                f_int_hi = 1.0 / p_lo
+                # Half-width of the interval, but at least 10% of peak freq
+                half = max(0.5 * (f_int_hi - f_int_lo), 0.1 * f_ctr)
+                # Expand by 50% symmetrically around the peak
+                f_win_lo = max(f_ctr - 1.5 * half, freq_grid[0])
+                f_win_hi = min(f_ctr + 1.5 * half, freq_grid[-1])
+            else:
+                # Fallback: ±25% symmetric window
+                half = 0.25 * f_ctr
+                f_win_lo = max(f_ctr - half, freq_grid[0])
+                f_win_hi = min(f_ctr + half, freq_grid[-1])
+            mask = (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
+            f_zoom = freq_grid[mask]
+            p_zoom = psd[mask]
+            if len(f_zoom) < 2:
+                # Emergency: ±10% around peak
+                f_win_lo = f_ctr * 0.9
+                f_win_hi = f_ctr * 1.1
+                mask = (freq_grid >= f_win_lo) & (freq_grid <= f_win_hi)
+                f_zoom = freq_grid[mask]
+                p_zoom = psd[mask]
+            return f_win_lo, f_win_hi, f_zoom, p_zoom
+
+        def _draw_peak_zoom(panel_ax, pk, f_win_lo, f_win_hi,
+                            f_zoom, p_zoom):
+            """Populate a zoom panel for one peak."""
+            col = _peak_color(pk.rank)
+            panel_ax.plot(f_zoom, p_zoom, color="steelblue", lw=1.5)
+            panel_ax.axvline(pk.frequency, color=col, lw=1.5, ls="--")
+            p_lo, p_hi = pk.interval_period
+            if (
+                np.isfinite(p_lo) and np.isfinite(p_hi) and p_lo > 0
+            ):
+                f_lo_int = 1.0 / p_hi
+                f_hi_int = 1.0 / p_lo
+                # Always draw the span when the interval is valid; matplotlib
+                # clips it to the axes automatically, so there is no need to
+                # check whether it fits inside the zoom window.
+                if f_lo_int < f_hi_int:
+                    panel_ax.axvspan(
+                        f_lo_int, f_hi_int,
+                        alpha=0.25, color=col,
+                        label=(
+                            f"{interval_label}  "
+                            f"[{p_lo:.4g}, {p_hi:.4g}]"
+                        ),
+                    )
+            _ratio_str = (
+                f"  ratio={pk.period_ratio_to_primary:.3g}"
+                if pk.rank > 1
+                else ""
+            )
+            panel_ax.set_title(
+                f"P{pk.rank}  period = {pk.period:.6g}{_ratio_str}"
+            )
+            if log_freq:
+                panel_ax.set_xscale("log")
+            panel_ax.set_yscale("log")
+            panel_ax.set_xlabel("Frequency")
+            panel_ax.set_ylabel("PSD")
+            panel_ax.legend(fontsize=7, loc="upper left")
+
+        # ------------------------------------------------------------------
+        # Structured PeriodSummaryResult with PSD available
+        # ------------------------------------------------------------------
+        if has_structured_peaks and has_psd:
+            freq_grid = summary["freq_grid"]
+            psd = summary["psd"]
+            # Limit to max_peaks_to_mark peaks
+            _peaks_to_plot = structured_peaks[:max_peaks_to_mark]
+            _n_peaks = len(_peaks_to_plot)
+            # Determine whether we are in single-peak mode.
+            # show_full_psd=None means: auto (False for 1 peak, True for >1).
+            _single_peak = _n_peaks == 1
+            _include_full = (
+                show_full_psd
+                if show_full_psd is not None
+                else not _single_peak
+            )
+
+            if _single_peak:
+                # -------------------------------------------------------
+                # Single-peak mode: one peak-centered panel (+ optional
+                # full-PSD panel if show_full_psd=True was requested).
+                # -------------------------------------------------------
+                pk = _peaks_to_plot[0]
+                col = _peak_color(pk.rank)
+                f_win_lo, f_win_hi, f_zoom, p_zoom = _zoom_window(
+                    pk, freq_grid
+                )
+
+                if _include_full:
+                    fig, axes = plt.subplots(
+                        2, 1, figsize=(9, 7), squeeze=False
+                    )
+                    axes = axes[:, 0]
+                    ax = axes[0]  # main = peak-centered
+                    ax_full = axes[1]
+                else:
+                    fig, ax = plt.subplots(1, 1, figsize=(9, 4.5))
+                    ax_full = None
+
+                # Main panel: peak-centered zoom
+                _draw_peak_zoom(ax, pk, f_win_lo, f_win_hi, f_zoom, p_zoom)
+                ax.set_title(
+                    f"Period summary - dominant peak  "
+                    f"(P = {pk.period:.6g})"
+                )
+
+                if ax_full is not None:
+                    # Optional full-range panel below
+                    ax_full.plot(
+                        freq_grid, psd,
+                        color="steelblue", lw=1.5, label="PSD"
+                    )
+                    ax_full.axvline(
+                        pk.frequency, color=col, lw=1.5, ls="--",
+                        label=f"P1  period={pk.period:.4g}",
+                    )
+                    p_lo_fp, p_hi_fp = pk.interval_period
+                    if (
+                        np.isfinite(p_lo_fp) and np.isfinite(p_hi_fp)
+                        and p_lo_fp > 0 and p_hi_fp > 0
+                    ):
+                        f_lo_int = 1.0 / p_hi_fp
+                        f_hi_int = 1.0 / p_lo_fp
+                        if f_lo_int < f_hi_int:
+                            ax_full.axvspan(
+                                f_lo_int, f_hi_int,
+                                alpha=0.15, color=col,
+                                label=(
+                                    f"{interval_label}  "
+                                    f"[{p_lo_fp:.4g}, {p_hi_fp:.4g}]"
+                                ),
+                            )
+                    if log_freq:
+                        ax_full.set_xscale("log")
+                    ax_full.set_yscale("log")
+                    ax_full.set_ylabel("PSD")
+                    ax_full.set_title(
+                        f"Period summary - full PSD ({method})"
+                    )
+                    ax_full.legend(fontsize=7, loc="upper left", ncol=2)
+
+            else:
+                # -------------------------------------------------------
+                # Multi-peak mode: full PSD top + one zoom panel per peak
+                # (limited to max_peaks_to_mark peaks)
+                # -------------------------------------------------------
+                n_panels = 1 + _n_peaks
+                fig, axes = plt.subplots(
+                    n_panels, 1,
+                    figsize=(9, 3.5 + 2.5 * _n_peaks),
+                    squeeze=False,
+                )
+                axes = axes[:, 0]
+                ax = axes[0]  # top panel = full PSD
+
+                # Top panel: full PSD
+                ax.plot(
+                    freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
+                )
+                for pk in _peaks_to_plot:
+                    col = _peak_color(pk.rank)
+                    ax.axvline(
+                        pk.frequency,
+                        color=col,
+                        lw=1.5,
+                        ls="--",
+                        label=f"P{pk.rank}  period={pk.period:.4g}",
+                    )
+                    p_lo, p_hi = pk.interval_period
+                    if (
+                        np.isfinite(p_lo) and np.isfinite(p_hi)
+                        and p_lo > 0 and p_hi > 0
+                    ):
+                        f_lo_int = 1.0 / p_hi
+                        f_hi_int = 1.0 / p_lo
+                        if f_lo_int < f_hi_int:
+                            _span_label = (
+                                f"{interval_label}  "
+                                f"[{p_lo:.4g}, {p_hi:.4g}]"
+                                if pk.rank == 1
+                                else None
+                            )
+                            ax.axvspan(
+                                f_lo_int, f_hi_int,
+                                alpha=0.15, color=col,
+                                label=_span_label,
+                            )
+                if log_freq:
+                    ax.set_xscale("log")
+                ax.set_yscale("log")
+                ax.set_ylabel("PSD")
+                ax.set_title(f"Period summary - full PSD ({method})")
+                ax.legend(fontsize=7, loc="upper left", ncol=2)
+
+                # Per-peak zoom panels (one per plotted peak)
+                for i, pk in enumerate(_peaks_to_plot):
+                    panel_ax = axes[i + 1]
+                    f_win_lo, f_win_hi, f_zoom, p_zoom = _zoom_window(
+                        pk, freq_grid
+                    )
+                    _draw_peak_zoom(
+                        panel_ax, pk, f_win_lo, f_win_hi, f_zoom, p_zoom
+                    )
+
+            fig.tight_layout()
+            if show:
+                plt.show()
+                return None
+            return fig, ax
+
+        # ------------------------------------------------------------------
+        # Single-panel fallback (non-structured or no PSD)
+        # ------------------------------------------------------------------
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+
+        # -- PSD curve (spectral-mixture only) -----------------------------
+        if has_psd:
+            freq_grid = summary["freq_grid"]
+            psd = summary["psd"]
+            ax.plot(
+                freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
+            )
+
+        # -- dominant peak marker -----------------------------------------
+        ax.axvline(
+            f_peak,
+            color="crimson",
+            lw=1.5,
+            ls="--",
+            label=f"Dominant peak  P = {p_dom:.4g}",
+        )
+
+        # -- period interval shaded band (if finite interval) --------------
+        if interval is not None:
+            period_lo, period_hi = interval
+            f_left = (
+                1.0 / period_hi if period_hi and period_hi > 0 else None
+            )
+            f_right = (
+                1.0 / period_lo if period_lo and period_lo > 0 else None
+            )
+            if (
+                f_left is not None and f_right is not None
+                and np.isfinite(f_left) and np.isfinite(f_right)
+                and f_left < f_right
+            ):
+                ax.axvspan(
+                    f_left,
+                    f_right,
+                    alpha=0.25,
+                    color="crimson",
+                    label=(
+                        f"{interval_label}  "
+                        f"[{period_lo:.4g}, {period_hi:.4g}]"
+                    ),
+                )
+
+        # -- other significant peaks from structured summary ---------------
+        if has_structured_peaks:
+            for pk in structured_peaks[1:max_peaks_to_mark]:
+                col = _peak_color(pk.rank)
+                ax.axvline(
+                    pk.frequency,
+                    color=col,
+                    lw=1.0,
+                    ls=":",
+                    alpha=0.9,
+                    label=f"P{pk.rank}  period={pk.period:.4g}",
+                )
+        else:
+            sig_periods = summary.get("significant_periods", np.array([]))
+            for sp in sig_periods:
+                sf = 1.0 / sp
+                if abs(sf - f_peak) > 1e-12 * max(f_peak, 1e-12):
+                    ax.axvline(
+                        sf,
+                        color="darkorange",
+                        lw=1.0,
+                        ls=":",
+                        alpha=0.8,
+                    )
+
+        # -- text annotation -----------------------------------------------
+        if q is not None and np.isfinite(q):
+            q_str = f"{q:.2f}"
+        elif q is not None and np.isinf(q):
+            q_str = "inf"
+        else:
+            q_str = "N/A"
+
+        if interval is not None:
+            p_lo, p_hi = interval
+            int_str = f"[{p_lo:.4g}, {p_hi:.4g}]"
+        else:
+            int_str = "N/A"
+
+        ann_lines = [
+            f"Dominant period:   {p_dom:.6g}",
+            f"Interval ({interval_label}): {int_str}",
+            f"Q-factor:          {q_str}",
+            f"Significant peaks: {n_sig}",
+        ]
+        ax.text(
+            0.97,
+            0.97,
+            "\n".join(ann_lines),
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
+            family="monospace",
+            bbox=dict(
+                boxstyle="round,pad=0.3", fc="white", alpha=0.8
+            ),
+        )
+
+        if log_freq:
+            ax.set_xscale("log")
+        if has_psd:
+            ax.set_yscale("log")
+        ax.set_xlabel("Frequency")
+        ax.set_ylabel("PSD" if has_psd else "")
+        ax.set_title(f"Period summary ({method})")
+        ax.legend(fontsize=8, loc="upper left")
+
+        if show:
+            plt.show()
+            return None
+        return fig, ax
+
+    # ------------------------------------------------------------------
+    # High-level output-writing convenience
+    # ------------------------------------------------------------------
+
+    def _save_period_summary_figure(
+        self,
+        summary,
+        filename,
+        plot_kwargs=None,
+        close_figure=True,
+        dpi=150,
+    ):
+        """Internal helper for write_period_summary_outputs().
+
+        Calls :meth:`plot_period_summary` with ``show=False``, saves the
+        resulting figure, and optionally closes it.
+
+        Parameters
+        ----------
+        summary : dict or PeriodSummaryResult
+            Pre-computed period summary (passed straight through to
+            :meth:`plot_period_summary`).
+        filename : str or Path-like
+            Destination path for the PNG (or any format supported by
+            matplotlib's ``savefig``).
+        plot_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`plot_period_summary`.
+        close_figure : bool, optional
+            If ``True`` (default), call ``plt.close(fig)`` after saving.
+        dpi : int, optional
+            Resolution in dots per inch, default ``150``.
+
+        Returns
+        -------
+        pathlib.Path
+            Path to the saved figure file (same as *filename* as a
+            ``pathlib.Path``; may be relative).
+        """
+        from pathlib import Path
+
+        if plot_kwargs is None:
+            plot_kwargs = {}
+        path = Path(filename)
+        result = self.plot_period_summary(
+            summary=summary, show=False, **plot_kwargs
+        )
+        # plot_period_summary returns None when show=True; that should not
+        # happen here (we always pass show=False), but guard defensively.
+        if result is None:
+            return path
+        fig, _ax = result
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        if close_figure:
+            plt.close(fig)
+        return path
+
+    def write_period_summary_outputs(
+        self,
+        text_file=None,
+        png_file=None,
+        json_file=None,
+        summary=None,
+        show=False,
+        close_figure=True,
+        include_components=True,
+        include_peaks=True,
+        include_psd_info=False,
+        include_psd_in_json=False,
+        summary_kwargs=None,
+        plot_kwargs=None,
+    ):
+        """Write period-summary outputs (text, PNG, JSON) to disk.
+
+        This is a high-level **convenience wrapper** around:
+
+        * :meth:`get_period_summary` — computes the summary if not supplied
+        * :meth:`PeriodSummaryResult.write_text` — human-readable text report
+        * :meth:`_save_period_summary_figure` — period-summary figure (PNG)
+        * :meth:`PeriodSummaryResult.write_json` — machine-readable JSON export
+
+        The method writes only the files whose paths are provided. Pass
+        ``text_file``, ``png_file``, and/or ``json_file`` in any combination.
+
+        Parameters
+        ----------
+        text_file : str, Path-like, or None, optional
+            If given, the human-readable period-summary text is written here.
+            The output is intended for direct reading by a researcher: it
+            includes the dominant period, peak table, kernel-component
+            diagnostics, and (optionally) PSD grid information.
+        png_file : str, Path-like, or None, optional
+            If given, the period-summary figure is saved here.  The PNG is a
+            visualisation of the analyzed peak structure produced by
+            :meth:`plot_period_summary`.
+        json_file : str, Path-like, or None, optional
+            If given, a machine-readable JSON export is written here.  The
+            JSON contains the same information as the text report plus the
+            raw array data (unless *include_psd_in_json* is ``False``).
+        summary : dict or PeriodSummaryResult or None, optional
+            A pre-computed period summary returned by
+            :meth:`get_period_summary`.  If ``None`` (default) the summary is
+            computed by calling ``get_period_summary(**summary_kwargs)``.
+            Supplying a pre-computed summary avoids redundant computation when
+            multiple output files are requested.
+        show : bool, optional
+            Passed through to :meth:`plot_period_summary`.  Ignored when
+            *png_file* is ``None``.  Default is ``False``.
+        close_figure : bool, optional
+            If ``True`` (default), close the matplotlib figure after saving.
+            Set to ``False`` to keep the figure in memory for further
+            inspection.
+        include_components : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether the kernel-component diagnostics block appears in the text
+            output.  Default is ``True``.
+        include_peaks : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether the analyzed-peaks block appears in the text output.
+            Default is ``True``.
+        include_psd_info : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_text`.  Controls
+            whether PSD grid statistics appear in the text output.  Default is
+            ``False``.
+        include_psd_in_json : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_json`.  When
+            ``True`` the full frequency grid and PSD arrays are embedded in
+            the JSON file.  Default is ``False`` (arrays are omitted to keep
+            the file small).
+        summary_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`get_period_summary`
+            when *summary* is ``None``.  Ignored if *summary* is supplied.
+        plot_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to :meth:`plot_period_summary`
+            (and thus to :meth:`_save_period_summary_figure`).  Ignored when
+            *png_file* is ``None``.
+
+        Returns
+        -------
+        PeriodSummaryResult or dict
+            The period summary (computed or passed in).
+
+        Examples
+        --------
+        Write all three output types in one call::
+
+            lc.write_period_summary_outputs(
+                text_file="results/summary.txt",
+                png_file="results/summary.png",
+                json_file="results/summary.json",
+            )
+
+        Reuse an existing summary to avoid recomputation::
+
+            s = lc.get_period_summary()
+            lc.write_period_summary_outputs(
+                summary=s,
+                text_file="results/summary.txt",
+                png_file="results/summary.png",
+            )
+        """
+        if summary_kwargs is None:
+            summary_kwargs = {}
+        if summary is None:
+            summary = self.get_period_summary(**summary_kwargs)
+        elif summary_kwargs:
+            warnings.warn(
+                "summary_kwargs are ignored because a pre-computed summary "
+                "was supplied via the summary= argument.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        if text_file is not None:
+            summary.write_text(
+                text_file,
+                include_components=include_components,
+                include_peaks=include_peaks,
+                include_psd_info=include_psd_info,
+            )
+
+        if json_file is not None:
+            summary.write_json(json_file, include_psd=include_psd_in_json)
+
+        if png_file is not None:
+            self._save_period_summary_figure(
+                summary,
+                png_file,
+                plot_kwargs=plot_kwargs,
+                close_figure=close_figure,
+            )
+
+        return summary
 
     def get_parameters(self, raw=False, transform=True):
         """
@@ -5087,7 +9207,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         - self._xdata_raw.sort().values[:-1]
                     )
                     mindelta = (diffs[diffs > 0]).min().item()
-                    print(step, mindelta, 1 / (mindelta / 2))
 
                     # we want to sample a set of frequencies that are spaced
                     # in the range covered by the gaussian mixture, but we
@@ -5099,7 +9218,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         1 / (mindelta / 2),
                         step.item(),
                     )
-                    print(freq.shape)
 
             elif self.ndim == 2:
                 raise NotImplementedError(
@@ -5117,6 +9235,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
         if mcmc_samples:
+            msg = "MCMC is not currently exposed. It will be available in future releases."
+            raise NotImplementedError(msg)
             fig, ax = self._plot_psd_mcmc(
                 freq,
                 means=means,
@@ -5225,6 +9345,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         n_samples = min(self.num_samples, n_samples_to_plot)
         if means is None:
             # this approach is slightly bugged - if more than one chain is used,
@@ -5474,6 +9596,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 padding = 0.1 * base
             ylim = [y_min - padding, y_max + padding]
         if mcmc_samples:
+            msg = "MCMC is not currently exposed. It will be available in future releases."
+            raise NotImplementedError(msg)
             if self.__FITTED_MCMC:
                 return self._plot_mcmc(ylim=ylim, show=show, **kwargs)
             else:
@@ -5537,6 +9661,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The figure object of the plot.
         """
         # Get into evaluation (predictive posterior) mode
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         self._eval()
 
         if self.ndim > 1:
@@ -5567,8 +9693,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(
             self.num_samples, 1, 1
         )  # .unsqueeze(0)
-        print(self.x_fine_transformed.shape)
-        print(self.expanded_test_x.shape)
         output = self.model(self.expanded_test_x)
         with torch.no_grad():
             f, ax = plt.subplots(1, 1, figsize=(8, 6))
@@ -5581,8 +9705,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     alpha=0.2,
                 )
 
-            # Plot training data as black stars (on top of model predictions)
-            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "k*")
+            # Plot training data as black filled circles (on top of model predictions)
+            ax.plot(self.xdata.cpu().numpy(), self.ydata.cpu().numpy(), "ko")
 
             ax.legend(["Observed Data", "Sample means"])
             if ylim is not None:
@@ -5680,11 +9804,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         x_plot,
                         y_plot,
                         yerr=self.yerr[mask].cpu().numpy(),
-                        fmt="k*",
+                        fmt="ko",
                         label="Observed",
                     )
                 else:
-                    ax.plot(x_plot, y_plot, "k*", label="Observed")
+                    ax.plot(x_plot, y_plot, "ko", label="Observed")
 
                 ax.set_ylabel("y")
                 ax.set_xlabel("x")
@@ -5709,10 +9833,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         y_plot = self.ydata.cpu().numpy()
         if hasattr(self, "yerr") and self.yerr is not None:
             ax.errorbar(
-                x_plot, y_plot, yerr=self.yerr.cpu().numpy(), fmt="k*", label="Observed"
+                x_plot, y_plot, yerr=self.yerr.cpu().numpy(), fmt="ko", label="Observed"
             )
         else:
-            ax.plot(x_plot, y_plot, "k*", label="Observed")
+            ax.plot(x_plot, y_plot, "ko", label="Observed")
         current_yscale, current_ylim = self._yscale_and_ylim(y_plot, yscale, ylim)
         ax.set_yscale(current_yscale)
         if current_ylim is not None:
@@ -5760,20 +9884,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             label="Confidence",
         )
 
-        # Plot training data as black stars (on top of model predictions)
+        # Plot training data as black filled circles (on top of model predictions)
         if self.yerr is not None:
             ax.errorbar(
                 self.xdata.cpu().numpy(),
                 self.ydata.cpu().numpy(),
                 yerr=self.yerr.cpu().numpy(),
-                fmt="k*",
+                fmt="ko",
                 label="Observed",
             )
         else:
             ax.plot(
                 self.xdata.cpu().numpy(),
                 self.ydata.cpu().numpy(),
-                "k*",
+                "ko",
                 label="Observed",
             )
 
@@ -5811,7 +9935,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             x_fine_tmp = torch.cat((x_fine_transformed[:, None], vals[:, None]), dim=1)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(), "b")
+            ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(),
+                    "b", label = "Mean")
 
             lower, upper = observed_pred.confidence_region()
             ax.fill_between(
@@ -5819,20 +9944,42 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 lower.cpu().numpy(),
                 upper.cpu().numpy(),
                 alpha=0.5,
+                label = "Confidence"
             )
 
-            # Plot training data as black stars (on top of model predictions)
-            y_data_for_val = self.ydata[self.xdata[:, 1] == val]
-            ax.plot(
-                self.xdata[self.xdata[:, 1] == val, 0],
-                y_data_for_val,
-                "k*",
-            )
-            ax.legend(["Observed Data", "Mean", "Confidence"])
+            # Plot training data as black filled circles (on top of model predictions)
+            mask = self.xdata[:, 1] == val
+            x_data_for_val = self.xdata[mask, 0]
+            y_data_for_val = self.ydata[mask]
+            if hasattr(self, "yerr") and self.yerr is not None:
+                y_err_for_val = self.yerr[mask]
+                ax.errorbar(
+                    x_data_for_val,
+                    y_data_for_val,
+                    yerr=y_err_for_val,
+                    fmt="ko",
+                    label="Observed Data",
+                )
+            else:
+                ax.plot(
+                    x_data_for_val,
+                    y_data_for_val,
+                    "ko",
+                    label="Observed Data",
+                )
+            ax.legend()
 
             ax.set_ylabel("y")
             ax.set_xlabel("x")
             ax.set_title(f"y vs x for {val}")
+
+            # Set x-axis limits to the data range for this wavelength so that
+            # the plot is centred on that wavelength's observations, even when
+            # the fit is evaluated over the combined time grid of all bands.
+            x_min = x_data_for_val.min().item()
+            x_max = x_data_for_val.max().item()
+            x_padding = 0.05 * (x_max - x_min) if x_max != x_min else 0.5
+            ax.set_xlim(x_min - x_padding, x_max + x_padding)
 
             # Determine y-axis scale and limits for this wavelength
             # independently, using the shared helper.
@@ -5961,6 +10108,89 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return t
 
+    def to_csv(self, filepath: str | Path = "lightcurve.csv") -> None:
+        """Write lightcurve data to a CSV file.
+
+        The output always includes ``time``, ``wavelength``, and ``flux``
+        columns.  ``flux_error`` and ``band`` are included when present on the
+        instance. For 1-D lightcurves (time-only ``xdata``), ``wavelength`` is
+        written as ``0.0`` for each row.
+
+        Parameters
+        ----------
+        filepath : str or pathlib.Path, optional
+            Destination CSV path. The file is created or overwritten.
+            Default is ``"lightcurve.csv"``.
+
+        """
+        def _tensor_to_numpy(tensor):
+            return tensor.detach().cpu().numpy()
+
+        path = Path(filepath)
+        x_np = _tensor_to_numpy(self._xdata_raw)
+        y_np = _tensor_to_numpy(self._ydata_raw)
+        yerr_np = (
+            _tensor_to_numpy(self._yerr_raw)
+            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
+            else None
+        )
+
+        if x_np.ndim == 1:
+            time_np = x_np
+            wavelength_np = np.zeros_like(time_np)
+        elif x_np.ndim == 2 and x_np.shape[1] == 2:
+            time_np = x_np[:, 0]
+            wavelength_np = x_np[:, 1]
+        else:
+            raise ValueError(
+                "xdata must be 1-dimensional (N,) or 2-dimensional "
+                "with exactly two columns (N, 2) to export to CSV."
+            )
+
+        n_rows = len(time_np)
+        if y_np.ndim != 1:
+            raise ValueError("ydata must be 1-dimensional with shape (N,).")
+        if len(y_np) != n_rows:
+            raise ValueError(
+                f"Length mismatch between xdata ({n_rows}) and ydata ({len(y_np)})."
+            )
+        if yerr_np is not None:
+            if yerr_np.ndim != 1:
+                raise ValueError("yerr must be 1-dimensional with shape (N,).")
+            if len(yerr_np) != n_rows:
+                raise ValueError(
+                    "Length mismatch between xdata "
+                    f"({n_rows}) and yerr ({len(yerr_np)})."
+                )
+
+        band_np = None
+        if self.band is not None:
+            band_np = np.asarray(self.band, dtype=str)
+            if band_np.size == 1 and n_rows > 1:
+                band_np = np.repeat(band_np, n_rows)
+            elif band_np.size != n_rows:
+                raise ValueError(
+                    f"Length of 'band' ({band_np.size}) does not match "
+                    f"number of rows ({n_rows})."
+                )
+
+        headers = ["time", "wavelength", "flux"]
+        if yerr_np is not None:
+            headers.append("flux_error")
+        if band_np is not None:
+            headers.append("band")
+
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(headers)
+            for i in range(n_rows):
+                row = [time_np[i], wavelength_np[i], y_np[i]]
+                if yerr_np is not None:
+                    row.append(yerr_np[i])
+                if band_np is not None:
+                    row.append(band_np[i])
+                writer.writerow(row)
+
     def write_votable(self, filename):
         """Write the results to a votable file.
 
@@ -5971,3 +10201,593 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         t = self.to_table()
         t.write(filename, format="votable", overwrite=True)
+
+    # ------------------------------------------------------------------
+    # Private helpers for merge / concat
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _resolve_lc_input(cls, item):
+        """Resolve *item* to a :class:`Lightcurve`.
+
+        Accepts a :class:`Lightcurve`, or a ``str``/``pathlib.Path``
+        pointing to a CSV file.  Any other type raises :class:`TypeError`.
+
+        Parameters
+        ----------
+        item : Lightcurve, str, or pathlib.Path
+            The input to resolve.
+
+        Returns
+        -------
+        Lightcurve
+
+        Raises
+        ------
+        TypeError
+            If *item* is not a :class:`Lightcurve`, ``str``, or
+            ``pathlib.Path``.
+        """
+        if isinstance(item, cls):
+            return item
+        if isinstance(item, (str, Path)):
+            return cls.from_csv(item)
+        raise TypeError(
+            f"Expected a Lightcurve, str, or pathlib.Path; "
+            f"got {type(item).__name__!r}."
+        )
+
+    @staticmethod
+    def _validate_band_wavelength_mapping(band_arr, wavelength_arr):
+        """Check that band↔wavelength mapping is strictly one-to-one.
+
+        Parameters
+        ----------
+        band_arr : numpy.ndarray of str
+            Per-row band labels.
+        wavelength_arr : numpy.ndarray of float
+            Per-row wavelength values (from ``xdata[:, 1]``).
+
+        Returns
+        -------
+        None
+            Raises :class:`ValueError` if any mapping violation is found;
+            returns without a value when all mappings are consistent.
+
+        Raises
+        ------
+        ValueError
+            If any band maps to more than one wavelength, or any wavelength
+            maps to more than one band.
+        """
+        for b in np.unique(band_arr):
+            wls = np.unique(wavelength_arr[band_arr == b])
+            if len(wls) != 1:
+                raise ValueError(
+                    f"Band {b!r} maps to multiple wavelengths: {wls.tolist()}. "
+                    "Each band must correspond to exactly one wavelength."
+                )
+        for wl in np.unique(wavelength_arr):
+            bs = np.unique(band_arr[wavelength_arr == wl])
+            if len(bs) != 1:
+                raise ValueError(
+                    f"Wavelength {wl} maps to multiple bands: "
+                    f"{bs.tolist()}. "
+                    "Each wavelength must correspond to exactly one band."
+                )
+
+    @staticmethod
+    def _get_scalar_wavelength_for_1d(lc):
+        """Extract a scalar wavelength from a 1-D :class:`Lightcurve`.
+
+        Checks the attributes ``wavelength``, ``wave``, and ``lambda_`` in
+        priority order.  The first one found is used.
+
+        Parameters
+        ----------
+        lc : Lightcurve
+            A 1-D lightcurve whose wavelength metadata should be read.
+
+        Returns
+        -------
+        float
+            The scalar wavelength value.
+
+        Raises
+        ------
+        ValueError
+            If none of the expected attributes exists, if the value is
+            non-scalar, or if it cannot be converted to :class:`float`.
+        """
+        for attr in ("wavelength", "wave", "lambda_"):
+            val = getattr(lc, attr, None)
+            if val is None:
+                continue
+            # Reject non-scalar array-like values
+            try:
+                import numpy as _np
+
+                arr = _np.asarray(val)
+                if arr.ndim != 0 and arr.size != 1:
+                    raise ValueError(
+                        f"1-D input to concat(): attribute {attr!r} "
+                        f"is non-scalar ({arr.shape}). "
+                        "A single numeric wavelength value is required."
+                    )
+                return float(arr.flat[0])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"1-D input to concat(): attribute {attr!r} "
+                    f"cannot be converted to a float: {val!r}."
+                ) from exc
+        raise ValueError(
+            "1-D input to concat() cannot be promoted to 2-D: no wavelength "
+            "metadata is available. Set lc.wavelength, lc.wave, or "
+            "lc.lambda_ to a scalar numeric value before calling concat()."
+        )
+
+    # ------------------------------------------------------------------
+    # merge
+    # ------------------------------------------------------------------
+
+    def merge(self, other, *, band=None, wavelength=None, on_conflict="raise"):
+        """Merge *other* into this light curve, appending new band(s).
+
+        Parameters
+        ----------
+        other : Lightcurve, str, or pathlib.Path
+            The light curve (or CSV path) to merge.  Must not be a list;
+            for multiple inputs use :meth:`concat`.
+        band : str or array-like of str, optional
+            Band label(s) to assign to *other* when *other* has no
+            ``band`` attribute set.  For a 1-D *other* this must be a
+            scalar string; for a 2-D *other* this must have the same
+            length as *other*.
+        wavelength : float, optional
+            Wavelength to assign when *other* is 1-D.  Must not be
+            provided for 2-D inputs.
+        on_conflict : {"raise", "skip"}, optional
+            Action taken when a band label or wavelength in *other*
+            already exists in ``self``.  ``"raise"`` (default) raises a
+            :class:`ValueError`; ``"skip"`` silently drops that
+            constituent band and emits a :class:`UserWarning`.
+
+        Returns
+        -------
+        Lightcurve
+            A new 2-D :class:`Lightcurve` containing the rows of
+            ``self`` followed by the non-conflicting rows from *other*.
+            The result is always unfitted (no model or posterior state).
+
+        Raises
+        ------
+        TypeError
+            If *other* is a list (use :meth:`concat` instead), or if
+            *other* is not a :class:`Lightcurve`, ``str``, or
+            ``pathlib.Path``.
+        ValueError
+            If ``self`` is not 2-D.
+        ValueError
+            If a conflict is detected and *on_conflict* is ``"raise"``.
+        ValueError
+            If *wavelength* is provided for a 2-D *other*.
+        ValueError
+            If *other* is 1-D and *wavelength* is not provided.
+        ValueError
+            If *other* is 1-D but *band* does not resolve to exactly
+            one unique label.
+        """
+        if isinstance(other, list):
+            raise TypeError(
+                "'other' must be a single Lightcurve or CSV path, not a list. "
+                "To merge multiple inputs use Lightcurve.concat()."
+            )
+
+        if on_conflict not in ("raise", "skip"):
+            raise ValueError(
+                f"on_conflict must be 'raise' or 'skip'; got {on_conflict!r}."
+            )
+
+        if self.ndim < 2:
+            raise ValueError(
+                "merge() requires 'self' to be a 2-D lightcurve "
+                "(xdata must have shape (N, 2))."
+            )
+
+        other = self._resolve_lc_input(other)
+
+        # ------------------------------------------------------------------
+        # 1-D vs 2-D promotion of *other*
+        # ------------------------------------------------------------------
+        if other.ndim < 2:
+            if wavelength is None:
+                raise ValueError(
+                    "When 'other' is a 1-D lightcurve, 'wavelength' must be "
+                    "provided as a scalar float."
+                )
+            if not np.isscalar(wavelength):
+                raise ValueError(
+                    "'wavelength' must be a scalar when 'other' is 1-D; "
+                    f"got {type(wavelength).__name__!r}."
+                )
+            # Determine band label for the 1-D input
+            if other.band is not None:
+                if band is not None:
+                    warnings.warn(
+                        "'band' was supplied but 'other' already has a band "
+                        "attribute; the supplied value will be ignored.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                resolved_band = np.asarray(other.band).astype(str)
+            else:
+                if band is None:
+                    raise ValueError(
+                        "'band' must be supplied when 'other' is 1-D and has "
+                        "no band attribute."
+                    )
+                resolved_band = np.atleast_1d(
+                    np.asarray(band).astype(str)
+                )
+
+            unique_bands = np.unique(resolved_band)
+            if len(unique_bands) != 1:
+                raise ValueError(
+                    "A 1-D 'other' must map to exactly one band label; "
+                    f"got {unique_bands.tolist()}."
+                )
+            n_other = len(other._xdata_raw)
+            if len(resolved_band) == 1:
+                resolved_band = np.full(n_other, resolved_band[0], dtype=str)
+            elif len(resolved_band) != n_other:
+                raise ValueError(
+                    f"Length of 'band' ({len(resolved_band)}) does not match "
+                    f"the number of rows in 'other' ({n_other})."
+                )
+
+            # Promote to 2-D by stacking time + wavelength
+            wl_col = torch.full(
+                (n_other,),
+                float(wavelength),
+                dtype=other._xdata_raw.dtype,
+                device=other._xdata_raw.device,
+            )
+            other_x = torch.stack([other._xdata_raw.reshape(-1), wl_col], dim=1)
+            other_y = other._ydata_raw
+            other_yerr = (
+                other._yerr_raw if hasattr(other, "_yerr_raw") else None
+            )
+            other_band = resolved_band
+
+        else:
+            # other is already 2-D
+            if wavelength is not None:
+                raise ValueError(
+                    "'wavelength' must not be provided when 'other' is "
+                    "already a 2-D lightcurve."
+                )
+            other_x = other._xdata_raw
+            other_y = other._ydata_raw
+            other_yerr = (
+                other._yerr_raw if hasattr(other, "_yerr_raw") else None
+            )
+
+            # Resolve band for 2-D other
+            if other.band is not None:
+                if band is not None:
+                    warnings.warn(
+                        "'band' was supplied but 'other' already has a band "
+                        "attribute; the supplied value will be ignored.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                other_band = np.asarray(other.band).astype(str)
+            else:
+                if band is None:
+                    raise ValueError(
+                        "'band' must be supplied when 'other' is 2-D and has "
+                        "no band attribute."
+                    )
+                other_band = np.asarray(band).astype(str)
+                if len(other_band) == 1:
+                    other_band = np.full(
+                        len(other_x), other_band[0], dtype=str
+                    )
+                elif len(other_band) != len(other_x):
+                    raise ValueError(
+                        f"Length of 'band' ({len(other_band)}) does not match "
+                        f"the number of rows in 'other' ({len(other_x)})."
+                    )
+
+        # ------------------------------------------------------------------
+        # Validate band arrays on self
+        # ------------------------------------------------------------------
+        if self.band is None:
+            raise ValueError(
+                "'self' must have a 'band' attribute set for merge()."
+            )
+        self_band = np.asarray(self.band).astype(str)
+        self_x = self._xdata_raw
+
+        # Validate band↔wavelength mapping on self
+        self._validate_band_wavelength_mapping(
+            self_band, self_x[:, 1].detach().cpu().numpy()
+        )
+
+        # Validate band↔wavelength mapping on other
+        self._validate_band_wavelength_mapping(
+            other_band, other_x[:, 1].detach().cpu().numpy()
+        )
+
+        # ------------------------------------------------------------------
+        # Build per-band groups from self (for conflict checking)
+        # ------------------------------------------------------------------
+        self_bands_set = set(np.unique(self_band).tolist())
+        self_wl_set = set(np.unique(self_x[:, 1].detach().cpu().numpy()).tolist())
+
+        # ------------------------------------------------------------------
+        # Process each constituent band in other
+        # ------------------------------------------------------------------
+        keep_x = [self_x]
+        keep_y = [self._ydata_raw]
+        keep_yerr = (
+            [self._yerr_raw] if hasattr(self, "_yerr_raw") else None
+        )
+        keep_band = [self_band]
+
+        other_constituent_bands = {}
+        for b in np.unique(other_band):
+            other_constituent_bands[b] = np.where(other_band == b)[0]
+
+        for b, idx in other_constituent_bands.items():
+            b_wl = float(other_x[idx[0], 1].item())
+            conflict_reason = None
+            if b in self_bands_set:
+                conflict_reason = (
+                    f"band {b!r} already exists in 'self'."
+                )
+            elif b_wl in self_wl_set:
+                conflict_reason = (
+                    f"wavelength {b_wl} already exists in 'self'."
+                )
+
+            if conflict_reason is not None:
+                if on_conflict == "raise":
+                    raise ValueError(
+                        f"Conflict detected: {conflict_reason} "
+                        "Use on_conflict='skip' to skip conflicting bands."
+                    )
+                else:
+                    warnings.warn(
+                        f"Skipping band {b!r} from 'other': {conflict_reason}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    continue
+
+            keep_x.append(other_x[idx])
+            keep_y.append(other_y[idx])
+            if keep_yerr is not None and other_yerr is not None:
+                keep_yerr.append(other_yerr[idx])
+            elif keep_yerr is not None:
+                keep_yerr = None
+            keep_band.append(other_band[idx])
+
+            # Track newly added band/wavelength to avoid double-merging
+            self_bands_set.add(b)
+            self_wl_set.add(b_wl)
+
+        # ------------------------------------------------------------------
+        # Assemble output arrays
+        # ------------------------------------------------------------------
+        new_x = torch.cat(keep_x, dim=0)
+        new_y = torch.cat(keep_y, dim=0)
+        new_yerr = (
+            torch.cat(keep_yerr, dim=0) if keep_yerr is not None else None
+        )
+        new_band = np.concatenate(keep_band, axis=0)
+
+        return type(self)(
+            new_x,
+            new_y,
+            yerr=new_yerr,
+            band=new_band,
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+        )
+
+    # ------------------------------------------------------------------
+    # concat
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def concat(cls, items, on_conflict="raise", **kwargs):
+        """Concatenate multiple light curves into one 2-D :class:`Lightcurve`.
+
+        Parameters
+        ----------
+        items : iterable of Lightcurve, str, or pathlib.Path
+            Input light curves (or CSV paths) to concatenate.  A bare
+            ``str`` is treated as a single item, **not** as an iterable
+            of characters.
+        on_conflict : {"raise", "skip"}, optional
+            Action taken when a band label or wavelength appears in more
+            than one input.  ``"raise"`` (default) raises a
+            :class:`ValueError`; ``"skip"`` drops the offending
+            constituent and emits a :class:`UserWarning`.
+        **kwargs
+            Additional keyword arguments forwarded to the
+            :class:`Lightcurve` constructor (e.g. ``xtransform``,
+            ``ytransform``, ``name``).  They are **not** forwarded to
+            :meth:`from_csv`.
+
+        Returns
+        -------
+        Lightcurve
+            A new 2-D :class:`Lightcurve` built from all non-conflicting
+            constituent bands across *items*, in input order.  Always
+            unfitted.
+
+        Raises
+        ------
+        TypeError
+            If any element of *items* is not a :class:`Lightcurve`,
+            ``str``, or ``pathlib.Path``.
+        ValueError
+            If *items* is empty.
+        ValueError
+            If some inputs have band information but others do not.
+        ValueError
+            If a 1-D input maps to more than one band or wavelength.
+        ValueError
+            If a conflict is detected and *on_conflict* is ``"raise"``.
+        """
+        # Treat a bare Lightcurve, str, or Path as a single-element list
+        if isinstance(items, (cls, str, Path)):
+            items = [items]
+
+        items = list(items)
+        if not items:
+            raise ValueError(
+                "concat() requires at least one item; got an empty iterable."
+            )
+
+        if on_conflict not in ("raise", "skip"):
+            raise ValueError(
+                f"on_conflict must be 'raise' or 'skip'; got {on_conflict!r}."
+            )
+        # ------------------------------------------------------------------
+        # Resolve all inputs to Lightcurve objects
+        # ------------------------------------------------------------------
+        lcs = [cls._resolve_lc_input(item) for item in items]
+
+        # ------------------------------------------------------------------
+        # Global band requirement: all inputs must carry band information.
+        # ------------------------------------------------------------------
+        has_band = [lc.band is not None for lc in lcs]
+        if not any(has_band):
+            raise ValueError(
+                "concat() requires band information on all inputs; "
+                "none of the supplied inputs has a 'band' attribute."
+            )
+        if any(has_band) and not all(has_band):
+            raise ValueError(
+                "All inputs must have band information if any one of them "
+                "does. Found a mix of inputs with and without 'band'."
+            )
+
+        # ------------------------------------------------------------------
+        # Promote each lightcurve to 2-D + resolve band arrays
+        # ------------------------------------------------------------------
+        resolved = []  # list of (x_2d, y, yerr, band_arr)
+        for lc in lcs:
+            if lc.ndim < 2:
+                # 1-D input: validate band info, then recover scalar wavelength.
+                band_arr = np.asarray(lc.band).astype(str)
+                unique_b = np.unique(band_arr)
+                if len(unique_b) != 1:
+                    raise ValueError(
+                        "A 1-D input to concat() must map to exactly one "
+                        f"band label; got {unique_b.tolist()}."
+                    )
+                # Recover scalar wavelength from lc.wavelength / .wave / .lambda_
+                wl_scalar = cls._get_scalar_wavelength_for_1d(lc)
+                # Build 2D xdata: (N, 2) with col0=time, col1=wavelength
+                t_col = lc._xdata_raw.reshape(-1)
+                wl_col = torch.full(
+                    (t_col.shape[0],),
+                    wl_scalar,
+                    dtype=t_col.dtype,
+                    device=t_col.device,
+                )
+                x_2d = torch.stack([t_col, wl_col], dim=1)
+                y = lc._ydata_raw
+                yerr = lc._yerr_raw if hasattr(lc, "_yerr_raw") else None
+                # Expand single-label band to one entry per data row
+                n_rows = lc._xdata_raw.shape[0]
+                band_arr = np.full(n_rows, unique_b[0], dtype=str)
+                resolved.append((x_2d, y, yerr, band_arr))
+            else:
+                # 2-D
+                x_2d = lc._xdata_raw
+                y = lc._ydata_raw
+                yerr = lc._yerr_raw if hasattr(lc, "_yerr_raw") else None
+
+                band_arr = np.asarray(lc.band).astype(str)
+
+                cls._validate_band_wavelength_mapping(
+                    band_arr, x_2d[:, 1].detach().cpu().numpy()
+                )
+                resolved.append((x_2d, y, yerr, band_arr))
+        # ------------------------------------------------------------------
+        global_bands: set[str] = set()
+        global_wls: set[float] = set()
+
+        final_x_parts = []
+        final_y_parts = []
+        final_yerr_parts: list = []
+        have_yerr = True  # set to False the moment any band lacks yerr
+        final_band_parts = []
+
+        for x_2d, y, yerr, band_arr in resolved:
+            # Process each constituent band within this input
+            for b in np.unique(band_arr):
+                idx = np.where(band_arr == b)[0]
+                b_wl = float(x_2d[idx[0], 1].item())
+
+                conflict_reason = None
+                if b in global_bands:
+                    conflict_reason = (
+                        f"band {b!r} appears in more than one input."
+                    )
+                elif b_wl in global_wls:
+                    conflict_reason = (
+                        f"wavelength {b_wl} appears in more than one input."
+                    )
+
+                if conflict_reason is not None:
+                    if on_conflict == "raise":
+                        raise ValueError(
+                            f"Conflict detected: {conflict_reason} "
+                            "Use on_conflict='skip' to skip conflicting "
+                            "bands."
+                        )
+                    else:
+                        warnings.warn(
+                            f"Skipping band {b!r}: {conflict_reason}",
+                            UserWarning,
+                            stacklevel=2,
+                        )
+                        continue
+
+                final_x_parts.append(x_2d[idx])
+                final_y_parts.append(y[idx])
+                if have_yerr:
+                    if yerr is not None:
+                        final_yerr_parts.append(yerr[idx])
+                    else:
+                        # First band without yerr — drop all collected so far
+                        have_yerr = False
+                        final_yerr_parts = None
+                final_band_parts.append(band_arr[idx])
+
+                global_bands.add(b)
+                global_wls.add(b_wl)
+
+        if not final_x_parts:
+            raise ValueError(
+                "All constituent bands were skipped due to conflicts; "
+                "the resulting lightcurve would be empty."
+            )
+
+        new_x = torch.cat(final_x_parts, dim=0)
+        new_y = torch.cat(final_y_parts, dim=0)
+        new_yerr = (
+            torch.cat(final_yerr_parts, dim=0)
+            if final_yerr_parts is not None
+            else None
+        )
+        new_band = np.concatenate(final_band_parts, axis=0)
+
+        return cls(new_x, new_y, yerr=new_yerr, band=new_band, **kwargs)
