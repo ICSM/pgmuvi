@@ -100,18 +100,18 @@ sampling.
 Bayesian Parameter Inference
 -----------------------------
 
-``pgmuvi`` supports two modes of parameter estimation:
+``pgmuvi`` currently supports one mode of parameter estimation:
 
 1. **Optimisation (MAP estimation):** The hyperparameters are optimised to maximise
    the (marginal) log likelihood.  This is fast and suitable for exploratory analysis
    or when the posterior is well-behaved.  Use :meth:`~pgmuvi.lightcurve.Lightcurve.fit`.
 
-2. **MCMC sampling:** Full posterior samples are drawn using Hamiltonian Monte Carlo
-   via Pyro/NumPyro.  This provides calibrated uncertainties and reveals correlations
-   between parameters.  Use :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`.
+.. note::
 
-For most use cases, MAP estimation followed by MCMC on parameters of interest is a
-practical workflow.
+   **MCMC sampling is planned but not yet available.**  Full posterior samples via
+   Hamiltonian Monte Carlo will be accessible through
+   :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc` in a future release.  In the current
+   version, calling ``mcmc()`` raises ``NotImplementedError``.
 
 Initialisation with Lomb–Scargle
 ---------------------------------

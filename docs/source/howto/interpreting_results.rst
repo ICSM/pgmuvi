@@ -22,10 +22,8 @@ Fitted Hyperparameters
 -----------------------
 
 After calling :meth:`~pgmuvi.lightcurve.Lightcurve.fit`, the model
-hyperparameters are updated to their optimised (MAP) values.  After calling
-:meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`, posterior samples are available
-instead of a single MAP estimate.  Retrieve the current parameter values as a
-dictionary after ``fit()``::
+hyperparameters are updated to their optimised (MAP) values.  Retrieve the
+current parameter values as a dictionary after ``fit()``::
 
     params = lc.get_parameters()
     print(params)
@@ -33,6 +31,12 @@ dictionary after ``fit()``::
 Note that :meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` computes
 Lomb–Scargle peak frequencies for initialisation and does not update the model
 hyperparameters to MAP values.
+
+.. note::
+
+   Full posterior sampling via :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc` is
+   not yet available; the method currently raises ``NotImplementedError``.
+   MCMC support is planned for a future release.
 
 The key parameters are:
 
@@ -84,11 +88,20 @@ Visualisation
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` accept standard Matplotlib
 keyword arguments.
 
-MCMC Results
--------------
+MCMC Results (Planned)
+-----------------------
 
-After running :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`, the full posterior
-distribution over hyperparameters is available.  Visualise it with:
+.. note::
+
+   Full MCMC support is planned for a future release of ``pgmuvi``.
+   :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`,
+   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_corner`,
+   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_trace`, and
+   :meth:`~pgmuvi.lightcurve.Lightcurve.print_results` currently raise
+   ``NotImplementedError``.
+
+When MCMC becomes available, the full posterior distribution over
+hyperparameters will be accessible.  Planned visualisation methods include:
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_corner`
     Corner plot (parameter covariance matrix).  Reveals correlations between
@@ -116,16 +129,17 @@ Overfitting
 
 Poor convergence (MAP)
     The loss does not decrease or oscillates.  Common causes:
-    
+
     * Poor initialisation — try using Lomb–Scargle initialisation via ``fit_LS()``.
     * Constraints that are too tight — check that the true period lies within your
       constraint bounds.
     * Learning rate too large — reduce ``lr`` in the call to
       :meth:`~pgmuvi.lightcurve.Lightcurve.fit`.
 
-Poor MCMC mixing
-    High :math:`\hat{R}` or very low effective sample size.  Common causes:
-    
+Poor MCMC mixing *(planned feature)*
+    High :math:`\hat{R}` or very low effective sample size.  This guidance will
+    apply once MCMC support is available.  Common causes:
+
     * The chains are stuck in different modes — run multiple chains from different
       starting points.
     * Strong parameter correlations — use tighter priors or a different
@@ -142,10 +156,13 @@ Period Uncertainty
 -------------------
 
 When using MAP optimisation, no formal uncertainty is reported on the period.  A
-simple approach to get an approximate uncertainty is to use the inferred bandwidth
-``mixture_scales``: a wider bandwidth (larger :math:`\sigma_q`) corresponds to a
-less coherent signal and therefore a less precisely determined period.
+practical proxy is the inferred bandwidth ``mixture_scales``: a wider bandwidth
+(larger :math:`\sigma_q`) corresponds to a less coherent signal and a less
+precisely determined period.
 
-For rigorous period uncertainties, use
-:meth:`~pgmuvi.lightcurve.Lightcurve.mcmc` and report the posterior credible
-interval on ``1 / mixture_means``.
+.. note::
+
+   Rigorous posterior period uncertainties via MCMC are planned for a future
+   release of ``pgmuvi``.  Once available,
+   :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc` will provide credible intervals
+   on ``1 / mixture_means``.

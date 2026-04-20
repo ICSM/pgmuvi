@@ -95,14 +95,13 @@ applied automatically before fitting.
 
 **Q: MCMC is very slow.**
 
-MCMC is inherently more expensive than MAP estimation.  Suggestions:
+.. note::
 
-* Run MAP first with :meth:`~pgmuvi.lightcurve.Lightcurve.fit` and use the MAP
-  solution as the starting point for
-  :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`.
-* Reduce ``num_samples`` and ``warmup_steps`` for a quick initial run to check
-  convergence behaviour.
-* Use a GPU if available.
+   Full MCMC sampling via :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc` is not
+   yet available in the current release of ``pgmuvi``; the method currently
+   raises ``NotImplementedError``.  MCMC support is planned for a future
+   version.  In the meantime, use
+   :meth:`~pgmuvi.lightcurve.Lightcurve.fit` for MAP estimation.
 
 Periods and Interpretation
 ---------------------------
@@ -127,9 +126,12 @@ timescale.  However, inspect the PSD shape carefully:
 
 **Q: How do I get period uncertainties from a MAP fit?**
 
-Run :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc` to obtain posterior samples.
-Report the posterior credible interval on ``1 / mixture_means`` as the period
-uncertainty.
+With MAP optimisation, no formal uncertainty is reported on the period.  A
+practical proxy is the inferred bandwidth ``mixture_scales``: a wider bandwidth
+corresponds to a less coherent signal and a less precisely determined period.
+
+Full posterior uncertainties via MCMC are planned for a future release of
+``pgmuvi`` (see the note in the MCMC question above).
 
 Multiband Data
 --------------

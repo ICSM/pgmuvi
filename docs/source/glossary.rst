@@ -82,9 +82,10 @@ Glossary
    MCMC
    Markov chain Monte Carlo
       A class of algorithms for sampling from a probability distribution (the
-      posterior in Bayesian inference).  ``pgmuvi`` uses Hamiltonian Monte Carlo
-      via Pyro/NumPyro.  MCMC provides full uncertainty quantification but is
-      more computationally expensive than MAP estimation.
+      posterior in Bayesian inference).  MCMC provides full uncertainty
+      quantification but is more computationally expensive than MAP estimation.
+      MCMC support (via Hamiltonian Monte Carlo) is planned for a future
+      release of ``pgmuvi``; the current version supports MAP estimation only.
 
    Mixture component
       One term in a spectral mixture kernel, characterised by a centre frequency,
