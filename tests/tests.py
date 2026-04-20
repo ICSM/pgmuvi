@@ -578,15 +578,15 @@ class TestMultibandFAP(unittest.TestCase):
         self.assertGreaterEqual(fap_parallel, 0.0)
         self.assertLessEqual(fap_parallel, 1.0)
 
-    def test_analytical_default_in_fit_ls(self):
-        """Test that fit_LS for multiband uses analytical FAP by default"""
+    def test_phase_scramble_default_in_fit_ls(self):
+        """Test that fit_LS for multiband uses phase_scramble FAP by default."""
         from unittest.mock import patch
         from pgmuvi import multiband_ls_significance as mls
 
         _orig_fap = mls.MultibandLSWithSignificance.false_alarm_probability
         called_methods = []
 
-        def _recording_fap(self_, power_values, method='analytical', **kw):
+        def _recording_fap(self_, power_values, method="phase_scramble", **kw):
             called_methods.append(method)
             return _orig_fap(self_, power_values, method=method, **kw)
 
@@ -594,13 +594,13 @@ class TestMultibandFAP(unittest.TestCase):
                           'false_alarm_probability', _recording_fap):
             self.lc_signal.fit_LS(num_peaks=1)
 
-        # Every call to false_alarm_probability should have used 'analytical'
+        # Every call to false_alarm_probability should have used 'phase_scramble'
         self.assertGreater(len(called_methods), 0,
                            "false_alarm_probability was never called")
         for method_used in called_methods:
             self.assertEqual(
-                method_used, 'analytical',
-                f"Expected 'analytical' FAP method by default, got '{method_used}'"
+                method_used, "phase_scramble",
+                f"Expected 'phase_scramble' FAP method by default, got '{method_used}'",
             )
 
 
