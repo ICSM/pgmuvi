@@ -75,14 +75,14 @@ Visualisation
     multiband data).
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_results`
-    Training-history diagnostics (parameter values vs.\ optimisation
-    iteration).  Use this to check convergence behaviour rather than
-    predictive fit quality.  Returns ``None``.
+    Training-history diagnostics are not currently available via this
+    method in the current release.  Avoid calling
+    ``Lightcurve.plot_results()`` until its implementation is fixed.
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd`
     Inferred power spectral density.  Peaks correspond to inferred periods.
     Broad, low-frequency power indicates stochastic variability.
-    Returns ``(fig, ax)`` when ``show=False``.
+    Returns ``(fig, ax)``.
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot` and
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` accept standard Matplotlib
@@ -95,9 +95,8 @@ MCMC Results (Planned)
 
    Full MCMC support is planned for a future release of ``pgmuvi``.
    :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`,
-   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_corner`,
-   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_trace`, and
-   :meth:`~pgmuvi.lightcurve.Lightcurve.print_results` currently raise
+   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_corner`, and
+   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_trace` currently raise
    ``NotImplementedError``.
 
 When MCMC becomes available, the full posterior distribution over
@@ -111,9 +110,8 @@ hyperparameters will be accessible.  Planned visualisation methods include:
     MCMC trace plots.  Use these to check convergence — well-mixed chains should
     look like "fuzzy caterpillars".
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.print_results`
-    Tabulated posterior summary (mean, median, credible intervals, effective sample
-    size, :math:`\hat{R}` diagnostic).
+Posterior-summary helpers are also planned for MCMC output, including
+credible intervals, effective sample size, and :math:`\hat{R}` diagnostics.
 
 A :math:`\hat{R}` value close to 1.0 (< 1.01 is a common criterion) indicates
 that the chains have converged to the same distribution.

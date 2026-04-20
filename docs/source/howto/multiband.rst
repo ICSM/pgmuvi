@@ -83,13 +83,12 @@ You can then filter out bands that have insufficient coverage::
 Visualising 2D Results
 -----------------------
 
-The standard :meth:`~pgmuvi.lightcurve.Lightcurve.plot_results` method supports
-multiband data and shows each band's data alongside the GP predictive mean and
+Use :meth:`~pgmuvi.lightcurve.Lightcurve.plot` to visualise multiband fits. For
+2D data, it shows each band's observations together with the GP predictive mean and
 credible interval.
 
-The :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` method shows the inferred power
-spectral density as a function of both frequency and wavelength (when using a 2D
-model).
+The :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` method does not currently
+support 2D models; plotting PSDs in more than one dimension is not implemented.
 
 Kernel Choices for 2D Models
 ------------------------------
@@ -107,13 +106,20 @@ scripts for illustrations of different kernel configurations.
 Separable vs Non-Separable Models
 -----------------------------------
 
-``pgmuvi`` currently uses **product (separable) kernels** for 2D data.  A separable
-kernel assumes that the temporal correlation structure is the same at every wavelength
-(up to a scaling factor).  This is a reasonable approximation for many sources but
-may break down when:
+``pgmuvi`` supports more than one kind of 2D kernel.  The explicit
+``2DSeparable`` model family uses **product (separable) kernels**, where the time
+and wavelength covariance are modeled as separate factors.  In these models, the
+separability assumption means that the temporal correlation structure is the same at
+every wavelength (up to a scaling factor).  This is a reasonable approximation for
+many sources but may break down when:
 
 * the period changes significantly with wavelength (e.g., in accretion disk reverberation),
 * the variability mechanism differs qualitatively between bands.
+
+By contrast, ``model="2D"`` uses a 2D spectral-mixture kernel rather than an
+explicit ``k_time * k_wavelength`` ProductKernel construction, so the separability
+assumption above should only be interpreted as applying to the ``2DSeparable``
+family.
 
 In such cases, consider fitting each band independently and comparing the inferred
 periods, or contact the ``pgmuvi`` developers to discuss extensions.
