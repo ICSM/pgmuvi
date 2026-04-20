@@ -2395,15 +2395,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     ) -> "Lightcurve":
         """Return a new Lightcurve with the specified bands removed.
 
-        This is the logical complement of :meth:`select_bands`: every row
-        whose :attr:`band` label appears in *bands* is excluded from the
-        returned object.
+        This complements the string band-label behavior of
+        :meth:`select_bands`: every row whose :attr:`band` label appears
+        in *bands* is excluded from the returned object.
 
         Parameters
         ----------
         bands : list, tuple, or numpy.ndarray
             Band labels to remove.  Each element must be a string
-            (``str`` or ``numpy.str_``).  Numeric selectors, ``bytes``,
+            (``str`` or ``numpy.str_``). Numeric selectors, ``bytes``,
             ``None``, and nested containers are not accepted.
 
         Returns
