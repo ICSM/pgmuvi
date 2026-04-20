@@ -174,8 +174,10 @@ class TestIsVariable(unittest.TestCase):
         y = 1.0 + 0.3 * np.sin(2 * np.pi * t / 10) + np.random.normal(0, 0.02, 300)
         yerr = np.full(300, 0.02)
 
-        # Use a strict diagnostic threshold to force stetson_test=False.
-        is_var, diag = is_variable(y, yerr, stetson_k_min=1.2)
+        # Set the threshold just above the computed value so this test checks
+        # the gating logic rather than a hard-coded Stetson-K scale.
+        stetson_k = compute_stetson_k(y, yerr)
+        is_var, diag = is_variable(y, yerr, stetson_k_min=stetson_k + 1e-6)
 
         self.assertTrue(diag["tests_passed"]["chi2_test"])
         self.assertTrue(diag["tests_passed"]["fvar_test"])
