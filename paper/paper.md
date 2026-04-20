@@ -143,7 +143,7 @@ To summarise, the key features of `pgmuvi` are:
 # - Fully Bayesian inference using HMC
 - Initialisation of kernel hyperparameters using Lomb-Scargle periodogram
 - Automated creation of diagnostic and summary plots
-$ - Automated reporting of kernel hyperparameters and their uncertainties, and summary of MCMC chains.
+# - Automated reporting of kernel hyperparameters and their uncertainties, and summary of MCMC chains.
 - Automated reporting and visualization of fitted kernel hyperparameters
 
 
