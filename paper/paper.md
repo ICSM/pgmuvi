@@ -139,10 +139,10 @@ To summarise, the key features of `pgmuvi` are:
 - Highly flexible kernel, able to model a wide range of multiwavelength signals
 - Able to exploit multiple strategies to scale to large datasets
 - GPU acceleration for both exact and variational GPs
-# - Fully Bayesian inference using HMC
+<!-- - Fully Bayesian inference using HMC-->
 - Initialisation of kernel hyperparameters using Lomb-Scargle periodogram
 - Automated creation of diagnostic and summary plots
-# - Automated reporting of kernel hyperparameters and their uncertainties, and summary of MCMC chains.
+<!-- - Automated reporting of kernel hyperparameters and their uncertainties, and summary of MCMC chains.-->
 - Automated reporting and visualization of fitted kernel hyperparameters
 
 
