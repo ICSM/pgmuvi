@@ -83,13 +83,15 @@ applied automatically before fitting.
 
 **Q: fit() finds too many / too few mixture components.**
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` and
-:meth:`~pgmuvi.lightcurve.Lightcurve.set_model` do not take a
-``num_mixtures`` argument; set it when calling
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit` (or
-:meth:`~pgmuvi.lightcurve.Lightcurve.set_model`)::
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` does not take a
+``num_mixtures`` argument.  To change the number of mixture components, pass
+``num_mixtures`` to :meth:`~pgmuvi.lightcurve.Lightcurve.fit` or to
+:meth:`~pgmuvi.lightcurve.Lightcurve.set_model`::
 
     lc.fit(model="1D", num_mixtures=2)
+    # or equivalently
+    lc.set_model("1D", num_mixtures=2)
+    lc.fit()
 
 **Q: MCMC is very slow.**
 

@@ -103,9 +103,14 @@ model directly::
 Alternative Kernel Configurations
 -----------------------------------
 
-Advanced users can construct custom kernel combinations by working directly with
-GPyTorch kernels and passing them to :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`.
-See the ``alternative_kernels_1d.py`` example script for an illustration.
+Advanced users can construct a custom GP model class (a GPyTorch
+:class:`~gpytorch.models.ExactGP` subclass configured with the desired kernel)
+and pass the instantiated model object to
+:meth:`~pgmuvi.lightcurve.Lightcurve.set_model`.
+Note that :meth:`~pgmuvi.lightcurve.Lightcurve.set_model` accepts either a
+model identifier string (e.g., ``'1D'``, ``'1DQuasiPeriodic'``) or a GP model
+instance; it does not accept a bare kernel object.
+See the ``alternative_kernels_1d.py`` example script for a full illustration.
 
 .. seealso::
 

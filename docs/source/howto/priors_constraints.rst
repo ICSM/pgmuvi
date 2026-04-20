@@ -32,7 +32,7 @@ explicitly after setting a model with
 :meth:`~pgmuvi.lightcurve.Lightcurve.set_default_constraints` to restore the
 defaults after manually modifying them (a model must be set first)::
 
-    lc.set_model("1D")
+    lc.set_model("1D", num_mixtures=4)
     lc.set_default_priors()
     lc.set_default_constraints()
 
