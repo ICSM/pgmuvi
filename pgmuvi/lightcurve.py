@@ -40,11 +40,11 @@ from .priors import (
     NormalPeriodPrior,
     get_prior_set,
 )
-import pyro
-from pyro.infer.mcmc import NUTS, MCMC, HMC
+# import pyro
+# from pyro.infer.mcmc import NUTS, MCMC, HMC
 from inspect import isclass
-import xarray as xr
-import arviz as az
+# import xarray as xr
+# import arviz as az
 import warnings
 import dataclasses
 import json
@@ -1679,8 +1679,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     This class is designed to be a convenient way to store and manipulate
     light curve data, and to fit Gaussian Processes to that data. It is
-    designed to be used with the GPyTorch library, and to be compatible with
-    the Pyro library for MCMC fitting.
+    designed to be used with the GPyTorch library, and in future will be
+    compatible with the Pyro library for MCMC fitting.
 
     Parameters
     ----------
@@ -5921,6 +5921,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             keys are the names of the parameters, and the values are the
             samples of the parameters.
         """
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         if sampler is None:
             sampler = NUTS
         elif isinstance(sampler, str):
@@ -6118,6 +6120,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         if var_names is None:
             var_names = ["mean_module", "covar_module.mixture_weights", "raw"]
         elif var_names == "all":
@@ -6173,6 +6177,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         if var_names is None:
             var_names = ["mean_module", "covar_module.mixture_weights", "raw"]
         if point_estimate is None:
@@ -6199,6 +6205,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         if var_names is None:
             # we carefully choose the default variables to plot
             # we want to plot all parameters relating to the mean function
@@ -9227,6 +9235,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
         if mcmc_samples:
+            msg = "MCMC is not currently exposed. It will be available in future releases."
+            raise NotImplementedError(msg)
             fig, ax = self._plot_psd_mcmc(
                 freq,
                 means=means,
@@ -9335,6 +9345,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         n_samples = min(self.num_samples, n_samples_to_plot)
         if means is None:
             # this approach is slightly bugged - if more than one chain is used,
@@ -9584,6 +9596,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 padding = 0.1 * base
             ylim = [y_min - padding, y_max + padding]
         if mcmc_samples:
+            msg = "MCMC is not currently exposed. It will be available in future releases."
+            raise NotImplementedError(msg)
             if self.__FITTED_MCMC:
                 return self._plot_mcmc(ylim=ylim, show=show, **kwargs)
             else:
@@ -9647,6 +9661,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The figure object of the plot.
         """
         # Get into evaluation (predictive posterior) mode
+        msg = "MCMC is not currently exposed. It will be available in future releases."
+        raise NotImplementedError(msg)
         self._eval()
 
         if self.ndim > 1:
