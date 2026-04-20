@@ -9755,7 +9755,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return t
 
-    def to_csv(self, filepath: str | Path = "lightcurve.csv") -> Path:
+    def to_csv(self, filepath: str | Path = "lightcurve.csv") -> None:
         """Write lightcurve data to a CSV file.
 
         The output always includes ``time``, ``wavelength``, and ``flux``
@@ -9769,19 +9769,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Destination CSV path. The file is created or overwritten.
             Default is ``"lightcurve.csv"``.
 
-        Returns
-        -------
-        pathlib.Path
-            The written file path.
         """
-        def _to_numpy(tensor):
+        def _tensor_to_numpy(tensor):
             return tensor.detach().cpu().numpy()
 
         path = Path(filepath)
-        x_np = _to_numpy(self._xdata_raw)
-        y_np = _to_numpy(self._ydata_raw)
+        x_np = _tensor_to_numpy(self._xdata_raw)
+        y_np = _tensor_to_numpy(self._ydata_raw)
         yerr_np = (
-            _to_numpy(self._yerr_raw)
+            _tensor_to_numpy(self._yerr_raw)
             if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
             else None
         )
@@ -9799,6 +9795,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         n_rows = len(time_np)
+        if y_np.ndim != 1:
+            raise ValueError("ydata must be 1-dimensional with shape (N,).")
+        if len(y_np) != n_rows:
+            raise ValueError(
+                f"Length mismatch between xdata ({n_rows}) and ydata ({len(y_np)})."
+            )
+        if yerr_np is not None:
+            if yerr_np.ndim != 1:
+                raise ValueError("yerr must be 1-dimensional with shape (N,).")
+            if len(yerr_np) != n_rows:
+                raise ValueError(
+                    "Length mismatch between xdata "
+                    f"({n_rows}) and yerr ({len(yerr_np)})."
+                )
+
         band_np = None
         if self.band is not None:
             band_np = np.asarray(self.band, dtype=str)
@@ -9826,7 +9837,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if band_np is not None:
                     row.append(band_np[i])
                 writer.writerow(row)
-        return path
 
     def write_votable(self, filename):
         """Write the results to a votable file.

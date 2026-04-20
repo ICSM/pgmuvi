@@ -973,8 +973,7 @@ class TestToCSV(unittest.TestCase):
         lc = Lightcurve(x, y, yerr=yerr, band=band)
 
         path = os.path.join(self.tmpdir, "with_optional.csv")
-        out = lc.to_csv(path)
-        self.assertEqual(str(out), path)
+        self.assertIsNone(lc.to_csv(path))
 
         with open(path) as fh:
             header = fh.readline().strip()
@@ -1015,13 +1014,49 @@ class TestToCSV(unittest.TestCase):
         old_cwd = os.getcwd()
         try:
             os.chdir(self.tmpdir)
-            out = lc.to_csv()
+            self.assertIsNone(lc.to_csv())
         finally:
             os.chdir(old_cwd)
 
         expected = os.path.join(self.tmpdir, "lightcurve.csv")
-        self.assertEqual(out.name, "lightcurve.csv")
         self.assertTrue(os.path.exists(expected))
+
+    def test_to_csv_raises_for_multidimensional_y(self):
+        """CSV export requires 1-D ydata."""
+        x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        y = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        lc = Lightcurve(x, y)
+        lc.register_buffer(
+            "_ydata_raw",
+            torch.as_tensor([[1.0, 2.0, 3.0]], dtype=torch.float32),
+        )
+        path = os.path.join(self.tmpdir, "bad_y_shape.csv")
+        with self.assertRaises(ValueError):
+            lc.to_csv(path)
+        self.assertFalse(os.path.exists(path))
+
+    def test_to_csv_raises_for_mismatched_y_length(self):
+        """CSV export requires matching x/y lengths."""
+        x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        y = torch.as_tensor([4.0, 5.0, 6.0], dtype=torch.float32)
+        lc = Lightcurve(x, y)
+        lc.register_buffer("_ydata_raw", torch.as_tensor([4.0, 5.0], dtype=torch.float32))
+        path = os.path.join(self.tmpdir, "bad_y_len.csv")
+        with self.assertRaises(ValueError):
+            lc.to_csv(path)
+        self.assertFalse(os.path.exists(path))
+
+    def test_to_csv_raises_for_mismatched_yerr_length(self):
+        """CSV export requires matching x/yerr lengths."""
+        x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        y = torch.as_tensor([4.0, 5.0, 6.0], dtype=torch.float32)
+        yerr = torch.as_tensor([0.1, 0.2, 0.3], dtype=torch.float32)
+        lc = Lightcurve(x, y, yerr=yerr)
+        lc.register_buffer("_yerr_raw", torch.as_tensor([0.1, 0.2], dtype=torch.float32))
+        path = os.path.join(self.tmpdir, "bad_yerr_len.csv")
+        with self.assertRaises(ValueError):
+            lc.to_csv(path)
+        self.assertFalse(os.path.exists(path))
 
 
 class TestFromTable(unittest.TestCase):
