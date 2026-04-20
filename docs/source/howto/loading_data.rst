@@ -40,13 +40,41 @@ arrays via ``lc.xdata.cpu().numpy()``, etc.
 Loading from a File
 --------------------
 
-``pgmuvi`` provides a convenience constructor
-:meth:`~pgmuvi.lightcurve.Lightcurve.from_table` that can build a light curve
-from an :class:`astropy.table.Table` instance or directly from a filename.
-Under the hood it calls :func:`astropy.table.Table.read`, so any format
-supported by Astropy (FITS, VOTable, many ASCII dialects) is accepted.
+**From a CSV file**
 
-Example loading from a filename::
+:meth:`~pgmuvi.lightcurve.Lightcurve.from_csv` reads a CSV file directly.
+Column names are matched case-insensitively using common aliases, so in most
+cases no extra arguments are required::
+
+    import pgmuvi
+
+    lc = pgmuvi.lightcurve.Lightcurve.from_csv("my_lightcurve.csv")
+
+For multiband CSV files that include a numeric wavelength column, pass the
+column name explicitly or let the method auto-detect it::
+
+    # Explicit wavelength column
+    lc = pgmuvi.lightcurve.Lightcurve.from_csv(
+        "multiband.csv", wavelcol="wavelength_um"
+    )
+
+    # Or specify time and wavelength together
+    lc = pgmuvi.lightcurve.Lightcurve.from_csv(
+        "multiband.csv", xcol=["mjd", "wavelength_um"]
+    )
+
+If the CSV contains a **string band-identifier column** (e.g. ``band`` or
+``filter`` with values like ``"V"``, ``"R"``), that column is automatically
+stored in :attr:`~pgmuvi.lightcurve.Lightcurve.band` for labelling purposes.
+Note that these string labels are for human readability only — the GP model
+requires a numeric wavelength in column 1 of ``xdata`` (see
+:doc:`multiband`).
+
+**From an Astropy-compatible format**
+
+:meth:`~pgmuvi.lightcurve.Lightcurve.from_table` builds a light curve from an
+:class:`astropy.table.Table` instance or any file format that Astropy can read
+(FITS, VOTable, many ASCII dialects)::
 
     import pgmuvi
 
@@ -60,9 +88,9 @@ Example from an in-memory table::
     t = Table.read("my_lightcurve.fits")
     lc = pgmuvi.lightcurve.Lightcurve.from_table(t)
 
-For formats that require column names different from the defaults, or to read
-plain-text files, you can also read the data manually and pass arrays to the
-constructor::
+**From raw arrays**
+
+For any other format, read the data manually and pass arrays directly::
 
     import numpy as np
     import pgmuvi
@@ -73,8 +101,35 @@ constructor::
 Adding More Observations
 --------------------------
 
-To combine observations from multiple files or epochs, concatenate the arrays
-before constructing the ``Lightcurve``::
+**Merging a new band into an existing multiband lightcurve**
+
+:meth:`~pgmuvi.lightcurve.Lightcurve.merge` appends a new band to an
+existing 2-D light curve.  The calling object must already be 2-D; 1-D
+inputs are promoted automatically when a wavelength is supplied::
+
+    # lc2d is an existing 2-D lightcurve; lc_new is a new single-band lc
+    merged = lc2d.merge(lc_new, wavelength=0.80)   # 0.80 μm
+
+You can also merge directly from a CSV path::
+
+    merged = lc2d.merge("new_band.csv", wavelength=0.80)
+
+**Combining multiple lightcurves into one multiband object**
+
+:meth:`~pgmuvi.lightcurve.Lightcurve.concat` is a class method that builds a
+2-D light curve from a list of single-band (or already-multiband) objects.
+Every input must carry band information (either set at construction time via
+``band=`` or via :meth:`~pgmuvi.lightcurve.Lightcurve.from_csv`)::
+
+    combined = pgmuvi.lightcurve.Lightcurve.concat([lc_V, lc_R, lc_I])
+
+Both methods accept ``on_conflict="skip"`` to silently drop duplicate bands
+rather than raising an error.
+
+**Concatenating arrays before construction**
+
+For simple cases where band information is not needed, concatenate the NumPy
+arrays before constructing the :class:`~pgmuvi.lightcurve.Lightcurve`::
 
     import numpy as np
     import pgmuvi
@@ -88,7 +143,7 @@ before constructing the ``Lightcurve``::
 .. note::
 
    For 2D / multiband data, ``xdata`` must have shape ``(N, 2)`` with column 0
-   being time and column 1 being a wavelength or band index.  See :doc:`multiband`.
+   being time and column 1 being a numeric wavelength.  See :doc:`multiband`.
 
 Data Transformations
 ---------------------

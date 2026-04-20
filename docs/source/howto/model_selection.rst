@@ -32,27 +32,53 @@ The kernel structure is selected with
    * - ``'1D'``
      - Default.  Pure spectral mixture kernel for single-band data;
        highly flexible.
-   * - ``'2D'``
-     - Spectral mixture kernel for 2D (multiband) data with a time and
-       wavelength/band dimension.
    * - ``'1DLinear'``
      - Spectral mixture with a linear mean function; useful when a
        long-term linear trend is expected.
+   * - ``'1DSKI'``
+     - Spectral mixture with SKI (Structured Kernel Interpolation)
+       approximation; faster for large datasets.
+   * - ``'1DLinearSKI'``
+     - Spectral mixture + linear mean + SKI approximation.
    * - ``'1DQuasiPeriodic'``
      - Quasi-periodic (Periodic × RBF) kernel.  Captures a single
        periodic signal that decays in coherence over time.
+   * - ``'1DLinearQuasiPeriodic'``
+     - Quasi-periodic kernel with a linear mean function.
    * - ``'1DPeriodicStochastic'``
      - Periodic kernel plus a stochastic (noise) component.
    * - ``'1DMatern'``
      - Matérn kernel.  Suitable for smooth but aperiodic variability.
+   * - ``'2D'``
+     - 2-D spectral mixture kernel over (time, wavelength); does **not**
+       factorise into separate time and wavelength components.
+   * - ``'2DLinear'``
+     - 2-D spectral mixture with a linear mean function.
+   * - ``'2DSKI'``
+     - 2-D spectral mixture with SKI approximation.
+   * - ``'2DLinearSKI'``
+     - 2-D spectral mixture + linear mean + SKI approximation.
+   * - ``'2DPowerLaw'``
+     - 2-D spectral mixture with a power-law mean function.
+   * - ``'2DPowerLawSKI'``
+     - 2-D spectral mixture + power-law mean + SKI approximation.
+   * - ``'2DDust'``
+     - 2-D spectral mixture with a dust-extinction mean function.
+   * - ``'2DDustSKI'``
+     - 2-D spectral mixture + dust mean + SKI approximation.
    * - ``'2DSeparable'``
-     - Separable 2D kernel (time × wavelength) for multiband data.
+     - Explicit product (separable) kernel: time kernel × wavelength kernel.
    * - ``'2DAchromatic'``
-     - 2D model with achromatic (wavelength-independent) variability.
+     - Separable 2D model with achromatic (wavelength-independent)
+       variability amplitude.
    * - ``'2DWavelengthDependent'``
-     - 2D model where variability amplitude depends on wavelength.
+     - Separable 2D model where variability amplitude depends on wavelength.
+   * - ``'2DDustMean'``
+     - Separable 2D model with a dust-extinction mean function.
+   * - ``'2DPowerLawMean'``
+     - Separable 2D model with a power-law mean function.
 
-For a complete list see :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`.
+For full parameter details see :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`.
 
 Number of Mixture Components
 -----------------------------
@@ -60,7 +86,8 @@ Number of Mixture Components
 The ``num_mixtures`` parameter controls how many spectral components are included.
 As a rule of thumb:
 
-* Start with ``num_mixtures=4`` (the default) for exploratory analysis.
+* Start with ``num_mixtures=1`` or ``num_mixtures=2`` for initial exploratory
+  analysis to reduce the risk of immediately over-fitting.
 * Increase if the data show evidence for multiple distinct periodicities.
 * Decrease if the optimisation struggles to converge (fewer parameters = simpler
   optimisation landscape).
