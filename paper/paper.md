@@ -104,9 +104,9 @@ However, `pgmuvi` is designed to provide an easier learning curve by packaging G
 In essence, `tinygp` could in principle be used by `pgmuvi` as a GP backend instead of GPyTorch.
 For a summary of the state of the art of GPR in astronomy, see the recent review by @arev_2023_gps.
 
-+-----------+-----------------------------+----------------+------------------+---------------+-----------------+------------+----------------------------+
+
 | Package   | Kernel (1D)                 | Spectral shape | Optimizer        | GPU           | 2D input        | Code lines | Time for 1D lightcurve (s) |
-+-----------+-----------------------------+----------------+------------------+---------------+-----------------+------------+----------------------------+
+|-----------|-----------------------------|----------------|------------------|---------------|-----------------|------------|----------------------------|
 | pgmuvi    | SpectralMixture (built-in)  | Gaussian       | Adam (PyTorch)   | Yes (CUDA)    | Yes (native)    | 1          | 11.19                      |
 | tinygp    | Custom SMK1D (user class)   | Gaussian       | optax Adam (JAX) | XLA JIT       | 2D class (user) | 16         | 19.00                      |
 | celerite2 | SHOTerm (Lorentzian approx) | Lorentzian     | scipy L-BFGS-B   | No (O(N) CPU) | No              | 4          | 0.737                      |
@@ -115,7 +115,7 @@ For a summary of the state of the art of GPR in astronomy, see the recent review
 | gpflow    | SquaredExp x Cosine         | Gaussian       | TF Scipy         | Yes (TF/GPU)  | Manual          | ~4         | --                         |
 | sklearn   | RBF x ExpSineSquared        | Non-Gaussian   | scipy L-BFGS-B   | No            | Partial         | 4          | 0.442                      |
 | gpjax     | Custom SMK (user class)     | Gaussian       | optax Adam (JAX) | XLA JIT       | Custom kernel   | ~20        | --                         |
-+-----------+-----------------------------+----------------+------------------+---------------+-----------------+------------+----------------------------+
+|-----------|-----------------------------|----------------|------------------|---------------|-----------------|------------|----------------------------|
 
 `pgmuvi` is used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)).
 This work served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood.
