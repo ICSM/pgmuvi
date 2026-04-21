@@ -134,9 +134,12 @@ Glossary
       same distribution.
 
    Separable kernel
-      A multi-dimensional kernel of the form :math:`k(\mathbf{x}, \mathbf{x}') =
-      k_1(x_1, x_1') \cdot k_2(x_2, x_2')`.  ``pgmuvi`` uses separable (product)
-      kernels for 2D data, with a temporal kernel and a wavelength kernel.
+      A multi-dimensional kernel of the form
+      :math:`k(\mathbf{x}, \mathbf{x}') = k_1(x_1, x_1') \cdot k_2(x_2, x_2')`.
+      ``pgmuvi``'s separable 2D model family (e.g. ``"2DSeparable"``,
+      ``"2DAchromatic"``) uses product kernels with a temporal component and a
+      wavelength component.  The default ``model="2D"`` uses a non-separable 2D
+      spectral-mixture kernel instead.
 
    Spectral mixture kernel
    SMK

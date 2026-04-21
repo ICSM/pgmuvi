@@ -86,9 +86,18 @@ Multiwavelength Variability Inference
 
 Many astrophysical sources are observed simultaneously at multiple wavelengths or in
 multiple photometric bands.  ``pgmuvi`` supports **2D Gaussian processes** where the
-inputs :math:`\mathbf{x} = (t, \lambda)` include both time and wavelength.  The
-kernel function is then a product of a temporal kernel and a wavelength kernel,
-allowing the GP to learn:
+inputs :math:`\mathbf{x} = (t, \lambda)` include both time and wavelength.  Two
+families of 2D kernel are available:
+
+* The default ``model="2D"`` uses a **non-separable 2D spectral-mixture kernel**
+  defined jointly over time and wavelength, allowing the GP to learn their joint
+  covariance structure.
+* The **separable model family** (``"2DSeparable"``, ``"2DAchromatic"``,
+  ``"2DWavelengthDependent"``, etc.) uses a product of a temporal kernel and a
+  wavelength kernel, which is a natural assumption when the variability structure
+  can be factored across the two dimensions.
+
+Both families allow the GP to learn:
 
 * the temporal variability structure (periodicities, noise),
 * how variability amplitude and coherence vary with wavelength.

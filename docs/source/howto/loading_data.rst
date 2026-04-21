@@ -64,8 +64,13 @@ column name explicitly or let the method auto-detect it::
     )
 
 If the CSV contains a **string band-identifier column** (e.g. ``band`` or
-``filter`` with values like ``"V"``, ``"R"``), that column is automatically
+``filter`` with values like ``"V"``, ``"R"``), that column may be automatically
 stored in :attr:`~pgmuvi.lightcurve.Lightcurve.band` for labelling purposes.
+For **2-D (multiband) lightcurves** this happens automatically.  For **1-D
+lightcurves**, auto-population only occurs when the band-ID column contains
+exactly one distinct non-empty label (matching the 1-D constructor contract); if
+multiple distinct labels are present, ``band`` is left unset and a warning is
+emitted.
 Note that these string labels are for human readability only — the GP model
 requires a numeric wavelength in column 1 of ``xdata`` (see
 :doc:`multiband`).

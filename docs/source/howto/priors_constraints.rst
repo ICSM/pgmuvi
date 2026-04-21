@@ -92,8 +92,16 @@ For the noise variance::
 
 .. note::
 
-   For 2D (multiband) models, constraints on ``mixture_means`` apply to the
-   temporal dimension.  Wavelength-dimension constraints can be set separately.
+   For **separable 2D models** (``"2DSeparable"``, ``"2DAchromatic"``,
+   ``"2DWavelengthDependent"``, etc.), constraints on ``mixture_means`` apply to
+   the temporal spectral-mixture component; the wavelength kernel parameters are
+   separate and can be constrained independently.
+
+   For the **non-separable ``model="2D"``**, GPyTorch applies constraints
+   element-wise to the entire ``mixture_means`` tensor (which spans both time
+   and wavelength dimensions), so temporal and wavelength constraints cannot be
+   set independently.  If independent per-dimension constraints are required,
+   use one of the separable 2D model families.
 
 Using Pre-defined Constraint Sets
 -----------------------------------

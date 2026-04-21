@@ -99,15 +99,23 @@ support 2D models; plotting PSDs in more than one dimension is not implemented.
 Kernel Choices for 2D Models
 ------------------------------
 
-The temporal kernel (first dimension) is a spectral mixture kernel, as in 1D.
-The wavelength kernel (second dimension) can be configured separately.  Common choices
-include:
+The choice of kernel depends on which 2D model family you are using:
 
-* **RBF (Squared-Exponential):** Smooth, continuous wavelength dependence.
-* **Matérn ν = 3/2:** Slightly rougher wavelength dependence, more robust to outliers.
+* **``model="2D"`` (non-separable):** Uses a 2D spectral-mixture kernel that
+  treats time and wavelength jointly.  There is no separate "wavelength kernel"
+  to configure; the model learns the joint covariance structure directly.
 
-See the ``separable_kernels_2d.py`` and ``dust_mean_spectral_mixture_2d.py`` example
-scripts for illustrations of different kernel configurations.
+* **Separable model family** (``"2DSeparable"``, ``"2DAchromatic"``,
+  ``"2DWavelengthDependent"``, etc.): Uses an explicit product kernel where the
+  temporal spectral-mixture kernel and the wavelength kernel are independent
+  factors.  Common choices for the wavelength kernel include:
+
+  * **RBF (Squared-Exponential):** Smooth, continuous wavelength dependence.
+  * **Matérn ν = 3/2:** Slightly rougher wavelength dependence, more robust to
+    outliers.
+
+  See the ``separable_kernels_2d.py`` and ``dust_mean_spectral_mixture_2d.py``
+  example scripts for illustrations of different kernel configurations.
 
 Separable vs Non-Separable Models
 -----------------------------------

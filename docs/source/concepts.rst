@@ -94,9 +94,17 @@ the original units when plotting or reporting results.
   when data from a single photometric band or wavelength range are available.
 
 * **2D (multiband):** The GP input is a two-column array ``[time, wavelength]``.
-  The kernel is a product of a temporal kernel (spectral mixture) and a wavelength
-  kernel, allowing the model to capture how variability changes across wavelengths.
-  See :doc:`howto/multiband` for details.
+  Two families of 2D kernels are available:
+
+  * The default ``model="2D"`` uses a **non-separable** 2D spectral-mixture kernel
+    that treats time and wavelength jointly.
+  * The separable model family (``"2DSeparable"``, ``"2DAchromatic"``,
+    ``"2DWavelengthDependent"``, etc.) uses a **product kernel** — a temporal
+    spectral-mixture kernel multiplied by a wavelength kernel — which is a natural
+    choice when the variability structure is assumed to be separable across the two
+    dimensions.
+
+  See :doc:`howto/multiband` for details on choosing between these families.
 
 Model Selection
 ----------------

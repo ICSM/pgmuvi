@@ -51,7 +51,12 @@ For convenience::
 
     lc.print_periods()         # prints inferred periods in human-readable form
     lc.print_parameters()      # prints all hyperparameter values
-    lc.summary()               # combined human-readable summary
+
+.. note::
+
+   ``lc.summary()`` is an MCMC-only helper and currently raises
+   ``NotImplementedError``.  Use ``print_periods()`` and ``print_parameters()``
+   after a MAP ``fit()`` call instead.
 
 Predictive Distribution
 ------------------------
