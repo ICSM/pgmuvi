@@ -105,9 +105,9 @@ In essence, `tinygp` could in principle be used by `pgmuvi` as a GP backend inst
 For a summary of the state of the art of GPR in astronomy, see the recent review by @arev_2023_gps.
 A simple comparison between different GP packages showing some cases where `pgmuvi` is a good choice are included in the documentation, while Fig. \autoref{fig:psds} and Table \autoref{tab:gps} summarise some of that comparison.
 
-![Comparison of the PSDs recovered by different GP packages for an arbitrary multiperiodic lightcuve. Not only does `pgmuvi` recover both periods accurately, it also localises with great precision. \label{fig:psds}](PSDs_1d.png){ width=40% }
+[Comparison of the PSDs recovered by different GP packages for an arbitrary multiperiodic lightcuve. Not only does `pgmuvi` recover both periods accurately, it also localises with great precision. \label{fig:psds}](PSDs_1d.png){ width=40% }
 
-![Comparison of different GP packages. \label{tab:gps}](
+[Comparison of different GP packages. \label{tab:gps}](
 | Package   | Kernel (1D)                 | Spectral shape | Optimizer        | GPU           | 2D input        | Code lines | Time for 1D lightcurve (s) |
 |-----------|-----------------------------|----------------|------------------|---------------|-----------------|------------|----------------------------|
 | pgmuvi    | SpectralMixture (built-in)  | Gaussian       | Adam (PyTorch)   | Yes (CUDA)    | Yes (native)    | 1          | 11.19                      |
