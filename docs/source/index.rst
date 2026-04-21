@@ -45,11 +45,50 @@ If you want to contribute to `pgmuvi` and develop new features, you might want a
 
 this way you can test how things change as you go along.
 
-Citing `pgmuvi`
-----------------
+Background and Concepts
+-----------------------
 
-`pgmuvi` is currently under review in the Journal of Open Source Software.
-If you use `pgmuvi` in your research, please cite the paper (details will be given here when the paper is accepted!)
+New to Gaussian processes or spectral mixture kernels? Start here.
+
+.. toctree::
+   :maxdepth: 1
+
+   background
+   concepts
+   glossary
+
+Tutorials
+---------
+
+Step-by-step notebooks introducing the main workflows in `pgmuvi`.
+
+.. toctree::
+   :maxdepth: 1
+
+   notebooks/pgmuvi_tutorial
+   notebooks/pgmuvi_tutorial_mcmc
+   notebooks/pgmuvi_tutorial_2d
+   notebooks/tutorial_preprocessing
+   notebooks/tutorial_synthetic
+   notebooks/tutorial_model_selection
+
+How-To Guides
+-------------
+
+Task-focused guides for common operations.
+
+.. toctree::
+   :maxdepth: 1
+
+   howto/index
+
+FAQ
+---
+
+.. toctree::
+   :maxdepth: 1
+
+   faq
 
 API reference
 -------------
@@ -63,8 +102,13 @@ API reference
 Contributing
 ------------
 
-We very much welcome contributions to `pgmuvi`! Please take a look at our `github repository <https://github.com/ICSM/pgmuvi/>`_ for more information on how to contribute!
+We very much welcome contributions to `pgmuvi`! Please take a look at our `GitHub repository <https://github.com/ICSM/pgmuvi/>`_ for more information on how to contribute!
 
+Citing `pgmuvi`
+----------------
+
+`pgmuvi` is currently under review in the Journal of Open Source Software.
+If you use `pgmuvi` in your research, please cite the paper (details will be given here when the paper is accepted!)
 
 
 Indices and tables
