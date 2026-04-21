@@ -19,6 +19,7 @@ User Guide
    notebooks/PGMUVI_Lightcurve
    notebooks/PGMUVI_Lomb_Scargle
    notebooks/PGMUVI_Gaussian_Process_fitting
+   notebooks/PGMUVI_comparison_with_other_codes
 
 
 Installation and Quickstart
