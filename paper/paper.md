@@ -115,7 +115,7 @@ For a summary of the state of the art of GPR in astronomy, see the recent review
 | gpflow    | SquaredExp x Cosine         | Gaussian       | TF Scipy         | Yes (TF/GPU)  | Manual          | ~4         | --                         |
 | sklearn   | RBF x ExpSineSquared        | Non-Gaussian   | scipy L-BFGS-B   | No            | Partial         | 4          | 0.442                      |
 | gpjax     | Custom SMK (user class)     | Gaussian       | optax Adam (JAX) | XLA JIT       | Custom kernel   | ~20        | --                         |
-|-----------|-----------------------------|----------------|------------------|---------------|-----------------|------------|----------------------------|
+
 
 `pgmuvi` is used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)).
 This work served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood.
