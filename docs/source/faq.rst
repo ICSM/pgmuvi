@@ -63,7 +63,7 @@ Fitting and Convergence
 
 * Subsample dense datasets (see :doc:`howto/preprocessing`).
 * Reduce ``num_mixtures`` (fewer parameters → faster optimisation).
-* Move the light curve to a GPU before fitting: ``lc = lc.cuda()``.
+* Move the light curve to a GPU before fitting: ``lc.cuda()``.
 
 **Q: The fit converges to a period that makes no physical sense.**
 

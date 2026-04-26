@@ -54,9 +54,11 @@ For convenience::
 
 .. note::
 
-   ``lc.summary()`` is an MCMC-only helper and currently raises
-   ``NotImplementedError``.  Use ``print_periods()`` and ``print_parameters()``
-   after a MAP ``fit()`` call instead.
+   ``lc.summary()`` is an MCMC-only helper.  Calling it before running the
+   MCMC sampler raises ``RuntimeError("You must first run the MCMC sampler")``,
+   and since ``mcmc()`` is not yet available it will always raise.  Use
+   ``print_periods()`` and ``print_parameters()`` after a MAP ``fit()`` call
+   instead.
 
 Predictive Distribution
 ------------------------
