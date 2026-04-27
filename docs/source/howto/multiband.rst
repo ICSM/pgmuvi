@@ -28,12 +28,23 @@ Data Format for 2D Models
 For 2D / multiband fitting, ``xdata`` must have shape ``(N, 2)`` where:
 
 * column 0 is the **observation time** (same unit across all observations),
-* column 1 is the **wavelength or band identifier** (e.g., effective wavelength
-  in microns or nanometres).  String band labels (e.g. ``"V"``, ``"I"``) and
-  integer band codes are accepted — they are mapped to numeric indices
-  (0, 1, 2 …) internally — but for wavelength-dependent kernels (separable 2D
-  models) a physically meaningful numeric wavelength is strongly recommended so
-  that the kernel can learn the correct wavelength scaling.
+* column 1 is the **wavelength or band identifier** and **must be numeric**.
+  Use the effective wavelength (e.g., in microns or nanometres) for
+  wavelength-dependent (separable 2D) kernels, or integer band codes
+  (0, 1, 2 …) for generic categorical band identification.
+  A physically meaningful numeric wavelength is strongly recommended for
+  separable 2D kernels so that the kernel can learn the correct wavelength
+  scaling.
+
+  .. note::
+
+     When loading from a CSV file via :meth:`~pgmuvi.lightcurve.Lightcurve.from_csv`,
+     a string band-label column (e.g. ``"V"``, ``"I"``) is automatically mapped to
+     integer codes (0, 1, 2 …) before the :class:`~pgmuvi.lightcurve.Lightcurve`
+     object is constructed, with the original labels stored in
+     :attr:`~pgmuvi.lightcurve.Lightcurve.band`.  The
+     :class:`~pgmuvi.lightcurve.Lightcurve` constructor itself requires numeric
+     ``xdata``; passing string arrays directly will raise an error.
 
 Human-readable band labels (e.g. ``"V"``, ``"R"``) can be stored separately in
 the :attr:`~pgmuvi.lightcurve.Lightcurve.band` attribute for labelling plots,
