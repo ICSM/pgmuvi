@@ -86,20 +86,25 @@ jobs:
         GITHUB_TOKEN: ${{ github.token }}
       # Only create the release when it doesn't already exist (e.g. it was
       # created manually via the GitHub UI before or after pushing the tag).
+      # --repo is required because this job does not check out the repository.
       # Real failures (auth, network, etc.) in the create command still propagate.
       run: >-
-        gh release view '${{ github.ref_name }}' 2>/dev/null
-        || gh release create '${{ github.ref_name }}' --notes ""
+        gh release view '${{ github.ref_name }}'
+        --repo '${{ github.repository }}' 2>/dev/null
+        || gh release create '${{ github.ref_name }}'
+        --repo '${{ github.repository }}' --notes ""
     - name: Upload artifact signatures to GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
       # Upload to GitHub Release using the `gh` CLI.
       # `dist/` contains the built packages, and the
       # sigstore-produced signatures and certificates.
+      # --clobber replaces any existing assets so reruns do not fail.
       run: >-
         gh release upload
         '${{ github.ref_name }}' dist/**
         --repo '${{ github.repository }}'
+        --clobber
 
   publish-to-testpypi:
     name: Publish Python 🐍 distribution 📦 to TestPyPI
