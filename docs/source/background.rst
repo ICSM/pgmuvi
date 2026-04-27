@@ -131,4 +131,8 @@ spectral mixture kernel frequencies before fitting.  This substantially improves
 convergence and reduces the risk of settling in a poor local optimum.
 
 In the current API, this Lomb–Scargle-based initialisation is performed
-internally by :meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS`.
+internally by :meth:`~pgmuvi.lightcurve.Lightcurve.fit` (when
+``use_mls_init=True``, which is the default).  :meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS`
+is a public helper that runs the same periodogram and returns the detected
+peaks, but kernel initialisation is performed by ``fit()``, not ``fit_LS()``
+alone.

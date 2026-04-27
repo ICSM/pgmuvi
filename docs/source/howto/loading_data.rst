@@ -125,13 +125,18 @@ You can also merge directly from a CSV path::
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.concat` is a class method that builds a
 2-D light curve from a list of single-band (or already-multiband) objects.
-Every input must carry band information (either set at construction time via
-``band=`` or via :meth:`~pgmuvi.lightcurve.Lightcurve.from_csv`)::
+Every 1-D input must carry both band information (either set at construction
+time via ``band=`` or via :meth:`~pgmuvi.lightcurve.Lightcurve.from_csv`) **and**
+a scalar wavelength value (``lc.wavelength``, ``lc.wave``, or ``lc.lambda_``);
+``concat()`` raises a :exc:`ValueError` if either is missing::
 
+    lc_V.band = "V";  lc_V.wavelength = 0.55
+    lc_R.band = "R";  lc_R.wavelength = 0.64
+    lc_I.band = "I";  lc_I.wavelength = 0.80
     combined = pgmuvi.lightcurve.Lightcurve.concat([lc_V, lc_R, lc_I])
 
-Both methods accept ``on_conflict="skip"`` to silently drop duplicate bands
-rather than raising an error.
+Both methods accept ``on_conflict="skip"`` to drop duplicate bands and emit a
+:class:`UserWarning` rather than raising an error.
 
 **Concatenating arrays before construction**
 

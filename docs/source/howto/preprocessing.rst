@@ -51,7 +51,7 @@ For multiband data::
 
 To retain only bands that pass a variability criterion::
 
-    lc.filter_variable_bands(fvar_min=0.1)
+    lc = lc.filter_variable_bands(fvar_min=0.1)
 
 Sampling Quality Metrics
 -------------------------

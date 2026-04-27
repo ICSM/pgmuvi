@@ -144,10 +144,12 @@ second column of ``xdata`` (see :doc:`howto/multiband`).
 
 **Q: Which band is used for Lomb–Scargle initialisation in 2D?**
 
-By default, the multiband Lomb–Scargle periodogram is used.  If one band has
-substantially more observations than others, pass ``use_best_band_init=True`` to
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` to first run 1D Lomb–Scargle on the
-most-sampled band for frequency seeding.
+By default, the multiband Lomb–Scargle periodogram is used to seed the
+spectral-mixture kernel frequencies.  If one band has substantially more
+observations than others, pass ``use_best_band_init=True`` to
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit` to use a 1-D Lomb–Scargle on the
+most-sampled band instead of the multiband periodogram for frequency
+initialisation.
 
 Contributing and Support
 ------------------------

@@ -70,9 +70,10 @@ others), consider using the best-band initialisation option::
 
     lc.fit(model="2D", use_best_band_init=True)
 
-This runs the Lomb–Scargle periodogram on the most densely sampled band before
-computing the multiband periodogram, which can substantially improve frequency
-initialisation.
+This uses a 1-D Lomb–Scargle on the most densely sampled band instead of the
+multiband periodogram to seed the spectral-mixture kernel frequencies.  This
+can substantially improve frequency initialisation when one band has far more
+observations than the others.
 
 Assessing Sampling Quality per Band
 -------------------------------------

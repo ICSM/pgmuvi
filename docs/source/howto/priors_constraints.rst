@@ -15,17 +15,16 @@ GP hyperparameters can take a wide range of values, and without any guidance the
 optimiser or sampler may explore physically unreasonable regions.  ``pgmuvi``
 provides two mechanisms to constrain the parameter space:
 
-* **Constraints** — hard bounds on parameter values (applied during both
-  optimisation and MCMC).
-* **Priors** — probabilistic regularisation, most relevant during MCMC but also
-  useful in MAP optimisation with regularisation.
+* **Constraints** — hard bounds on parameter values (applied during
+  optimisation; MCMC support is planned for a future release).
+* **Priors** — probabilistic regularisation, most relevant during MCMC
+  (planned) but also useful in MAP optimisation with regularisation.
 
 Default Priors and Constraints
 --------------------------------
 
 ``pgmuvi`` applies sensible default priors and constraints when you call
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit` or
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS`.  You can also apply those defaults
+:meth:`~pgmuvi.lightcurve.Lightcurve.fit`.  You can also apply those defaults
 explicitly after setting a model with
 :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`.  Call
 :meth:`~pgmuvi.lightcurve.Lightcurve.set_default_priors` and
