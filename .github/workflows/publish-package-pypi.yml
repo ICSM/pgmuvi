@@ -4,8 +4,6 @@ on:
     push:
         tags:
             - "v*"
-    release:
-        types: [created]
 
 jobs:
   build:
@@ -14,20 +12,25 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # fetch full history and tags for setuptools_scm versioning
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: "3.x"
-    - name: Install pypa/build
+    - name: Install pypa/build and twine
       run: >-
         python3 -m
         pip install
         build
+        twine
         --user
     - name: Build a binary wheel and a source tarball
       run: python3 -m build
+    - name: Check dist metadata
+      run: python3 -m twine check dist/*
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
@@ -41,13 +44,13 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/pgmuvi  # Replace <package-name> with your PyPI project name
+      url: https://pypi.org/project/pgmuvi/
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
@@ -68,7 +71,7 @@ jobs:
 
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
@@ -78,11 +81,15 @@ jobs:
         inputs: >-
           ./dist/*.tar.gz
           ./dist/*.whl
-    - name: Create GitHub Release
+    - name: Create GitHub Release (if it does not already exist)
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      # Only create the release when it doesn't already exist (e.g. it was
+      # created manually via the GitHub UI before or after pushing the tag).
+      # Real failures (auth, network, etc.) in the create command still propagate.
       run: >-
-        gh release create
-        '${{ github.ref_name }}'
-        --notes ""
+        gh release view '${{ github.ref_name }}' 2>/dev/null
+        || gh release create '${{ github.ref_name }}' --notes ""
     - name: Upload artifact signatures to GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
@@ -102,14 +109,14 @@ jobs:
 
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/<package-name>
+      url: https://test.pypi.org/project/pgmuvi/
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
