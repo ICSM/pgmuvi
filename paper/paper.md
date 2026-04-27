@@ -39,7 +39,7 @@ affiliations:
    index: 5
  - name: Max Planck Institute for Astronomy, Königstuhl 17, 69117 Heidelberg, Germany
    index: 6
-date: XX August 2023
+date: XX April 2026
 bibliography: paper.bib
 
 # Optional fields if submitting to a AAS journal too, see this blog post:
