@@ -65,7 +65,6 @@ Step-by-step notebooks introducing the main workflows in `pgmuvi`.
    :maxdepth: 1
 
    notebooks/pgmuvi_tutorial
-   notebooks/pgmuvi_tutorial_mcmc
    notebooks/pgmuvi_tutorial_2d
    notebooks/tutorial_preprocessing
    notebooks/tutorial_synthetic

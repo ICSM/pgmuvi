@@ -61,10 +61,14 @@ Priors and Constraints
 ``pgmuvi`` supports **priors** (Bayesian probability distributions placed on
 hyperparameters) and **constraints** (hard bounds on the allowed parameter space).
 
-Priors are used during MCMC sampling to regularise the posterior distribution.
-Constraints are applied during both optimisation and MCMC to prevent the optimiser
-from exploring physically unreasonable regions (e.g., negative noise variance or
-periods longer than the observational baseline).
+Priors regularise the posterior distribution; during MAP optimisation they contribute
+log-prior terms to the objective.  Their full role in MCMC sampling is planned for a
+future release once ``mcmc()`` is available.
+
+Constraints are applied during MAP optimisation to prevent the optimiser from
+exploring physically unreasonable regions (e.g., negative noise variance or periods
+longer than the observational baseline).  They will also apply to the planned future
+MCMC workflow.
 
 See :doc:`howto/priors_constraints` for practical guidance, and the
 :mod:`pgmuvi.priors` and :mod:`pgmuvi.constraints` API reference for full details.
