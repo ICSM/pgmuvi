@@ -39,12 +39,16 @@ For 2D / multiband fitting, ``xdata`` must have shape ``(N, 2)`` where:
   .. note::
 
      When loading from a CSV file via :meth:`~pgmuvi.lightcurve.Lightcurve.from_csv`,
-     a string band-label column (e.g. ``"V"``, ``"I"``) is automatically mapped to
-     integer codes (0, 1, 2 …) before the :class:`~pgmuvi.lightcurve.Lightcurve`
-     object is constructed, with the original labels stored in
-     :attr:`~pgmuvi.lightcurve.Lightcurve.band`.  The
-     :class:`~pgmuvi.lightcurve.Lightcurve` constructor itself requires numeric
-     ``xdata``; passing string arrays directly will raise an error.
+     string band labels are mapped to integer codes only if the wavelength input
+     column itself is string-typed, for example with ``wavelcol="band"`` or
+     ``xcol=["time", "band"]``. In that case, the encoded values are used in
+     ``xdata[:, 1]`` and the original labels (e.g. ``"V"``, ``"I"``) are stored in
+     :attr:`~pgmuvi.lightcurve.Lightcurve.band`. If the CSV already provides a
+     numeric wavelength column, that numeric column is used directly in
+     ``xdata[:, 1]`` and any separate string band-ID column is only stored in
+     :attr:`~pgmuvi.lightcurve.Lightcurve.band` without remapping. The
+     :class:`~pgmuvi.lightcurve.Lightcurve` constructor itself still requires
+     numeric ``xdata``; passing string arrays directly will raise an error.
 
 Human-readable band labels (e.g. ``"V"``, ``"R"``) can be stored separately in
 the :attr:`~pgmuvi.lightcurve.Lightcurve.band` attribute for labelling plots,
