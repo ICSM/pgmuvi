@@ -73,8 +73,9 @@ A particular challenge in astronomy is handling heterogeneous, multiwavelength d
 Data must often be combined from a wide variety of instruments, telescopes or surveys, and so the systematics or noise properties of different datasets vary widely.
 In addition, by combining multiple wavelengths, we gain a better understanding of the physical processes driving the variability of the object.
 For example, some variability mechanisms differ as a function of wavelength only in amplitude (e.g. eclipsing binaries), while others may vary in phase (e.g. pulsating stars) or even period (e.g. multiperiodic systems).
-In long-period variables (such as AGB stars), different radiation processes are relevant in different wavelength ranges, with changes in molecular bands dominating optical variability, while changes in dust radiation dominate the infrared.
-A complete physical picture can only be obtained by modelling all relevant wavelengths simultaneously.
+`pgmuvi` is particularly motivated by the need to interpret the lightcurves of long-period variables (such as AGB stars), where different radiation processes are relevant in different wavelength ranges, with changes in molecular bands dominating optical variability, while changes in dust radiation dominate the infrared.
+Their variations are caused by changes in stellar temperature and radius, but lead to changes in chemistry (changing the presence and depth of molecular absorption bands across the optical and near-infrared), the formation of circumstellar dust (changing the emission in the near- and mid-infrared) and changes in the ionisation state of circumstellar gas (causing changes in the chromospheric emission at ultraviolet and radio wavelengths). Each of these processes have different amplitudes and phase-lags compared to the changes in temperature and radius of the star itself, meaning that interpreting multiple wavelengths at once requires a model that can handle the differences across wavelengths.
+As a result, a complete physical picture can only be obtained by modelling all relevant wavelengths simultaneously.
 
 Gaussian processes (GPs) have recently become a popular tool to handle these challenges.
 GPs are a flexible way to forward-model arbitrary signals, by assuming that the signal is drawn from a multivariate Gaussian distribution.
