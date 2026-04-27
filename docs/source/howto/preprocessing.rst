@@ -61,18 +61,34 @@ timescales of interest.  ``pgmuvi`` computes several metrics to assess this:
 
 .. list-table::
    :header-rows: 1
-   :widths: 25 60
+   :widths: 30 55
 
-   * - Metric
+   * - Key
      - Description
-   * - Nyquist period
-     - Shortest period resolvable given the typical sampling cadence.
-   * - Baseline
-     - Total time span of the observations; limits the longest detectable period.
-   * - Detectable range
-     - The range of periods between the Nyquist period and the baseline.
-   * - Gap fraction
-     - Fraction of the baseline with no observations; large gaps reduce sensitivity.
+   * - ``n_points``
+     - Number of finite observations.
+   * - ``baseline``
+     - Total time span (``max(t) − min(t)``).
+   * - ``max_gap``
+     - Largest gap between consecutive observations.
+   * - ``max_gap_fraction``
+     - ``max_gap / baseline``; large values reduce sensitivity to long-period variability.
+   * - ``median_cadence``
+     - Median time between consecutive observations.
+   * - ``mean_cadence``
+     - Mean time between consecutive observations.
+   * - ``cadence_std``
+     - Standard deviation of the cadence distribution.
+   * - ``nyquist_period``
+     - ``2 × effective_cadence``; shortest reliably detectable period.
+   * - ``nyquist_frequency``
+     - ``1 / (2 × effective_cadence)``; corresponding Nyquist frequency.
+   * - ``longest_detectable_period``
+     - ``baseline / 2`` (heuristic upper limit on detectable periods).
+   * - ``duty_cycle``
+     - Fraction of the baseline with observations (``n × cadence / baseline``).
+   * - ``sampling_uniformity``
+     - ``1 − std(cadence) / mean(cadence)``; 1 = perfectly uniform, 0 = highly irregular.
 
 Retrieve numeric metrics::
 

@@ -10,17 +10,6 @@ Welcome to `pgmuvi`'s documentation!
 It is built on top of the `gpytorch <https://gpytorch.ai/>`_ package, and is designed to be easy to use and flexible.
 It is currently under active development, and we welcome contributions!
 
-User Guide
-----------
-
-.. toctree::
-   :maxdepth: 2
-
-   notebooks/PGMUVI_Lightcurve
-   notebooks/PGMUVI_Lomb_Scargle
-   notebooks/PGMUVI_Gaussian_Process_fitting
-
-
 Installation and Quickstart
 ---------------------------
 
@@ -64,6 +53,9 @@ Step-by-step notebooks introducing the main workflows in `pgmuvi`.
 .. toctree::
    :maxdepth: 1
 
+   notebooks/PGMUVI_Lightcurve
+   notebooks/PGMUVI_Lomb_Scargle
+   notebooks/PGMUVI_Gaussian_Process_fitting
    notebooks/pgmuvi_tutorial
    notebooks/pgmuvi_tutorial_2d
    notebooks/tutorial_preprocessing
