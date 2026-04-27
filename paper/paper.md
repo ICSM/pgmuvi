@@ -11,30 +11,31 @@ authors:
     # equal-contrib: true
     corresponding: true
     affiliation: "1, 2" # (Multiple affiliations must be quoted)
-  - name: Stefan Waterval
-    orcid: 0000-0002-5542-8624
-    affiliation: "3, 4"
-  - name: Diego A. Vasquez-Torres
-    orcid: 0009-0008-2354-0049
-    # corresponding: true # (This is how to denote the corresponding author)
-    affiliation: 5
   - name: Sundar Srinivasan
     orcid: 0000-0002-2996-305X
     # equal-contrib: true # (This is how you can denote equal contributions between multiple authors)
-    affiliation: 5
+    affiliation: 3
+  - name: Stefan Waterval
+    orcid: 0000-0002-5542-8624
+    affiliation: "4, 5"
+  - name: Diego A. Vasquez-Torres
+    orcid: 0009-0008-2354-0049
+    # corresponding: true # (This is how to denote the corresponding author)
+    affiliation: 3
+
   - name: Sara Jamal
     orcid: 0000-0002-3929-6668
     affiliation: 6
 affiliations:
- - name: European Southern Observatory, Alonso de Córdova 3107, Vitacura, Santiago, Chile
+ - name: Centre for Astrophysics Research, Department of Physics, Astronomy and Mathematics, College Lane Campus, University of Hertfordshire, Hatfield AL10 9AB, UK
    index: 1
  - name: Space Science Institute, 4750 Walnut Street, Suite 205, Boulder, CO 80301, USA
    index: 2
- - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
-   index: 3
- - name: Center for Astro, Particle and Planetary Physics (CAP$^3$), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
-   index: 4
  - name: IRyA, Universidad Nacional Autónoma de México, Morelia, Michoacán, México
+   index: 3
+ - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+   index: 4
+ - name: Center for Astro, Particle and Planetary Physics (CAP$^3$), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
    index: 5
  - name: Max Planck Institute for Astronomy, Königstuhl 17, 69117 Heidelberg, Germany
    index: 6
