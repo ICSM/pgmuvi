@@ -89,7 +89,9 @@ Visualisation
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd`
     Inferred power spectral density.  Peaks correspond to inferred periods.
     Broad, low-frequency power indicates stochastic variability.
-    Returns ``(fig, ax)``.
+    With ``show=False``, returns ``(fig, ax)`` for further customisation.
+    With the default ``show=True``, calls :func:`matplotlib.pyplot.show` and
+    returns ``None``.
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot` and
 :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` accept standard Matplotlib

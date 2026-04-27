@@ -28,10 +28,12 @@ Data Format for 2D Models
 For 2D / multiband fitting, ``xdata`` must have shape ``(N, 2)`` where:
 
 * column 0 is the **observation time** (same unit across all observations),
-* column 1 is the **numeric wavelength** (e.g., effective wavelength in microns
-  or nanometres).  The GP model operates in wavelength space, so a physically
-  meaningful numeric wavelength is required here — integer band codes or string
-  identifiers are not sufficient.
+* column 1 is the **wavelength or band identifier** (e.g., effective wavelength
+  in microns or nanometres).  String band labels (e.g. ``"V"``, ``"I"``) and
+  integer band codes are accepted — they are mapped to numeric indices
+  (0, 1, 2 …) internally — but for wavelength-dependent kernels (separable 2D
+  models) a physically meaningful numeric wavelength is strongly recommended so
+  that the kernel can learn the correct wavelength scaling.
 
 Human-readable band labels (e.g. ``"V"``, ``"R"``) can be stored separately in
 the :attr:`~pgmuvi.lightcurve.Lightcurve.band` attribute for labelling plots,
