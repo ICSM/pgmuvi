@@ -78,8 +78,8 @@ transformations:
 
 * **MinMax:** rescales data to the range [0, 1].
 * **ZScore:** standardises data to zero mean and unit variance.
-* **RobustZScore:** standardises using the median and interquartile range, making it
-  robust to outliers.
+* **RobustZScore:** standardises using the median and median absolute deviation (MAD),
+  making it robust to outliers.
 
 Transformations can be applied to the time axis (``xtransform``) or the flux/magnitude
 axis (``ytransform``).  All predictions are automatically inverse-transformed back to

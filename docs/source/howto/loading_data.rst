@@ -110,14 +110,16 @@ Adding More Observations
 
 :meth:`~pgmuvi.lightcurve.Lightcurve.merge` appends a new band to an
 existing 2-D light curve.  The calling object must already be 2-D; 1-D
-inputs are promoted automatically when a wavelength is supplied::
+inputs are promoted automatically when a wavelength is supplied.  For 1-D
+inputs that have no ``band`` attribute set, you must also pass ``band=``
+explicitly (otherwise a :class:`ValueError` is raised)::
 
     # lc2d is an existing 2-D lightcurve; lc_new is a new single-band lc
-    merged = lc2d.merge(lc_new, wavelength=0.80)   # 0.80 μm
+    merged = lc2d.merge(lc_new, wavelength=0.80, band="I")   # 0.80 μm, band "I"
 
 You can also merge directly from a CSV path::
 
-    merged = lc2d.merge("new_band.csv", wavelength=0.80)
+    merged = lc2d.merge("new_band.csv", wavelength=0.80, band="I")
 
 **Combining multiple lightcurves into one multiband object**
 
@@ -167,7 +169,7 @@ provides built-in transformations to rescale the time and flux axes:
    * - ``'zscore'``
      - Standardise to zero mean, unit variance.
    * - ``'robust_score'``
-     - Standardise using median and IQR (robust to outliers).
+     - Standardise using median and MAD (median absolute deviation; robust to outliers).
 
 Apply a transformation at construction time via the ``xtransform`` and ``ytransform``
 keyword arguments::
