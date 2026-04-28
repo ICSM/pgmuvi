@@ -226,5 +226,40 @@ class TestGetConstraintsSpectral(unittest.TestCase):
         self.assertIn("Registered constraints:", output)
 
 
+# ---------------------------------------------------------------------------
+# Regression tests for get_periods
+# ---------------------------------------------------------------------------
+
+
+class TestGetPeriodsGradTensor(unittest.TestCase):
+    """get_periods must not raise when mixture parameters require grad.
+
+    Regression test for the original failure where np.array() was called
+    directly on tensors that had requires_grad=True.
+    """
+
+    def setUp(self):
+        self.lc = _make_1d_lc()
+        self.lc.set_model("1D", num_mixtures=2)
+
+    def test_no_xtransform_returns_without_error(self):
+        # xtransform is None by default; parameters may require grad after
+        # set_model, so this must not raise RuntimeError.
+        has_grad = any(
+            p.requires_grad for p in self.lc.model.parameters()
+        )
+        self.assertTrue(has_grad, "Expected model parameters to require grad")
+        periods, weights, scales = self.lc.get_periods()
+        self.assertIsInstance(periods, torch.Tensor)
+        self.assertIsInstance(weights, torch.Tensor)
+        self.assertIsInstance(scales, torch.Tensor)
+
+    def test_returns_correct_length(self):
+        periods, weights, scales = self.lc.get_periods()
+        self.assertEqual(len(periods), 2)
+        self.assertEqual(len(weights), 2)
+        self.assertEqual(len(scales), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
