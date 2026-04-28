@@ -6342,9 +6342,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     self.model.sci_kernel.mixture_weights[i].detach().numpy()
                 )
 
-        weights = np.array(weights)
-        periods = np.array(periods)
-        scales = np.array(scales)
+        # weights = np.array(weights)
+        # periods = np.array(periods)
+        # scales = np.array(scales)
+        weights = np.array([
+            w.detach().cpu().numpy() if hasattr(w, "detach") else w
+            for w in weights
+        ])
+        
+        periods = np.array([
+            p.detach().cpu().numpy() if hasattr(p, "detach") else p
+            for p in periods
+        ])
+        
+        scales = np.array([
+            s.detach().cpu().numpy() if hasattr(s, "detach") else s
+            for s in scales
+        ])
 
         return (
             torch.as_tensor(periods),
