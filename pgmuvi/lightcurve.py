@@ -8309,6 +8309,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         summary=None,
         show=True,
         log_freq=True,
+        log_y=True,
         show_full_psd=None,
         max_peaks_to_mark=3,
         **kwargs,
@@ -8351,6 +8352,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         log_freq : bool, optional
             If ``True`` (default), plot the x-axis (frequency) on a log
             scale.  Ignored for non-periodic summaries.
+        log_y : bool, optional
+            If ``True`` (default), plot the y-axis (PSD) on a log scale.
+            Set to ``False`` to use a linear y-axis.  Ignored for
+            non-periodic summaries and for panels where no PSD is drawn.
         show_full_psd : bool or None, optional
             Controls whether a full-range PSD panel is included in the
             single-peak case.  When ``None`` (default), a full-range panel
@@ -8527,7 +8532,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             if log_freq:
                 panel_ax.set_xscale("log")
-            panel_ax.set_yscale("log")
+            if log_y:
+                panel_ax.set_yscale("log")
             panel_ax.set_xlabel("Frequency")
             panel_ax.set_ylabel("PSD")
             panel_ax.legend(fontsize=7, loc="upper left")
@@ -8607,7 +8613,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             )
                     if log_freq:
                         ax_full.set_xscale("log")
-                    ax_full.set_yscale("log")
+                    if log_y:
+                        ax_full.set_yscale("log")
                     ax_full.set_ylabel("PSD")
                     ax_full.set_title(
                         f"Period summary - full PSD ({method})"
@@ -8662,7 +8669,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             )
                 if log_freq:
                     ax.set_xscale("log")
-                ax.set_yscale("log")
+                if log_y:
+                    ax.set_yscale("log")
                 ax.set_ylabel("PSD")
                 ax.set_title(f"Period summary - full PSD ({method})")
                 ax.legend(fontsize=7, loc="upper left", ncol=2)
@@ -8791,7 +8799,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if log_freq:
             ax.set_xscale("log")
-        if has_psd:
+        if has_psd and log_y:
             ax.set_yscale("log")
         ax.set_xlabel("Frequency")
         ax.set_ylabel("PSD" if has_psd else "")
