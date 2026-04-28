@@ -11,34 +11,35 @@ authors:
     # equal-contrib: true
     corresponding: true
     affiliation: "1, 2" # (Multiple affiliations must be quoted)
-  - name: Stefan Waterval
-    orcid: 0000-0002-5542-8624
-    affiliation: "3, 4"
-  - name: Diego A. Vasquez-Torres
-    orcid: 0009-0008-2354-0049
-    # corresponding: true # (This is how to denote the corresponding author)
-    affiliation: 5
   - name: Sundar Srinivasan
     orcid: 0000-0002-2996-305X
     # equal-contrib: true # (This is how you can denote equal contributions between multiple authors)
-    affiliation: 5
+    affiliation: 3
+  - name: Stefan Waterval
+    orcid: 0000-0002-5542-8624
+    affiliation: "4, 5"
+  - name: Diego A. Vasquez-Torres
+    orcid: 0009-0008-2354-0049
+    # corresponding: true # (This is how to denote the corresponding author)
+    affiliation: 3
+
   - name: Sara Jamal
     orcid: 0000-0002-3929-6668
     affiliation: 6
 affiliations:
- - name: European Southern Observatory, Alonso de Córdova 3107, Vitacura, Santiago, Chile
+ - name: Centre for Astrophysics Research, Department of Physics, Astronomy and Mathematics, College Lane Campus, University of Hertfordshire, Hatfield AL10 9AB, UK
    index: 1
  - name: Space Science Institute, 4750 Walnut Street, Suite 205, Boulder, CO 80301, USA
    index: 2
- - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
-   index: 3
- - name: Center for Astro, Particle and Planetary Physics (CAP$^3$), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
-   index: 4
  - name: IRyA, Universidad Nacional Autónoma de México, Morelia, Michoacán, México
+   index: 3
+ - name: New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
+   index: 4
+ - name: Center for Astro, Particle and Planetary Physics (CAP$^3$), New York University Abu Dhabi, PO Box 129188, Abu Dhabi, United Arab Emirates
    index: 5
  - name: Max Planck Institute for Astronomy, Königstuhl 17, 69117 Heidelberg, Germany
    index: 6
-date: XX August 2023
+date: XX April 2026
 bibliography: paper.bib
 
 # Optional fields if submitting to a AAS journal too, see this blog post:
@@ -72,8 +73,9 @@ A particular challenge in astronomy is handling heterogeneous, multiwavelength d
 Data must often be combined from a wide variety of instruments, telescopes or surveys, and so the systematics or noise properties of different datasets vary widely.
 In addition, by combining multiple wavelengths, we gain a better understanding of the physical processes driving the variability of the object.
 For example, some variability mechanisms differ as a function of wavelength only in amplitude (e.g. eclipsing binaries), while others may vary in phase (e.g. pulsating stars) or even period (e.g. multiperiodic systems).
-In long-period variables (such as AGB stars), different radiation processes are relevant in different wavelength ranges, with changes in molecular bands dominating optical variability, while changes in dust radiation dominate the infrared.
-A complete physical picture can only be obtained by modelling all relevant wavelengths simultaneously.
+`pgmuvi` is particularly motivated by the need to interpret the lightcurves of long-period variables (such as AGB stars), where different radiation processes are relevant in different wavelength ranges, with changes in molecular bands dominating optical variability, while changes in dust radiation dominate the infrared.
+Their variations are caused by changes in stellar temperature and radius, but lead to changes in chemistry (changing the presence and depth of molecular absorption bands across the optical and near-infrared), the formation of circumstellar dust (changing the emission in the near- and mid-infrared) and changes in the ionisation state of circumstellar gas (causing changes in the chromospheric emission at ultraviolet and radio wavelengths). Each of these processes have different amplitudes and phase-lags compared to the changes in temperature and radius of the star itself, meaning that interpreting multiple wavelengths at once requires a model that can handle the differences across wavelengths.
+As a result, a complete physical picture can only be obtained by modelling all relevant wavelengths simultaneously.
 
 Gaussian processes (GPs) have recently become a popular tool to handle these challenges.
 GPs are a flexible way to forward-model arbitrary signals, by assuming that the signal is drawn from a multivariate Gaussian distribution.
@@ -103,10 +105,27 @@ It is therefore restricted to a small number of kernels with specific forms; whi
 However, `pgmuvi` is designed to provide an easier learning curve by packaging GPs with data transforms and inference routines.
 In essence, `tinygp` could in principle be used by `pgmuvi` as a GP backend instead of GPyTorch.
 For a summary of the state of the art of GPR in astronomy, see the recent review by @arev_2023_gps.
+A simple comparison between different GP packages showing some cases where `pgmuvi` is a good choice are included in the documentation, while Fig. \autoref{fig:psds} and Table \autoref{tab:gps} summarise some of that comparison.
 
-`pgmuvi` is used in two ongoing projects by our group: one of the authors' (DAVT) masters thesis and the paper resulting from this work deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)).
-This work served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood.
-The paper will be published in 2026 (Srinivasan et al., in prep.).
+![Comparison of the PSDs recovered by different GP packages for an arbitrary multiperiodic lightcuve. Not only does `pgmuvi` recover both periods accurately, it also localises with great precision.\label{fig:psds}](PSDs_1d.png){ width="40%" }
+
+![Comparison of different GP packages.\label{tab:gps}](
+| Package   | Kernel (1D)                 | Spectral shape | Optimizer        | GPU           | 2D input        | Code lines | Time for 1D lightcurve (s) |
+|-----------|-----------------------------|----------------|------------------|---------------|-----------------|------------|----------------------------|
+| pgmuvi    | SpectralMixture (built-in)  | Gaussian       | Adam (PyTorch)   | Yes (CUDA)    | Yes (native)    | 1          | 11.19                      |
+| tinygp    | Custom SMK1D (user class)   | Gaussian       | optax Adam (JAX) | XLA JIT       | 2D class (user) | 16         | 19.00                      |
+| celerite2 | SHOTerm (Lorentzian approx) | Lorentzian     | scipy L-BFGS-B   | No (O(N) CPU) | No              | 4          | 0.737                      |
+| george    | ExpSquared x Cosine         | Gaussian       | scipy L-BFGS-B   | No            | No              | 5          | 1.460                      |
+| GPy       | ExpQuadCosine (built-in)    | Gaussian       | scipy L-BFGS-B   | No            | Manual          | ~3         | --                         |
+| gpflow    | SquaredExp x Cosine         | Gaussian       | TF Scipy         | Yes (TF/GPU)  | Manual          | ~4         | --                         |
+| sklearn   | RBF x ExpSineSquared        | Non-Gaussian   | scipy L-BFGS-B   | No            | Partial         | 4          | 0.442                      |
+| gpjax     | Custom SMK (user class)     | Gaussian       | optax Adam (JAX) | XLA JIT       | Custom kernel   | ~20        | --                         |
+)
+
+
+`pgmuvi` is already in use for projects in our group. 
+One of the authors' (DAVT) masters thesis served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood.
+The paper resulting from this work (Srinivasan et al., in prep) deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)).
 <!-- A different project related to dusty variable stars in M33 has also used `pgmuvi` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al., in prep.).-->
 
 # Method and Features

@@ -56,6 +56,7 @@ Step-by-step notebooks introducing the main workflows in `pgmuvi`.
    notebooks/PGMUVI_Lightcurve
    notebooks/PGMUVI_Lomb_Scargle
    notebooks/PGMUVI_Gaussian_Process_fitting
+   notebooks/PGMUVI_comparison_with_other_codes
    notebooks/pgmuvi_tutorial
    notebooks/pgmuvi_tutorial_2d
    notebooks/tutorial_preprocessing
