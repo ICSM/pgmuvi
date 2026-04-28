@@ -40,11 +40,11 @@ from .priors import (
     NormalPeriodPrior,
     get_prior_set,
 )
-# import pyro
-# from pyro.infer.mcmc import NUTS, MCMC, HMC
+import pyro
+from pyro.infer.mcmc import NUTS, MCMC, HMC
 from inspect import isclass
-# import xarray as xr
-# import arviz as az
+import xarray as xr
+import arviz as az
 import warnings
 import dataclasses
 import json
@@ -9235,7 +9235,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
         if mcmc_samples:
-            msg = "MCMC is not currently exposed. It will be available in future releases."
+            msg = (
+                "MCMC is not currently exposed. "
+                "It will be available in future releases."
+            )
             raise NotImplementedError(msg)
             fig, ax = self._plot_psd_mcmc(
                 freq,
@@ -9596,7 +9599,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 padding = 0.1 * base
             ylim = [y_min - padding, y_max + padding]
         if mcmc_samples:
-            msg = "MCMC is not currently exposed. It will be available in future releases."
+            msg = (
+                "MCMC is not currently exposed. "
+                "It will be available in future releases."
+                )
             raise NotImplementedError(msg)
             if self.__FITTED_MCMC:
                 return self._plot_mcmc(ylim=ylim, show=show, **kwargs)
