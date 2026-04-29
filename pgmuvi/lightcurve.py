@@ -8309,9 +8309,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         summary=None,
         show=True,
         log_freq=True,
-        log_y=True,
         show_full_psd=None,
         max_peaks_to_mark=3,
+        log_y=True,
         **kwargs,
     ):
         """Plot the period summary from :meth:`get_period_summary`.

@@ -527,6 +527,24 @@ class TestPlotPeriodSummary(unittest.TestCase):
         self.assertNotEqual(ax.get_xscale(), "log")
         plt.close(fig)
 
+    def test_sm_linear_y_axis(self):
+        """log_y=False produces a linear y-axis in the single-panel fallback."""
+        import matplotlib.pyplot as plt
+
+        lc = _make_1d_lc_no_transform()
+        fig, ax = lc.plot_period_summary(show=False, log_y=False)
+        self.assertNotEqual(ax.get_yscale(), "log")
+        plt.close(fig)
+
+    def test_sm_log_y_default(self):
+        """y-axis defaults to log scale (log_y=True)."""
+        import matplotlib.pyplot as plt
+
+        lc = _make_1d_lc_no_transform()
+        fig, ax = lc.plot_period_summary(show=False)
+        self.assertEqual(ax.get_yscale(), "log")
+        plt.close(fig)
+
     def test_qp_returns_fig_ax(self):
         lc = _make_1d_lc_model("1DQuasiPeriodic", period=100.0)
         self._check_fig_ax(
@@ -1386,6 +1404,35 @@ class TestSinglePeakPlotCentering(unittest.TestCase):
         fig, _ = lc.plot_period_summary(summary=summary, show=False)
         for panel_ax in fig.axes:
             self.assertEqual(panel_ax.get_yscale(), "log")
+        plt.close(fig)
+
+    def test_single_peak_linear_y_axis(self):
+        """log_y=False produces a linear y-axis in the single-peak panel."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_single_peak_lc()
+        summary = lc.get_period_summary(n_peaks=1)
+        fig, ax = lc.plot_period_summary(
+            summary=summary, show=False, log_y=False
+        )
+        self.assertNotEqual(ax.get_yscale(), "log")
+        plt.close(fig)
+
+    def test_multi_peak_linear_y_axis(self):
+        """log_y=False produces linear y-axis on all panels in multi-peak mode."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        lc = self._make_two_peak_lc()
+        summary = lc.get_period_summary()
+        if summary.n_peaks_analyzed < 2:
+            self.skipTest("Not enough peaks for multi-peak test")
+        fig, _ = lc.plot_period_summary(
+            summary=summary, show=False, log_y=False
+        )
+        for panel_ax in fig.axes:
+            self.assertNotEqual(panel_ax.get_yscale(), "log")
         plt.close(fig)
 
 
