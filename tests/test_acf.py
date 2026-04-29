@@ -280,7 +280,7 @@ class TestACFGPMocked(unittest.TestCase):
         self.assertFalse(result.acf.requires_grad)
 
 
-
+class TestACFGPFitted(unittest.TestCase):
     """Smoke test for GP ACF after a minimal fit."""
 
     @unittest.skip(
@@ -303,6 +303,31 @@ class TestACFGPMocked(unittest.TestCase):
         self.assertAlmostEqual(float(result.lag[0]), 0.0)
         self.assertAlmostEqual(float(result.acf[0]), 1.0, places=4)
         self.assertFalse(torch.any(torch.isnan(result.acf)).item())
+
+
+class TestACFConstantLightcurve(unittest.TestCase):
+    """Tests for zero-variance (constant) input to _acf_data."""
+
+    def setUp(self):
+        n = 30
+        t = np.linspace(0, 100, n)
+        y = np.ones(n) * 5.0  # constant: variance == 0
+        yerr = np.full(n, 0.1)
+        self.lc_const = Lightcurve(
+            torch.as_tensor(t, dtype=torch.float32),
+            torch.as_tensor(y, dtype=torch.float32),
+            yerr=torch.as_tensor(yerr, dtype=torch.float32),
+        )
+
+    def test_normalize_true_raises_runtime_error(self):
+        with self.assertRaises(RuntimeError):
+            self.lc_const.acf(method="data", normalize=True)
+
+    def test_normalize_false_succeeds_variance_zero(self):
+        result = self.lc_const.acf(method="data", normalize=False)
+        self.assertIsInstance(result, ACFResult)
+        # Zero-lag acf equals variance, which is 0 for a constant series
+        self.assertAlmostEqual(float(result.acf[0]), 0.0, places=6)
 
 
 class TestPlotACF(unittest.TestCase):

@@ -4677,9 +4677,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If ``True``, subtract the sample mean before computing products
             (``method="data"`` only).  Default is ``True``.
         band : str or None, optional
-            Band label to use when the light curve is 2D (multiband).  For 2D
-            data this argument is **required**; a :exc:`ValueError` is raised
-            if it is ``None``.
+            Band label to use when the light curve is 2D (multiband).
+            For ``method="data"`` this argument is **required** when the
+            light curve is 2D; a :exc:`ValueError` is raised if it is
+            ``None``.  For ``method="gp"`` with a 2D light curve the call
+            always raises :exc:`NotImplementedError` regardless of *band*,
+            because GP-implied ACF for 2D kernels is not yet implemented.
         reference_time : float or None, optional
             Reference time used to anchor the GP covariance evaluation
             (``method="gp"`` only).  If ``None``, the mean of the time axis
@@ -4849,6 +4852,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # Zero-lag entry: all n self-pairs
         # ------------------------------------------------------------------
         variance = float((y_centered**2).mean())
+        if normalize and not (np.isfinite(variance) and variance > 0):
+            raise RuntimeError(
+                "Cannot normalize ACF: variance is zero or non-finite. "
+                "Input light curve may be constant."
+            )
         zero_lag_val = variance  # before normalisation
 
         # ------------------------------------------------------------------
@@ -4879,7 +4887,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         acf_vals = torch.zeros(n_bins, dtype=torch.float64, device=t.device)
         acf_vals[valid] = bin_sums[valid] / bin_counts[valid]
 
-        if normalize and variance > 0:
+        if normalize:
             acf_vals = acf_vals / variance
             zero_lag_val = 1.0
 
