@@ -878,6 +878,34 @@ class PeriodPeakResult:
         }
 
 
+@dataclasses.dataclass
+class ACFResult:
+    """Result container for :meth:`Lightcurve.acf`.
+
+    Attributes
+    ----------
+    lag : torch.Tensor
+        Lag values (same units as the time axis).
+    acf : torch.Tensor
+        Autocorrelation values at each lag.
+    method : str
+        The method used to compute the ACF (``"data"`` or ``"gp"``).
+    counts : torch.Tensor or None
+        Number of data pairs contributing to each lag bin (data method only).
+    normalized : bool
+        Whether the ACF has been normalised so that ``acf(0) == 1``.
+    band : str, float, or None
+        Band label or wavelength used when computing the ACF, if applicable.
+    """
+
+    lag: torch.Tensor
+    acf: torch.Tensor
+    method: str
+    counts: torch.Tensor | None = None
+    normalized: bool = True
+    band: str | float | None = None
+
+
 class ComponentDiagnosticsResult:
     """Kernel-component diagnostic information for a spectral-mixture GP.
 
@@ -4610,6 +4638,316 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if return_full:
                 return (_pf, _sm, _freq_t, _power_t)
             return (_pf, _sm)
+
+    def acf(
+        self,
+        method="data",
+        max_lag=None,
+        n_lags=50,
+        lag_edges=None,
+        normalize=True,
+        subtract_mean=True,
+        band=None,
+        reference_time=None,
+    ):
+        """Compute the autocorrelation function (ACF) of the light curve.
+
+        Parameters
+        ----------
+        method : {"data", "gp"}, optional
+            ``"data"`` estimates the ACF directly from the observations using
+            a pairwise lag-binning estimator (handles uneven sampling).
+            ``"gp"`` evaluates the ACF implied by the fitted GP covariance
+            function.  Default is ``"data"``.
+        max_lag : float or None, optional
+            Maximum lag to consider.  If ``None``, defaults to half the
+            total time baseline.
+        n_lags : int, optional
+            Number of lag bins (``method="data"``) or evaluation points
+            (``method="gp"``).  Default is 50.
+        lag_edges : array-like or None, optional
+            Explicit bin edges for the lag axis (``method="data"`` only).
+            If provided, *n_lags* and *max_lag* are ignored.
+        normalize : bool, optional
+            If ``True``, normalise the ACF so that ``acf(0) == 1``.
+            Default is ``True``.
+        subtract_mean : bool, optional
+            If ``True``, subtract the sample mean before computing products
+            (``method="data"`` only).  Default is ``True``.
+        band : str or None, optional
+            Band label to use when the light curve is 2D (multiband).  For 2D
+            data this argument is **required**; a :exc:`ValueError` is raised
+            if it is ``None``.
+        reference_time : float or None, optional
+            Reference time used to anchor the GP covariance evaluation
+            (``method="gp"`` only).  If ``None``, the mean of the time axis
+            is used.
+
+        Returns
+        -------
+        ACFResult
+            A :class:`ACFResult` instance with attributes ``lag``, ``acf``,
+            ``method``, ``counts`` (data method only), ``normalized``, and
+            ``band``.
+
+        Raises
+        ------
+        ValueError
+            If *method* is not ``"data"`` or ``"gp"``.
+        ValueError
+            If the light curve is 2D and *band* is ``None``.
+        RuntimeError
+            If ``method="gp"`` is requested but :meth:`fit` has not been
+            called yet.
+        NotImplementedError
+            If ``method="gp"`` is used with a 2D light curve without
+            specifying a *band*.
+
+        Examples
+        --------
+        >>> result = lc.acf(method="data")
+        >>> result = lc.acf(method="gp", n_lags=500)
+        """
+        if method not in ("data", "gp"):
+            raise ValueError(
+                f"Unknown method {method!r}. Choose 'data' or 'gp'."
+            )
+
+        # ------------------------------------------------------------------
+        # Handle 2D (multiband) light curves by delegating to a single band
+        # ------------------------------------------------------------------
+        if self.ndim > 1:
+            if band is None:
+                raise ValueError(
+                    "This is a 2D (multiband) light curve. "
+                    "You must specify 'band' to select a single band before "
+                    "computing the ACF."
+                )
+            lc_band = self.select_bands([str(band)])
+            if method == "data":
+                return lc_band._acf_data(
+                    max_lag=max_lag,
+                    n_lags=n_lags,
+                    lag_edges=lag_edges,
+                    normalize=normalize,
+                    subtract_mean=subtract_mean,
+                    band=band,
+                )
+            # method == "gp"
+            return lc_band._acf_gp(
+                max_lag=max_lag,
+                n_lags=n_lags,
+                normalize=normalize,
+                band=band,
+                reference_time=reference_time,
+            )
+
+        if method == "data":
+            return self._acf_data(
+                max_lag=max_lag,
+                n_lags=n_lags,
+                lag_edges=lag_edges,
+                normalize=normalize,
+                subtract_mean=subtract_mean,
+                band=band,
+            )
+        # method == "gp"
+        return self._acf_gp(
+            max_lag=max_lag,
+            n_lags=n_lags,
+            normalize=normalize,
+            band=band,
+            reference_time=reference_time,
+        )
+
+    def _get_time_axis(self):
+        """Return the 1-D time axis from xdata (column 0 for 2D data)."""
+        return self.xdata[:, 0] if self.xdata.dim() > 1 else self.xdata
+
+    def _default_max_lag(self, t):
+        """Return half the time baseline as the default max lag."""
+        return float((t.max() - t.min()) / 2.0)
+
+    def _acf_data(
+        self,
+        max_lag=None,
+        n_lags=50,
+        lag_edges=None,
+        normalize=True,
+        subtract_mean=True,
+        band=None,
+    ):
+        """Pairwise lag-binning ACF estimator for unevenly sampled data.
+
+        This is an O(n²) algorithm in the number of observations. For very
+        large datasets (n > ~1000) the computation may be slow.
+        """
+        t = self._get_time_axis().double()
+        y = self.ydata.double()
+
+        if max_lag is None:
+            max_lag = self._default_max_lag(t)
+
+        if lag_edges is not None:
+            edges = torch.as_tensor(
+                lag_edges, dtype=torch.float64, device=t.device
+            )
+            n_bins = len(edges) - 1
+        else:
+            edges = torch.linspace(0.0, max_lag, n_lags + 1, device=t.device)
+            n_bins = n_lags
+
+        mean = y.mean() if subtract_mean else 0.0
+        y_centered = y - mean
+
+        # Vectorised pairwise computation ---------------------------------
+        # Build upper-triangle index pairs (i < j)
+        n = t.shape[0]
+        idx_i, idx_j = torch.triu_indices(n, n, offset=1, device=t.device)
+        dt = (t[idx_j] - t[idx_i]).abs()
+        vals = y_centered[idx_i] * y_centered[idx_j]
+
+        # Keep only pairs within max_lag
+        in_range = dt <= max_lag
+        dt = dt[in_range]
+        vals = vals[in_range]
+
+        # Bin dt into lag bins
+        bin_idx = torch.searchsorted(edges, dt) - 1
+        valid_bins = (bin_idx >= 0) & (bin_idx < n_bins)
+        bin_idx = bin_idx[valid_bins]
+        vals = vals[valid_bins]
+
+        bin_sums = torch.zeros(n_bins, dtype=torch.float64, device=t.device)
+        bin_counts = torch.zeros(n_bins, dtype=torch.float64, device=t.device)
+        bin_sums.scatter_add_(0, bin_idx, vals)
+        bin_counts.scatter_add_(
+            0, bin_idx, torch.ones_like(vals)
+        )
+
+        # Normalise by counts
+        valid = bin_counts > 0
+        acf_vals = torch.zeros(n_bins, dtype=torch.float64, device=t.device)
+        acf_vals[valid] = bin_sums[valid] / bin_counts[valid]
+
+        if normalize:
+            variance = float((y_centered**2).mean())
+            if variance > 0:
+                acf_vals = acf_vals / variance
+
+        lag_centers = (edges[:-1] + edges[1:]) / 2.0
+
+        return ACFResult(
+            lag=lag_centers.float(),
+            acf=acf_vals.float(),
+            method="data",
+            counts=bin_counts.float(),
+            normalized=normalize,
+            band=band,
+        )
+
+    def _acf_gp(
+        self,
+        max_lag=None,
+        n_lags=500,
+        normalize=True,
+        band=None,
+        reference_time=None,
+    ):
+        """GP-implied ACF evaluated on a uniform lag grid."""
+        if not hasattr(self, "model") or self.model is None:
+            raise RuntimeError(
+                "No fitted GP model found. Call fit() before using "
+                "method='gp'."
+            )
+
+        t = self._get_time_axis()
+
+        if max_lag is None:
+            max_lag = self._default_max_lag(t)
+
+        t_ref = float(t.mean()) if reference_time is None else float(reference_time)
+
+        tau = torch.linspace(0.0, max_lag, n_lags, dtype=t.dtype, device=t.device)
+        x1 = torch.full((n_lags,), t_ref, dtype=t.dtype, device=t.device)
+        x2 = x1 + tau
+
+        # Apply the same input transformation used during training
+        if self.xtransform is not None:
+            x1 = self.xtransform.transform(x1)
+            x2 = self.xtransform.transform(x2)
+
+        # Unsqueeze to (n, 1) as expected by GPyTorch kernels
+        x1 = x1.unsqueeze(-1)
+        x2 = x2.unsqueeze(-1)
+
+        self.model.eval()
+        with torch.no_grad():
+            lazy_cov = self.model.covar_module(x1, x2)
+            # Extract diagonal: K(x1[i], x2[i]) = K(t_ref, t_ref + tau[i])
+            acf_vals = lazy_cov.diagonal()
+
+            if normalize:
+                x_ref = x1[:1]
+                lazy_var = self.model.covar_module(x_ref, x_ref)
+                variance = float(lazy_var.diagonal()[0])
+                if variance > 0:
+                    acf_vals = acf_vals / variance
+
+        return ACFResult(
+            lag=tau,
+            acf=acf_vals,
+            method="gp",
+            counts=None,
+            normalized=normalize,
+            band=band,
+        )
+
+    def plot_acf(
+        self,
+        method="data",
+        ax=None,
+        **kwargs,
+    ):
+        """Plot the autocorrelation function of the light curve.
+
+        Calls :meth:`acf` and plots the result.
+
+        Parameters
+        ----------
+        method : {"data", "gp"}, optional
+            Which ACF to compute and plot.  Default is ``"data"``.
+        ax : matplotlib.axes.Axes or None, optional
+            Axes to draw on.  If ``None``, a new figure and axes are created.
+        **kwargs
+            Additional keyword arguments passed to :meth:`acf`.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+            The axes with the ACF plotted.
+
+        Examples
+        --------
+        >>> ax = lc.plot_acf(method="data")
+        >>> ax = lc.plot_acf(method="gp", n_lags=500)
+        """
+        result = self.acf(method=method, **kwargs)
+
+        if ax is None:
+            _, ax = plt.subplots()
+
+        lag_np = result.lag.detach().cpu().numpy()
+        acf_np = result.acf.detach().cpu().numpy()
+
+        ax.plot(lag_np, acf_np)
+        ax.axhline(0.0, color="k", linestyle="--", linewidth=0.8)
+        ax.set_xlabel("Lag")
+        ax.set_ylabel("ACF")
+        title_method = "Data (pairwise)" if method == "data" else "GP model"
+        ax.set_title(f"Autocorrelation Function ({title_method})")
+
+        return ax
 
     def compute_sampling_metrics(self) -> dict:
         """
