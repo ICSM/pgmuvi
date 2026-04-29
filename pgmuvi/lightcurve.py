@@ -4664,7 +4664,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             total time baseline.
         n_lags : int, optional
             Number of lag bins (``method="data"``) or evaluation points
-            (``method="gp"``).  Default is 50.
+            (``method="gp"``).  Default is 50.  Must be a positive integer.
+            For ``method="data"`` the returned arrays have length
+            ``n_lags + 1`` because a zero-lag point is prepended.
         lag_edges : array-like or None, optional
             Explicit bin edges for the lag axis (``method="data"`` only).
             If provided, *n_lags* and *max_lag* are ignored.
@@ -4695,13 +4697,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ValueError
             If *method* is not ``"data"`` or ``"gp"``.
         ValueError
-            If the light curve is 2D and *band* is ``None``.
+            If *n_lags* is not a positive integer.
+        ValueError
+            If the light curve is 2D and ``method="data"`` and *band* is
+            ``None``.
+        ValueError
+            If *lag_edges* is invalid (not 1-D, fewer than two values,
+            not strictly increasing, or contains non-finite values).
         RuntimeError
             If ``method="gp"`` is requested but :meth:`fit` has not been
             called yet.
+        RuntimeError
+            If ``method="gp"`` with ``normalize=True`` and the zero-lag
+            covariance is non-positive or non-finite.
         NotImplementedError
-            If ``method="gp"`` is used with a 2D light curve without
-            specifying a *band*.
+            If ``method="gp"`` is used with a 2D light curve.
 
         Examples
         --------
@@ -4714,9 +4724,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         # ------------------------------------------------------------------
-        # Handle 2D (multiband) light curves by delegating to a single band
+        # Handle 2D (multiband) light curves
         # ------------------------------------------------------------------
         if self.ndim > 1:
+            if method == "gp":
+                raise NotImplementedError(
+                    "GP-implied ACF for 2D (multiband) light curves is not "
+                    "implemented yet. Fixed-wavelength covariance evaluation "
+                    "requires additional support not yet in place."
+                )
+            # method == "data"
             if band is None:
                 raise ValueError(
                     "This is a 2D (multiband) light curve. "
@@ -4724,22 +4741,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "computing the ACF."
                 )
             lc_band = self.select_bands([str(band)])
-            if method == "data":
-                return lc_band._acf_data(
-                    max_lag=max_lag,
-                    n_lags=n_lags,
-                    lag_edges=lag_edges,
-                    normalize=normalize,
-                    subtract_mean=subtract_mean,
-                    band=band,
-                )
-            # method == "gp"
-            return lc_band._acf_gp(
+            return lc_band._acf_data(
                 max_lag=max_lag,
                 n_lags=n_lags,
+                lag_edges=lag_edges,
                 normalize=normalize,
+                subtract_mean=subtract_mean,
                 band=band,
-                reference_time=reference_time,
             )
 
         if method == "data":
@@ -4768,6 +4776,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Return half the time baseline as the default max lag."""
         return float((t.max() - t.min()) / 2.0)
 
+    @staticmethod
+    def _validate_n_lags(n_lags):
+        """Raise ValueError if *n_lags* is not a positive integer."""
+        if not isinstance(n_lags, (int, np.integer)) or n_lags < 1:
+            raise ValueError(
+                f"n_lags must be a positive integer; got {n_lags!r}."
+            )
+
     def _acf_data(
         self,
         max_lag=None,
@@ -4779,30 +4795,65 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     ):
         """Pairwise lag-binning ACF estimator for unevenly sampled data.
 
+        Returns an array of length ``n_lags + 1`` (or ``M + 1`` for *M*
+        explicit bins): the first element is the zero-lag point, followed by
+        the lag-bin centres.
+
         This is an O(n²) algorithm in the number of observations. For very
         large datasets (n > ~1000) the computation may be slow.
         """
+        self._validate_n_lags(n_lags)
+
         t = self._get_time_axis().double()
         y = self.ydata.double()
 
-        if max_lag is None:
-            max_lag = self._default_max_lag(t)
-
+        # ------------------------------------------------------------------
+        # Build lag-bin edges
+        # ------------------------------------------------------------------
         if lag_edges is not None:
             edges = torch.as_tensor(
                 lag_edges, dtype=torch.float64, device=t.device
             )
-            n_bins = len(edges) - 1
+            if edges.dim() != 1:
+                raise ValueError(
+                    "lag_edges must be a 1-D array; "
+                    f"got shape {tuple(edges.shape)}."
+                )
+            if edges.shape[0] < 2:
+                raise ValueError(
+                    "lag_edges must contain at least two values "
+                    f"(got {edges.shape[0]})."
+                )
+            if not torch.all(torch.isfinite(edges)):
+                raise ValueError(
+                    "lag_edges must contain only finite values."
+                )
+            diffs = edges[1:] - edges[:-1]
+            if not torch.all(diffs > 0):
+                raise ValueError(
+                    "lag_edges must be strictly increasing."
+                )
+            max_lag = float(edges[-1])
+            n_bins = edges.shape[0] - 1
         else:
+            if max_lag is None:
+                max_lag = self._default_max_lag(t)
             edges = torch.linspace(0.0, max_lag, n_lags + 1, device=t.device)
             n_bins = n_lags
 
         mean = y.mean() if subtract_mean else 0.0
         y_centered = y - mean
-
-        # Vectorised pairwise computation ---------------------------------
-        # Build upper-triangle index pairs (i < j)
         n = t.shape[0]
+
+        # ------------------------------------------------------------------
+        # Zero-lag entry: all n self-pairs
+        # ------------------------------------------------------------------
+        variance = float((y_centered**2).mean())
+        zero_lag_val = variance  # before normalisation
+
+        # ------------------------------------------------------------------
+        # Vectorised pairwise computation (i < j pairs)
+        # ------------------------------------------------------------------
         idx_i, idx_j = torch.triu_indices(n, n, offset=1, device=t.device)
         dt = (t[idx_j] - t[idx_i]).abs()
         vals = y_centered[idx_i] * y_centered[idx_j]
@@ -4821,27 +4872,37 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         bin_sums = torch.zeros(n_bins, dtype=torch.float64, device=t.device)
         bin_counts = torch.zeros(n_bins, dtype=torch.float64, device=t.device)
         bin_sums.scatter_add_(0, bin_idx, vals)
-        bin_counts.scatter_add_(
-            0, bin_idx, torch.ones_like(vals)
-        )
+        bin_counts.scatter_add_(0, bin_idx, torch.ones_like(vals))
 
         # Normalise by counts
         valid = bin_counts > 0
         acf_vals = torch.zeros(n_bins, dtype=torch.float64, device=t.device)
         acf_vals[valid] = bin_sums[valid] / bin_counts[valid]
 
-        if normalize:
-            variance = float((y_centered**2).mean())
-            if variance > 0:
-                acf_vals = acf_vals / variance
+        if normalize and variance > 0:
+            acf_vals = acf_vals / variance
+            zero_lag_val = 1.0
 
         lag_centers = (edges[:-1] + edges[1:]) / 2.0
 
+        # Prepend zero-lag point
+        zero_lag_tensor = torch.zeros(1, dtype=torch.float64, device=t.device)
+        zero_acf_tensor = torch.tensor(
+            [zero_lag_val], dtype=torch.float64, device=t.device
+        )
+        zero_count_tensor = torch.tensor(
+            [float(n)], dtype=torch.float64, device=t.device
+        )
+
+        full_lag = torch.cat([zero_lag_tensor, lag_centers])
+        full_acf = torch.cat([zero_acf_tensor, acf_vals])
+        full_counts = torch.cat([zero_count_tensor, bin_counts])
+
         return ACFResult(
-            lag=lag_centers.float(),
-            acf=acf_vals.float(),
+            lag=full_lag.float(),
+            acf=full_acf.float(),
             method="data",
-            counts=bin_counts.float(),
+            counts=full_counts.float(),
             normalized=normalize,
             band=band,
         )
@@ -4855,7 +4916,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         reference_time=None,
     ):
         """GP-implied ACF evaluated on a uniform lag grid."""
-        if not hasattr(self, "model") or self.model is None:
+        self._validate_n_lags(n_lags)
+
+        # Use the MAP-fitted flag; set_model() alone is not sufficient.
+        if not self.__FITTED_MAP:
             raise RuntimeError(
                 "No fitted GP model found. Call fit() before using "
                 "method='gp'."
@@ -4885,18 +4949,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         with torch.no_grad():
             lazy_cov = self.model.covar_module(x1, x2)
             # Extract diagonal: K(x1[i], x2[i]) = K(t_ref, t_ref + tau[i])
-            acf_vals = lazy_cov.diagonal()
+            acf_vals = lazy_cov.diagonal().detach()
 
             if normalize:
                 x_ref = x1[:1]
                 lazy_var = self.model.covar_module(x_ref, x_ref)
-                variance = float(lazy_var.diagonal()[0])
-                if variance > 0:
-                    acf_vals = acf_vals / variance
+                variance = float(lazy_var.diagonal()[0].detach())
+                if not (np.isfinite(variance) and variance > 0):
+                    raise RuntimeError(
+                        f"Zero-lag GP covariance is {variance!r}, which is "
+                        "non-positive or non-finite. Cannot normalise ACF."
+                    )
+                acf_vals = acf_vals / variance
 
         return ACFResult(
-            lag=tau,
-            acf=acf_vals,
+            lag=tau.detach(),
+            acf=acf_vals.detach(),
             method="gp",
             counts=None,
             normalized=normalize,
