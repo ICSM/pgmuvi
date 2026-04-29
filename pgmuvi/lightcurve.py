@@ -8354,6 +8354,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             scale.  Ignored for non-periodic summaries.
         log_y : bool, optional
             If ``True`` (default), plot the y-axis (PSD) on a log scale.
+            The lower y-axis limit is clamped automatically so that at most
+            10 decades below the maximum PSD value in each panel are shown,
+            preventing near-zero noise from compressing the useful range.
             Set to ``False`` to use a linear y-axis.  Ignored for
             non-periodic summaries and for panels where no PSD is drawn.
         show_full_psd : bool or None, optional
@@ -8456,6 +8459,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             idx = max(rank - 1, 0)
             return _peak_colors[idx % len(_peak_colors)]
 
+        # Maximum decades shown below the PSD peak on a log y-axis
+        _MAX_LOG_Y_DEC = 10
+
+        def _clamp_log_ylim(panel_ax, psd_visible):
+            """Clamp log y-axis to at most _MAX_LOG_Y_DEC decades."""
+            pos = psd_visible[
+                np.isfinite(psd_visible) & (psd_visible > 0)
+            ]
+            if pos.size == 0:
+                return
+            y_top = float(pos.max())
+            panel_ax.set_ylim(bottom=y_top * 10.0 ** (-_MAX_LOG_Y_DEC))
+
         # ------------------------------------------------------------------
         # Helpers shared by both structured-peak plot paths
         # ------------------------------------------------------------------
@@ -8534,6 +8550,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 panel_ax.set_xscale("log")
             if log_y:
                 panel_ax.set_yscale("log")
+                _clamp_log_ylim(panel_ax, p_zoom)
             panel_ax.set_xlabel("Frequency")
             panel_ax.set_ylabel("PSD")
             panel_ax.legend(fontsize=7, loc="upper left")
@@ -8615,6 +8632,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         ax_full.set_xscale("log")
                     if log_y:
                         ax_full.set_yscale("log")
+                        _clamp_log_ylim(ax_full, psd)
                     ax_full.set_ylabel("PSD")
                     ax_full.set_title(
                         f"Period summary - full PSD ({method})"
@@ -8671,6 +8689,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ax.set_xscale("log")
                 if log_y:
                     ax.set_yscale("log")
+                    _clamp_log_ylim(ax, psd)
                 ax.set_ylabel("PSD")
                 ax.set_title(f"Period summary - full PSD ({method})")
                 ax.legend(fontsize=7, loc="upper left", ncol=2)
@@ -8801,6 +8820,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.set_xscale("log")
         if has_psd and log_y:
             ax.set_yscale("log")
+            _clamp_log_ylim(ax, psd)
         ax.set_xlabel("Frequency")
         ax.set_ylabel("PSD" if has_psd else "")
         ax.set_title(f"Period summary ({method})")

@@ -1435,6 +1435,49 @@ class TestSinglePeakPlotCentering(unittest.TestCase):
             self.assertNotEqual(panel_ax.get_yscale(), "log")
         plt.close(fig)
 
+    def test_log_y_clamps_lower_ylim_single_peak(self):
+        """log_y=True clamps the y-axis bottom: visible range <= ~10 decades."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+        lc = self._make_single_peak_lc()
+        summary = lc.get_period_summary(n_peaks=1)
+        fig, ax = lc.plot_period_summary(summary=summary, show=False)
+        self.assertEqual(ax.get_yscale(), "log")
+        y_lo, y_hi = ax.get_ylim()
+        self.assertGreater(y_lo, 0)
+        # Allow up to 10.5 decades: 10 from clamping + ~0.3 autoscale margin
+        self.assertLess(
+            np.log10(y_hi / y_lo), 10.5,
+            msg="log y-axis spans more than 10.5 decades (clamping not applied)",
+        )
+        plt.close(fig)
+
+    def test_log_y_clamps_lower_ylim_multi_peak(self):
+        """All log-y panels in multi-peak mode are clamped to ~10 decades."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+        lc = self._make_two_peak_lc()
+        summary = lc.get_period_summary()
+        if summary.n_peaks_analyzed < 2:
+            self.skipTest("Not enough peaks for multi-peak test")
+        fig, _ = lc.plot_period_summary(summary=summary, show=False)
+        for panel_ax in fig.axes:
+            self.assertEqual(panel_ax.get_yscale(), "log")
+            y_lo, y_hi = panel_ax.get_ylim()
+            self.assertGreater(y_lo, 0)
+            self.assertLess(
+                np.log10(y_hi / y_lo), 10.5,
+                msg=(
+                    "log y-axis spans more than 10.5 decades "
+                    "(clamping not applied)"
+                ),
+            )
+        plt.close(fig)
+
 
 # ---------------------------------------------------------------------------
 # 17. PeriodSummaryResult text export (to_text / write_text)
