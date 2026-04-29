@@ -76,7 +76,7 @@ jobs:
         name: python-package-distributions
         path: dist/
     - name: Sign the dists with Sigstore
-      uses: sigstore/gh-action-sigstore-python@v1.2.3
+      uses: sigstore/gh-action-sigstore-python@v3.3.0
       with:
         inputs: >-
           ./dist/*.tar.gz
@@ -106,26 +106,26 @@ jobs:
         --repo '${{ github.repository }}'
         --clobber
 
-  publish-to-testpypi:
-    name: Publish Python 🐍 distribution 📦 to TestPyPI
-    needs:
-    - build
-    runs-on: ubuntu-latest
+  # publish-to-testpypi:
+  #   name: Publish Python 🐍 distribution 📦 to TestPyPI
+  #   needs:
+  #   - build
+  #   runs-on: ubuntu-latest
 
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/project/pgmuvi/
+  #   environment:
+  #     name: testpypi
+  #     url: https://test.pypi.org/project/pgmuvi/
 
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
+  #   permissions:
+  #     id-token: write  # IMPORTANT: mandatory for trusted publishing
 
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Publish distribution 📦 to TestPyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
+  #   steps:
+  #   - name: Download all the dists
+  #     uses: actions/download-artifact@v4
+  #     with:
+  #       name: python-package-distributions
+  #       path: dist/
+  #   - name: Publish distribution 📦 to TestPyPI
+  #     uses: pypa/gh-action-pypi-publish@release/v1
+  #     with:
         repository-url: https://test.pypi.org/legacy/
