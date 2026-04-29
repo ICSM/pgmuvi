@@ -30,6 +30,7 @@ from .gps import (
 )
 import matplotlib.pyplot as plt
 from .trainers import train
+from .initialization import _to_numpy
 from gpytorch.constraints import Interval, GreaterThan, LessThan, Positive  # noqa: F401
 from .constraints import get_constraint_set
 from gpytorch.priors import LogNormalPrior, NormalPrior, UniformPrior  # noqa: F401
@@ -6342,9 +6343,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     self.model.sci_kernel.mixture_weights[i].detach().numpy()
                 )
 
-        weights = np.array(weights)
-        periods = np.array(periods)
-        scales = np.array(scales)
+        weights = np.array([_to_numpy(w) for w in weights])
+        periods = np.array([_to_numpy(p) for p in periods])
+        scales = np.array([_to_numpy(s) for s in scales])
 
         return (
             torch.as_tensor(periods),
