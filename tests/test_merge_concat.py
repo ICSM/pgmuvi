@@ -691,6 +691,27 @@ class TestMultiCharBandLabels(unittest.TestCase):
         self.assertIn(self.LONG_BAND, unique_bands)
         self.assertNotIn("A", unique_bands)
 
+    def test_merge_2d_other_no_band_scalar_str_preserves_label(self):
+        """merge() with 2-D other (band=None) and scalar string band=.
 
-if __name__ == "__main__":
+        Regression: passing a scalar string for band= must not raise
+        TypeError (0-D array has no len) and must preserve the full label.
+        """
+        rng = np.random.default_rng(55)
+        n = 10
+        t = np.sort(rng.uniform(0, 10, n))
+        wl = np.full(n, 2.0)
+        x = torch.tensor(np.column_stack([t, wl]), dtype=torch.float32)
+        y = torch.tensor(rng.normal(0, 1, n), dtype=torch.float32)
+        # 2-D Lightcurve with no band attribute
+        lc_other = Lightcurve(x, y)
+        lc_2d = _make_2d_lc([1.0], band_labels=["V"])
+        result = lc_2d.merge(lc_other, band=self.LONG_BAND)
+        unique_bands = set(np.unique(result.band))
+        self.assertIn(self.LONG_BAND, unique_bands)
+        self.assertNotIn("A", unique_bands)
+
+
+
+if __name__ == '__main__':
     unittest.main()

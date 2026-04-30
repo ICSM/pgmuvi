@@ -10523,7 +10523,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "'band' must be supplied when 'other' is 2-D and has "
                         "no band attribute."
                     )
-                other_band = np.asarray(band).astype(str)
+                other_band = np.atleast_1d(np.asarray(band, dtype=object))
                 if len(other_band) == 1:
                     other_band = np.full(
                         len(other_x), other_band[0], dtype=object
