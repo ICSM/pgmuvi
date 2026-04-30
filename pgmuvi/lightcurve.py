@@ -4806,8 +4806,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         This is an O(n²) algorithm in the number of observations. For very
         large datasets (n > ~1000) the computation may be slow.
         """
-        self._validate_n_lags(n_lags)
-
         t = self._get_time_axis().double()
         y = self.ydata.double()
 
@@ -4837,9 +4835,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 raise ValueError(
                     "lag_edges must be strictly increasing."
                 )
-            max_lag = float(edges[-1])
+            max_lag = edges[-1].detach().item()
             n_bins = edges.shape[0] - 1
         else:
+            self._validate_n_lags(n_lags)
             if max_lag is None:
                 max_lag = self._default_max_lag(t)
             edges = torch.linspace(0.0, max_lag, n_lags + 1, device=t.device)
@@ -4852,7 +4851,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # ------------------------------------------------------------------
         # Zero-lag entry: all n self-pairs
         # ------------------------------------------------------------------
-        variance = float((y_centered**2).mean())
+        variance = (y_centered**2).mean().detach().item()
         if normalize and not (np.isfinite(variance) and variance > 0):
             raise RuntimeError(
                 "Cannot normalize ACF: variance is zero or non-finite. "
@@ -4939,7 +4938,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if max_lag is None:
             max_lag = self._default_max_lag(t)
 
-        t_ref = float(t.mean()) if reference_time is None else float(reference_time)
+        if reference_time is None:
+            t_ref = t.mean().detach().item()
+        else:
+            t_ref = float(reference_time)
 
         tau = torch.linspace(0.0, max_lag, n_lags, dtype=t.dtype, device=t.device)
         x1 = torch.full((n_lags,), t_ref, dtype=t.dtype, device=t.device)
@@ -4963,7 +4965,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if normalize:
                 x_ref = x1[:1]
                 lazy_var = self.model.covar_module(x_ref, x_ref)
-                variance = float(lazy_var.diagonal()[0].detach())
+                variance = lazy_var.diagonal()[0].detach().item()
                 if not (np.isfinite(variance) and variance > 0):
                     raise RuntimeError(
                         f"Zero-lag GP covariance is {variance!r}, which is "
