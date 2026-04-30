@@ -5865,7 +5865,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # for param_name, param in self.model.named_parameters():
         #    print(f'Parameter name: {param_name:42} value = {param.data}')
-        self.print_parameters()
+        # self.print_parameters()
 
         # Now actually call the trainer!
         with gpytorch.settings.max_cg_iterations(max_cg_iterations):
