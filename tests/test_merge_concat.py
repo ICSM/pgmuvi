@@ -640,5 +640,57 @@ class TestResultAlways2D(unittest.TestCase):
         self.assertEqual(result.ndim, 2)
 
 
+class TestMultiCharBandLabels(unittest.TestCase):
+    """Regression: multi-character band labels must not be truncated."""
+
+    LONG_BAND = "ASAS_SN/Misc_APASS.V"
+
+    def _make_1d_with_long_band(self, n=12, seed=42):
+        rng = np.random.default_rng(seed)
+        t = torch.tensor(
+            np.sort(rng.uniform(0, 10, n)), dtype=torch.float32
+        )
+        y = torch.tensor(rng.normal(0, 1, n), dtype=torch.float32)
+        ye = torch.tensor(rng.uniform(0.05, 0.15, n), dtype=torch.float32)
+        return Lightcurve(t, y, yerr=ye, band=[self.LONG_BAND])
+
+    def test_concat_1d_preserves_long_band_label(self):
+        """concat() must preserve multi-character band labels from 1-D inputs."""
+        lc_1d = self._make_1d_with_long_band()
+        lc_1d.wavelength = 1.0
+        lc_2d = _make_2d_lc([2.0], band_labels=["R"])
+        result = Lightcurve.concat([lc_2d, lc_1d])
+        unique_bands = set(np.unique(result.band))
+        self.assertIn(self.LONG_BAND, unique_bands)
+        self.assertNotIn("A", unique_bands)
+
+    def test_concat_2d_preserves_long_band_label(self):
+        """concat() must preserve multi-character band labels from 2-D inputs."""
+        lc1 = _make_2d_lc([1.0], band_labels=[self.LONG_BAND])
+        lc2 = _make_2d_lc([2.0], band_labels=["R"])
+        result = Lightcurve.concat([lc1, lc2])
+        unique_bands = set(np.unique(result.band))
+        self.assertIn(self.LONG_BAND, unique_bands)
+        self.assertNotIn("A", unique_bands)
+
+    def test_merge_1d_other_preserves_long_band_label(self):
+        """merge() must preserve multi-character band labels for 1-D 'other'."""
+        lc_2d = _make_2d_lc([1.0], band_labels=["V"])
+        lc_1d = self._make_1d_with_long_band()
+        result = lc_2d.merge(lc_1d, wavelength=3.0)
+        unique_bands = set(np.unique(result.band))
+        self.assertIn(self.LONG_BAND, unique_bands)
+        self.assertNotIn("A", unique_bands)
+
+    def test_merge_2d_other_preserves_long_band_label(self):
+        """merge() must preserve multi-character band labels for 2-D 'other'."""
+        lc_2d = _make_2d_lc([1.0], band_labels=["V"])
+        lc_other = _make_2d_lc([2.0], band_labels=[self.LONG_BAND])
+        result = lc_2d.merge(lc_other)
+        unique_bands = set(np.unique(result.band))
+        self.assertIn(self.LONG_BAND, unique_bands)
+        self.assertNotIn("A", unique_bands)
+
+
 if __name__ == "__main__":
     unittest.main()
