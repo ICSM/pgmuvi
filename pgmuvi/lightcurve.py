@@ -4777,7 +4777,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def _default_max_lag(self, t):
         """Return half the time baseline as the default max lag."""
-        return float((t.max() - t.min()) / 2.0)
+        max_lag = (t.max() - t.min()) / 2.0
+        return max_lag.detach().item()
 
     @staticmethod
     def _validate_n_lags(n_lags):
