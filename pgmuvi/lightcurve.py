@@ -10473,7 +10473,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             n_other = len(other._xdata_raw)
             if len(resolved_band) == 1:
-                resolved_band = np.full(n_other, resolved_band[0], dtype=str)
+                resolved_band = np.full(n_other, resolved_band[0], dtype=object)
             elif len(resolved_band) != n_other:
                 raise ValueError(
                     f"Length of 'band' ({len(resolved_band)}) does not match "
@@ -10523,10 +10523,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "'band' must be supplied when 'other' is 2-D and has "
                         "no band attribute."
                     )
-                other_band = np.asarray(band).astype(str)
+                other_band = np.atleast_1d(np.asarray(band, dtype=object))
                 if len(other_band) == 1:
                     other_band = np.full(
-                        len(other_x), other_band[0], dtype=str
+                        len(other_x), other_band[0], dtype=object
                     )
                 elif len(other_band) != len(other_x):
                     raise ValueError(
@@ -10741,7 +10741,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 yerr = lc._yerr_raw if hasattr(lc, "_yerr_raw") else None
                 # Expand single-label band to one entry per data row
                 n_rows = lc._xdata_raw.shape[0]
-                band_arr = np.full(n_rows, unique_b[0], dtype=str)
+                band_arr = np.full(n_rows, unique_b[0], dtype=object)
                 resolved.append((x_2d, y, yerr, band_arr))
             else:
                 # 2-D
