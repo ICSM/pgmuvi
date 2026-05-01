@@ -2039,8 +2039,10 @@ class TestPlotNPred(unittest.TestCase):
 
     def test_n_pred_numpy_int_accepted(self):
         """plot() accepts a numpy integer for n_pred."""
-        fig = self.lc_1d.plot(show=False, n_pred=np.int32(50))
-        self.assertIsNotNone(fig)
+        fig_small = self.lc_1d.plot(show=False, n_pred=np.int32(10))
+        fig_large = self.lc_1d.plot(show=False, n_pred=np.int32(50))
+        self.assertIsNotNone(fig_small)
+        self.assertIsNotNone(fig_large)
 
 
 class TestExtinctionAmplitude(unittest.TestCase):

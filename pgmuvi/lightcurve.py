@@ -9633,7 +9633,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise ValueError(
                 f"yscale must be one of {_VALID_YSCALES!r}, got {yscale!r}"
             )
-        if not isinstance(n_pred, (int, np.integer)) or isinstance(n_pred, bool):
+        if isinstance(n_pred, bool) or not isinstance(n_pred, (int, np.integer)):
             raise ValueError(
                 f"n_pred must be an integer, got {type(n_pred).__name__!r}"
             )
