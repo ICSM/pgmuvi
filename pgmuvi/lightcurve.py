@@ -8313,6 +8313,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         show_full_psd=None,
         max_peaks_to_mark=3,
         log_y=True,
+        close=False,
         **kwargs,
     ):
         """Plot the period summary from :meth:`get_period_summary`.
@@ -8409,6 +8410,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.set_title("Period summary")
             if show:
                 plt.show()
+                if close:
+                    plt.close(fig)
                 return None
             return fig, ax
 
