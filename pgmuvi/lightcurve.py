@@ -8372,6 +8372,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Maximum number of peaks to mark on the plot.  In multi-peak
             mode this also limits the number of zoom panels created.
             Default is ``3``.
+        close : bool, optional
+            If True and show=True, close the figure immediately after displaying it.
+            This is useful in notebooks or loops where many figures are generated.
+            Ignored when show=False, because the figure is returned to the caller.
         **kwargs
             Additional keyword arguments forwarded to
             :meth:`get_period_summary` when ``summary`` is ``None``.
