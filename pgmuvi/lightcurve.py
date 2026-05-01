@@ -9584,7 +9584,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             psd_tot = psd_tot.exp().cpu().detach().numpy()
         return psd_tot
 
-    def plot(self, ylim=None, yscale="auto", show=True, mcmc_samples=False, **kwargs):
+    def plot(
+        self,
+        ylim=None,
+        yscale="auto",
+        show=True,
+        mcmc_samples=False,
+        n_pred=1000,
+        **kwargs,
+    ):
         """Plot the model and data
 
         Parameters
@@ -9607,6 +9615,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         mcmc_samples : bool, optional
             Whether to plot the samples from the MCMC run, by default False.
             This will only work if the MCMC sampler has been run.
+        n_pred : int, optional
+            Number of prediction points used to construct the fine time grid
+            for plotting. Lower values reduce memory usage and speed up plotting,
+            especially for 2D light curves. Default is 1000.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
 
@@ -9661,8 +9673,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 x_raw = self.xdata[:, 0]
             # y_raw = self.ydata
 
-            # creating array of 10000 test points across the range of the data
-            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+            # creating array of test points across the range of the data
+            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), n_pred)
 
             if self.ndim == 1:
                 fig = self._plot_1d(
