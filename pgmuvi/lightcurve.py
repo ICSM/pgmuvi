@@ -5957,6 +5957,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     )
                 else:
                     ls_freqs, ls_sig = self.fit_LS(num_peaks=_max_peaks)
+                    print(f"MLS frequencies: {ls_freqs}")
+                    print(f"MLS significances: {ls_sig}")
                     _bb_nyquist = float("inf")
 
                 # Filter peaks whose period exceeds the data span or falls
