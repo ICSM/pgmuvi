@@ -5896,7 +5896,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             _init_freqs = 1.0 / _periods_tensor
             num_mixtures = len(_init_freqs)
-        elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
+        elif use_mls_init and isinstance(model, str):  # and model in _SM_MODELS:
             # Compute constraint-set frequency bounds in raw data units.
             # These are used in addition to the data-span bounds to exclude
             # MLS peaks that would lie outside user-requested period limits.
