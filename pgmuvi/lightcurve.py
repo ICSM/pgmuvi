@@ -5868,7 +5868,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else float("inf")
         )
 
-        import pdb; pdb.set_trace()
+        print("Model: ", model)
+        print("periods: ", periods)
+        print("use_mls_init: ", use_mls_init)
+        print("isinstance(model, str): ", isinstance(model, str))
+        print("model in _SM_MODELS: ", model in _SM_MODELS)
 
         if periods is not None:
             # User supplied explicit period guesses — skip MLS entirely.
