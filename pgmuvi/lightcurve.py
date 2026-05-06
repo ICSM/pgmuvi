@@ -5960,6 +5960,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     print(f"MLS frequencies: {ls_freqs}")
                     print(f"MLS significances: {ls_sig}")
                     _bb_nyquist = float("inf")
+                import pdb; pdb.set_trace()
 
                 # Filter peaks whose period exceeds the data span or falls
                 # outside user-specified constraint-set period bounds.
