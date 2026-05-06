@@ -5868,6 +5868,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else float("inf")
         )
 
+        print("IS IT?", isinstance(model, str) and model in _SM_MODELS)
         if periods is not None:
             # User supplied explicit period guesses — skip MLS entirely.
             _periods_tensor = torch.as_tensor(
@@ -5890,6 +5891,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             _init_freqs = 1.0 / _periods_tensor
             num_mixtures = len(_init_freqs)
+            print("periods is not None")
+            import pdb; pdb.set_trace()
         elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
             import pdb; pdb.set_trace()
             # Compute constraint-set frequency bounds in raw data units.
