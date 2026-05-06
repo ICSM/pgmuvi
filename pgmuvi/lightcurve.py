@@ -5868,7 +5868,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else float("inf")
         )
 
-        print("IS IT?", isinstance(model, str) and model in _SM_MODELS)
         if periods is not None:
             # User supplied explicit period guesses — skip MLS entirely.
             _periods_tensor = torch.as_tensor(
@@ -5891,10 +5890,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             _init_freqs = 1.0 / _periods_tensor
             num_mixtures = len(_init_freqs)
-            print("periods is not None")
-            import pdb; pdb.set_trace()
         elif use_mls_init and isinstance(model, str) and model in _SM_MODELS:
-            import pdb; pdb.set_trace()
             # Compute constraint-set frequency bounds in raw data units.
             # These are used in addition to the data-span bounds to exclude
             # MLS peaks that would lie outside user-requested period limits.
@@ -5964,7 +5960,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     print(f"MLS frequencies: {ls_freqs}")
                     print(f"MLS significances: {ls_sig}")
                     _bb_nyquist = float("inf")
-                import pdb; pdb.set_trace()
 
                 # Filter peaks whose period exceeds the data span or falls
                 # outside user-specified constraint-set period bounds.
