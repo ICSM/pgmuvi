@@ -59,6 +59,10 @@ class TestFitMlsDataDrivenPrior(unittest.TestCase):
 
     def setUp(self):
         self.lc = _make_lc()
+        # Record the dominant LS frequency BEFORE fitting so we can
+        # compare it to the prior without re-running the periodogram.
+        ls_freqs, _ = self.lc.fit_LS(num_peaks=10)
+        self._dominant_freq = float(ls_freqs[0])
         _fit_without_training(self.lc, model="1D", prior_set=None, training_iter=1)
 
     def _get_mm_prior(self):
@@ -78,19 +82,18 @@ class TestFitMlsDataDrivenPrior(unittest.TestCase):
         self.assertIsInstance(prior, gpytorch.priors.LogNormalPrior)
 
     def test_mixture_means_prior_broad_sigma(self):
-        """The data-driven prior should have sigma=1.5 (broad)."""
+        """The data-driven prior should have sigma=_MLS_PRIOR_SIGMA (broad)."""
+        from pgmuvi.lightcurve import _MLS_PRIOR_SIGMA
+
         prior = self._get_mm_prior()
-        self.assertAlmostEqual(float(prior.scale), 1.5, places=5)
+        self.assertAlmostEqual(float(prior.scale), _MLS_PRIOR_SIGMA, places=5)
 
     def test_mixture_means_prior_median_matches_dominant_freq(self):
         """The prior median should equal the dominant MLS frequency."""
         prior = self._get_mm_prior()
         # median of LogNormal(mu, sigma) = exp(mu)
         median_freq = math.exp(float(prior.loc))
-        # Get the actual init frequencies used
-        init_freqs, _ = self.lc.fit_LS(num_peaks=10)
-        dominant_freq = float(init_freqs[0])
-        self.assertAlmostEqual(median_freq, dominant_freq, places=5)
+        self.assertAlmostEqual(median_freq, self._dominant_freq, places=5)
 
     def test_priors_set_flag_is_true(self):
         """__PRIORS_SET flag should be True after fit()."""

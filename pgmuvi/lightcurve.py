@@ -843,6 +843,13 @@ _SM_MODELS: frozenset[str] = frozenset(
     }
 )
 
+# Standard deviation (sigma) of the LogNormal prior registered on
+# mixture_means when MLS-based initialisation is used and the user has not
+# specified a prior_set.  A value of 1.5 gives an ~4.5x factor around the
+# median, ensuring the prior is informative enough to regularise training
+# while remaining broad enough not to overly constrain the period.
+_MLS_PRIOR_SIGMA: float = 1.5
+
 
 @dataclasses.dataclass(frozen=True)
 class PeriodPeakResult:
@@ -5806,8 +5813,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               periodogram was used to initialise the hyperparameters, a
               ``LogNormalPrior`` is automatically registered on
               ``mixture_means`` with its median set to the dominant LS
-              frequency and a broad standard deviation (``sigma=1.5``) so as
-              not to overly constrain the period distribution.
+              frequency and a broad standard deviation
+              (``sigma=_MLS_PRIOR_SIGMA``) so as not to overly constrain the
+              period distribution.
             - If ``prior_set`` is ``None`` and no MLS-based initialisation was
               performed, the ``"LPV"`` prior set is used as a default.
 
@@ -5877,6 +5885,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
         # Validate prior_set early so we fail fast before the expensive MLS.
+        # The result is discarded here; the value is passed to
+        # set_default_priors() later which calls get_prior_set() again.
+        # Early validation ensures we raise immediately (before long MLS
+        # computation) for unrecognised or wrongly-typed prior_set values.
         if prior_set is not None:
             if not isinstance(prior_set, str):
                 raise TypeError(
@@ -6322,7 +6334,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     _f_dom = float(_init_freqs[0])
                     _mu_f = math.log(_f_dom)
                     _mls_mm_prior = gpytorch.priors.LogNormalPrior(
-                        _mu_f, 1.5
+                        _mu_f, _MLS_PRIOR_SIGMA
                     )
                     self._model_pars["mixture_means"]["module"].register_prior(
                         "mixture_means_prior",
