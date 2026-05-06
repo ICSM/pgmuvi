@@ -858,13 +858,43 @@ _SEPARABLE_SM_CAPABLE_MODELS: frozenset[str] = frozenset(
 )
 
 
+def _find_sm_in_kernel(kernel):
+    """Recursively search for a SpectralMixtureKernel within a kernel tree.
+
+    Walks :class:`~gpytorch.kernels.ScaleKernel` wrappers (via
+    ``base_kernel``) and container kernels (``AdditiveKernel``,
+    ``ProductKernel``, etc., via ``kernels``).  Returns the first kernel
+    that exposes ``mixture_means`` (i.e. a SpectralMixtureKernel), or
+    ``None`` if none is found.
+    """
+    if hasattr(kernel, "mixture_means"):
+        return kernel
+    # Unwrap ScaleKernel and similar single-child wrappers
+    base = getattr(kernel, "base_kernel", None)
+    if base is not None:
+        found = _find_sm_in_kernel(base)
+        if found is not None:
+            return found
+    # Walk AdditiveKernel / ProductKernel / SumKernel sub-kernels
+    sub_kernels = getattr(kernel, "kernels", None)
+    if sub_kernels is not None:
+        for k in sub_kernels:
+            found = _find_sm_in_kernel(k)
+            if found is not None:
+                return found
+    return None
+
+
 def _find_separable_sm_time_kernel(model):
     """Return the SM time sub-kernel from a separable model, or None.
 
     For separable 2D models the covar_module is a ProductKernel.  This
     function walks its sub-kernels looking for one whose ``active_dims``
     contains 0 (the time dimension) and that is (or wraps) a
-    SpectralMixtureKernel.
+    SpectralMixtureKernel.  The SM kernel may be nested inside additional
+    wrappers (e.g. a ScaleKernel) or additive containers
+    (e.g. when ``add_flicker=True`` produces an ``AdditiveKernel``), so
+    :func:`_find_sm_in_kernel` is used to recurse into those structures.
     """
     covar = getattr(model, "covar_module", None)
     if covar is None:
@@ -875,9 +905,9 @@ def _find_separable_sm_time_kernel(model):
     for k in sub_kernels:
         ad = getattr(k, "active_dims", None)
         if ad is not None and 0 in ad.tolist():
-            actual = getattr(k, "base_kernel", k)
-            if hasattr(actual, "mixture_means"):
-                return actual
+            found = _find_sm_in_kernel(k)
+            if found is not None:
+                return found
     return None
 
 
@@ -4081,6 +4111,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # dominates, the time kernel's frequency can drift to the boundary
         # (maximum period) because the model explains the data through
         # wavelength correlations + mean function alone.
+        # The upper bound is max(data_var, 1e-4): using data_var directly
+        # caps the wavelength kernel at the observed variance, while the
+        # floor of 1e-4 prevents a degenerate upper bound when the data
+        # have near-zero variance (e.g. unit-normalised toy data).
         if _find_separable_sm_time_kernel(self.model) is not None:
             sk = self.model.covar_module
             for k in getattr(sk, "kernels", []):
@@ -6242,17 +6276,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if not self.__CONTRAINTS_SET:
             self.set_default_constraints(constraint_set=constraint_set)
 
-        if not self.__CONTRAINTS_SET:
-            self.set_default_constraints()
+        # Ensure all default priors (noise, scale, etc.) are registered.
+        # This must happen before the separable-SM specialisation below so
+        # that the specialised LogNormalFrequencyPrior can override the
+        # generic mixture_means_prior registered by set_default_priors().
+        # Setting __PRIORS_SET=True here also prevents mcmc() from
+        # inadvertently overwriting the specialised prior by calling
+        # set_default_priors() again.
+        if not self.__PRIORS_SET:
+            self.set_default_priors()
 
         # For separable 2D models with an SM time kernel, register a
-        # frequency prior during MAP fitting to penalise low-frequency
-        # (long-period) solutions.  Without this, the MLL alone prefers
-        # to push the time-kernel frequency to the lower constraint
-        # boundary because the wavelength kernel + mean function can
-        # absorb all variance when the time kernel is near-constant.
+        # specialised frequency prior during MAP fitting to penalise
+        # low-frequency (long-period) solutions.  Without this, the MLL
+        # alone prefers to push the time-kernel frequency to the lower
+        # constraint boundary because the wavelength kernel + mean function
+        # can absorb all variance when the time kernel is near-constant.
+        # This call comes *after* set_default_priors() so that it overrides
+        # the generic mixture_means_prior that set_default_priors() registers.
         _sep_sm_tk = _find_separable_sm_time_kernel(self.model)
-        if _sep_sm_tk is not None and not self.__PRIORS_SET:
+        if _sep_sm_tk is not None:
             from .priors import LogNormalFrequencyPrior
             if self.ndim > 1:
                 _x_orig_span = float(
