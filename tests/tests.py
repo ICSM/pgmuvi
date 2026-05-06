@@ -1982,6 +1982,69 @@ class TestMultibandPlotWithoutFit(unittest.TestCase):
         self.assertEqual(len(figs), 2)
 
 
+class TestPlotNPred(unittest.TestCase):
+    """Test the n_pred parameter of Lightcurve.plot()."""
+
+    def setUp(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        self.plt = plt
+        xdata = torch.as_tensor([1.0, 2.0, 3.0, 4.0])
+        ydata = torch.as_tensor([1.0, 2.0, 1.0, 2.0])
+        self.lc_1d = Lightcurve(xdata, ydata)
+        xdata_2d = torch.as_tensor(
+            [[1.0, 0.5], [2.0, 0.5], [3.0, 1.5], [4.0, 1.5]], dtype=torch.float32
+        )
+        ydata_2d = torch.as_tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float32)
+        self.lc_2d = Lightcurve(xdata_2d, ydata_2d)
+
+    def tearDown(self):
+        self.plt.close("all")
+
+    def test_1d_plot_accepts_n_pred(self):
+        """plot() with n_pred returns a figure for 1D data."""
+        fig = self.lc_1d.plot(show=False, n_pred=50)
+        self.assertIsNotNone(fig)
+
+    def test_2d_plot_accepts_n_pred(self):
+        """plot() with n_pred returns a list of figures for 2D data."""
+        figs = self.lc_2d.plot(show=False, n_pred=50)
+        self.assertIsInstance(figs, list)
+
+    def test_invalid_n_pred_not_int_raises(self):
+        """plot() raises ValueError when n_pred is not an integer."""
+        with self.assertRaises(ValueError):
+            self.lc_1d.plot(show=False, n_pred=100.5)
+
+    def test_invalid_n_pred_bool_raises(self):
+        """plot() raises ValueError when n_pred is a bool."""
+        with self.assertRaises(ValueError):
+            self.lc_1d.plot(show=False, n_pred=True)
+
+    def test_invalid_n_pred_zero_raises(self):
+        """plot() raises ValueError when n_pred is 0."""
+        with self.assertRaises(ValueError):
+            self.lc_1d.plot(show=False, n_pred=0)
+
+    def test_invalid_n_pred_negative_raises(self):
+        """plot() raises ValueError when n_pred is negative."""
+        with self.assertRaises(ValueError):
+            self.lc_1d.plot(show=False, n_pred=-10)
+
+    def test_invalid_n_pred_one_raises(self):
+        """plot() raises ValueError when n_pred is 1 (< 2)."""
+        with self.assertRaises(ValueError):
+            self.lc_1d.plot(show=False, n_pred=1)
+
+    def test_n_pred_numpy_int_accepted(self):
+        """plot() accepts a numpy integer for n_pred."""
+        fig_small = self.lc_1d.plot(show=False, n_pred=np.int32(10))
+        fig_large = self.lc_1d.plot(show=False, n_pred=np.int32(50))
+        self.assertIsNotNone(fig_small)
+        self.assertIsNotNone(fig_large)
+
+
 class TestExtinctionAmplitude(unittest.TestCase):
     """Tests that the extinction amplitude law decreases with wavelength."""
 

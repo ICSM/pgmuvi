@@ -10001,7 +10001,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             psd_tot = psd_tot.exp().cpu().detach().numpy()
         return psd_tot
 
-    def plot(self, ylim=None, yscale="auto", show=True, mcmc_samples=False, **kwargs):
+    def plot(
+        self,
+        ylim=None,
+        yscale="auto",
+        show=True,
+        mcmc_samples=False,
+        n_pred=1000,
+        **kwargs,
+    ):
         """Plot the model and data
 
         Parameters
@@ -10024,6 +10032,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         mcmc_samples : bool, optional
             Whether to plot the samples from the MCMC run, by default False.
             This will only work if the MCMC sampler has been run.
+        n_pred : int, optional
+            Number of prediction points used to construct the fine time grid
+            for plotting. Lower values reduce memory usage and speed up
+            plotting, especially for 2D light curves. Default is 1000.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
 
@@ -10037,6 +10049,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if yscale not in _VALID_YSCALES:
             raise ValueError(
                 f"yscale must be one of {_VALID_YSCALES!r}, got {yscale!r}"
+            )
+        if isinstance(n_pred, bool) or not isinstance(n_pred, (int, np.integer)):
+            raise ValueError(
+                f"n_pred must be an integer, got {type(n_pred).__name__!r}"
+            )
+        n_pred = int(n_pred)
+        if n_pred < 2:
+            raise ValueError(f"n_pred must be >= 2, got {n_pred}")
+        if self.ndim > 2:
+            raise NotImplementedError(
+                "Plotting models and data in more than 2 dimensions is not "
+                "currently supported. Please get in touch if you need this "
+                "functionality!"
             )
         if ylim is None and self.ndim == 1:
             # ylim = [-3, 3]
@@ -10078,24 +10103,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 x_raw = self.xdata[:, 0]
             # y_raw = self.ydata
 
-            # creating array of 10000 test points across the range of the data
-            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+            # creating array of test points across the range of the data
+            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), n_pred)
 
             if self.ndim == 1:
                 fig = self._plot_1d(
                     x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
                 )
-            elif self.ndim == 2:
+            else:
                 fig = self._plot_2d(
                     x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
-                )
-            else:
-                raise NotImplementedError(
-                    """
-                Plotting models and data in more than 2 dimensions is not
-                currently supported. Please get in touch if you need this
-                functionality!
-                """
                 )
         return fig
 
