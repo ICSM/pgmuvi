@@ -5868,6 +5868,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else float("inf")
         )
 
+        import pdb; pdb.set_trace()
+
         if periods is not None:
             # User supplied explicit period guesses — skip MLS entirely.
             _periods_tensor = torch.as_tensor(
