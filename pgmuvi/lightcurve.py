@@ -5646,6 +5646,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lr=0.1,
         stopavg=30,
         variance=False,
+        prior_set=None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -5792,6 +5793,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
+        prior_set : str or None, optional
+            Name of a predefined prior set to apply to the period/frequency
+            parameter (e.g. ``"LPV"``).  Controls prior selection as follows:
+
+            - If ``prior_set`` is given, the named prior set is validated and
+              applied via :meth:`set_default_priors`.  A warning is raised if
+              ``prior_set`` is specified alongside MLS-based initialisation,
+              since it overrides the data-driven prior that would otherwise be
+              used.  An unrecognised name raises a :class:`ValueError`.
+            - If ``prior_set`` is ``None`` (default) **and** the Lomb-Scargle
+              periodogram was used to initialise the hyperparameters, a
+              ``LogNormalPrior`` is automatically registered on
+              ``mixture_means`` with its median set to the dominant LS
+              frequency and a broad standard deviation (``sigma=1.5``) so as
+              not to overly constrain the period distribution.
+            - If ``prior_set`` is ``None`` and no MLS-based initialisation was
+              performed, the ``"LPV"`` prior set is used as a default.
+
+            To apply fully custom priors, call :meth:`set_period_prior` or
+            :meth:`set_default_priors` **after** :meth:`fit` returns (the
+            ``__PRIORS_SET`` flag is set during fitting and prevents the
+            defaults from being overwritten by a subsequent :meth:`mcmc` call).
+            Alternatively, call :meth:`set_default_priors` *before* fitting to
+            pre-register priors; in that case the logic above is skipped
+            entirely.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -5804,7 +5830,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Raises
         ------
         ValueError
-            If no model is provided.
+            If no model is provided or if ``prior_set`` is not a recognised
+            prior-set name.
+        TypeError
+            If ``prior_set`` is not a string or ``None``.
 
         Notes
         -----
@@ -5846,6 +5875,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "`num_mixtures` must be a positive integer or None, "
                     f"got {num_mixtures}."
                 )
+
+        # Validate prior_set early so we fail fast before the expensive MLS.
+        if prior_set is not None:
+            if not isinstance(prior_set, str):
+                raise TypeError(
+                    "`prior_set` must be a string or None, "
+                    f"got {type(prior_set)!r}."
+                )
+            # Raises ValueError for unrecognised names.
+            get_prior_set(prior_set)
 
         # --- MLS-based initialisation ---
         _init_freqs = None  # frequencies (raw units) to seed the SM kernel
@@ -6264,6 +6303,46 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 #                 # self.model.initialize(**guess)
 #                 self.set_hypers(guess)
 
+        # --- Prior setting ---
+        # Apply priors if they have not already been set by the user (e.g. via
+        # a prior call to set_default_priors() or set_period_prior()).
+        if not self.__PRIORS_SET:
+            # Determine whether the MLS periodogram was the source of
+            # _init_freqs.  When the user supplied explicit `periods`, they
+            # were not MLS-derived; when MLS was not used (use_mls_init=False,
+            # non-SM model, or MLS returned no peaks), _init_freqs is None.
+            _mls_init_used = periods is None and _init_freqs is not None
+            if _mls_init_used and prior_set is None:
+                # MLS-based initialisation and no explicit prior choice:
+                # register a LogNormalPrior centred on the dominant LS
+                # frequency with a broad sigma so the prior does not
+                # overly constrain the period distribution.
+                self.set_default_priors()
+                if "mixture_means" in self._model_pars:
+                    _f_dom = float(_init_freqs[0])
+                    _mu_f = math.log(_f_dom)
+                    _mls_mm_prior = gpytorch.priors.LogNormalPrior(
+                        _mu_f, 1.5
+                    )
+                    self._model_pars["mixture_means"]["module"].register_prior(
+                        "mixture_means_prior",
+                        _mls_mm_prior,
+                        "mixture_means",
+                    )
+            else:
+                if _mls_init_used and prior_set is not None:
+                    _msg = (
+                        f"prior_set={prior_set!r} overrides the MLS-based "
+                        "data-driven frequency prior. To use a prior centred "
+                        "on the dominant LS frequency automatically, omit "
+                        "prior_set."
+                    )
+                    warnings.warn(_msg, UserWarning, stacklevel=2)
+                _effective_prior_set = (
+                    prior_set if prior_set is not None else "LPV"
+                )
+                self.set_default_priors(prior_set=_effective_prior_set)
+
         if miniter is None:
             miniter = training_iter
 
@@ -6308,6 +6387,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         disable_progbar=False,
         max_cg_iterations=None,
         cuda=False,
+        prior_set=None,
         **kwargs,
     ):
         """Run an MCMC sampler on the model
@@ -6330,6 +6410,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The number of warmup steps to use, by default 100.
         disable_progbar : bool, optional
             Whether to disable the progress bar, by default False.
+        prior_set : str or None, optional
+            Name of a predefined prior set to use when priors have not already
+            been set (e.g. by a preceding call to :meth:`fit` or
+            :meth:`set_default_priors`).  Defaults to ``"LPV"`` when ``None``
+            and priors need to be applied.  Ignored if priors have already
+            been registered.  See :meth:`set_default_priors` and
+            :data:`~pgmuvi.priors.PRIOR_SETS` for available options.
         **kwargs : dict, optional
 
         Returns
@@ -6364,7 +6451,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self.cuda()
 
         if not self.__PRIORS_SET:
-            self.set_default_priors()
+            _mcmc_prior_set = prior_set if prior_set is not None else "LPV"
+            self.set_default_priors(prior_set=_mcmc_prior_set)
 
         if max_cg_iterations is None:
             max_cg_iterations = 10000
