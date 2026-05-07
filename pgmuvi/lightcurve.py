@@ -6550,10 +6550,43 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return guess
 
     def _consensus_standard_fit(self, **fit_kwargs):
-        """Consensus-fit stub; currently raises ``NotImplementedError``."""
-        raise NotImplementedError(
-            "fit_strategy='consensus' is not implemented yet."
+        """Minimal consensus wrapper using caller-provided consensus frequencies."""
+        consensus_frequencies = fit_kwargs.pop("consensus_frequencies", None)
+        if consensus_frequencies is None:
+            raise NotImplementedError(
+                "Automatic 1D consensus construction is not implemented yet. "
+                "Please provide `consensus_frequencies`."
+            )
+        consensus_scales = fit_kwargs.pop("consensus_scales", None)
+        user_guess = fit_kwargs.pop("guess", None)
+
+        model_is_ready = (
+            hasattr(self, "model")
+            and self.model is not None
+            and hasattr(self, "_model_pars")
         )
+        if not model_is_ready:
+            self.set_model(
+                fit_kwargs.get("model"),
+                fit_kwargs.get("likelihood"),
+                num_mixtures=fit_kwargs.get("num_mixtures"),
+                variance=fit_kwargs.get("variance", False),
+            )
+            fit_kwargs["model"] = None
+
+        consensus_guess = self._consensus_build_guess(
+            frequencies=consensus_frequencies,
+            scales=consensus_scales,
+        )
+
+        merged_guess = {}
+        if user_guess is not None:
+            merged_guess.update(user_guess)
+        merged_guess.update(consensus_guess)
+
+        fit_kwargs["guess"] = merged_guess
+        fit_kwargs["fit_strategy"] = None
+        return self.fit(**fit_kwargs)
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
         """Consensus-fit stub; currently raises ``NotImplementedError``."""
