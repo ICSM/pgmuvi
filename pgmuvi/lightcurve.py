@@ -5826,6 +5826,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # whether to substitute the stored _model_num_mixtures.
         _num_mixtures_arg = num_mixtures
 
+        # Dispatch alternative fit strategies before any stateful setup from
+        # the default/general fit pathway mutates this Lightcurve instance.
+        if fit_strategy is not None:
+            return self._consensus_fit(
+                fit_strategy=fit_strategy,
+                model=model,
+                likelihood=likelihood,
+                num_mixtures=num_mixtures,
+                guess=guess,
+                periods=periods,
+                use_mls_init=use_mls_init,
+                use_best_band_init=use_best_band_init,
+                constraint_set=constraint_set,
+                grid_size=grid_size,
+                cuda=cuda,
+                training_iter=training_iter,
+                max_cg_iterations=max_cg_iterations,
+                optim=optim,
+                miniter=miniter,
+                stop=stop,
+                lr=lr,
+                stopavg=stopavg,
+                variance=variance,
+                **kwargs,
+            )
+
         if not hasattr(self, "likelihood"):
             self.set_likelihood(likelihood, variance=variance, **kwargs)
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
@@ -5854,30 +5880,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "`num_mixtures` must be a positive integer or None, "
                     f"got {num_mixtures}."
                 )
-
-        if fit_strategy is not None:
-            return self._consensus_fit(
-                fit_strategy=fit_strategy,
-                model=model,
-                likelihood=likelihood,
-                num_mixtures=num_mixtures,
-                guess=guess,
-                periods=periods,
-                use_mls_init=use_mls_init,
-                use_best_band_init=use_best_band_init,
-                constraint_set=constraint_set,
-                grid_size=grid_size,
-                cuda=cuda,
-                training_iter=training_iter,
-                max_cg_iterations=max_cg_iterations,
-                optim=optim,
-                miniter=miniter,
-                stop=stop,
-                lr=lr,
-                stopavg=stopavg,
-                variance=variance,
-                **kwargs,
-            )
 
         # --- MLS-based initialisation ---
         _init_freqs = None  # frequencies (raw units) to seed the SM kernel
