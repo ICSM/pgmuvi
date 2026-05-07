@@ -6489,7 +6489,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         init = {
             "mixture_means": mixture_means,
             "mixture_scales": None,
-            "num_mixtures": n_mixtures,
+            "num_mixtures": int(n_mixtures),
         }
 
         if scales is not None:
