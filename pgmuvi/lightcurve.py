@@ -6348,6 +6348,65 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             f"Got {fit_strategy!r}."
         )
 
+    def _consensus_resolve_time_sm_keys(self):
+        """Resolve time-kernel spectral-mixture parameter keys for consensus fit."""
+        if (
+            not hasattr(self, "model")
+            or self.model is None
+            or not hasattr(self, "_model_pars")
+        ):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before resolving "
+                "consensus SM keys."
+            )
+
+        def _resolve_one(param_name):
+            candidates = set()
+            for key, meta in self._model_pars.items():
+                if not isinstance(key, str):
+                    continue
+                if key.startswith("raw_") or ".raw_" in key:
+                    continue
+                if key.endswith(f".{param_name}"):
+                    candidates.add(key)
+                if key == param_name and isinstance(meta, dict):
+                    resolved = (
+                        meta.get("constrained_full_name")
+                        or meta.get("full_name")
+                    )
+                    if isinstance(resolved, str):
+                        candidates.add(resolved)
+                if isinstance(meta, dict):
+                    resolved = meta.get("constrained_full_name")
+                    if (
+                        isinstance(resolved, str)
+                        and resolved.endswith(f".{param_name}")
+                    ):
+                        candidates.add(resolved)
+
+            if not candidates:
+                raise RuntimeError(
+                    f"Could not resolve a time-kernel '{param_name}' key from "
+                    "_model_pars."
+                )
+
+            ordered = sorted(
+                candidates,
+                key=lambda x: (
+                    x != f"covar_module.{param_name}",
+                    ".kernels.0." not in x,
+                    not x.startswith("covar_module."),
+                    len(x),
+                    x,
+                ),
+            )
+            return ordered[0]
+
+        return {
+            "mixture_means": _resolve_one("mixture_means"),
+            "mixture_scales": _resolve_one("mixture_scales"),
+        }
+
     def _consensus_standard_fit(self, **fit_kwargs):
         """Consensus-fit stub; currently raises ``NotImplementedError``."""
         raise NotImplementedError(
