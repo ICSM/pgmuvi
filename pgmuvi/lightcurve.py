@@ -6360,7 +6360,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "consensus SM keys."
             )
 
-        def _resolve_one(param_name):
+        def _resolve_param_key(param_name):
             candidates = set()
             raw_token = "raw_"
             for key, meta in self._model_pars.items():
@@ -6410,8 +6410,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return ordered[0]
 
         return {
-            "mixture_means": _resolve_one("mixture_means"),
-            "mixture_scales": _resolve_one("mixture_scales"),
+            "mixture_means": _resolve_param_key("mixture_means"),
+            "mixture_scales": _resolve_param_key("mixture_scales"),
         }
 
     def _consensus_standard_fit(self, **fit_kwargs):
