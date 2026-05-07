@@ -5798,8 +5798,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Optional fitting-strategy selector.  The default ``None`` keeps the
             existing general ``fit`` workflow unchanged.  When set to one of
             the listed strategy names, ``fit`` dispatches to the corresponding
-            internal consensus-fit pathway.  All non-``None`` strategies are
-            currently stubs and raise ``NotImplementedError``.
+            internal consensus-fit pathway.  The listed strategy names are
+            reserved for planned consensus-fit implementations and currently
+            raise ``NotImplementedError``.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -6342,41 +6343,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if fit_strategy == "consensus_relaxed":
             return self._consensus_relaxed_fit(**fit_kwargs)
         raise ValueError(
-            "Invalid fit_strategy. Expected one of: "
+            "Invalid fit_strategy. Expected None or one of: "
             "'consensus', 'consensus_multicomp', 'consensus_relaxed'. "
             f"Got {fit_strategy!r}."
         )
 
     def _consensus_standard_fit(self, **fit_kwargs):
-        """Stub for future strict cross-band consensus-initialized 2D GP fit.
-
-        The planned implementation will run per-band 1D LS/ACF/GP analyses,
-        build a consensus frequency window across bands, reject discrepant
-        bands, initialize/constrain 2D time-frequency SM parameters, and then
-        run the 2D GP fit.
-        """
+        """Consensus-fit stub; currently raises ``NotImplementedError``."""
         raise NotImplementedError(
             "fit_strategy='consensus' is not implemented yet."
         )
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
-        """Stub for future multi-component cross-band consensus SM fitting.
-
-        The planned implementation will identify multiple recurring
-        frequencies from 1D analyses, cluster them across bands, and
-        initialize/constrain multi-component SM kernels.
-        """
+        """Consensus-fit stub; currently raises ``NotImplementedError``."""
         raise NotImplementedError(
             "fit_strategy='consensus_multicomp' is not implemented yet."
         )
 
     def _consensus_relaxed_fit(self, **fit_kwargs):
-        """Stub for future relaxed consensus-initialized 2D GP fitting.
-
-        The planned implementation will retain or downweight discrepant bands
-        instead of hard rejection, broadening constraints or weighting bands
-        by confidence.
-        """
+        """Consensus-fit stub; currently raises ``NotImplementedError``."""
         raise NotImplementedError(
             "fit_strategy='consensus_relaxed' is not implemented yet."
         )
