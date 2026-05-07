@@ -6514,6 +6514,41 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return init
 
+    def _consensus_build_guess(
+        self,
+        frequencies,
+        scales=None,
+        dtype=None,
+        device=None,
+    ):
+        """Build a model-key-aware SM init dictionary for future consensus fits."""
+        keys = self._consensus_resolve_time_sm_keys()
+        init = self._consensus_build_sm_initialization(
+            frequencies=frequencies,
+            scales=scales,
+            dtype=dtype,
+            device=device,
+        )
+
+        expected_num_mixtures = getattr(self, "_fit_num_mixtures_effective", None)
+        if (
+            expected_num_mixtures is not None
+            and int(expected_num_mixtures) != init["num_mixtures"]
+        ):
+            raise ValueError(
+                "The number of consensus frequencies does not match the model's "
+                f"number of mixtures ({init['num_mixtures']} != "
+                f"{int(expected_num_mixtures)})."
+            )
+
+        guess = {
+            keys["mixture_means"]: init["mixture_means"],
+        }
+        if init["mixture_scales"] is not None:
+            guess[keys["mixture_scales"]] = init["mixture_scales"]
+
+        return guess
+
     def _consensus_standard_fit(self, **fit_kwargs):
         """Consensus-fit stub; currently raises ``NotImplementedError``."""
         raise NotImplementedError(
