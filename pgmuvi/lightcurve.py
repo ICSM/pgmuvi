@@ -6342,11 +6342,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return self._consensus_multicomp_fit(**fit_kwargs)
         if fit_strategy == "consensus_relaxed":
             return self._consensus_relaxed_fit(**fit_kwargs)
-        raise ValueError(
+        msg = (
             "Invalid fit_strategy. Expected None or one of: "
             "'consensus', 'consensus_multicomp', 'consensus_relaxed'. "
             f"Got {fit_strategy!r}."
         )
+        raise ValueError(msg)
 
     def _consensus_resolve_time_sm_keys(self):
         """Resolve time-kernel spectral-mixture parameter keys for consensus fit."""
@@ -6464,10 +6465,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if scales_tensor.numel() == 1 and n_mixtures > 1:
                 scales_tensor = scales_tensor.expand(n_mixtures)
             elif scales_tensor.numel() != n_mixtures:
-                raise ValueError(
+                msg = (
                     "scales must be a scalar or have the same number of "
                     "elements as frequencies."
                 )
+                raise ValueError(msg)
 
             init["mixture_scales"] = scales_tensor.reshape(1, n_mixtures, 1)
 
