@@ -6422,21 +6422,53 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         dtype=None,
         device=None,
     ):
-        """Convert consensus frequencies into SM-kernel initialization tensors.
+        """Convert consensus frequency estimates to SM init tensors.
 
-        This helper normalizes consensus-derived frequency estimates into
-        properly-shaped tensors for spectral-mixture kernel initialization.
+        Converts consensus frequency estimates into properly-shaped tensors for
+        spectral-mixture kernel initialization.
+
+        Parameters
+        ----------
+        frequencies : float or list or numpy.ndarray or torch.Tensor
+            Consensus frequency estimate(s). Values are converted to a 1-D
+            tensor and must be non-empty, finite, and strictly positive.
+        scales : float or list or numpy.ndarray or torch.Tensor or None, optional
+            Optional spectral-mixture scale value(s). If a scalar is provided,
+            it is broadcast to all mixtures. If array-like, it must have the
+            same number of elements as ``frequencies``.
+        dtype : torch.dtype or None, optional
+            Tensor dtype for returned initialization tensors. If ``None``,
+            inferred from ``self.xdata`` when available; otherwise uses
+            ``torch.float32``.
+        device : torch.device or str or None, optional
+            Device for returned initialization tensors. If ``None``, inferred
+            from ``self.xdata`` when available; otherwise uses CPU.
+
+        Returns
+        -------
+        dict
+            Initialization dictionary containing ``mixture_means`` with shape
+            ``(1, n_mixtures, 1)`` and, when ``scales`` is provided,
+            ``mixture_scales`` with the same shape.
+
+        Raises
+        ------
+        ValueError
+            If frequencies or scales fail validation checks.
         """
+        xdata_tensor = (
+            self.xdata
+            if hasattr(self, "xdata") and isinstance(self.xdata, torch.Tensor)
+            else None
+        )
         if dtype is None:
-            if hasattr(self, "xdata") and isinstance(self.xdata, torch.Tensor):
-                dtype = self.xdata.dtype
-            else:
-                dtype = torch.float32
+            dtype = xdata_tensor.dtype if xdata_tensor is not None else torch.float32
         if device is None:
-            if hasattr(self, "xdata") and isinstance(self.xdata, torch.Tensor):
-                device = self.xdata.device
-            else:
-                device = torch.device("cpu")
+            device = (
+                xdata_tensor.device
+                if xdata_tensor is not None
+                else torch.device("cpu")
+            )
 
         freq_tensor = torch.as_tensor(frequencies, dtype=dtype, device=device)
         freq_tensor = freq_tensor.reshape(-1)
