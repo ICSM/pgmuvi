@@ -6486,7 +6486,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         n_mixtures = freq_tensor.numel()
         mixture_means = freq_tensor.reshape(1, n_mixtures, 1)
-        init = {"mixture_means": mixture_means}
+        init = {
+            "mixture_means": mixture_means,
+            "mixture_scales": None,
+            "num_mixtures": n_mixtures,
+        }
 
         if scales is not None:
             scales_tensor = torch.as_tensor(scales, dtype=dtype, device=device)
