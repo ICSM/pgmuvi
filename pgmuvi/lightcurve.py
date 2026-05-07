@@ -6414,6 +6414,65 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "mixture_scales": _resolve_param_key("mixture_scales"),
         }
 
+    def _consensus_build_sm_initialization(
+        self,
+        frequencies,
+        scales=None,
+        dtype=None,
+        device=None,
+    ):
+        """Convert consensus frequencies into SM-kernel initialization tensors.
+
+        This helper normalizes consensus-derived frequency estimates into
+        properly-shaped tensors for spectral-mixture kernel initialization.
+        """
+        if dtype is None:
+            if hasattr(self, "xdata") and isinstance(self.xdata, torch.Tensor):
+                dtype = self.xdata.dtype
+            else:
+                dtype = torch.float32
+        if device is None:
+            if hasattr(self, "xdata") and isinstance(self.xdata, torch.Tensor):
+                device = self.xdata.device
+            else:
+                device = torch.device("cpu")
+
+        freq_tensor = torch.as_tensor(frequencies, dtype=dtype, device=device)
+        freq_tensor = freq_tensor.reshape(-1)
+
+        if freq_tensor.numel() == 0:
+            raise ValueError("frequencies must not be empty.")
+        if not torch.all(torch.isfinite(freq_tensor)):
+            raise ValueError("frequencies must contain only finite values.")
+        if not torch.all(freq_tensor > 0):
+            raise ValueError("frequencies must be strictly positive.")
+
+        n_mixtures = freq_tensor.numel()
+        mixture_means = freq_tensor.reshape(1, n_mixtures, 1)
+        init = {"mixture_means": mixture_means}
+
+        if scales is not None:
+            scales_tensor = torch.as_tensor(scales, dtype=dtype, device=device)
+            scales_tensor = scales_tensor.reshape(-1)
+            if scales_tensor.numel() == 0:
+                raise ValueError("scales must not be empty when provided.")
+            if not torch.all(torch.isfinite(scales_tensor)):
+                raise ValueError("scales must contain only finite values.")
+            if not torch.all(scales_tensor > 0):
+                raise ValueError("scales must be strictly positive.")
+
+            if scales_tensor.numel() == 1 and n_mixtures > 1:
+                scales_tensor = scales_tensor.expand(n_mixtures)
+            elif scales_tensor.numel() != n_mixtures:
+                raise ValueError(
+                    "scales must be a scalar or have the same number of "
+                    "elements as frequencies."
+                )
+
+            init["mixture_scales"] = scales_tensor.reshape(1, n_mixtures, 1)
+
+        return init
+
     def _consensus_standard_fit(self, **fit_kwargs):
         """Consensus-fit stub; currently raises ``NotImplementedError``."""
         raise NotImplementedError(
