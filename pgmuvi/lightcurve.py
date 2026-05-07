@@ -6448,8 +6448,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         -------
         dict
             Initialization dictionary containing ``mixture_means`` with shape
-            ``(1, n_mixtures, 1)`` and, when ``scales`` is provided,
-            ``mixture_scales`` with the same shape.
+            ``(1, n_mixtures, 1)``, ``mixture_scales`` (same shape when scales
+            are provided, otherwise ``None``), and ``num_mixtures``.
 
         Raises
         ------
