@@ -6462,7 +6462,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else None
         )
         if dtype is None:
-            dtype = xdata_tensor.dtype if xdata_tensor is not None else torch.float32
+            dtype = (
+                xdata_tensor.dtype
+                if xdata_tensor is not None
+                else torch.float32
+            )
         if device is None:
             device = (
                 xdata_tensor.device
@@ -6497,11 +6501,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if scales_tensor.numel() == 1 and n_mixtures > 1:
                 scales_tensor = scales_tensor.expand(n_mixtures)
             elif scales_tensor.numel() != n_mixtures:
-                msg = (
-                    "scales must be a scalar or have the same number of "
-                    "elements as frequencies."
+                raise ValueError(
+                    "scales must be a scalar or have the same number of elements "
+                    "as frequencies."
                 )
-                raise ValueError(msg)
 
             init["mixture_scales"] = scales_tensor.reshape(1, n_mixtures, 1)
 
