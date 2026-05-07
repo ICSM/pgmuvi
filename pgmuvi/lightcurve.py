@@ -5646,6 +5646,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lr=0.1,
         stopavg=30,
         variance=False,
+        fit_strategy=None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -5792,6 +5793,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
+        fit_strategy : {"consensus", "consensus_multicomp",
+                        "consensus_relaxed"} or None, optional
+            Optional fitting-strategy selector.  The default ``None`` keeps the
+            existing general ``fit`` workflow unchanged.  When set to one of
+            the listed strategy names, ``fit`` dispatches to the corresponding
+            internal consensus-fit pathway.  All non-``None`` strategies are
+            currently stubs and raise ``NotImplementedError``.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -5846,6 +5854,30 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "`num_mixtures` must be a positive integer or None, "
                     f"got {num_mixtures}."
                 )
+
+        if fit_strategy is not None:
+            return self._consensus_fit(
+                fit_strategy=fit_strategy,
+                model=model,
+                likelihood=likelihood,
+                num_mixtures=num_mixtures,
+                guess=guess,
+                periods=periods,
+                use_mls_init=use_mls_init,
+                use_best_band_init=use_best_band_init,
+                constraint_set=constraint_set,
+                grid_size=grid_size,
+                cuda=cuda,
+                training_iter=training_iter,
+                max_cg_iterations=max_cg_iterations,
+                optim=optim,
+                miniter=miniter,
+                stop=stop,
+                lr=lr,
+                stopavg=stopavg,
+                variance=variance,
+                **kwargs,
+            )
 
         # --- MLS-based initialisation ---
         _init_freqs = None  # frequencies (raw units) to seed the SM kernel
@@ -6298,6 +6330,54 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.__FITTED_MAP = True
 
         return self.results
+
+    def _consensus_fit(self, fit_strategy, **fit_kwargs):
+        """Dispatch consensus fit strategies to their internal handlers."""
+        if fit_strategy == "consensus":
+            return self._consensus_standard_fit(**fit_kwargs)
+        if fit_strategy == "consensus_multicomp":
+            return self._consensus_multicomp_fit(**fit_kwargs)
+        if fit_strategy == "consensus_relaxed":
+            return self._consensus_relaxed_fit(**fit_kwargs)
+        raise ValueError(
+            "Invalid fit_strategy. Expected one of: "
+            "'consensus', 'consensus_multicomp', 'consensus_relaxed'. "
+            f"Got {fit_strategy!r}."
+        )
+
+    def _consensus_standard_fit(self, **fit_kwargs):
+        """Stub for future strict cross-band consensus-initialized 2D GP fit.
+
+        The planned implementation will run per-band 1D LS/ACF/GP analyses,
+        build a consensus frequency window across bands, reject discrepant
+        bands, initialize/constrain 2D time-frequency SM parameters, and then
+        run the 2D GP fit.
+        """
+        raise NotImplementedError(
+            "fit_strategy='consensus' is not implemented yet."
+        )
+
+    def _consensus_multicomp_fit(self, **fit_kwargs):
+        """Stub for future multi-component cross-band consensus SM fitting.
+
+        The planned implementation will identify multiple recurring
+        frequencies from 1D analyses, cluster them across bands, and
+        initialize/constrain multi-component SM kernels.
+        """
+        raise NotImplementedError(
+            "fit_strategy='consensus_multicomp' is not implemented yet."
+        )
+
+    def _consensus_relaxed_fit(self, **fit_kwargs):
+        """Stub for future relaxed consensus-initialized 2D GP fitting.
+
+        The planned implementation will retain or downweight discrepant bands
+        instead of hard rejection, broadening constraints or weighting bands
+        by confidence.
+        """
+        raise NotImplementedError(
+            "fit_strategy='consensus_relaxed' is not implemented yet."
+        )
 
     def mcmc(
         self,
