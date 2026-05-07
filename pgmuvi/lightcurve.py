@@ -6362,10 +6362,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         def _resolve_one(param_name):
             candidates = set()
+            raw_token = "raw_"
             for key, meta in self._model_pars.items():
                 if not isinstance(key, str):
                     continue
-                if key.startswith("raw_") or ".raw_" in key:
+                if key.startswith(raw_token) or f".{raw_token}" in key:
                     continue
                 if key.endswith(f".{param_name}"):
                     candidates.add(key)
@@ -6390,15 +6391,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "_model_pars."
                 )
 
+            def _candidate_rank(candidate):
+                if candidate == f"covar_module.{param_name}":
+                    return (0, len(candidate), candidate)
+                if (
+                    candidate.startswith("covar_module.")
+                    and ".kernels.0." in candidate
+                ):
+                    return (1, len(candidate), candidate)
+                if candidate.startswith("covar_module."):
+                    return (2, len(candidate), candidate)
+                return (3, len(candidate), candidate)
+
             ordered = sorted(
                 candidates,
-                key=lambda x: (
-                    x != f"covar_module.{param_name}",
-                    ".kernels.0." not in x,
-                    not x.startswith("covar_module."),
-                    len(x),
-                    x,
-                ),
+                key=_candidate_rank,
             )
             return ordered[0]
 
