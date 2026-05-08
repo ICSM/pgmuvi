@@ -72,6 +72,9 @@ _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES = frozenset(
         "rejected",
     }
 )
+_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED = tuple(
+    sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES)
+)
 
 
 def _reraise_with_note(e, note):
@@ -7036,7 +7039,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         reason : str or None, optional
             Optional GP-validation reason string stored in
             ``record["gp_validation_reason"]``. If ``None``, existing reason
-            values are preserved and no new key is created.
+            values are preserved and no new key is created. This argument is
+            keyword-only.
 
         Raises
         ------
@@ -7047,7 +7051,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise ValueError(
                 f"Invalid gp_validation_status {status!r}. "
                 "Allowed values are: "
-                f"{sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES)}"
+                f"{_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED}"
             )
         record["gp_validation_status"] = status
         if reason is not None:
