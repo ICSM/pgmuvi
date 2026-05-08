@@ -7204,9 +7204,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "dominant_frequency is missing or invalid for GP validation."
                     )
 
-                # Validation is performed on the 1D Lightcurve returned by
-                # select_bands, not on self, so the original 2D model and
-                # likelihood state are not mutated by the per-band fit.
+                # Validation is performed on a separate 1D Lightcurve returned
+                # by select_bands, not on self, so the original 2D model and
+                # likelihood attributes of this instance are not mutated by
+                # the per-band fit.
                 lc_band = self.select_bands([str(band_label)])
                 lc_band.fit(**default_gp_fit_kwargs)
                 summary = lc_band.get_period_summary(**period_summary_kwargs)
@@ -7237,6 +7238,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     1.0e-8,
                 )
                 diff = abs(gp_freq - ls_freq)
+                # Relative difference normalised by the LS reference frequency.
                 frac_diff = diff / ls_freq
 
                 record["gp_dominant_frequency"] = gp_freq
@@ -7278,7 +7280,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     _msg += f" rejection_reason={reason}"
                 print(_msg)
 
-        # Guard: ensure no band appears in both accepted and rejected lists.
+        # Guard: ensure no band can appear in both accepted and rejected.
+        # Overlap is unlikely in normal operation but could occur if a band
+        # was recorded in rejected_bands before GP validation ran (e.g. for
+        # a missing LS frequency) and was somehow also added to accepted_after_gp.
         _rejected_set = set(rejected_bands)
         final_accepted = [b for b in accepted_after_gp if b not in _rejected_set]
 
