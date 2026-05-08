@@ -6324,10 +6324,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # Apply priors if they have not already been set by the user (e.g. via
         # a prior call to set_default_priors() or set_period_prior()).
         if not self.__PRIORS_SET:
-            # Validate prior_set now (inside the gate) so we fail fast before
-            # the expensive MLS, but ONLY when the prior logic will actually
-            # run.  When __PRIORS_SET is True the value is irrelevant and we
-            # must not raise even for an invalid/mismatched prior_set.
+            # Validate prior_set before applying any priors, but ONLY when
+            # the prior logic will actually run.  When __PRIORS_SET is True
+            # the value is irrelevant and we must not raise even for an
+            # invalid/mismatched prior_set.
             if prior_set is not None:
                 if not isinstance(prior_set, str):
                     raise TypeError(

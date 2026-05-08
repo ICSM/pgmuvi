@@ -186,6 +186,8 @@ class TestFitPreregisteredPriorsNotOverridden(unittest.TestCase):
 
     def test_invalid_prior_set_silently_ignored_when_priors_preset(self):
         """When priors are already set, an invalid prior_set is silently ignored."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
         lc = _make_lc()
         lc.set_model("1D", num_mixtures=2)
         lc.set_default_priors(prior_set="LPV")
@@ -193,6 +195,13 @@ class TestFitPreregisteredPriorsNotOverridden(unittest.TestCase):
         # neither a bad type nor an unrecognised string should raise.
         _fit_without_training(lc, model=None, prior_set=42, training_iter=1)
         _fit_without_training(lc, model=None, prior_set="NOT_REAL", training_iter=1)
+        # The pre-registered LPV prior must still be in effect.
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in lc.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
+        self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
 
 
 class TestFit2DSmModel(unittest.TestCase):
