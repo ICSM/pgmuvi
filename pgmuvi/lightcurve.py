@@ -7162,6 +7162,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record.setdefault("gp_dominant_frequency", None)
             record.setdefault("gp_dominant_period", None)
             record.setdefault("gp_frequency_difference", None)
+            record.setdefault("gp_fractional_frequency_difference", None)
             record.setdefault("gp_frequency_tolerance", None)
             record.setdefault("gp_validation_status", None)
             record.setdefault("gp_validation_error", None)
@@ -7188,7 +7189,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record["gp_validation_status"] = None
             record["gp_validation_error"] = None
 
-            ls_freq = float(record.get("dominant_frequency", np.nan))
+            _ls_freq_raw = record.get("dominant_frequency", np.nan)
+            ls_freq = (
+                float(_ls_freq_raw) if _ls_freq_raw is not None else np.nan
+            )
             ls_period = record.get("dominant_period")
             gp_freq = None
             gp_period = None
@@ -7200,6 +7204,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "dominant_frequency is missing or invalid for GP validation."
                     )
 
+                # Validation is performed on the 1D Lightcurve returned by
+                # select_bands, not on self, so the original 2D model and
+                # likelihood state are not mutated by the per-band fit.
                 lc_band = self.select_bands([str(band_label)])
                 lc_band.fit(**default_gp_fit_kwargs)
                 summary = lc_band.get_period_summary(**period_summary_kwargs)
@@ -7230,10 +7237,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     1.0e-8,
                 )
                 diff = abs(gp_freq - ls_freq)
+                frac_diff = diff / ls_freq
 
                 record["gp_dominant_frequency"] = gp_freq
                 record["gp_dominant_period"] = gp_period
                 record["gp_frequency_difference"] = float(diff)
+                record["gp_fractional_frequency_difference"] = float(frac_diff)
                 record["gp_frequency_tolerance"] = float(tolerance)
 
                 if diff <= tolerance:
@@ -7269,10 +7278,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     _msg += f" rejection_reason={reason}"
                 print(_msg)
 
+        # Guard: ensure no band appears in both accepted and rejected lists.
+        _rejected_set = set(rejected_bands)
+        final_accepted = [b for b in accepted_after_gp if b not in _rejected_set]
+
         return {
             "controls": controls,
             "band_records": band_records,
-            "accepted_bands": accepted_after_gp,
+            "accepted_bands": final_accepted,
             "rejected_bands": rejected_bands,
             "rejection_reasons": rejection_reasons,
         }
@@ -7581,11 +7594,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         1) uses caller-provided consensus frequencies directly when supplied,
         2) collects one dominant LS candidate per band after quality gating,
            using LS with optional ACF consistency support diagnostics,
-        3) builds a robust cross-band consensus using median and MAD in
+        3) optionally validates each LS/ACF-accepted band against the dominant
+           frequency from a per-band 1D GP PSD fit when
+           ``use_gp_validation=True`` — all comparisons and aggregation are
+           performed in frequency space; user-facing diagnostics may report
+           periods,
+        4) builds a robust cross-band consensus using median and MAD in
            frequency space,
-        4) forwards consensus outputs into existing initial-guess and
+        5) forwards consensus outputs into existing initial-guess and
            constraint plumbing,
-        5) dispatches to the standard fit path with merged guesses.
+        6) dispatches to the standard fit path with merged guesses.
 
         Manual ``consensus_frequencies`` can be supplied directly and bypass
         automatic candidate collection. Automatic LS/ACF consensus construction
