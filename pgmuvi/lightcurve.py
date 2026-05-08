@@ -7028,6 +7028,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "gp_dominant_frequency": None,
                 "gp_dominant_period": None,
                 "gp_frequency_difference": None,
+                "gp_fractional_frequency_difference": None,
                 "gp_frequency_tolerance": None,
                 "gp_validation_status": None,
                 "gp_validation_error": None,
@@ -7184,6 +7185,95 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "rejection_reasons": rejection_reasons,
         }
 
+    @staticmethod
+    def _consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs=None):
+        """Build a safe, isolated kwarg dict for nested 1D GP validation fits.
+
+        All consensus logic operates in frequency space [1/day]. Periods are
+        derived from frequencies only for user-facing diagnostics.
+
+        This helper:
+
+        1. Starts from conservative defaults (``model="1D"``,
+           ``num_mixtures=1``, ``use_mls_init=True``,
+           ``training_iter=100``).
+        2. Merges non-blocked user overrides from ``gp_validation_kwargs``.
+        3. Always forces ``fit_strategy=None`` after merging.
+
+        Why ``fit_strategy`` is forced to ``None``
+        ------------------------------------------
+        Nested validation fits run on 1D per-band ``Lightcurve`` objects
+        created by ``select_bands``. These objects have no multi-band
+        structure and cannot support ``fit_strategy="consensus"``.
+        Propagating the outer ``fit_strategy`` would cause infinite
+        recursion or a misleading error.
+
+        Why consensus-only kwargs are stripped
+        --------------------------------------
+        Keys like ``consensus_frequencies``, ``use_gp_validation``, and
+        ``outlier_sigma`` are meaningful only at the 2D consensus level.
+        Forwarding them into nested 1D fits would either be silently
+        ignored or cause unexpected errors.
+
+        Parameters
+        ----------
+        gp_validation_kwargs : dict or None, optional
+            User-supplied overrides. The reserved nested key
+            ``period_summary_kwargs`` is stripped here and must NOT be
+            forwarded to ``fit()``; callers must pass it separately to
+            ``get_period_summary``.
+
+        Returns
+        -------
+        dict
+            Sanitized kwargs safe for a nested 1D ``Lightcurve.fit()``
+            call. The ``fit_strategy`` key is always ``None``.
+        """
+        # Keys that must NOT propagate into nested GP validation fits.
+        # Consensus-only kwargs are meaningless or harmful for 1D band fits.
+        # period_summary_kwargs is forwarded separately to get_period_summary.
+        _BLOCKED_KEYS = frozenset({
+            "fit_strategy",
+            "consensus_frequencies",
+            "consensus_scales",
+            "consensus_frequency_width",
+            "consensus_frequency_k",
+            "consensus_scale_max_factor",
+            "apply_consensus_constraints",
+            "constrain_consensus",
+            "use_gp_validation",
+            "gp_validation_kwargs",
+            "gp_frequency_tolerance_factor",
+            "outlier_sigma",
+            "consensus_width_factor",
+            "consensus_dedup_rtol",
+            "min_points_per_band",
+            "max_gap_fraction",
+            "min_duty_cycle",
+            "use_acf",
+            "period_summary_kwargs",
+        })
+
+        # Conservative defaults: keep validation lightweight and reproducible.
+        # Users can override non-blocked keys via gp_validation_kwargs.
+        defaults = {
+            "model": "1D",
+            "num_mixtures": 1,
+            "use_mls_init": True,
+            "training_iter": 100,
+        }
+
+        merged = dict(defaults)
+        if gp_validation_kwargs:
+            for key, val in gp_validation_kwargs.items():
+                if key not in _BLOCKED_KEYS:
+                    merged[key] = val
+
+        # Force fit_strategy=None last, regardless of any user override.
+        # A recursive consensus fit on a 1D band lightcurve is always wrong.
+        merged["fit_strategy"] = None
+        return merged
+
     def _consensus_validate_candidates_with_1d_gp(
         self,
         candidate_diag,
@@ -7254,18 +7344,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record.setdefault("gp_validation_status", None)
             record.setdefault("gp_validation_error", None)
 
-        default_gp_fit_kwargs = {
-            "model": "1D",
-            "num_mixtures": 1,
-            "use_mls_init": True,
-            "training_iter": 100,
-            "fit_strategy": None,
-        }
+        default_gp_fit_kwargs = (
+            self._consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs)
+        )
         gp_ls_tolerance_base_factor = 0.1
-        gp_fit_kwargs = dict(gp_validation_kwargs)
-        gp_fit_kwargs.pop("period_summary_kwargs", None)
-        default_gp_fit_kwargs.update(gp_fit_kwargs)
-        default_gp_fit_kwargs["fit_strategy"] = None
 
         accepted_after_gp = []
         for band_label in accepted_bands:
@@ -7297,9 +7379,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     )
 
                 # Validation is performed on a separate 1D Lightcurve returned
-                # by select_bands, not on self, so the original 2D model and
-                # likelihood attributes of this instance are not mutated by
-                # the per-band fit.
+                # by select_bands. The per-band fit mutates only lc_band —
+                # self.model, self.likelihood, self.guess, and
+                # self.consensus_diagnostics on this instance are unaffected.
                 lc_band = self.select_bands([str(band_label)])
                 lc_band.fit(**default_gp_fit_kwargs)
                 summary = lc_band.get_period_summary(**period_summary_kwargs)
@@ -7351,7 +7433,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             except Exception as exc:
                 record["gp_validation_status"] = "failed"
-                record["gp_validation_error"] = f"{type(exc).__name__}: {exc}"
+                record["gp_validation_error"] = (
+                    f"band={band_label}: {type(exc).__name__}: {exc}"
+                )
                 reason = "gp_validation_failed"
 
             if reason is not None:
