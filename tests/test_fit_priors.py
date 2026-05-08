@@ -243,11 +243,11 @@ class TestFit2DSmModel(unittest.TestCase):
                     )
 
         # A UserWarning should be issued about 2D prior concerns.
-        dim_warns = [
-            x for x in w
-            if issubclass(x.category, UserWarning)
+        _is_2d_dim_warn = (
+            lambda x: issubclass(x.category, UserWarning)
             and "2d" in str(x.message).lower()
-        ]
+        )
+        dim_warns = [x for x in w if _is_2d_dim_warn(x)]
         self.assertTrue(
             len(dim_warns) >= 1,
             "Expected a UserWarning about 2D SM prior dimensionality",

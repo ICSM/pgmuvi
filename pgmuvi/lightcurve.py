@@ -6350,7 +6350,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 and hasattr(self.model, "covar_module")
                 else None
             )
-            _ard_dims = getattr(_covar, "ard_num_dims", 1) if _covar is not None else 1
+            _ard_dims = getattr(_covar, "ard_num_dims", 1)
             _is_1d_sm = _ard_dims == 1
             _is_2d_sm = _ard_dims == 2
 
