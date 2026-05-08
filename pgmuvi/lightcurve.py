@@ -7760,9 +7760,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         verbose = fit_kwargs.get("verbose", False)
         consensus_dedup_rtol = float(consensus_dedup_rtol)
-        if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol < 0:
+        if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol <= 0:
             raise ValueError(
-                "consensus_dedup_rtol must be a finite, non-negative "
+                "consensus_dedup_rtol must be a finite, strictly positive "
                 "float."
             )
         if not isinstance(use_gp_validation, bool):
