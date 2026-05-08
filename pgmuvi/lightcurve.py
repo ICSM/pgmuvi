@@ -6638,6 +6638,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "positive and finite."
                     )
                 _k = float(consensus_frequency_k)
+                # 1e-12: practical lower bound — frequencies must be positive
                 _lowers = np.maximum(_freqs - _k * _widths, 1.0e-12)
                 _uppers = _freqs + _k * _widths
                 _global_lower = float(_lowers.min())
@@ -6658,6 +6659,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f" must be positive and finite (got {_scale_upper})."
                 )
                 raise ValueError(_msg)
+            # 1e-6: practical lower bound — scales must be positive
             _constraint_dict[_keys["mixture_scales"]] = Interval(
                 1.0e-6, _scale_upper
             )
