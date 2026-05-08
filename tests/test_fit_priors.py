@@ -184,6 +184,16 @@ class TestFitPreregisteredPriorsNotOverridden(unittest.TestCase):
         # Should still be the LPV prior, not a plain LogNormalPrior
         self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
 
+    def test_invalid_prior_set_silently_ignored_when_priors_preset(self):
+        """When priors are already set, an invalid prior_set is silently ignored."""
+        lc = _make_lc()
+        lc.set_model("1D", num_mixtures=2)
+        lc.set_default_priors(prior_set="LPV")
+        # prior_set validation is skipped when __PRIORS_SET is True, so
+        # neither a bad type nor an unrecognised string should raise.
+        _fit_without_training(lc, model=None, prior_set=42, training_iter=1)
+        _fit_without_training(lc, model=None, prior_set="NOT_REAL", training_iter=1)
+
 
 class TestFit2DSmModel(unittest.TestCase):
     """Test prior-setting behaviour for 2D spectral-mixture models."""

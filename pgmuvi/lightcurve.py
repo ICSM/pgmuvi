@@ -5812,6 +5812,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               :class:`ValueError`.  For 2D SM models a warning is also raised
               because the period/frequency prior applies to both temporal and
               wavelength dimensions.
+
+              **Note:** ``prior_set`` is only validated and applied when priors
+              have not already been set (i.e. when :meth:`set_default_priors`
+              or :meth:`set_period_prior` has **not** been called before
+              :meth:`fit`).  If priors are pre-registered, ``prior_set`` is
+              silently ignored and no error is raised even for invalid values.
             - If ``prior_set`` is ``None`` (default) **and** the Lomb-Scargle
               periodogram was used to initialise a **1D** spectral-mixture
               model, a ``LogNormalPrior`` is automatically registered on
@@ -5896,20 +5902,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "`num_mixtures` must be a positive integer or None, "
                     f"got {num_mixtures}."
                 )
-
-        # Validate prior_set early so we fail fast before the expensive MLS.
-        # The result is discarded here; the value is passed to
-        # set_default_priors() later which calls get_prior_set() again.
-        # Early validation ensures we raise immediately (before long MLS
-        # computation) for unrecognised or wrongly-typed prior_set values.
-        if prior_set is not None:
-            if not isinstance(prior_set, str):
-                raise TypeError(
-                    "`prior_set` must be a string or None, "
-                    f"got {type(prior_set)!r}."
-                )
-            # Raises ValueError for unrecognised names.
-            get_prior_set(prior_set)
 
         # --- MLS-based initialisation ---
         _init_freqs = None  # frequencies (raw units) to seed the SM kernel
@@ -6332,6 +6324,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # Apply priors if they have not already been set by the user (e.g. via
         # a prior call to set_default_priors() or set_period_prior()).
         if not self.__PRIORS_SET:
+            # Validate prior_set now (inside the gate) so we fail fast before
+            # the expensive MLS, but ONLY when the prior logic will actually
+            # run.  When __PRIORS_SET is True the value is irrelevant and we
+            # must not raise even for an invalid/mismatched prior_set.
+            if prior_set is not None:
+                if not isinstance(prior_set, str):
+                    raise TypeError(
+                        "`prior_set` must be a string or None, "
+                        f"got {type(prior_set)!r}."
+                    )
+                # Raises ValueError for unrecognised names.
+                get_prior_set(prior_set)
+
             # Determine whether the MLS periodogram was the source of
             # _init_freqs.  When the user supplied explicit `periods`, they
             # were not MLS-derived; when MLS was not used (use_mls_init=False,
