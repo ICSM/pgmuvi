@@ -6863,7 +6863,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             }
 
         for harmonic_order in (2, 3, 4):
-            if abs(ratio - float(harmonic_order)) <= harmonic_tolerance:
+            harmonic_target = float(harmonic_order)
+            if (
+                abs(ratio - harmonic_target) / harmonic_target
+                <= harmonic_tolerance
+            ):
                 return {
                     "status": _ACF_STATUS_HARMONIC,
                     "ratio": float(ratio),
@@ -7074,8 +7078,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     )
                     if use_acf:
                         _msg += (
-                            f" acf_status={_record['acf_comparison_status']}"
-                            f" harmonic_order={_record['acf_harmonic_order']}"
+                            f" acf_status={_record.get('acf_comparison_status')}"
+                            f" harmonic_order={_record.get('acf_harmonic_order')}"
                         )
                     print(_msg)
                 elif _band in rejection_reasons:
