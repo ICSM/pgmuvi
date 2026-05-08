@@ -7028,6 +7028,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "gp_dominant_frequency": None,
                 "gp_dominant_period": None,
                 "gp_frequency_difference": None,
+                # None means GP validation was not performed or was skipped
+                # for this band; set to a float only after GP validation runs.
                 "gp_fractional_frequency_difference": None,
                 "gp_frequency_tolerance": None,
                 "gp_validation_status": None,
@@ -7379,9 +7381,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     )
 
                 # Validation is performed on a separate 1D Lightcurve returned
-                # by select_bands. The per-band fit mutates only lc_band —
-                # self.model, self.likelihood, self.guess, and
-                # self.consensus_diagnostics on this instance are unaffected.
+                # by select_bands. The per-band lc_band.fit() call mutates
+                # only lc_band — it does NOT affect self.model, self.likelihood,
+                # self.guess, or self.consensus_diagnostics on this instance.
+                # (self.consensus_diagnostics is assigned by _consensus_standard_fit
+                # after all per-band validation has finished, not here.)
                 lc_band = self.select_bands([str(band_label)])
                 lc_band.fit(**default_gp_fit_kwargs)
                 summary = lc_band.get_period_summary(**period_summary_kwargs)
