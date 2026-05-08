@@ -6801,22 +6801,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     @staticmethod
     def _consensus_compare_ls_acf(
-        ls_period,
-        acf_period,
+        ls_frequency,
+        acf_frequency,
         harmonic_tolerance=0.15,
     ):
-        """Compare LS and ACF dominant periods for deterministic consistency checks.
+        """Compare LS and ACF dominant frequencies for consistency checks.
 
+        All internal comparisons are performed in frequency space [1/day].
         ACF is treated as an independent periodicity diagnostic. Bands where
         LS and ACF strongly disagree are rejected because the dominant LS peak
         is less likely to reflect the shared physical timescale.
 
+        The ``ratio`` returned is ``larger_frequency / smaller_frequency``.
+        Because both inputs represent the same physical cycle rate, a harmonic
+        relationship in frequency space (f1 = n * f2) yields the same integer
+        ratio as the equivalent period-space check, so harmonic detection is
+        unaffected by the convention change.
+
         Parameters
         ----------
-        ls_period : float
-            Dominant period derived from Lomb-Scargle for a single band.
-        acf_period : float
-            Dominant period derived from ACF for the same band.
+        ls_frequency : float
+            Dominant frequency [1/day] derived from Lomb-Scargle for a band.
+        acf_frequency : float
+            Dominant frequency [1/day] derived from ACF for the same band.
         harmonic_tolerance : float, optional
             Relative tolerance used to classify direct or harmonic agreement.
 
@@ -6826,11 +6833,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Comparison summary with keys:
             ``status`` (``"agreement"``, ``"harmonic"``,
             ``"disagreement"``, or ``"unavailable"``),
-            ``ratio`` (larger/smaller period ratio), and
+            ``ratio`` (larger/smaller frequency ratio), and
             ``harmonic_order`` (integer harmonic when applicable).
         """
-        ls_val = float(ls_period) if ls_period is not None else np.nan
-        acf_val = float(acf_period) if acf_period is not None else np.nan
+        ls_val = float(ls_frequency) if ls_frequency is not None else np.nan
+        acf_val = float(acf_frequency) if acf_frequency is not None else np.nan
 
         if not (
             np.isfinite(ls_val)
@@ -6988,6 +6995,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             longest_period = float(metrics.get("longest_detectable_period", np.nan))
             if not (np.isfinite(longest_period) and longest_period > 0):
                 longest_period = baseline / 2.0 if np.isfinite(baseline) else np.nan
+            # Minimum physically plausible frequency (inverse of longest
+            # detectable period). All plausibility checks use frequency space.
+            min_detectable_frequency = (
+                float(1.0 / longest_period)
+                if (np.isfinite(longest_period) and longest_period > 0)
+                else 0.0
+            )
             nyquist_freq = float(metrics.get("nyquist_frequency", np.inf))
 
             plausible_idx = []
@@ -6996,8 +7010,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     continue
                 if np.isfinite(nyquist_freq) and fval > nyquist_freq:
                     continue
-                period = 1.0 / fval
-                if np.isfinite(longest_period) and period > longest_period:
+                # Frequency below the minimum detectable frequency means the
+                # corresponding period would exceed the longest detectable period.
+                if min_detectable_frequency > 0 and fval < min_detectable_frequency:
                     continue
                 plausible_idx.append(idx)
 
@@ -7016,12 +7031,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 best_idx = plausible_idx[0]
 
             dominant_freq = float(ls_freqs_np[best_idx])
+            # Period is derived here for storage as a user-facing diagnostic
+            # only; all internal decisions remain in frequency space.
             dominant_period = float(1.0 / dominant_freq)
 
-            if np.isfinite(longest_period) and dominant_period > longest_period:
+            # Final plausibility guard: frequency must meet the minimum
+            # detectable frequency threshold.
+            if (
+                min_detectable_frequency > 0
+                and dominant_freq < min_detectable_frequency
+            ):
                 rejected_bands.append(band_label)
                 rejection_reasons[band_label] = [
-                    "baseline_too_short_for_candidate_period",
+                    "baseline_too_short_for_candidate_frequency",
                 ]
                 band_records[band_label] = record
                 continue
@@ -7046,9 +7068,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     record["acf_frequency"] = acf_candidate["frequency"]
                     record["acf_period"] = acf_candidate["period"]
 
+                # Consistency check is performed in frequency space; period
+                # fields in the record are presentation-only derivations.
                 acf_compare = self._consensus_compare_ls_acf(
-                    ls_period=dominant_period,
-                    acf_period=record["acf_period"],
+                    ls_frequency=dominant_freq,
+                    acf_frequency=record["acf_frequency"],
                 )
                 record["acf_comparison_status"] = acf_compare["status"]
                 record["acf_period_ratio"] = acf_compare["ratio"]
@@ -7110,7 +7134,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         gp_frequency_tolerance_factor=3.0,
         verbose=False,
     ):
-        """Validate LS/ACF-vetted band candidates against per-band 1D GP PSD."""
+        """Validate LS/ACF-vetted band candidates against per-band 1D GP PSD.
+
+        All comparison logic operates in frequency space [1/day].  Period
+        values stored in ``band_records`` (``gp_dominant_period`` etc.) are
+        derived from the validated GP frequency solely for user-facing display
+        and are not used in any acceptance/rejection decision.
+        """
         if not isinstance(candidate_diag, dict):
             raise ValueError("candidate_diag must be a dictionary.")
         if gp_validation_kwargs is None:
@@ -7193,7 +7223,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ls_freq = (
                 float(_ls_freq_raw) if _ls_freq_raw is not None else np.nan
             )
-            ls_period = record.get("dominant_period")
+            # Period is derived for verbose display only; all GP validation
+            # decisions are made in frequency space.
             gp_freq = None
             gp_period = None
             reason = None
@@ -7268,9 +7299,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if verbose:
                 _status = record.get("gp_validation_status")
+                # Period shown here is derived from frequency for display only.
+                _ls_period_display = (
+                    float(1.0 / ls_freq)
+                    if (np.isfinite(ls_freq) and ls_freq > 0)
+                    else None
+                )
                 _msg = (
                     f"[consensus][gp] band={band_label} "
-                    f"ls_period={ls_period} "
+                    f"ls_period={_ls_period_display} "
                     f"ls_frequency={record.get('dominant_frequency')} "
                     f"gp_period={record.get('gp_dominant_period')} "
                     f"gp_frequency={record.get('gp_dominant_frequency')} "
