@@ -7043,7 +7043,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ):
                 rejected_bands.append(band_label)
                 rejection_reasons[band_label] = [
-                    "baseline_too_short_for_candidate_frequency",
+                    "candidate_frequency_too_low",
                 ]
                 band_records[band_label] = record
                 continue
@@ -7307,7 +7307,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
                 _msg = (
                     f"[consensus][gp] band={band_label} "
-                    f"ls_period={_ls_period_display} "
+                    f"ls_period_display={_ls_period_display} "
                     f"ls_frequency={record.get('dominant_frequency')} "
                     f"gp_period={record.get('gp_dominant_period')} "
                     f"gp_frequency={record.get('gp_dominant_frequency')} "
