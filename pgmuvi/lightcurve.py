@@ -6559,6 +6559,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
         consensus_scales = fit_kwargs.pop("consensus_scales", None)
         user_guess = fit_kwargs.pop("guess", None)
+        consensus_frequency_width = fit_kwargs.pop("consensus_frequency_width", None)
+        consensus_frequency_k = fit_kwargs.pop("consensus_frequency_k", 3.0)
+        consensus_scale_max_factor = fit_kwargs.pop("consensus_scale_max_factor", 0.2)
+        apply_consensus_constraints = fit_kwargs.pop(
+            "apply_consensus_constraints", True
+        )
 
         model_is_ready = (
             hasattr(self, "model")
@@ -6574,6 +6580,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "guess",
                 "consensus_frequencies",
                 "consensus_scales",
+                "consensus_frequency_width",
+                "consensus_frequency_k",
+                "consensus_scale_max_factor",
+                "apply_consensus_constraints",
                 "periods",
                 "use_mls_init",
                 "use_best_band_init",
@@ -6602,6 +6612,57 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 **set_model_kwargs,
             )
             fit_kwargs["model"] = None
+
+        if apply_consensus_constraints:
+            _constraint_dict = {}
+            _keys = self._consensus_resolve_time_sm_keys()
+            if consensus_frequency_width is not None:
+                _freqs = np.asarray(
+                    consensus_frequencies, dtype=float
+                ).ravel()
+                _widths = np.asarray(
+                    consensus_frequency_width, dtype=float
+                ).ravel()
+                if _widths.size == 1:
+                    _widths = np.broadcast_to(_widths, _freqs.shape).copy()
+                if _widths.shape != _freqs.shape:
+                    _msg = (
+                        "consensus_frequency_width must be scalar or have one "
+                        "entry per consensus frequency "
+                        f"(got {_widths.shape} vs {_freqs.shape})."
+                    )
+                    raise ValueError(_msg)
+                if not np.all(np.isfinite(_widths) & (_widths > 0)):
+                    raise ValueError(
+                        "consensus_frequency_width values must all be "
+                        "positive and finite."
+                    )
+                _k = float(consensus_frequency_k)
+                _lowers = np.maximum(_freqs - _k * _widths, 1.0e-12)
+                _uppers = _freqs + _k * _widths
+                _global_lower = float(_lowers.min())
+                _global_upper = float(_uppers.max())
+                _constraint_dict[_keys["mixture_means"]] = Interval(
+                    _global_lower, _global_upper
+                )
+
+            _freqs_arr = np.asarray(
+                consensus_frequencies, dtype=float
+            ).ravel()
+            _scale_upper = (
+                float(consensus_scale_max_factor) * float(np.median(_freqs_arr))
+            )
+            if not (np.isfinite(_scale_upper) and _scale_upper > 0):
+                _msg = (
+                    "consensus_scale_max_factor * median(consensus_frequencies)"
+                    f" must be positive and finite (got {_scale_upper})."
+                )
+                raise ValueError(_msg)
+            _constraint_dict[_keys["mixture_scales"]] = Interval(
+                1.0e-6, _scale_upper
+            )
+            if _constraint_dict:
+                self.set_constraint(_constraint_dict)
 
         consensus_guess = self._consensus_build_guess(
             frequencies=consensus_frequencies,
