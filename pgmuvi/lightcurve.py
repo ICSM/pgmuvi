@@ -5819,11 +5819,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               frequency and a broad standard deviation
               (``sigma=_MLS_PRIOR_SIGMA``) so as not to overly constrain the
               period distribution.
-            - For **2D** spectral-mixture models (``ard_num_dims=2``) only
-              generic default priors (noise, mean, scales, weights) are
-              applied; no period/frequency prior is added automatically,
-              because such a prior constrains both temporal and wavelength
-              dimensions identically, which is physically incorrect.
+            - For **2D** spectral-mixture models (``ard_num_dims=2``),
+              generic default priors are still applied, including the broad
+              default spectral-mixture ``mixture_means`` prior. However, no
+              LPV/data-driven period-bounded prior is added automatically,
+              because such a prior would constrain both temporal and
+              wavelength dimensions identically, which is physically
+              incorrect.
             - If ``prior_set`` is ``None`` and no MLS-based initialisation was
               performed (e.g. explicit ``periods`` supplied,
               ``use_mls_init=False``, or MLS returned no peaks), the

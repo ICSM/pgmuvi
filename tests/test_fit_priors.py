@@ -6,7 +6,6 @@ import warnings
 from unittest.mock import patch
 
 import gpytorch
-import torch
 
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
