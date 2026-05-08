@@ -7344,9 +7344,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             auto_controls = candidate_diag["controls"]
             accepted_bands = candidate_diag.get("accepted_bands", [])
             if not accepted_bands:
+                rejection_reasons = candidate_diag.get("rejection_reasons", {})
                 raise RuntimeError(
                     "Consensus construction failed: no acceptable bands "
-                    "survived consensus candidate vetting."
+                    "survived consensus candidate vetting. "
+                    f"Rejection reasons: {rejection_reasons!r}."
                 )
             try:
                 consensus_diag = self._consensus_build_frequency_consensus(
@@ -7362,7 +7364,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             except Exception as exc:
                 raise RuntimeError(
                     "Consensus construction failed during robust frequency "
-                    f"aggregation: {exc}"
+                    "aggregation. This may occur if accepted per-band "
+                    "frequencies are invalid/outlying or too sparse. "
+                    f"Details: {exc}"
                 ) from exc
 
             final_consensus_frequency = float(
@@ -7374,7 +7378,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ):
                 raise RuntimeError(
                     "Consensus construction failed: final consensus frequency "
-                    "is not finite and strictly positive."
+                    "is not finite or not strictly positive."
                 )
             robust_width = float(
                 consensus_diag.get("final_mad_frequency_scatter", np.nan)
@@ -7392,8 +7396,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 requested_num_mixtures = 1
                 fit_kwargs["num_mixtures"] = 1
 
-            # First-generation automatic consensus strategy uses a single robust
-            # cross-band frequency (LS primary + optional ACF support checks).
+            # Automatic consensus strategy uses a single robust cross-band
+            # frequency (LS primary + optional ACF support checks).
             consensus_frequencies = np.asarray(
                 [final_consensus_frequency], dtype=float
             )
