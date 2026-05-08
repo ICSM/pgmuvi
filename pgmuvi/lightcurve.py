@@ -63,6 +63,15 @@ _ACF_STATUS_AGREEMENT = "agreement"
 _ACF_STATUS_HARMONIC = "harmonic"
 _ACF_STATUS_DISAGREEMENT = "disagreement"
 _ACF_STATUS_UNAVAILABLE = "unavailable"
+_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES = frozenset(
+    {
+        "not_requested",
+        "skipped",
+        "failed",
+        "success",
+        "rejected",
+    }
+)
 
 
 def _reraise_with_note(e, note):
@@ -7016,18 +7025,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         *,
         reason=None,
     ):
-        """Set a validated GP-validation status on a band record."""
-        allowed_statuses = {
-            "not_requested",
-            "skipped",
-            "failed",
-            "success",
-            "rejected",
-        }
-        if status not in allowed_statuses:
+        """Set a validated GP-validation status on a band record.
+
+        Parameters
+        ----------
+        record : dict
+            Per-band consensus diagnostic record.
+        status : {"not_requested", "skipped", "failed", "success", "rejected"}
+            GP-validation status to store.
+        reason : str or None, optional
+            Optional GP-validation reason string stored in
+            ``record["gp_validation_reason"]``. If ``None``, existing reason
+            values are preserved and no new key is created.
+
+        Raises
+        ------
+        ValueError
+            If ``status`` is not an allowed GP-validation status.
+        """
+        if status not in _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES:
             raise ValueError(
                 f"Invalid gp_validation_status {status!r}. "
-                f"Allowed values are: {sorted(allowed_statuses)}"
+                "Allowed values are: "
+                f"{sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES)}"
             )
         record["gp_validation_status"] = status
         if reason is not None:
