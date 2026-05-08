@@ -52,6 +52,10 @@ import json
 import math
 
 
+_CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
+_CONSENSUS_MIN_SCALE_BOUND = 1.0e-6
+
+
 def _reraise_with_note(e, note):
     """Reraise an exception with a note added to the message
 
@@ -5798,9 +5802,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Optional fitting-strategy selector.  The default ``None`` keeps the
             existing general ``fit`` workflow unchanged.  When set to one of
             the listed strategy names, ``fit`` dispatches to the corresponding
-            internal consensus-fit pathway.  The listed strategy names are
-            reserved for planned consensus-fit implementations and currently
-            raise ``NotImplementedError``.
+            internal consensus-fit pathway.
+            ``"consensus"`` runs a deterministic multi-band consensus workflow
+            (2D light curves only) that:
+            (i) computes per-band sampling diagnostics,
+            (ii) extracts one dominant LS frequency per acceptable band,
+            (iii) aggregates frequencies with median/MAD outlier rejection,
+            and (iv) uses the resulting consensus to seed and optionally
+            constrain the spectral-mixture fit.
+            ``"consensus_multicomp"`` and ``"consensus_relaxed"`` are currently
+            placeholders and still raise ``NotImplementedError``.
+            Additional ``"consensus"`` controls accepted via ``**kwargs``:
+            ``min_points_per_band``, ``max_gap_fraction``,
+            ``min_duty_cycle``, ``outlier_sigma``, ``use_acf``,
+            ``constrain_consensus``, and ``consensus_width_factor``.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -6349,7 +6364,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         raise ValueError(msg)
 
-    def _consensus_resolve_time_sm_keys(self):
+    def _consensus_resolve_time_spectral_mixture_keys(self):
         """Resolve time-kernel spectral-mixture parameter keys for consensus fit."""
         if (
             not hasattr(self, "model")
@@ -6415,14 +6430,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "mixture_scales": _resolve_param_key("mixture_scales"),
         }
 
-    def _consensus_build_sm_initialization(
+    def _consensus_build_spectral_mixture_initialization(
         self,
         frequencies,
         scales=None,
         dtype=None,
         device=None,
     ):
-        """Convert consensus frequency estimates to SM init tensors.
+        """Convert consensus frequency estimates to spectral-mixture init tensors.
 
         Converts consensus frequency estimates into properly-shaped tensors for
         spectral-mixture kernel initialization.
@@ -6521,9 +6536,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         dtype=None,
         device=None,
     ):
-        """Build a model-key-aware SM init dictionary for future consensus fits."""
-        keys = self._consensus_resolve_time_sm_keys()
-        init = self._consensus_build_sm_initialization(
+        """Build a model-key-aware spectral-mixture init dictionary."""
+        keys = self._consensus_resolve_time_spectral_mixture_keys()
+        init = self._consensus_build_spectral_mixture_initialization(
             frequencies=frequencies,
             scales=scales,
             dtype=dtype,
@@ -6549,22 +6564,737 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return guess
 
-    def _consensus_standard_fit(self, **fit_kwargs):
-        """Minimal consensus wrapper using caller-provided consensus frequencies."""
-        consensus_frequencies = fit_kwargs.pop("consensus_frequencies", None)
-        if consensus_frequencies is None:
-            raise NotImplementedError(
-                "Automatic 1D consensus construction is not implemented yet. "
-                "Please provide `consensus_frequencies`."
+    def _consensus_iter_band_lightcurves(self):
+        """Yield per-band 1D light curves using stored band-label metadata.
+
+        Yields
+        ------
+        tuple[str, Lightcurve]
+            Pairs of ``(band_label, band_lightcurve_1d)``. Each returned light
+            curve contains only time (1-D xdata), flux, and optional flux
+            uncertainty for that band.
+
+        Raises
+        ------
+        ValueError
+            If this light curve is not 2-D, or if per-row band labels are not
+            available/consistent.
+        """
+        if self.ndim <= 1:
+            raise ValueError(
+                "fit_strategy='consensus' requires a 2D (multiband) Lightcurve."
             )
+        if self.band is None:
+            raise ValueError(
+                "fit_strategy='consensus' requires per-row band labels in "
+                "Lightcurve.band for multiband splitting."
+            )
+        if len(self.band) != len(self._xdata_raw):
+            raise ValueError(
+                "fit_strategy='consensus' requires one band label per "
+                "observation row for 2D light curves."
+            )
+
+        band_arr = np.asarray(self.band, dtype=str)
+        unique_bands = list(dict.fromkeys(band_arr.tolist()))
+
+        for band_label in unique_bands:
+            mask_np = band_arr == band_label
+            mask = torch.as_tensor(
+                mask_np,
+                dtype=torch.bool,
+                device=self._xdata_raw.device,
+            )
+            t = self._xdata_raw[mask, 0].clone()
+            y = self._ydata_raw[mask].clone()
+            yerr = (
+                self._yerr_raw[mask].clone()
+                if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
+                else None
+            )
+            lc_band = Lightcurve(
+                t,
+                y,
+                yerr=yerr,
+                xtransform=self.xtransform,
+                ytransform=self.ytransform,
+                name=self.name,
+                band=np.asarray([band_label], dtype=np.str_),
+            )
+            yield str(band_label), lc_band
+
+    def _consensus_resolve_controls(
+        self,
+        metrics_by_band,
+        min_points_per_band=None,
+        max_gap_fraction=None,
+        min_duty_cycle=None,
+        outlier_sigma=None,
+        consensus_width_factor=None,
+    ):
+        """Resolve consensus-control defaults from per-band sampling metrics.
+
+        Any control set explicitly by the caller is used as-is. Missing controls
+        are derived conservatively from the observed per-band sampling metrics.
+        """
+        valid_metrics = [
+            m
+            for m in metrics_by_band.values()
+            if isinstance(m, dict) and "error" not in m
+        ]
+
+        if valid_metrics:
+            n_points_vals = np.asarray(
+                [float(m.get("n_points", np.nan)) for m in valid_metrics],
+                dtype=float,
+            )
+            gap_vals = np.asarray(
+                [float(m.get("max_gap_fraction", np.nan)) for m in valid_metrics],
+                dtype=float,
+            )
+            duty_vals = np.asarray(
+                [float(m.get("duty_cycle", np.nan)) for m in valid_metrics],
+                dtype=float,
+            )
+        else:
+            n_points_vals = np.asarray([8.0], dtype=float)
+            gap_vals = np.asarray([0.4], dtype=float)
+            duty_vals = np.asarray([0.1], dtype=float)
+
+        if min_points_per_band is None:
+            min_points_per_band = int(
+                np.clip(np.nanpercentile(n_points_vals, 25), 8, 25)
+            )
+        if max_gap_fraction is None:
+            max_gap_fraction = float(
+                np.clip(np.nanmedian(gap_vals) * 1.5, 0.25, 0.8)
+            )
+        if min_duty_cycle is None:
+            min_duty_cycle = float(np.clip(np.nanmedian(duty_vals) * 0.5, 0.02, 0.3))
+        if outlier_sigma is None:
+            outlier_sigma = 3.5
+        if consensus_width_factor is None:
+            consensus_width_factor = 3.0
+
+        if min_points_per_band < 2:
+            raise ValueError("min_points_per_band must be >= 2.")
+        if not (0 < max_gap_fraction <= 1):
+            raise ValueError("max_gap_fraction must be in the interval (0, 1].")
+        if not (0 <= min_duty_cycle <= 1):
+            raise ValueError("min_duty_cycle must be in the interval [0, 1].")
+        if not (np.isfinite(outlier_sigma) and outlier_sigma > 0):
+            raise ValueError("outlier_sigma must be positive and finite.")
+        if not (
+            np.isfinite(consensus_width_factor) and consensus_width_factor > 0
+        ):
+            raise ValueError(
+                "consensus_width_factor must be positive and finite."
+            )
+
+        return {
+            "min_points_per_band": int(min_points_per_band),
+            "max_gap_fraction": float(max_gap_fraction),
+            "min_duty_cycle": float(min_duty_cycle),
+            "outlier_sigma": float(outlier_sigma),
+            "consensus_width_factor": float(consensus_width_factor),
+        }
+
+    @staticmethod
+    def _consensus_reject_bad_bands(
+        metrics,
+        min_points_per_band,
+        max_gap_fraction,
+        min_duty_cycle,
+    ):
+        """Return a list of deterministic rejection reasons from sampling metrics."""
+        reasons = []
+        if not isinstance(metrics, dict):
+            return ["sampling metrics unavailable"]
+        if "error" in metrics:
+            reasons.append(str(metrics["error"]))
+            return reasons
+
+        n_points = float(metrics.get("n_points", np.nan))
+        if not (np.isfinite(n_points) and n_points >= min_points_per_band):
+            reasons.append(
+                f"too_few_points ({n_points:g} < {int(min_points_per_band)})"
+            )
+
+        gap_fraction = float(metrics.get("max_gap_fraction", np.nan))
+        if not (np.isfinite(gap_fraction) and gap_fraction <= max_gap_fraction):
+            reasons.append(
+                f"max_gap_fraction ({gap_fraction:.3g} > {max_gap_fraction:.3g})"
+            )
+
+        duty_cycle = float(metrics.get("duty_cycle", np.nan))
+        if not (np.isfinite(duty_cycle) and duty_cycle >= min_duty_cycle):
+            reasons.append(
+                f"duty_cycle ({duty_cycle:.3g} < {min_duty_cycle:.3g})"
+            )
+
+        return reasons
+
+    @staticmethod
+    def _consensus_extract_acf_candidate(acf_result):
+        """Extract the strongest non-zero-lag ACF peak as a frequency candidate."""
+        if acf_result is None:
+            return None
+        lag = acf_result.lag.detach().cpu().numpy()
+        acf_vals = acf_result.acf.detach().cpu().numpy()
+        if lag.size < 3 or acf_vals.size < 3:
+            return None
+
+        lag = lag[1:]
+        acf_vals = acf_vals[1:]
+        valid = np.isfinite(lag) & np.isfinite(acf_vals) & (lag > 0)
+        if not np.any(valid):
+            return None
+        lag = lag[valid]
+        acf_vals = acf_vals[valid]
+        if lag.size < 3:
+            return None
+
+        try:
+            from scipy.signal import find_peaks
+
+            peaks, _ = find_peaks(acf_vals)
+        except ImportError:
+            peaks = np.asarray([], dtype=int)
+
+        if peaks.size == 0:
+            return None
+
+        best_idx = peaks[np.argmax(acf_vals[peaks])]
+        best_period = float(lag[best_idx])
+        if not (np.isfinite(best_period) and best_period > 0):
+            return None
+        return {
+            "period": best_period,
+            "frequency": float(1.0 / best_period),
+        }
+
+    def _consensus_collect_band_candidates(
+        self,
+        *,
+        min_points_per_band=None,
+        max_gap_fraction=None,
+        min_duty_cycle=None,
+        use_acf=False,
+        verbose=False,
+    ):
+        """Collect one dominant LS frequency candidate per accepted band.
+
+        This function computes per-band sampling metrics, applies conservative
+        pre-fit band rejection, runs per-band LS (and optional ACF diagnostics),
+        and retains at most one dominant physically plausible LS candidate per
+        band.
+
+        Parameters
+        ----------
+        min_points_per_band : int or None, optional
+            Minimum number of points required to accept a band prior to LS.
+            If ``None``, derived from per-band sampling metrics.
+        max_gap_fraction : float or None, optional
+            Maximum allowed largest-gap fraction per band. If ``None``, derived
+            from per-band sampling metrics.
+        min_duty_cycle : float or None, optional
+            Minimum allowed duty-cycle estimate per band. If ``None``, derived
+            from per-band sampling metrics.
+        use_acf : bool, optional
+            If ``True``, compute data-driven ACF diagnostics per accepted band.
+        verbose : bool, optional
+            If ``True``, print per-band acceptance/rejection and dominant LS
+            values.
+
+        Returns
+        -------
+        dict
+            Dictionary with control values, per-band records, accepted and
+            rejected bands, and rejection reasons.
+        """
+        per_band_lc = dict(self._consensus_iter_band_lightcurves())
+        metrics_by_band = {
+            band: lc_band.compute_sampling_metrics()
+            for band, lc_band in per_band_lc.items()
+        }
+
+        controls = self._consensus_resolve_controls(
+            metrics_by_band=metrics_by_band,
+            min_points_per_band=min_points_per_band,
+            max_gap_fraction=max_gap_fraction,
+            min_duty_cycle=min_duty_cycle,
+        )
+
+        band_records = {}
+        accepted_bands = []
+        rejected_bands = []
+        rejection_reasons = {}
+
+        for band_label, lc_band in per_band_lc.items():
+            metrics = metrics_by_band[band_label]
+            reasons = self._consensus_reject_bad_bands(
+                metrics=metrics,
+                min_points_per_band=controls["min_points_per_band"],
+                max_gap_fraction=controls["max_gap_fraction"],
+                min_duty_cycle=controls["min_duty_cycle"],
+            )
+
+            record = {
+                "band": band_label,
+                "metrics": metrics,
+                "dominant_frequency": None,
+                "dominant_period": None,
+                "ls_significant": None,
+                "acf_frequency": None,
+                "acf_period": None,
+                "selected_from": None,
+            }
+
+            if reasons:
+                rejected_bands.append(band_label)
+                rejection_reasons[band_label] = reasons
+                band_records[band_label] = record
+                continue
+
+            ls_freqs, ls_sig = lc_band.fit_LS(num_peaks=5)
+            ls_freqs_np = np.asarray(ls_freqs.detach().cpu().numpy(), dtype=float)
+            ls_sig_np = np.asarray(ls_sig.detach().cpu().numpy(), dtype=bool)
+            if ls_freqs_np.size == 0:
+                rejected_bands.append(band_label)
+                rejection_reasons[band_label] = ["no_ls_peaks"]
+                band_records[band_label] = record
+                continue
+
+            baseline = float(metrics.get("baseline", np.nan))
+            longest_period = float(metrics.get("longest_detectable_period", np.nan))
+            if not (np.isfinite(longest_period) and longest_period > 0):
+                longest_period = baseline / 2.0 if np.isfinite(baseline) else np.nan
+            nyquist_freq = float(metrics.get("nyquist_frequency", np.inf))
+
+            plausible_idx = []
+            for idx, fval in enumerate(ls_freqs_np):
+                if not (np.isfinite(fval) and fval > 0):
+                    continue
+                if np.isfinite(nyquist_freq) and fval > nyquist_freq:
+                    continue
+                period = 1.0 / fval
+                if np.isfinite(longest_period) and period > longest_period:
+                    continue
+                plausible_idx.append(idx)
+
+            if not plausible_idx:
+                rejected_bands.append(band_label)
+                rejection_reasons[band_label] = ["no_physically_plausible_ls_peak"]
+                band_records[band_label] = record
+                continue
+
+            best_idx = None
+            for idx in plausible_idx:
+                if idx < ls_sig_np.size and ls_sig_np[idx]:
+                    best_idx = idx
+                    break
+            if best_idx is None:
+                best_idx = plausible_idx[0]
+
+            dominant_freq = float(ls_freqs_np[best_idx])
+            dominant_period = float(1.0 / dominant_freq)
+
+            if np.isfinite(longest_period) and dominant_period > longest_period:
+                rejected_bands.append(band_label)
+                rejection_reasons[band_label] = [
+                    "baseline_too_short_for_candidate_period",
+                ]
+                band_records[band_label] = record
+                continue
+
+            if use_acf:
+                acf_candidate = self._consensus_extract_acf_candidate(
+                    lc_band.acf(method="data", normalize=True)
+                )
+                if acf_candidate is not None:
+                    record["acf_frequency"] = acf_candidate["frequency"]
+                    record["acf_period"] = acf_candidate["period"]
+
+            record["dominant_frequency"] = dominant_freq
+            record["dominant_period"] = dominant_period
+            record["ls_significant"] = bool(
+                best_idx < ls_sig_np.size and ls_sig_np[best_idx]
+            )
+            record["selected_from"] = "ls_primary_peak"
+            band_records[band_label] = record
+            accepted_bands.append(band_label)
+
+        if verbose:
+            print("[consensus] accepted bands:", accepted_bands)
+            print("[consensus] rejected bands:", rejected_bands)
+            for _band, _record in band_records.items():
+                _freq = _record["dominant_frequency"]
+                _period = _record["dominant_period"]
+                if _freq is not None:
+                    print(
+                        f"[consensus] band={_band} dominant_period={_period:.6g} "
+                        f"dominant_frequency={_freq:.6g}"
+                    )
+                elif _band in rejection_reasons:
+                    print(
+                        f"[consensus] band={_band} rejected: "
+                        f"{', '.join(rejection_reasons[_band])}"
+                    )
+
+        return {
+            "controls": controls,
+            "band_records": band_records,
+            "accepted_bands": accepted_bands,
+            "rejected_bands": rejected_bands,
+            "rejection_reasons": rejection_reasons,
+        }
+
+    @staticmethod
+    def _consensus_build_frequency_consensus(
+        band_records,
+        accepted_bands,
+        outlier_sigma=3.5,
+        verbose=False,
+    ):
+        """Build a robust cross-band consensus frequency from dominant candidates.
+
+        Parameters
+        ----------
+        band_records : dict
+            Per-band candidate records containing at least
+            ``dominant_frequency`` keys.
+        accepted_bands : list[str]
+            Bands to include in the robust aggregation stage.
+        outlier_sigma : float, optional
+            Robust sigma threshold used with MAD-based dispersion for
+            catastrophic outlier rejection.
+        verbose : bool, optional
+            If ``True``, print outlier decisions and final consensus values.
+
+        Returns
+        -------
+        dict
+            Aggregation diagnostics including median frequency, MAD scatter,
+            inlier/outlier bands, and final consensus frequency.
+
+        Raises
+        ------
+        ValueError
+            If no valid per-band dominant frequencies are available.
+        """
+        freq_pairs = []
+        for band in accepted_bands:
+            freq = band_records[band].get("dominant_frequency")
+            if freq is None:
+                continue
+            if np.isfinite(freq) and freq > 0:
+                freq_pairs.append((band, float(freq)))
+
+        if not freq_pairs:
+            raise ValueError(
+                "Consensus fit failed: no valid dominant per-band frequencies "
+                "were available after quality gating."
+            )
+
+        freq_arr = np.asarray([f for _, f in freq_pairs], dtype=float)
+        band_arr = np.asarray([b for b, _ in freq_pairs], dtype=object)
+
+        median_freq = float(np.median(freq_arr))
+        mad_freq = float(np.median(np.abs(freq_arr - median_freq)))
+        robust_sigma = 1.4826 * mad_freq
+
+        if len(freq_arr) >= 3 and robust_sigma > 0 and np.isfinite(robust_sigma):
+            abs_dev = np.abs(freq_arr - median_freq)
+            inlier_mask = abs_dev <= float(outlier_sigma) * robust_sigma
+        else:
+            inlier_mask = np.ones_like(freq_arr, dtype=bool)
+
+        if not np.any(inlier_mask):
+            inlier_mask = np.ones_like(freq_arr, dtype=bool)
+
+        outlier_bands = band_arr[~inlier_mask].tolist()
+        inlier_freqs = freq_arr[inlier_mask]
+        inlier_bands = band_arr[inlier_mask].tolist()
+
+        final_consensus_frequency = float(np.median(inlier_freqs))
+        mad_scatter = float(np.median(np.abs(inlier_freqs - final_consensus_frequency)))
+
+        if verbose:
+            if outlier_bands:
+                print(
+                    "[consensus] outlier rejection removed bands:",
+                    outlier_bands,
+                )
+            print(
+                "[consensus] median frequency:",
+                f"{median_freq:.6g}",
+                "MAD:",
+                f"{mad_freq:.6g}",
+            )
+            print(
+                "[consensus] final consensus frequency:",
+                f"{final_consensus_frequency:.6g}",
+            )
+
+        return {
+            "frequencies_all": freq_arr.tolist(),
+            "bands_all": band_arr.tolist(),
+            "median_frequency": median_freq,
+            "mad_frequency_scatter": mad_freq,
+            "inlier_bands": inlier_bands,
+            "outlier_bands": outlier_bands,
+            "final_consensus_frequency": final_consensus_frequency,
+            "final_mad_frequency_scatter": mad_scatter,
+        }
+
+    @staticmethod
+    def _consensus_build_initialization_from_frequency(
+        final_frequency,
+        scatter,
+        *,
+        num_mixtures=1,
+        consensus_width_factor=3.0,
+    ):
+        """Convert a scalar consensus frequency into init guesses and bounds.
+
+        Parameters
+        ----------
+        final_frequency : float
+            Final robust consensus frequency.
+        scatter : float
+            Robust frequency scatter estimate (MAD-based).
+        num_mixtures : int, optional
+            Number of spectral-mixture components for initialization vectors.
+        consensus_width_factor : float, optional
+            Multiplier applied to robust scatter to form constraint width.
+
+        Returns
+        -------
+        dict
+            Initialization payload containing ``consensus_frequencies``,
+            ``consensus_scales``, ``consensus_frequency_width``, and
+            ``consensus_constraint_bounds``.
+
+        Raises
+        ------
+        ValueError
+            If inputs are invalid (non-positive frequency or mixture count).
+        """
+        if not (np.isfinite(final_frequency) and final_frequency > 0):
+            raise ValueError(
+                "final consensus frequency must be positive and finite."
+            )
+        if not isinstance(num_mixtures, int) or num_mixtures < 1:
+            raise ValueError("num_mixtures must be a positive integer.")
+
+        floor_width = max(final_frequency * 0.01, 1.0e-8)
+        if np.isfinite(scatter) and scatter > 0:
+            width = float(consensus_width_factor) * float(scatter)
+            width = max(width, floor_width)
+        else:
+            width = floor_width
+
+        lower = max(final_frequency - width, _CONSENSUS_MIN_FREQUENCY_BOUND)
+        upper = final_frequency + width
+        scale_guess = max(
+            float(scatter),
+            final_frequency * 0.05,
+            _CONSENSUS_MIN_SCALE_BOUND,
+        )
+
+        return {
+            "consensus_frequencies": np.full(
+                num_mixtures, final_frequency, dtype=float
+            ),
+            "consensus_scales": np.full(num_mixtures, scale_guess, dtype=float),
+            "consensus_frequency_width": np.full(num_mixtures, width, dtype=float),
+            "consensus_constraint_bounds": (float(lower), float(upper)),
+        }
+
+    def _consensus_standard_fit(self, **fit_kwargs):
+        """Run the conservative consensus fit workflow for 2D light curves.
+
+        For ``fit_strategy="consensus"``, this method:
+        1) validates 2D multiband inputs,
+        2) collects one dominant LS candidate per band after quality gating,
+        3) builds a robust cross-band consensus using median and MAD,
+        4) converts consensus outputs into initial guesses and constraints,
+        5) dispatches to the standard fit path with merged guesses.
+
+        Manual ``consensus_frequencies`` remain supported and bypass automatic
+        candidate collection.
+
+        Parameters
+        ----------
+        **fit_kwargs : dict
+            Standard :meth:`fit` kwargs plus consensus-specific controls:
+            ``min_points_per_band``, ``max_gap_fraction``, ``min_duty_cycle``,
+            ``outlier_sigma``, ``use_acf``, ``constrain_consensus``, and
+            ``consensus_width_factor``. Manual overrides are also accepted via
+            ``consensus_frequencies`` and ``consensus_scales``.
+
+        Returns
+        -------
+        dict
+            The result object returned by the underlying :meth:`fit` call.
+
+        Raises
+        ------
+        ValueError
+            If this is not a 2D light curve, or if consensus inputs fail
+            validation.
+        """
+        consensus_frequencies = fit_kwargs.pop("consensus_frequencies", None)
         consensus_scales = fit_kwargs.pop("consensus_scales", None)
         user_guess = fit_kwargs.pop("guess", None)
         consensus_frequency_width = fit_kwargs.pop("consensus_frequency_width", None)
         consensus_frequency_k = fit_kwargs.pop("consensus_frequency_k", 3.0)
         consensus_scale_max_factor = fit_kwargs.pop("consensus_scale_max_factor", 0.2)
-        apply_consensus_constraints = fit_kwargs.pop(
-            "apply_consensus_constraints", True
-        )
+        legacy_apply_constraints = fit_kwargs.pop("apply_consensus_constraints", None)
+        constrain_consensus = fit_kwargs.pop("constrain_consensus", None)
+        if constrain_consensus is None:
+            apply_consensus_constraints = (
+                True
+                if legacy_apply_constraints is None
+                else bool(legacy_apply_constraints)
+            )
+        else:
+            apply_consensus_constraints = bool(constrain_consensus)
+
+        min_points_per_band = fit_kwargs.pop("min_points_per_band", None)
+        max_gap_fraction = fit_kwargs.pop("max_gap_fraction", None)
+        min_duty_cycle = fit_kwargs.pop("min_duty_cycle", None)
+        outlier_sigma = fit_kwargs.pop("outlier_sigma", None)
+        use_acf = fit_kwargs.pop("use_acf", False)
+        consensus_width_factor = fit_kwargs.pop("consensus_width_factor", None)
+        verbose = fit_kwargs.get("verbose", False)
+
+        if self.ndim <= 1:
+            raise ValueError(
+                "fit_strategy='consensus' is only supported for 2D multiband "
+                "Lightcurve objects."
+            )
+
+        auto_constraint_bounds = None
+        auto_controls = None
+        if consensus_frequencies is None:
+            candidate_diag = self._consensus_collect_band_candidates(
+                min_points_per_band=min_points_per_band,
+                max_gap_fraction=max_gap_fraction,
+                min_duty_cycle=min_duty_cycle,
+                use_acf=use_acf,
+                verbose=verbose,
+            )
+            auto_controls = candidate_diag["controls"]
+            consensus_diag = self._consensus_build_frequency_consensus(
+                band_records=candidate_diag["band_records"],
+                accepted_bands=candidate_diag["accepted_bands"],
+                outlier_sigma=(
+                    auto_controls["outlier_sigma"]
+                    if outlier_sigma is None
+                    else float(outlier_sigma)
+                ),
+                verbose=verbose,
+            )
+
+            if consensus_width_factor is None:
+                consensus_width_factor = auto_controls["consensus_width_factor"]
+            if outlier_sigma is None:
+                outlier_sigma = auto_controls["outlier_sigma"]
+
+            requested_num_mixtures = fit_kwargs.get("num_mixtures")
+            if requested_num_mixtures is None:
+                requested_num_mixtures = 1
+                fit_kwargs["num_mixtures"] = 1
+
+            init_payload = self._consensus_build_initialization_from_frequency(
+                final_frequency=consensus_diag["final_consensus_frequency"],
+                scatter=consensus_diag["final_mad_frequency_scatter"],
+                num_mixtures=int(requested_num_mixtures),
+                consensus_width_factor=float(consensus_width_factor),
+            )
+
+            consensus_frequencies = init_payload["consensus_frequencies"]
+            if consensus_scales is None:
+                consensus_scales = init_payload["consensus_scales"]
+            if consensus_frequency_width is None:
+                consensus_frequency_width = init_payload["consensus_frequency_width"]
+            auto_constraint_bounds = init_payload["consensus_constraint_bounds"]
+
+            self.consensus_diagnostics = {
+                "accepted_bands": candidate_diag["accepted_bands"],
+                "rejected_bands": candidate_diag["rejected_bands"],
+                "rejection_reasons": candidate_diag["rejection_reasons"],
+                "per_band_diagnostics": candidate_diag["band_records"],
+                "per_band_dominant_periods": {
+                    band: rec["dominant_period"]
+                    for band, rec in candidate_diag["band_records"].items()
+                    if rec["dominant_period"] is not None
+                },
+                "per_band_dominant_frequencies": {
+                    band: rec["dominant_frequency"]
+                    for band, rec in candidate_diag["band_records"].items()
+                    if rec["dominant_frequency"] is not None
+                },
+                "median_frequency": consensus_diag["median_frequency"],
+                "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
+                "consensus_inlier_bands": consensus_diag["inlier_bands"],
+                "consensus_outlier_bands": consensus_diag["outlier_bands"],
+                "final_consensus_frequency": consensus_diag[
+                    "final_consensus_frequency"
+                ],
+                "final_constraint_bounds": init_payload["consensus_constraint_bounds"],
+                "controls": {
+                    **auto_controls,
+                    "outlier_sigma": float(outlier_sigma),
+                    "use_acf": bool(use_acf),
+                    "constrain_consensus": bool(apply_consensus_constraints),
+                    "consensus_width_factor": float(consensus_width_factor),
+                },
+            }
+            if verbose:
+                print(
+                    "[consensus] final bounds:",
+                    init_payload["consensus_constraint_bounds"],
+                )
+        else:
+            consensus_frequencies = np.asarray(
+                consensus_frequencies, dtype=float
+            ).ravel()
+            if consensus_frequencies.size == 0:
+                raise ValueError("consensus_frequencies must not be empty.")
+            if not np.all(
+                np.isfinite(consensus_frequencies) & (consensus_frequencies > 0)
+            ):
+                raise ValueError(
+                    "consensus_frequencies must contain finite, strictly "
+                    "positive values."
+                )
+            if consensus_frequency_width is None:
+                floor_width = np.maximum(consensus_frequencies * 0.01, 1.0e-8)
+                consensus_frequency_width = floor_width
+            self.consensus_diagnostics = {
+                "accepted_bands": [],
+                "rejected_bands": [],
+                "rejection_reasons": {},
+                "per_band_dominant_periods": {},
+                "per_band_dominant_frequencies": {},
+                "median_frequency": float(np.median(consensus_frequencies)),
+                "mad_frequency_scatter": float(
+                    np.median(
+                        np.abs(consensus_frequencies - np.median(consensus_frequencies))
+                    )
+                ),
+                "final_consensus_frequency": float(np.median(consensus_frequencies)),
+                "final_constraint_bounds": None,
+                "controls": {
+                    "outlier_sigma": outlier_sigma,
+                    "use_acf": bool(use_acf),
+                    "constrain_consensus": bool(apply_consensus_constraints),
+                    "consensus_width_factor": consensus_width_factor,
+                },
+                "mode": "manual_consensus_frequencies",
+            }
 
         model_is_ready = (
             hasattr(self, "model")
@@ -6584,6 +7314,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "consensus_frequency_k",
                 "consensus_scale_max_factor",
                 "apply_consensus_constraints",
+                "constrain_consensus",
+                "min_points_per_band",
+                "max_gap_fraction",
+                "min_duty_cycle",
+                "outlier_sigma",
+                "use_acf",
+                "consensus_width_factor",
                 "periods",
                 "use_mls_init",
                 "use_best_band_init",
@@ -6615,7 +7352,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if apply_consensus_constraints:
             _constraint_dict = {}
-            _keys = self._consensus_resolve_time_sm_keys()
+            _keys = self._consensus_resolve_time_spectral_mixture_keys()
+            _frequency_constraint_bounds = None
             if consensus_frequency_width is not None:
                 _freqs = np.asarray(
                     consensus_frequencies, dtype=float
@@ -6638,14 +7376,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "positive and finite."
                     )
                 _k = float(consensus_frequency_k)
-                # 1e-12: practical lower bound — frequencies must be positive
-                _lowers = np.maximum(_freqs - _k * _widths, 1.0e-12)
+                # Practical lower bound - frequencies must be positive.
+                _lowers = np.maximum(
+                    _freqs - _k * _widths, _CONSENSUS_MIN_FREQUENCY_BOUND
+                )
                 _uppers = _freqs + _k * _widths
                 _global_lower = float(_lowers.min())
                 _global_upper = float(_uppers.max())
                 _constraint_dict[_keys["mixture_means"]] = Interval(
                     _global_lower, _global_upper
                 )
+                _frequency_constraint_bounds = (_global_lower, _global_upper)
 
             _freqs_arr = np.asarray(
                 consensus_frequencies, dtype=float
@@ -6659,17 +7400,46 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f" must be positive and finite (got {_scale_upper})."
                 )
                 raise ValueError(_msg)
-            # 1e-6: practical lower bound — scales must be positive
+            # Practical lower bound - scales must be positive.
             _constraint_dict[_keys["mixture_scales"]] = Interval(
-                1.0e-6, _scale_upper
+                _CONSENSUS_MIN_SCALE_BOUND, _scale_upper
             )
             if _constraint_dict:
                 self.set_constraint(_constraint_dict)
+        else:
+            _frequency_constraint_bounds = None
+            _scale_upper = None
 
         consensus_guess = self._consensus_build_guess(
             frequencies=consensus_frequencies,
             scales=consensus_scales,
         )
+
+        self._last_consensus_fit_info = {
+            "fit_strategy": "consensus",
+            "consensus_frequencies": np.asarray(
+                consensus_frequencies, dtype=float
+            ).ravel().tolist(),
+            "consensus_scales": (
+                None
+                if consensus_scales is None
+                else np.asarray(consensus_scales, dtype=float).ravel().tolist()
+            ),
+            "consensus_frequency_width": (
+                None
+                if consensus_frequency_width is None
+                else np.asarray(consensus_frequency_width, dtype=float).ravel().tolist()
+            ),
+            "apply_consensus_constraints": bool(apply_consensus_constraints),
+            "consensus_frequency_bounds": (
+                _frequency_constraint_bounds
+                if _frequency_constraint_bounds is not None
+                else auto_constraint_bounds
+            ),
+            "consensus_scale_upper": (
+                float(_scale_upper) if _scale_upper is not None else None
+            ),
+        }
 
         merged_guess = {}
         if user_guess is not None:
@@ -6681,13 +7451,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return self.fit(**fit_kwargs)
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
-        """Consensus-fit stub; currently raises ``NotImplementedError``."""
+        """Consensus-fit stub for future multi-component consensus fitting."""
         raise NotImplementedError(
             "fit_strategy='consensus_multicomp' is not implemented yet."
         )
 
     def _consensus_relaxed_fit(self, **fit_kwargs):
-        """Consensus-fit stub; currently raises ``NotImplementedError``."""
+        """Consensus-fit stub for future relaxed-consensus fitting behavior."""
         raise NotImplementedError(
             "fit_strategy='consensus_relaxed' is not implemented yet."
         )
