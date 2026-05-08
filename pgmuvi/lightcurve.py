@@ -6800,6 +6800,48 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         }
 
     @staticmethod
+    def _consensus_fractional_frequency_difference(f1, f2):
+        """Return the standard consensus fractional frequency difference.
+
+        Definition
+        ----------
+        ``abs(f1 - f2) / min(f1, f2)``
+        The smaller-frequency normalisation keeps agreement checks symmetric in
+        frequency space while measuring mismatch relative to the slower
+        timescale represented by the pair.
+
+        Parameters
+        ----------
+        f1 : float
+            First positive frequency [1/day].
+        f2 : float
+            Second positive frequency [1/day].
+
+        Returns
+        -------
+        float
+            Fractional frequency difference for consensus agreement tests.
+
+        Raises
+        ------
+        ValueError
+            If either frequency is not finite and strictly positive.
+        """
+        f1_val = float(f1)
+        f2_val = float(f2)
+        if not (
+            np.isfinite(f1_val)
+            and np.isfinite(f2_val)
+            and f1_val > 0
+            and f2_val > 0
+        ):
+            raise ValueError(
+                "fractional frequency difference requires finite, positive "
+                "frequencies."
+            )
+        return abs(f1_val - f2_val) / min(f1_val, f2_val)
+
+    @staticmethod
     def _consensus_compare_ls_acf(
         ls_frequency,
         acf_frequency,
@@ -7258,15 +7300,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 frequency_difference = abs(
                     gp_dominant_frequency - candidate_frequency
                 )
-                # Standard consensus disagreement definition in frequency space.
-                frac_diff = frequency_difference / min(
+                fractional_frequency_difference = (
+                    self._consensus_fractional_frequency_difference(
                     candidate_frequency, gp_dominant_frequency
+                )
                 )
 
                 record["gp_dominant_frequency"] = gp_dominant_frequency
                 record["gp_dominant_period"] = gp_dominant_period
                 record["gp_frequency_difference"] = float(frequency_difference)
-                record["gp_fractional_frequency_difference"] = float(frac_diff)
+                record["gp_fractional_frequency_difference"] = float(
+                    fractional_frequency_difference
+                )
                 record["gp_frequency_tolerance"] = float(frequency_tolerance)
 
                 if frequency_difference <= frequency_tolerance:
@@ -7354,8 +7399,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             freq = float(candidate["frequency"])
             score = float(candidate["score"])
-            if not np.isfinite(freq):
-                raise ValueError("Candidate frequencies must be finite.")
+            if not (np.isfinite(freq) and freq > 0):
+                raise ValueError(
+                    "Candidate frequencies must be finite and positive."
+                )
             if not np.isfinite(score):
                 raise ValueError("Candidate scores must be finite.")
             candidate_copy = dict(candidate)
@@ -7385,9 +7432,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             f1 = float(normalized[i]["frequency"])
             for j in range(i + 1, len(normalized)):
                 f2 = float(normalized[j]["frequency"])
-                # Use the same consensus fractional-frequency definition across
-                # clustering and agreement checks.
-                rel_diff = abs(f1 - f2) / min(f1, f2)
+                rel_diff = self._consensus_fractional_frequency_difference(f1, f2)
                 if rel_diff < _rtol:
                     _union(i, j)
 
@@ -7715,9 +7760,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         verbose = fit_kwargs.get("verbose", False)
         consensus_dedup_rtol = float(consensus_dedup_rtol)
-        if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol <= 0:
+        if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol < 0:
             raise ValueError(
-                "consensus_dedup_rtol must be a finite, strictly positive "
+                "consensus_dedup_rtol must be a finite, non-negative "
                 "float."
             )
         if not isinstance(use_gp_validation, bool):
@@ -7752,12 +7797,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 verbose=verbose,
             )
             if use_gp_validation:
-                candidate_diag = self._consensus_validate_candidates_with_1d_gp(
+                validated_diag = self._consensus_validate_candidates_with_1d_gp(
                     candidate_diag=candidate_diag,
                     gp_validation_kwargs=gp_validation_kwargs,
                     gp_frequency_tolerance_factor=gp_frequency_tolerance_factor,
                     verbose=verbose,
                 )
+                candidate_diag = validated_diag
             auto_controls = candidate_diag["controls"]
             accepted_bands = candidate_diag.get("accepted_bands", [])
             if not accepted_bands:
