@@ -7009,6 +7009,30 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 normalized.append(reason_str)
         return normalized
 
+    @staticmethod
+    def _consensus_set_gp_validation_status(
+        record,
+        status,
+        *,
+        reason=None,
+    ):
+        """Set a validated GP-validation status on a band record."""
+        allowed_statuses = {
+            "not_requested",
+            "skipped",
+            "failed",
+            "success",
+            "rejected",
+        }
+        if status not in allowed_statuses:
+            raise ValueError(
+                f"Invalid gp_validation_status {status!r}. "
+                f"Allowed values are: {sorted(allowed_statuses)}"
+            )
+        record["gp_validation_status"] = status
+        if reason is not None:
+            record["gp_validation_reason"] = reason
+
     def _consensus_initialize_band_record(
         self,
         band_label,
@@ -7026,8 +7050,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # "not_requested" means GP validation was not invoked for this record.
         # Records are upgraded to "skipped"/"failed"/"rejected"/"success" later
         # only when the GP-validation stage is actually executed.
-        gp_status = "not_requested"
-        return {
+        record = {
             "band": str(band_label),
             "status": "pending",
             "rejection_reason": None,
@@ -7053,9 +7076,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "gp_frequency_difference": None,
             "gp_fractional_frequency_difference": None,
             "gp_frequency_tolerance": None,
-            "gp_validation_status": gp_status,
             "gp_validation_error": None,
         }
+        self._consensus_set_gp_validation_status(record, "not_requested")
+        return record
 
     def _consensus_add_rejection_reasons(self, record, reasons):
         """Append rejection reasons to a band record without duplicates."""
@@ -7502,7 +7526,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record.setdefault("gp_frequency_difference", None)
             record.setdefault("gp_fractional_frequency_difference", None)
             record.setdefault("gp_frequency_tolerance", None)
-            record.setdefault("gp_validation_status", "not_requested")
+            if "gp_validation_status" not in record:
+                self._consensus_set_gp_validation_status(
+                    record,
+                    "not_requested",
+                )
             record.setdefault("gp_validation_error", None)
 
         # GP validation is requested for this function call. Bands not in
@@ -7512,7 +7540,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 band not in accepted_bands
                 and not record.get("gp_validation_used", False)
             ):
-                record["gp_validation_status"] = "skipped"
+                self._consensus_set_gp_validation_status(
+                    record,
+                    "skipped",
+                    reason="band_not_accepted",
+                )
 
         default_gp_fit_kwargs = (
             self._consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs)
@@ -7532,7 +7564,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record["gp_validation_used"] = True
             # "failed" is the pre-attempt state while the GP fit is attempted.
             # It remains "failed" if any exception is raised.
-            record["gp_validation_status"] = "failed"
+            self._consensus_set_gp_validation_status(record, "failed")
             record["gp_validation_error"] = None
 
             _candidate_frequency_raw = record.get("dominant_frequency", np.nan)
@@ -7605,19 +7637,27 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
                 if frequency_difference <= frequency_tolerance:
                     # GP fit succeeded and the band is accepted.
-                    record["gp_validation_status"] = "success"
+                    self._consensus_set_gp_validation_status(record, "success")
                     record["status"] = "accepted"
                     record["rejection_reasons"] = []
                     record["rejection_reason"] = None
                     accepted_after_gp.append(band_label)
                 else:
                     # GP fit succeeded but disagreed with the LS candidate.
-                    record["gp_validation_status"] = "rejected"
+                    self._consensus_set_gp_validation_status(
+                        record,
+                        "rejected",
+                        reason="diagnostics_failed",
+                    )
                     reason = "gp_ls_frequency_disagreement"
 
             except Exception as exc:
                 # GP fit attempt raised/failed.
-                record["gp_validation_status"] = "failed"
+                self._consensus_set_gp_validation_status(
+                    record,
+                    "failed",
+                    reason="exception",
+                )
                 record["gp_validation_error"] = (
                     f"band={band_label}: {type(exc).__name__}: {exc}"
                 )
