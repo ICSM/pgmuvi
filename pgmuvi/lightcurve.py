@@ -7021,7 +7021,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         A stable schema is required so every downstream consumer can assume all
         keys exist for every band, including early-return failure paths.
         """
-        gp_status = "skipped" if gp_validation_requested else "not_requested"
+        # "not_requested" means GP validation was not invoked for this record.
+        # Records are upgraded to "skipped"/"failed"/"rejected"/"success" later
+        # only when the GP-validation stage is actually executed.
+        gp_status = "not_requested"
         return {
             "band": str(band_label),
             "status": "pending",
@@ -7097,9 +7100,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         use_acf : bool, optional
             If ``True``, compute data-driven ACF diagnostics per accepted band.
         gp_validation_requested : bool, optional
-            If ``True``, initialize each band record with
-            ``gp_validation_status="skipped"`` because GP validation is
-            requested later in the workflow but not yet executed here.
+            If ``True``, this stage records intent only; records remain
+            ``gp_validation_status="not_requested"`` until the GP-validation
+            stage runs and assigns ``skipped``/``failed``/``rejected``/
+            ``success`` per band.
         verbose : bool, optional
             If ``True``, print per-band acceptance/rejection and dominant LS
             values.
@@ -7496,9 +7500,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record.setdefault("gp_frequency_difference", None)
             record.setdefault("gp_fractional_frequency_difference", None)
             record.setdefault("gp_frequency_tolerance", None)
-            record.setdefault("gp_validation_status", "skipped")
+            # Default "not_requested" means GP validation has not been
+            # executed for this record yet.
+            record.setdefault("gp_validation_status", "not_requested")
             record.setdefault("gp_validation_error", None)
-            if record.get("gp_validation_status") == "not_requested":
+
+        # GP validation is requested for this function call. Bands not in
+        # accepted_bands are intentionally bypassed by pre-GP filtering.
+        for band, record in band_records.items():
+            if (
+                band not in accepted_bands
+                and not record.get("gp_validation_used", False)
+            ):
                 record["gp_validation_status"] = "skipped"
 
         default_gp_fit_kwargs = (
@@ -7517,6 +7530,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band_records[band_label] = record
 
             record["gp_validation_used"] = True
+            # "failed" is the pre-attempt state while the GP fit is attempted.
+            # It remains "failed" if any exception is raised.
             record["gp_validation_status"] = "failed"
             record["gp_validation_error"] = None
 
@@ -7589,16 +7604,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 record["gp_frequency_tolerance"] = float(frequency_tolerance)
 
                 if frequency_difference <= frequency_tolerance:
+                    # GP fit succeeded and the band is accepted.
                     record["gp_validation_status"] = "success"
                     record["status"] = "accepted"
                     record["rejection_reasons"] = []
                     record["rejection_reason"] = None
                     accepted_after_gp.append(band_label)
                 else:
+                    # GP fit succeeded but disagreed with the LS candidate.
                     record["gp_validation_status"] = "rejected"
                     reason = "gp_ls_frequency_disagreement"
 
             except Exception as exc:
+                # GP fit attempt raised/failed.
                 record["gp_validation_status"] = "failed"
                 record["gp_validation_error"] = (
                     f"band={band_label}: {type(exc).__name__}: {exc}"
