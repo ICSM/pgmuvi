@@ -7096,14 +7096,111 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "rejection_reasons": rejection_reasons,
         }
 
-    @staticmethod
+    def _deduplicate_frequency_candidates(
+        self,
+        candidates,
+        rtol=0.01,
+    ):
+        """Collapse near-identical frequency candidates before ranking.
+
+        Near-duplicate frequencies can split support across effectively
+        identical peaks due to floating-point jitter. Deduplicating first keeps
+        only the strongest representative in each cluster before downstream
+        ranking and trusted-candidate selection.
+
+        Notes
+        -----
+        ``rtol=0`` disables deduplication while still validating candidate
+        structure and numeric values.
+        """
+        if candidates is None:
+            return []
+
+        _rtol = float(rtol)
+        # rtol=0 is allowed and effectively disables deduplication.
+        if not np.isfinite(_rtol) or _rtol < 0:
+            raise ValueError("rtol must be a finite, non-negative float.")
+
+        normalized = []
+        for idx, candidate in enumerate(candidates):
+            if not isinstance(candidate, dict):
+                raise ValueError("Each candidate must be a dict.")
+            if "frequency" not in candidate or "score" not in candidate:
+                raise ValueError(
+                    "Each candidate must contain 'frequency' and 'score'."
+                )
+            freq = float(candidate["frequency"])
+            score = float(candidate["score"])
+            if not np.isfinite(freq):
+                raise ValueError("Candidate frequencies must be finite.")
+            if not np.isfinite(score):
+                raise ValueError("Candidate scores must be finite.")
+            candidate_copy = dict(candidate)
+            candidate_copy["frequency"] = freq
+            candidate_copy["score"] = score
+            candidate_copy["_dedup_index"] = idx
+            normalized.append(candidate_copy)
+
+        if not normalized:
+            return []
+
+        parent = list(range(len(normalized)))
+
+        def _find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def _union(i, j):
+            ri = _find(i)
+            rj = _find(j)
+            if ri != rj:
+                parent[rj] = ri
+
+        epsilon_denom = np.finfo(float).tiny
+        for i in range(len(normalized)):
+            f1 = float(normalized[i]["frequency"])
+            for j in range(i + 1, len(normalized)):
+                f2 = float(normalized[j]["frequency"])
+                denom = max(abs(f1), abs(f2), epsilon_denom)
+                rel_diff = abs(f1 - f2) / denom
+                if rel_diff < _rtol:
+                    _union(i, j)
+
+        clusters = {}
+        for idx, candidate in enumerate(normalized):
+            root = _find(idx)
+            clusters.setdefault(root, []).append(candidate)
+
+        deduped = []
+        for cluster in clusters.values():
+            best = max(
+                cluster,
+                key=lambda c: (float(c["score"]), -int(c["_dedup_index"])),
+            )
+            deduped.append(best)
+
+        deduped.sort(key=lambda c: (-float(c["score"]), int(c["_dedup_index"])))
+
+        output = []
+        for candidate in deduped:
+            candidate_copy = dict(candidate)
+            candidate_copy.pop("_dedup_index", None)
+            output.append(candidate_copy)
+        return output
+
     def _consensus_build_frequency_consensus(
+        self,
         band_records,
         accepted_bands,
         outlier_sigma=3.5,
         verbose=False,
     ):
         """Build a robust cross-band consensus frequency from dominant candidates.
+
+        Near-duplicate frequencies are collapsed before robust aggregation so
+        equivalent peaks do not receive duplicate weight during ranking.
 
         Parameters
         ----------
@@ -7143,8 +7240,40 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "were available after quality gating."
             )
 
-        freq_arr = np.asarray([f for _, f in freq_pairs], dtype=float)
-        band_arr = np.asarray([b for b, _ in freq_pairs], dtype=object)
+        # Deduplicate near-identical frequencies to prevent floating-point
+        # jitter from counting equivalent peaks multiple times.
+        _significant_ls_score = 2.0
+        _default_ls_score = 1.0
+        candidates = []
+        for band, freq in freq_pairs:
+            record = band_records.get(band, {})
+            ls_significant = bool(record.get("ls_significant"))
+            candidates.append(
+                {
+                    "frequency": float(freq),
+                    "score": (
+                        _significant_ls_score
+                        if ls_significant
+                        else _default_ls_score
+                    ),
+                    "band": band,
+                }
+            )
+
+        n_before = len(candidates)
+        candidates = self._deduplicate_frequency_candidates(candidates)
+        n_after = len(candidates)
+        if verbose:
+            print(f"[Consensus] Deduplicated {n_before} -> {n_after} candidates")
+
+        if not candidates:
+            raise ValueError(
+                "Consensus fit failed: no valid dominant per-band frequencies "
+                "were available after deduplication."
+            )
+
+        freq_arr = np.asarray([cand["frequency"] for cand in candidates], dtype=float)
+        band_arr = np.asarray([cand["band"] for cand in candidates], dtype=object)
 
         median_freq = float(np.median(freq_arr))
         mad_freq = float(np.median(np.abs(freq_arr - median_freq)))
@@ -7481,6 +7610,36 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "consensus_frequencies must contain finite, strictly "
                     "positive values."
                 )
+            # Apply near-duplicate suppression before downstream ranking and
+            # aggregation, consistent with automatic mode.
+            manual_candidates = [
+                {"frequency": float(freq), "score": 1.0, "index": idx}
+                for idx, freq in enumerate(consensus_frequencies.tolist())
+            ]
+            n_before = len(manual_candidates)
+            manual_candidates = self._deduplicate_frequency_candidates(
+                manual_candidates
+            )
+            n_after = len(manual_candidates)
+            if verbose:
+                print(f"[Consensus] Deduplicated {n_before} -> {n_after} candidates")
+
+            consensus_frequencies = np.asarray(
+                [cand["frequency"] for cand in manual_candidates], dtype=float
+            )
+            if consensus_frequencies.size == 0:
+                raise ValueError("consensus_frequencies must not be empty.")
+
+            if consensus_frequency_width is not None:
+                _manual_widths = np.asarray(
+                    consensus_frequency_width, dtype=float
+                ).ravel()
+                if _manual_widths.size > 1 and _manual_widths.size == n_before:
+                    _selected_idx = np.asarray(
+                        [int(cand["index"]) for cand in manual_candidates],
+                        dtype=int,
+                    )
+                    consensus_frequency_width = _manual_widths[_selected_idx]
             if consensus_frequency_width is None:
                 floor_width = np.maximum(consensus_frequencies * 0.01, 1.0e-8)
                 consensus_frequency_width = floor_width
