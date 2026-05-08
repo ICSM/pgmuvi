@@ -7195,6 +7195,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         band_records,
         accepted_bands,
         outlier_sigma=3.5,
+        dedup_rtol=0.01,
         verbose=False,
     ):
         """Build a robust cross-band consensus frequency from dominant candidates.
@@ -7212,6 +7213,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         outlier_sigma : float, optional
             Robust sigma threshold used with MAD-based dispersion for
             catastrophic outlier rejection.
+        dedup_rtol : float, optional
+            Relative tolerance used to cluster near-identical frequency
+            candidates before consensus ranking.
         verbose : bool, optional
             If ``True``, print outlier decisions and final consensus values.
 
@@ -7261,7 +7265,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         n_before = len(candidates)
-        candidates = self._deduplicate_frequency_candidates(candidates)
+        candidates = self._deduplicate_frequency_candidates(
+            candidates, rtol=dedup_rtol
+        )
         n_after = len(candidates)
         if verbose:
             print(f"[Consensus] Deduplicated {n_before} -> {n_after} candidates")
@@ -7410,8 +7416,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         **fit_kwargs : dict
             Standard :meth:`fit` kwargs plus consensus-specific controls:
             ``min_points_per_band``, ``max_gap_fraction``, ``min_duty_cycle``,
-            ``outlier_sigma``, ``use_acf``, ``constrain_consensus``, and
-            ``consensus_width_factor``.
+            ``outlier_sigma``, ``use_acf``, ``constrain_consensus``,
+            ``consensus_width_factor``, and ``consensus_dedup_rtol``.
 
             Manual overrides are also accepted via:
 
@@ -7428,6 +7434,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             - ``consensus_scale_max_factor`` : float, default ``0.2``
               Multiplier on median consensus frequency to derive an upper bound
               for mixture-scale constraints when enabled.
+            - ``consensus_dedup_rtol`` : float, default ``0.01``
+              Relative tolerance used to cluster near-identical frequency
+              candidates before consensus ranking. Must be finite and strictly
+              positive.
 
         Returns
         -------
@@ -7463,7 +7473,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         outlier_sigma = fit_kwargs.pop("outlier_sigma", None)
         use_acf = fit_kwargs.pop("use_acf", False)
         consensus_width_factor = fit_kwargs.pop("consensus_width_factor", None)
+        consensus_dedup_rtol = fit_kwargs.pop("consensus_dedup_rtol", 0.01)
         verbose = fit_kwargs.get("verbose", False)
+        consensus_dedup_rtol = float(consensus_dedup_rtol)
+        if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol <= 0:
+            raise ValueError(
+                "consensus_dedup_rtol must be a finite, strictly positive "
+                "float."
+            )
 
         auto_constraint_bounds = None
         auto_controls = None
@@ -7499,6 +7516,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         if outlier_sigma is None
                         else float(outlier_sigma)
                     ),
+                    dedup_rtol=consensus_dedup_rtol,
                     verbose=verbose,
                 )
             except Exception as exc:
@@ -7574,6 +7592,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "use_acf": bool(use_acf),
                     "constrain_consensus": bool(apply_consensus_constraints),
                     "consensus_width_factor": float(consensus_width_factor),
+                    "consensus_dedup_rtol": float(consensus_dedup_rtol),
                 },
             }
             if verbose:
@@ -7611,14 +7630,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "positive values."
                 )
             # Apply near-duplicate suppression before downstream ranking and
-            # aggregation, consistent with automatic mode.
+            # aggregation, using the configured consensus clustering tolerance.
             manual_candidates = [
                 {"frequency": float(freq), "score": 1.0, "index": idx}
                 for idx, freq in enumerate(consensus_frequencies.tolist())
             ]
             n_before = len(manual_candidates)
             manual_candidates = self._deduplicate_frequency_candidates(
-                manual_candidates
+                manual_candidates, rtol=consensus_dedup_rtol
             )
             n_after = len(manual_candidates)
             if verbose:
@@ -7662,6 +7681,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "use_acf": bool(use_acf),
                     "constrain_consensus": bool(apply_consensus_constraints),
                     "consensus_width_factor": consensus_width_factor,
+                    "consensus_dedup_rtol": float(consensus_dedup_rtol),
                 },
                 "mode": "manual_consensus_frequencies",
             }
