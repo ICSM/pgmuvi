@@ -7264,12 +7264,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         For ``fit_strategy="consensus"``, this method:
         1) validates 2D multiband inputs,
         2) collects one dominant LS candidate per band after quality gating,
-        3) builds a robust cross-band consensus using median and MAD,
-        4) converts consensus outputs into initial guesses and constraints,
+           using LS with optional ACF consistency support diagnostics,
+        3) builds a robust cross-band consensus using median and MAD in
+           frequency space,
+        4) forwards consensus outputs into existing initial-guess and
+           constraint plumbing,
         5) dispatches to the standard fit path with merged guesses.
 
         Manual ``consensus_frequencies`` remain supported and bypass automatic
-        candidate collection.
+        candidate collection. 1D GP validation in this strategy is planned but
+        not implemented yet.
 
         Parameters
         ----------
@@ -7325,6 +7329,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         auto_constraint_bounds = None
         auto_controls = None
         if consensus_frequencies is None:
+            if self.ndim != 2:
+                raise ValueError(
+                    "Automatic consensus frequency construction currently "
+                    "requires a 2D light curve."
+                )
             candidate_diag = self._consensus_collect_band_candidates(
                 min_points_per_band=min_points_per_band,
                 max_gap_fraction=max_gap_fraction,
@@ -7333,16 +7342,45 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 verbose=verbose,
             )
             auto_controls = candidate_diag["controls"]
-            consensus_diag = self._consensus_build_frequency_consensus(
-                band_records=candidate_diag["band_records"],
-                accepted_bands=candidate_diag["accepted_bands"],
-                outlier_sigma=(
-                    auto_controls["outlier_sigma"]
-                    if outlier_sigma is None
-                    else float(outlier_sigma)
-                ),
-                verbose=verbose,
+            accepted_bands = candidate_diag.get("accepted_bands", [])
+            if not accepted_bands:
+                raise RuntimeError(
+                    "Consensus construction failed: no acceptable bands "
+                    "survived consensus candidate vetting."
+                )
+            try:
+                consensus_diag = self._consensus_build_frequency_consensus(
+                    band_records=candidate_diag["band_records"],
+                    accepted_bands=accepted_bands,
+                    outlier_sigma=(
+                        auto_controls["outlier_sigma"]
+                        if outlier_sigma is None
+                        else float(outlier_sigma)
+                    ),
+                    verbose=verbose,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Consensus construction failed during robust frequency "
+                    f"aggregation: {exc}"
+                ) from exc
+
+            final_consensus_frequency = float(
+                consensus_diag.get("final_consensus_frequency", np.nan)
             )
+            if not (
+                np.isfinite(final_consensus_frequency)
+                and final_consensus_frequency > 0
+            ):
+                raise RuntimeError(
+                    "Consensus construction failed: final consensus frequency "
+                    "is not finite and strictly positive."
+                )
+            robust_width = float(
+                consensus_diag.get("final_mad_frequency_scatter", np.nan)
+            )
+            if not (np.isfinite(robust_width) and robust_width > 0):
+                robust_width = None
 
             if consensus_width_factor is None:
                 consensus_width_factor = auto_controls["consensus_width_factor"]
@@ -7354,19 +7392,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 requested_num_mixtures = 1
                 fit_kwargs["num_mixtures"] = 1
 
-            init_payload = self._consensus_build_initialization_from_frequency(
-                final_frequency=consensus_diag["final_consensus_frequency"],
-                scatter=consensus_diag["final_mad_frequency_scatter"],
-                num_mixtures=int(requested_num_mixtures),
-                consensus_width_factor=float(consensus_width_factor),
+            # First-generation automatic consensus strategy uses a single robust
+            # cross-band frequency (LS primary + optional ACF support checks).
+            consensus_frequencies = np.asarray(
+                [final_consensus_frequency], dtype=float
             )
-
-            consensus_frequencies = init_payload["consensus_frequencies"]
-            if consensus_scales is None:
-                consensus_scales = init_payload["consensus_scales"]
-            if consensus_frequency_width is None:
-                consensus_frequency_width = init_payload["consensus_frequency_width"]
-            auto_constraint_bounds = init_payload["consensus_constraint_bounds"]
+            if consensus_frequency_width is None and robust_width is not None:
+                consensus_frequency_width = np.asarray([robust_width], dtype=float)
+            auto_constraint_bounds = None
 
             self.consensus_diagnostics = {
                 "accepted_bands": candidate_diag["accepted_bands"],
@@ -7387,10 +7420,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
                 "consensus_inlier_bands": consensus_diag["inlier_bands"],
                 "consensus_outlier_bands": consensus_diag["outlier_bands"],
-                "final_consensus_frequency": consensus_diag[
-                    "final_consensus_frequency"
-                ],
-                "final_constraint_bounds": init_payload["consensus_constraint_bounds"],
+                "final_consensus_frequency": final_consensus_frequency,
+                "final_consensus_period": float(1.0 / final_consensus_frequency),
+                "robust_frequency_width": robust_width,
+                "final_constraint_bounds": None,
                 "controls": {
                     **auto_controls,
                     "outlier_sigma": float(outlier_sigma),
@@ -7400,9 +7433,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 },
             }
             if verbose:
+                print("[consensus] accepted bands:", candidate_diag["accepted_bands"])
+                print("[consensus] rejected bands:", candidate_diag["rejected_bands"])
                 print(
-                    "[consensus] final bounds:",
-                    init_payload["consensus_constraint_bounds"],
+                    "[consensus] per-band dominant periods:",
+                    self.consensus_diagnostics["per_band_dominant_periods"],
+                )
+                print(
+                    "[consensus] final consensus frequency:",
+                    f"{final_consensus_frequency:.6g}",
+                )
+                print(
+                    "[consensus] final consensus period:",
+                    f"{(1.0 / final_consensus_frequency):.6g}",
+                )
+                print(
+                    "[consensus] robust frequency width:",
+                    "None"
+                    if robust_width is None
+                    else f"{float(robust_width):.6g}",
                 )
         else:
             consensus_frequencies = np.asarray(
