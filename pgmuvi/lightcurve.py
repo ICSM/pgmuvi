@@ -7144,13 +7144,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         }
         accepted_bands = list(candidate_diag.get("accepted_bands", []))
         rejected_bands = list(candidate_diag.get("rejected_bands", []))
-        rejection_reasons = {
-            band: list(reasons)
-            for band, reasons in candidate_diag.get("rejection_reasons", {}).items()
-        }
+        rejection_reasons = {}
+        for band, reasons in candidate_diag.get("rejection_reasons", {}).items():
+            if isinstance(reasons, list):
+                rejection_reasons[band] = list(reasons)
+            elif isinstance(reasons, tuple):
+                rejection_reasons[band] = list(reasons)
+            elif isinstance(reasons, set):
+                rejection_reasons[band] = list(reasons)
+            elif reasons is None:
+                rejection_reasons[band] = []
+            else:
+                rejection_reasons[band] = [str(reasons)]
 
-        for band, record in band_records.items():
-            _ = band
+        for record in band_records.values():
             record.setdefault("gp_validation_used", False)
             record.setdefault("gp_dominant_frequency", None)
             record.setdefault("gp_dominant_period", None)
@@ -7166,6 +7173,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "training_iter": 100,
             "fit_strategy": None,
         }
+        gp_ls_tolerance_base_factor = 0.1
         gp_fit_kwargs = dict(gp_validation_kwargs)
         gp_fit_kwargs.pop("period_summary_kwargs", None)
         default_gp_fit_kwargs.update(gp_fit_kwargs)
@@ -7216,7 +7224,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     gp_period = float(1.0 / gp_freq)
 
                 tolerance = max(
-                    gp_frequency_tolerance_factor * 0.1 * ls_freq,
+                    gp_frequency_tolerance_factor
+                    * gp_ls_tolerance_base_factor
+                    * ls_freq,
                     1.0e-8,
                 )
                 diff = abs(gp_freq - ls_freq)
