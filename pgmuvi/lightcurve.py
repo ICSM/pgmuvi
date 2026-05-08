@@ -6944,6 +6944,127 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "harmonic_order": None,
         }
 
+    @staticmethod
+    def _consensus_make_json_safe(value):
+        """Return a JSON-safe copy of a consensus diagnostic value.
+
+        Consensus diagnostics are consumed by plotting, inspection utilities,
+        and future JSON export/recovery workflows. Keeping values JSON-safe at
+        creation time avoids late serialization failures caused by NaN/Inf,
+        tensors, numpy objects, Interval objects, or set/tuple containers.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool | int | str):
+            return value
+        if isinstance(value, float):
+            return value if np.isfinite(value) else None
+        if isinstance(value, np.generic):
+            return Lightcurve._consensus_make_json_safe(value.item())
+        if isinstance(value, np.ndarray):
+            return [
+                Lightcurve._consensus_make_json_safe(v)
+                for v in value.tolist()
+            ]
+        if torch.is_tensor(value):
+            if value.numel() == 1:
+                return Lightcurve._consensus_make_json_safe(value.item())
+            return Lightcurve._consensus_make_json_safe(
+                value.detach().cpu().tolist()
+            )
+        if isinstance(value, Interval):
+            lower = None if value.lower_bound is None else value.lower_bound
+            upper = None if value.upper_bound is None else value.upper_bound
+            return {
+                "lower": Lightcurve._consensus_make_json_safe(lower),
+                "upper": Lightcurve._consensus_make_json_safe(upper),
+            }
+        if isinstance(value, dict):
+            return {
+                str(key): Lightcurve._consensus_make_json_safe(val)
+                for key, val in value.items()
+            }
+        if isinstance(value, list | tuple | set):
+            return [
+                Lightcurve._consensus_make_json_safe(v)
+                for v in list(value)
+            ]
+        return str(value)
+
+    @staticmethod
+    def _consensus_normalize_rejection_reasons(reasons):
+        """Normalize rejection reasons into an ordered, de-duplicated list."""
+        if reasons is None:
+            return []
+        if isinstance(reasons, str):
+            items = [reasons]
+        elif isinstance(reasons, list | tuple | set):
+            items = list(reasons)
+        else:
+            items = [str(reasons)]
+        normalized = []
+        for reason in items:
+            reason_str = str(reason).strip()
+            if reason_str and reason_str not in normalized:
+                normalized.append(reason_str)
+        return normalized
+
+    def _consensus_initialize_band_record(
+        self,
+        band_label,
+        *,
+        metrics=None,
+        gp_validation_requested=False,
+    ):
+        """Create a canonical per-band consensus diagnostic record.
+
+        A stable schema is required so every downstream consumer can assume all
+        keys exist for every band, including early-return failure paths.
+        """
+        gp_status = "skipped" if gp_validation_requested else "not_requested"
+        return {
+            "band": str(band_label),
+            "status": "pending",
+            "rejection_reason": None,
+            "rejection_reasons": [],
+            "metrics": self._consensus_make_json_safe(metrics),
+            "dominant_frequency": None,
+            "dominant_period": None,
+            "ls_significant": None,
+            "ls_peak_power": None,
+            "ls_peak_prominence": None,
+            "ls_peak_area_fraction": None,
+            "acf_frequency": None,
+            "acf_period": None,
+            "acf_supported": None,
+            "acf_comparison_status": None,
+            "acf_period_ratio": None,
+            "acf_harmonic_order": None,
+            "acf_error": None,
+            "selected_from": None,
+            "gp_validation_used": False,
+            "gp_dominant_frequency": None,
+            "gp_dominant_period": None,
+            "gp_frequency_difference": None,
+            "gp_fractional_frequency_difference": None,
+            "gp_frequency_tolerance": None,
+            "gp_validation_status": gp_status,
+            "gp_validation_error": None,
+        }
+
+    def _consensus_add_rejection_reasons(self, record, reasons):
+        """Append rejection reasons to a band record without duplicates."""
+        merged = self._consensus_normalize_rejection_reasons(
+            record.get("rejection_reasons", [])
+        )
+        for reason in self._consensus_normalize_rejection_reasons(reasons):
+            if reason not in merged:
+                merged.append(reason)
+        record["rejection_reasons"] = merged
+        record["rejection_reason"] = merged[0] if merged else None
+        if merged:
+            record["status"] = "rejected"
+
     def _consensus_collect_band_candidates(
         self,
         *,
@@ -6951,6 +7072,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         max_gap_fraction=None,
         min_duty_cycle=None,
         use_acf=False,
+        gp_validation_requested=False,
         verbose=False,
     ):
         """Collect one dominant LS frequency candidate per accepted band.
@@ -6974,6 +7096,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             from per-band sampling metrics.
         use_acf : bool, optional
             If ``True``, compute data-driven ACF diagnostics per accepted band.
+        gp_validation_requested : bool, optional
+            If ``True``, initialize each band record with
+            ``gp_validation_status="skipped"`` because GP validation is
+            requested later in the workflow but not yet executed here.
         verbose : bool, optional
             If ``True``, print per-band acceptance/rejection and dominant LS
             values.
@@ -7002,6 +7128,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         rejected_bands = []
         rejection_reasons = {}
 
+        def _reject_band(record, reasons):
+            self._consensus_add_rejection_reasons(record, reasons)
+            band = record["band"]
+            if band not in rejected_bands:
+                rejected_bands.append(band)
+            if band in accepted_bands:
+                accepted_bands.remove(band)
+            rejection_reasons[band] = list(record["rejection_reasons"])
+
         for band_label, lc_band in per_band_lc.items():
             metrics = metrics_by_band[band_label]
             reasons = self._consensus_reject_bad_bands(
@@ -7010,35 +7145,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 max_gap_fraction=controls["max_gap_fraction"],
                 min_duty_cycle=controls["min_duty_cycle"],
             )
-
-            record = {
-                "band": band_label,
-                "metrics": metrics,
-                "dominant_frequency": None,
-                "dominant_period": None,
-                "ls_significant": None,
-                "acf_frequency": None,
-                "acf_period": None,
-                "acf_comparison_status": None,
-                "acf_period_ratio": None,
-                "acf_harmonic_order": None,
-                "acf_error": None,
-                "selected_from": None,
-                "gp_validation_used": False,
-                "gp_dominant_frequency": None,
-                "gp_dominant_period": None,
-                "gp_frequency_difference": None,
-                # None means GP validation was not performed or was skipped
-                # for this band; set to a float only after GP validation runs.
-                "gp_fractional_frequency_difference": None,
-                "gp_frequency_tolerance": None,
-                "gp_validation_status": None,
-                "gp_validation_error": None,
-            }
+            record = self._consensus_initialize_band_record(
+                band_label,
+                metrics=metrics,
+                gp_validation_requested=gp_validation_requested,
+            )
 
             if reasons:
-                rejected_bands.append(band_label)
-                rejection_reasons[band_label] = reasons
+                _reject_band(record, reasons)
                 band_records[band_label] = record
                 continue
 
@@ -7046,8 +7160,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ls_freqs_np = np.asarray(ls_freqs.detach().cpu().numpy(), dtype=float)
             ls_sig_np = np.asarray(ls_sig.detach().cpu().numpy(), dtype=bool)
             if ls_freqs_np.size == 0:
-                rejected_bands.append(band_label)
-                rejection_reasons[band_label] = ["no_ls_peaks"]
+                _reject_band(record, ["no_ls_peaks"])
                 band_records[band_label] = record
                 continue
 
@@ -7077,8 +7190,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 plausible_idx.append(idx)
 
             if not plausible_idx:
-                rejected_bands.append(band_label)
-                rejection_reasons[band_label] = ["no_physically_plausible_ls_peak"]
+                _reject_band(record, ["no_physically_plausible_ls_peak"])
                 band_records[band_label] = record
                 continue
 
@@ -7098,10 +7210,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 min_detectable_frequency > 0
                 and dominant_freq < min_detectable_frequency
             ):
-                rejected_bands.append(band_label)
-                rejection_reasons[band_label] = [
-                    "candidate_frequency_too_low",
-                ]
+                _reject_band(record, ["candidate_frequency_too_low"])
                 band_records[band_label] = record
                 continue
 
@@ -7119,6 +7228,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 ) as exc:
                     _acf_result = None
                     record["acf_error"] = f"{type(exc).__name__}: {exc}"
+                    record["acf_supported"] = False
 
                 acf_candidate = self._consensus_extract_acf_candidate(_acf_result)
                 if acf_candidate is not None:
@@ -7134,13 +7244,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 record["acf_comparison_status"] = acf_compare["status"]
                 record["acf_period_ratio"] = acf_compare["ratio"]
                 record["acf_harmonic_order"] = acf_compare["harmonic_order"]
+                record["acf_supported"] = bool(
+                    acf_compare["status"] in (
+                        _ACF_STATUS_AGREEMENT,
+                        _ACF_STATUS_HARMONIC,
+                    )
+                )
 
                 # ACF is a direct time-domain periodicity diagnostic. Strong
                 # LS-vs-ACF disagreement is treated conservatively as likely
                 # LS window/alias contamination for shared-timescale consensus.
                 if acf_compare["status"] == _ACF_STATUS_DISAGREEMENT:
-                    rejected_bands.append(band_label)
-                    rejection_reasons[band_label] = ["ls_acf_disagreement"]
+                    _reject_band(record, ["ls_acf_disagreement"])
                     band_records[band_label] = record
                     continue
 
@@ -7153,6 +7268,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 best_idx < ls_sig_np.size and ls_sig_np[best_idx]
             )
             record["selected_from"] = "ls_primary_peak"
+            record["status"] = "accepted"
             band_records[band_label] = record
             accepted_bands.append(band_label)
 
@@ -7179,12 +7295,39 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         f"{', '.join(rejection_reasons[_band])}"
                     )
 
+        # Final guard: records define accepted/rejected membership.
+        for _band, _record in band_records.items():
+            _reasons = self._consensus_normalize_rejection_reasons(
+                _record.get("rejection_reasons")
+            )
+            _record["rejection_reasons"] = _reasons
+            _record["rejection_reason"] = _reasons[0] if _reasons else None
+            if _reasons:
+                _record["status"] = "rejected"
+                if _band in accepted_bands:
+                    accepted_bands.remove(_band)
+                if _band not in rejected_bands:
+                    rejected_bands.append(_band)
+                rejection_reasons[_band] = list(_reasons)
+            else:
+                if _record.get("status") != "accepted":
+                    _record["status"] = (
+                        "accepted" if _band in accepted_bands else "rejected"
+                    )
+                if _record["status"] == "accepted":
+                    rejection_reasons.pop(_band, None)
+                elif _band not in rejected_bands:
+                    rejected_bands.append(_band)
+            band_records[_band] = self._consensus_make_json_safe(_record)
+
+        accepted_bands = [b for b in accepted_bands if b not in set(rejected_bands)]
+
         return {
-            "controls": controls,
+            "controls": self._consensus_make_json_safe(controls),
             "band_records": band_records,
             "accepted_bands": accepted_bands,
             "rejected_bands": rejected_bands,
-            "rejection_reasons": rejection_reasons,
+            "rejection_reasons": self._consensus_make_json_safe(rejection_reasons),
         }
 
     @staticmethod
@@ -7317,24 +7460,34 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         controls = dict(candidate_diag.get("controls", {}))
-        band_records = {
-            band: dict(record)
-            for band, record in candidate_diag.get("band_records", {}).items()
-        }
+        band_records = {}
+        for band, record in candidate_diag.get("band_records", {}).items():
+            canonical = self._consensus_initialize_band_record(
+                band,
+                metrics=(record or {}).get("metrics"),
+                gp_validation_requested=True,
+            )
+            canonical.update(dict(record))
+            canonical["rejection_reasons"] = (
+                self._consensus_normalize_rejection_reasons(
+                    canonical.get("rejection_reasons")
+                )
+            )
+            canonical["rejection_reason"] = (
+                canonical["rejection_reasons"][0]
+                if canonical["rejection_reasons"]
+                else None
+            )
+            if canonical["rejection_reasons"]:
+                canonical["status"] = "rejected"
+            band_records[band] = canonical
         accepted_bands = list(candidate_diag.get("accepted_bands", []))
         rejected_bands = list(candidate_diag.get("rejected_bands", []))
         rejection_reasons = {}
         for band, reasons in candidate_diag.get("rejection_reasons", {}).items():
-            if isinstance(reasons, list):
-                rejection_reasons[band] = list(reasons)
-            elif isinstance(reasons, tuple):
-                rejection_reasons[band] = list(reasons)
-            elif isinstance(reasons, set):
-                rejection_reasons[band] = list(reasons)
-            elif reasons is None:
-                rejection_reasons[band] = []
-            else:
-                rejection_reasons[band] = [str(reasons)]
+            normalized = self._consensus_normalize_rejection_reasons(reasons)
+            if normalized:
+                rejection_reasons[band] = normalized
 
         for record in band_records.values():
             record.setdefault("gp_validation_used", False)
@@ -7343,8 +7496,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record.setdefault("gp_frequency_difference", None)
             record.setdefault("gp_fractional_frequency_difference", None)
             record.setdefault("gp_frequency_tolerance", None)
-            record.setdefault("gp_validation_status", None)
+            record.setdefault("gp_validation_status", "skipped")
             record.setdefault("gp_validation_error", None)
+            if record.get("gp_validation_status") == "not_requested":
+                record["gp_validation_status"] = "skipped"
 
         default_gp_fit_kwargs = (
             self._consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs)
@@ -7353,11 +7508,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         accepted_after_gp = []
         for band_label in accepted_bands:
-            record = band_records.get(band_label, {"band": band_label})
+            record = band_records.get(
+                band_label,
+                self._consensus_initialize_band_record(
+                    band_label, gp_validation_requested=True
+                ),
+            )
             band_records[band_label] = record
 
             record["gp_validation_used"] = True
-            record["gp_validation_status"] = None
+            record["gp_validation_status"] = "failed"
             record["gp_validation_error"] = None
 
             _candidate_frequency_raw = record.get("dominant_frequency", np.nan)
@@ -7416,8 +7576,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
                 fractional_frequency_difference = (
                     self._consensus_fractional_frequency_difference(
-                    candidate_frequency, gp_dominant_frequency
-                )
+                        candidate_frequency, gp_dominant_frequency
+                    )
                 )
 
                 record["gp_dominant_frequency"] = gp_dominant_frequency
@@ -7429,10 +7589,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 record["gp_frequency_tolerance"] = float(frequency_tolerance)
 
                 if frequency_difference <= frequency_tolerance:
-                    record["gp_validation_status"] = "agreement"
+                    record["gp_validation_status"] = "success"
+                    record["status"] = "accepted"
+                    record["rejection_reasons"] = []
+                    record["rejection_reason"] = None
                     accepted_after_gp.append(band_label)
                 else:
-                    record["gp_validation_status"] = "disagreement"
+                    record["gp_validation_status"] = "rejected"
                     reason = "gp_ls_frequency_disagreement"
 
             except Exception as exc:
@@ -7443,11 +7606,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 reason = "gp_validation_failed"
 
             if reason is not None:
+                self._consensus_add_rejection_reasons(record, [reason])
                 if band_label not in rejected_bands:
                     rejected_bands.append(band_label)
-                reasons = rejection_reasons.setdefault(band_label, [])
-                if reason not in reasons:
-                    reasons.append(reason)
+                rejection_reasons[band_label] = list(record["rejection_reasons"])
 
             if verbose:
                 _status = record.get("gp_validation_status")
@@ -7476,15 +7638,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # Overlap is unlikely in normal operation but could occur if a band
         # was recorded in rejected_bands before GP validation ran (e.g. for
         # a missing LS frequency) and was somehow also added to accepted_after_gp.
+        for band in rejected_bands:
+            if band in band_records:
+                band_records[band]["status"] = "rejected"
+
         _rejected_set = set(rejected_bands)
         final_accepted = [b for b in accepted_after_gp if b not in _rejected_set]
+        for band in final_accepted:
+            if band in band_records:
+                band_records[band]["status"] = "accepted"
+                band_records[band]["rejection_reasons"] = []
+                band_records[band]["rejection_reason"] = None
+                rejection_reasons.pop(band, None)
+
+        for band, record in band_records.items():
+            reasons = self._consensus_normalize_rejection_reasons(
+                record.get("rejection_reasons")
+            )
+            record["rejection_reasons"] = reasons
+            record["rejection_reason"] = reasons[0] if reasons else None
+            if reasons:
+                record["status"] = "rejected"
+                rejection_reasons[band] = list(reasons)
+            elif record.get("status") != "accepted":
+                record["status"] = "rejected" if band in rejected_bands else "accepted"
+            band_records[band] = self._consensus_make_json_safe(record)
 
         return {
-            "controls": controls,
+            "controls": self._consensus_make_json_safe(controls),
             "band_records": band_records,
             "accepted_bands": final_accepted,
             "rejected_bands": rejected_bands,
-            "rejection_reasons": rejection_reasons,
+            "rejection_reasons": self._consensus_make_json_safe(rejection_reasons),
         }
 
     def _deduplicate_frequency_candidates(
@@ -7922,6 +8107,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 max_gap_fraction=max_gap_fraction,
                 min_duty_cycle=min_duty_cycle,
                 use_acf=use_acf,
+                gp_validation_requested=use_gp_validation,
                 verbose=verbose,
             )
             if use_gp_validation:
@@ -7997,7 +8183,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 consensus_frequency_width = np.asarray([robust_width], dtype=float)
             auto_constraint_bounds = None
 
-            self.consensus_diagnostics = {
+            self.consensus_diagnostics = self._consensus_make_json_safe({
                 "accepted_bands": candidate_diag["accepted_bands"],
                 "rejected_bands": candidate_diag["rejected_bands"],
                 "rejection_reasons": candidate_diag["rejection_reasons"],
@@ -8032,7 +8218,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         gp_frequency_tolerance_factor
                     ),
                 },
-            }
+            })
             if verbose:
                 print("[consensus] accepted bands:", candidate_diag["accepted_bands"])
                 print("[consensus] rejected bands:", candidate_diag["rejected_bands"])
@@ -8100,10 +8286,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if consensus_frequency_width is None:
                 floor_width = np.maximum(consensus_frequencies * 0.01, 1.0e-8)
                 consensus_frequency_width = floor_width
-            self.consensus_diagnostics = {
+            self.consensus_diagnostics = self._consensus_make_json_safe({
                 "accepted_bands": [],
                 "rejected_bands": [],
                 "rejection_reasons": {},
+                "per_band_diagnostics": {},
                 "per_band_dominant_periods": {},
                 "per_band_dominant_frequencies": {},
                 "median_frequency": float(np.median(consensus_frequencies)),
@@ -8126,7 +8313,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                 },
                 "mode": "manual_consensus_frequencies",
-            }
+            })
 
         model_is_ready = (
             hasattr(self, "model")
