@@ -8,7 +8,7 @@ from unittest.mock import patch
 import gpytorch
 import torch
 
-from pgmuvi.synthetic import make_simple_sinusoid_1d
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 # Sentinel return value for the patched `train` function.
 _DUMMY_RESULTS = {"loss": [1.0], "delta_loss": [0.0]}
@@ -183,6 +183,82 @@ class TestFitPreregisteredPriorsNotOverridden(unittest.TestCase):
                 mm_prior = prior
         self.assertIsNotNone(mm_prior)
         # Should still be the LPV prior, not a plain LogNormalPrior
+        self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
+
+
+class TestFit2DSmModel(unittest.TestCase):
+    """Test prior-setting behaviour for 2D spectral-mixture models."""
+
+    def setUp(self):
+        self.lc_2d = make_chromatic_sinusoid_2d(
+            n_per_band=[40, 35],
+            period=5.0,
+            wavelengths=[0.5, 1.5],
+            amplitude_law="linear",
+            noise_level=0.1,
+            t_span=20.0,
+            irregular=False,
+            seed=42,
+        )
+
+    def test_2d_sm_mls_uses_generic_defaults(self):
+        """2D SM model with MLS init should use generic LogNormalPrior(0,1)."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
+        with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
+            with patch.object(self.lc_2d, "_train"):
+                self.lc_2d.fit(
+                    model="2D",
+                    num_mixtures=2,
+                    prior_set=None,
+                    training_iter=1,
+                )
+
+        # For 2D SM (ard_num_dims=2) the period/frequency prior branch is
+        # skipped.  set_default_priors() still registers a generic
+        # LogNormalPrior(0, 1) on mixture_means (no period bounds), which is
+        # different from a LogNormalFrequencyPrior (which has period bounds).
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in self.lc_2d.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
+        # Should be a plain LogNormalPrior, NOT a period-bounded
+        # LogNormalFrequencyPrior which would cause inf losses.
+        self.assertNotIsInstance(mm_prior, LogNormalFrequencyPrior)
+
+    def test_2d_sm_user_prior_set_warns_and_applied(self):
+        """2D SM model with explicit prior_set applies prior but warns about it."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
+                with patch.object(self.lc_2d, "_train"):
+                    self.lc_2d.fit(
+                        model="2D",
+                        num_mixtures=2,
+                        prior_set="LPV",
+                        training_iter=1,
+                    )
+
+        # A UserWarning should be issued about 2D prior concerns.
+        dim_warns = [
+            x for x in w
+            if issubclass(x.category, UserWarning)
+            and "2d" in str(x.message).lower()
+        ]
+        self.assertTrue(
+            len(dim_warns) >= 1,
+            "Expected a UserWarning about 2D SM prior dimensionality",
+        )
+
+        # Despite the warning, the LPV prior should still be registered.
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in self.lc_2d.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
         self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
 
 
