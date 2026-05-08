@@ -7031,9 +7031,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 best_idx = plausible_idx[0]
 
             dominant_freq = float(ls_freqs_np[best_idx])
-            # Period is derived here for storage as a user-facing diagnostic
-            # only; all internal decisions remain in frequency space.
-            dominant_period = float(1.0 / dominant_freq)
 
             # Final plausibility guard: frequency must meet the minimum
             # detectable frequency threshold.
@@ -7087,6 +7084,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     band_records[band_label] = record
                     continue
 
+            # Consensus logic operates in frequency space internally. Period is
+            # derived only for user-facing diagnostics.
+            dominant_period = float(1.0 / dominant_freq)
             record["dominant_frequency"] = dominant_freq
             record["dominant_period"] = dominant_period
             record["ls_significant"] = bool(
@@ -7210,18 +7210,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record["gp_validation_status"] = None
             record["gp_validation_error"] = None
 
-            _ls_freq_raw = record.get("dominant_frequency", np.nan)
-            ls_freq = (
-                float(_ls_freq_raw) if _ls_freq_raw is not None else np.nan
+            _candidate_frequency_raw = record.get("dominant_frequency", np.nan)
+            candidate_frequency = (
+                float(_candidate_frequency_raw)
+                if _candidate_frequency_raw is not None
+                else np.nan
             )
             # Period is derived for verbose display only; all GP validation
             # decisions are made in frequency space.
-            gp_freq = None
-            gp_period = None
+            gp_dominant_frequency = None
+            gp_dominant_period = None
             reason = None
 
             try:
-                if not (np.isfinite(ls_freq) and ls_freq > 0):
+                if not (
+                    np.isfinite(candidate_frequency) and candidate_frequency > 0
+                ):
                     raise ValueError(
                         "dominant_frequency is missing or invalid for GP validation."
                     )
@@ -7230,37 +7234,42 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 lc_band.fit(**default_gp_fit_kwargs)
                 summary = lc_band.get_period_summary(**period_summary_kwargs)
 
-                gp_freq = getattr(summary, "dominant_frequency", None)
-                if gp_freq is None and hasattr(summary, "get"):
-                    gp_freq = summary.get("dominant_frequency")
+                gp_dominant_frequency = getattr(summary, "dominant_frequency", None)
+                if gp_dominant_frequency is None and hasattr(summary, "get"):
+                    gp_dominant_frequency = summary.get("dominant_frequency")
 
-                gp_period = getattr(summary, "dominant_period", None)
-                if gp_period is None and hasattr(summary, "get"):
-                    gp_period = summary.get("dominant_period")
-
-                gp_freq = float(gp_freq)
-                if not (np.isfinite(gp_freq) and gp_freq > 0):
+                gp_dominant_frequency = float(gp_dominant_frequency)
+                if not (
+                    np.isfinite(gp_dominant_frequency)
+                    and gp_dominant_frequency > 0
+                ):
                     raise ValueError("GP dominant frequency is not finite/positive.")
 
-                if gp_period is None:
-                    gp_period = float(1.0 / gp_freq)
-                elif np.isfinite(float(gp_period)) and float(gp_period) > 0:
-                    gp_period = float(gp_period)
-                else:
-                    gp_period = float(1.0 / gp_freq)
+                # Consensus logic operates in frequency space internally.
+                # Period is derived from frequency only for display/diagnostics.
+                gp_dominant_period = float(1.0 / gp_dominant_frequency)
 
-                tolerance = max(
-                    gp_frequency_tolerance_factor * 0.1 * ls_freq,
+                frequency_tolerance = max(
+                    gp_frequency_tolerance_factor
+                    * gp_ls_tolerance_base_factor
+                    * min(candidate_frequency, gp_dominant_frequency),
                     1.0e-8,
                 )
-                diff = abs(gp_freq - ls_freq)
+                frequency_difference = abs(
+                    gp_dominant_frequency - candidate_frequency
+                )
+                # Standard consensus disagreement definition in frequency space.
+                frac_diff = frequency_difference / min(
+                    candidate_frequency, gp_dominant_frequency
+                )
 
-                record["gp_dominant_frequency"] = gp_freq
-                record["gp_dominant_period"] = gp_period
-                record["gp_frequency_difference"] = float(diff)
-                record["gp_frequency_tolerance"] = float(tolerance)
+                record["gp_dominant_frequency"] = gp_dominant_frequency
+                record["gp_dominant_period"] = gp_dominant_period
+                record["gp_frequency_difference"] = float(frequency_difference)
+                record["gp_fractional_frequency_difference"] = float(frac_diff)
+                record["gp_frequency_tolerance"] = float(frequency_tolerance)
 
-                if diff <= tolerance:
+                if frequency_difference <= frequency_tolerance:
                     record["gp_validation_status"] = "agreement"
                     accepted_after_gp.append(band_label)
                 else:
@@ -7283,8 +7292,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _status = record.get("gp_validation_status")
                 # Period shown here is derived from frequency for display only.
                 _ls_period_display = (
-                    float(1.0 / ls_freq)
-                    if (np.isfinite(ls_freq) and ls_freq > 0)
+                    float(1.0 / candidate_frequency)
+                    if (
+                        np.isfinite(candidate_frequency)
+                        and candidate_frequency > 0
+                    )
                     else None
                 )
                 _msg = (
@@ -7369,13 +7381,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if ri != rj:
                 parent[rj] = ri
 
-        epsilon_denom = np.finfo(float).tiny
         for i in range(len(normalized)):
             f1 = float(normalized[i]["frequency"])
             for j in range(i + 1, len(normalized)):
                 f2 = float(normalized[j]["frequency"])
-                denom = max(abs(f1), abs(f2), epsilon_denom)
-                rel_diff = abs(f1 - f2) / denom
+                # Use the same consensus fractional-frequency definition across
+                # clustering and agreement checks.
+                rel_diff = abs(f1 - f2) / min(f1, f2)
                 if rel_diff < _rtol:
                     _union(i, j)
 
@@ -8100,13 +8112,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return self.fit(**fit_kwargs)
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
-        """Consensus-fit stub for future multi-component consensus fitting."""
+        """Frequency-space consensus-fit stub for multi-component fitting."""
         raise NotImplementedError(
             "fit_strategy='consensus_multicomp' is not implemented yet."
         )
 
     def _consensus_relaxed_fit(self, **fit_kwargs):
-        """Consensus-fit stub for future relaxed-consensus fitting behavior."""
+        """Frequency-space consensus-fit stub for relaxed-consensus behavior."""
         raise NotImplementedError(
             "fit_strategy='consensus_relaxed' is not implemented yet."
         )
