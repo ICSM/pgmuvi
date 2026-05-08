@@ -7020,6 +7020,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         A stable schema is required so every downstream consumer can assume all
         keys exist for every band, including early-return failure paths.
+        Initial ``gp_validation_status`` is always ``"not_requested"`` and is
+        changed later only when the GP-validation stage runs.
         """
         # "not_requested" means GP validation was not invoked for this record.
         # Records are upgraded to "skipped"/"failed"/"rejected"/"success" later
@@ -7500,8 +7502,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record.setdefault("gp_frequency_difference", None)
             record.setdefault("gp_fractional_frequency_difference", None)
             record.setdefault("gp_frequency_tolerance", None)
-            # Default "not_requested" means GP validation has not been
-            # executed for this record yet.
             record.setdefault("gp_validation_status", "not_requested")
             record.setdefault("gp_validation_error", None)
 
