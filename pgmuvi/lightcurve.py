@@ -6566,11 +6566,40 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             and hasattr(self, "_model_pars")
         )
         if not model_is_ready:
+            _set_model_excluded = {
+                "model",
+                "likelihood",
+                "num_mixtures",
+                "variance",
+                "guess",
+                "consensus_frequencies",
+                "consensus_scales",
+                "periods",
+                "use_mls_init",
+                "use_best_band_init",
+                "constraint_set",
+                "grid_size",
+                "cuda",
+                "training_iter",
+                "max_cg_iterations",
+                "optim",
+                "miniter",
+                "stop",
+                "lr",
+                "stopavg",
+                "fit_strategy",
+            }
+            set_model_kwargs = {
+                key: value
+                for key, value in fit_kwargs.items()
+                if key not in _set_model_excluded
+            }
             self.set_model(
                 fit_kwargs.get("model"),
                 fit_kwargs.get("likelihood"),
                 num_mixtures=fit_kwargs.get("num_mixtures"),
                 variance=fit_kwargs.get("variance", False),
+                **set_model_kwargs,
             )
             fit_kwargs["model"] = None
 
