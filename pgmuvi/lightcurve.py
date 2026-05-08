@@ -6745,7 +6745,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     @staticmethod
     def _consensus_extract_acf_candidate(acf_result):
-        """Extract the strongest non-zero-lag ACF peak as a candidate period.
+        """Extract the strongest non-zero-lag ACF peak as a frequency candidate.
+
+        ACF peaks are located in lag space [days].  The dominant lag is then
+        converted to a frequency [1/day] which is the primary quantity used
+        by the consensus machinery.
+
+        Convention
+        ----------
+        INTERNAL : frequency [1/day]  (``"frequency"`` key in returned dict)
+        USER-FACING : period [day]    (``"period"`` key — display/diagnostics only)
 
         Parameters
         ----------
@@ -6756,8 +6765,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Returns
         -------
         dict or None
-            ``{"period": ..., "frequency": ...}`` for the strongest non-zero
-            lag ACF peak, or ``None`` when no robust candidate can be derived.
+            ``{"frequency": ..., "period": ...}`` where ``"frequency"``
+            [1/day] is the primary consensus quantity and ``"period"`` [day]
+            is retained for backward-compatible display only.  Returns ``None``
+            when no robust candidate can be derived.
 
         Notes
         -----
@@ -6772,6 +6783,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if lag.size < 3 or acf_vals.size < 3:
             return None
 
+        # Drop the zero-lag bin; all positive lags remain.
         lag = lag[1:]
         acf_vals = acf_vals[1:]
         valid = np.isfinite(lag) & np.isfinite(acf_vals) & (lag > 0)
@@ -6791,12 +6803,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return None
 
         best_idx = peaks[np.argmax(acf_vals[peaks])]
-        best_period = float(lag[best_idx])
-        if not (np.isfinite(best_period) and best_period > 0):
+        # acf_lag is the dominant ACF lag [days]; convert to frequency for
+        # consensus logic.  "period" is kept only for user-facing display.
+        acf_lag = float(lag[best_idx])
+        if not (np.isfinite(acf_lag) and acf_lag > 0):
             return None
+        candidate_frequency = float(1.0 / acf_lag)
         return {
-            "period": best_period,
-            "frequency": float(1.0 / best_period),
+            "frequency": candidate_frequency,
+            "period": acf_lag,  # display-only; primary key is "frequency"
         }
 
     @staticmethod
