@@ -51,9 +51,18 @@ import dataclasses
 import json
 import math
 
+try:
+    from scipy.signal import find_peaks as _scipy_find_peaks
+except ImportError:
+    _scipy_find_peaks = None
+
 
 _CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
 _CONSENSUS_MIN_SCALE_BOUND = 1.0e-6
+_ACF_STATUS_AGREEMENT = "agreement"
+_ACF_STATUS_HARMONIC = "harmonic"
+_ACF_STATUS_DISAGREEMENT = "disagreement"
+_ACF_STATUS_UNAVAILABLE = "unavailable"
 
 
 def _reraise_with_note(e, note):
@@ -6736,7 +6745,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     @staticmethod
     def _consensus_extract_acf_candidate(acf_result):
-        """Extract the strongest non-zero-lag ACF peak as a frequency candidate."""
+        """Extract the strongest non-zero-lag ACF peak as a candidate period.
+
+        Parameters
+        ----------
+        acf_result : ACFResult or None
+            Output from :meth:`acf(method="data")`. If unavailable or invalid,
+            no candidate is returned.
+
+        Returns
+        -------
+        dict or None
+            ``{"period": ..., "frequency": ...}`` for the strongest non-zero
+            lag ACF peak, or ``None`` when no robust candidate can be derived.
+
+        Notes
+        -----
+        If ``scipy.signal.find_peaks`` is unavailable, this helper degrades
+        gracefully and returns ``None`` so consensus vetting can continue in
+        LS-only mode.
+        """
         if acf_result is None:
             return None
         lag = acf_result.lag.detach().cpu().numpy()
@@ -6754,12 +6782,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if lag.size < 3:
             return None
 
-        try:
-            from scipy.signal import find_peaks
-
-            peaks, _ = find_peaks(acf_vals)
-        except ImportError:
+        if _scipy_find_peaks is None:
             peaks = np.asarray([], dtype=int)
+        else:
+            peaks, _ = _scipy_find_peaks(acf_vals)
 
         if peaks.size == 0:
             return None
@@ -6771,6 +6797,83 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return {
             "period": best_period,
             "frequency": float(1.0 / best_period),
+        }
+
+    @staticmethod
+    def _consensus_compare_ls_acf(
+        ls_period,
+        acf_period,
+        harmonic_tolerance=0.15,
+    ):
+        """Compare LS and ACF dominant periods for deterministic consistency checks.
+
+        ACF is treated as an independent periodicity diagnostic. Bands where
+        LS and ACF strongly disagree are rejected because the dominant LS peak
+        is less likely to reflect the shared physical timescale.
+
+        Parameters
+        ----------
+        ls_period : float
+            Dominant period derived from Lomb-Scargle for a single band.
+        acf_period : float
+            Dominant period derived from ACF for the same band.
+        harmonic_tolerance : float, optional
+            Relative tolerance used to classify direct or harmonic agreement.
+
+        Returns
+        -------
+        dict
+            Comparison summary with keys:
+            ``status`` (``"agreement"``, ``"harmonic"``,
+            ``"disagreement"``, or ``"unavailable"``),
+            ``ratio`` (larger/smaller period ratio), and
+            ``harmonic_order`` (integer harmonic when applicable).
+        """
+        ls_val = float(ls_period) if ls_period is not None else np.nan
+        acf_val = float(acf_period) if acf_period is not None else np.nan
+
+        if not (
+            np.isfinite(ls_val)
+            and np.isfinite(acf_val)
+            and ls_val > 0
+            and acf_val > 0
+        ):
+            return {
+                "status": _ACF_STATUS_UNAVAILABLE,
+                "ratio": None,
+                "harmonic_order": None,
+            }
+
+        larger = max(ls_val, acf_val)
+        smaller = min(ls_val, acf_val)
+        ratio = larger / smaller
+
+        if not (np.isfinite(ratio) and ratio > 0):
+            return {
+                "status": _ACF_STATUS_UNAVAILABLE,
+                "ratio": None,
+                "harmonic_order": None,
+            }
+
+        if abs(ratio - 1.0) <= harmonic_tolerance:
+            return {
+                "status": _ACF_STATUS_AGREEMENT,
+                "ratio": float(ratio),
+                "harmonic_order": 1,
+            }
+
+        for harmonic_order in (2, 3, 4):
+            if abs(ratio - float(harmonic_order)) <= harmonic_tolerance:
+                return {
+                    "status": _ACF_STATUS_HARMONIC,
+                    "ratio": float(ratio),
+                    "harmonic_order": int(harmonic_order),
+                }
+
+        return {
+            "status": _ACF_STATUS_DISAGREEMENT,
+            "ratio": float(ratio),
+            "harmonic_order": None,
         }
 
     def _consensus_collect_band_candidates(
@@ -6787,7 +6890,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         This function computes per-band sampling metrics, applies conservative
         pre-fit band rejection, runs per-band LS (and optional ACF diagnostics),
         and retains at most one dominant physically plausible LS candidate per
-        band.
+        band. When ACF is enabled, LS-vs-ACF disagreement triggers rejection,
+        while direct or harmonic agreement is preserved as diagnostic support.
 
         Parameters
         ----------
@@ -6847,6 +6951,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "ls_significant": None,
                 "acf_frequency": None,
                 "acf_period": None,
+                "acf_comparison_status": None,
+                "acf_period_ratio": None,
+                "acf_harmonic_order": None,
+                "acf_error": None,
                 "selected_from": None,
             }
 
@@ -6908,12 +7016,41 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 continue
 
             if use_acf:
-                acf_candidate = self._consensus_extract_acf_candidate(
-                    lc_band.acf(method="data", normalize=True)
-                )
+                # ACF is optional in consensus vetting. Sparse/irregular bands
+                # may fail ACF estimation, so failure falls back to LS-only
+                # candidate vetting while preserving diagnostics.
+                try:
+                    _acf_result = lc_band.acf(method="data", normalize=True)
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                ) as exc:
+                    _acf_result = None
+                    record["acf_error"] = f"{type(exc).__name__}: {exc}"
+
+                acf_candidate = self._consensus_extract_acf_candidate(_acf_result)
                 if acf_candidate is not None:
                     record["acf_frequency"] = acf_candidate["frequency"]
                     record["acf_period"] = acf_candidate["period"]
+
+                acf_compare = self._consensus_compare_ls_acf(
+                    ls_period=dominant_period,
+                    acf_period=record["acf_period"],
+                )
+                record["acf_comparison_status"] = acf_compare["status"]
+                record["acf_period_ratio"] = acf_compare["ratio"]
+                record["acf_harmonic_order"] = acf_compare["harmonic_order"]
+
+                # ACF is a direct time-domain periodicity diagnostic. Strong
+                # LS-vs-ACF disagreement is treated conservatively as likely
+                # LS window/alias contamination for shared-timescale consensus.
+                if acf_compare["status"] == _ACF_STATUS_DISAGREEMENT:
+                    rejected_bands.append(band_label)
+                    rejection_reasons[band_label] = ["ls_acf_disagreement"]
+                    band_records[band_label] = record
+                    continue
 
             record["dominant_frequency"] = dominant_freq
             record["dominant_period"] = dominant_period
@@ -6931,10 +7068,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _freq = _record["dominant_frequency"]
                 _period = _record["dominant_period"]
                 if _freq is not None:
-                    print(
+                    _msg = (
                         f"[consensus] band={_band} dominant_period={_period:.6g} "
                         f"dominant_frequency={_freq:.6g}"
                     )
+                    if use_acf:
+                        _msg += (
+                            f" acf_status={_record['acf_comparison_status']}"
+                            f" harmonic_order={_record['acf_harmonic_order']}"
+                        )
+                    print(_msg)
                 elif _band in rejection_reasons:
                     print(
                         f"[consensus] band={_band} rejected: "
