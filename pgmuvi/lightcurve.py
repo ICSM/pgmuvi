@@ -7259,10 +7259,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         }
 
     def _consensus_standard_fit(self, **fit_kwargs):
-        """Run the conservative consensus fit workflow for 2D light curves.
+        """Run the conservative consensus fit workflow.
 
         For ``fit_strategy="consensus"``, this method:
-        1) validates 2D multiband inputs,
+        1) uses caller-provided consensus frequencies directly when supplied,
         2) collects one dominant LS candidate per band after quality gating,
            using LS with optional ACF consistency support diagnostics,
         3) builds a robust cross-band consensus using median and MAD in
@@ -7271,9 +7271,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
            constraint plumbing,
         5) dispatches to the standard fit path with merged guesses.
 
-        Manual ``consensus_frequencies`` remain supported and bypass automatic
-        candidate collection. 1D GP validation in this strategy is planned but
-        not implemented yet.
+        Manual ``consensus_frequencies`` can be supplied directly and bypass
+        automatic candidate collection. Automatic LS/ACF consensus construction
+        currently requires a 2D light curve. 1D GP validation in this strategy
+        is planned but not implemented yet.
 
         Parameters
         ----------
@@ -7281,8 +7282,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Standard :meth:`fit` kwargs plus consensus-specific controls:
             ``min_points_per_band``, ``max_gap_fraction``, ``min_duty_cycle``,
             ``outlier_sigma``, ``use_acf``, ``constrain_consensus``, and
-            ``consensus_width_factor``. Manual overrides are also accepted via
-            ``consensus_frequencies`` and ``consensus_scales``.
+            ``consensus_width_factor``.
+
+            Manual overrides are also accepted via:
+
+            - ``consensus_frequencies`` : array-like of float
+              Consensus frequency values used directly when provided (automatic
+              cross-band construction is skipped).
+            - ``consensus_scales`` : array-like of float or scalar
+              Optional spectral-mixture scale initialization values.
+            - ``consensus_frequency_width`` : array-like of float or scalar
+              Optional width values for consensus-frequency constraints.
+            - ``consensus_frequency_k`` : float, default ``3.0``
+              Multiplier applied to ``consensus_frequency_width`` when building
+              mixture-mean constraint bounds.
+            - ``consensus_scale_max_factor`` : float, default ``0.2``
+              Multiplier on median consensus frequency to derive an upper bound
+              for mixture-scale constraints when enabled.
 
         Returns
         -------
@@ -7292,8 +7308,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Raises
         ------
         ValueError
-            If this is not a 2D light curve, or if consensus inputs fail
-            validation.
+            If automatic consensus construction is requested for a non-2D light
+            curve, or if consensus inputs fail validation.
         """
         consensus_frequencies = fit_kwargs.pop("consensus_frequencies", None)
         consensus_scales = fit_kwargs.pop("consensus_scales", None)
@@ -7320,19 +7336,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         consensus_width_factor = fit_kwargs.pop("consensus_width_factor", None)
         verbose = fit_kwargs.get("verbose", False)
 
-        if self.ndim <= 1:
-            raise ValueError(
-                "fit_strategy='consensus' is only supported for 2D multiband "
-                "Lightcurve objects."
-            )
-
         auto_constraint_bounds = None
         auto_controls = None
         if consensus_frequencies is None:
             if self.ndim != 2:
                 raise ValueError(
-                    "Automatic consensus frequency construction currently "
-                    "requires a 2D light curve."
+                    "Automatic consensus frequency construction requires a 2D "
+                    "light curve. 1D validation in this strategy is planned "
+                    "but not implemented yet."
                 )
             candidate_diag = self._consensus_collect_band_candidates(
                 min_points_per_band=min_points_per_band,
