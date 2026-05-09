@@ -7523,6 +7523,69 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 merged,
             )
 
+    def _consensus_set_top_level_rejection_reasons(
+        self,
+        diagnostics,
+        rejection_reasons,
+    ):
+        """Canonicalize top-level consensus rejection reasons bookkeeping.
+
+        This helper centralizes canonicalization for
+        ``diagnostics["rejection_reasons"]`` and enforces stable structure:
+
+        - input is normalized to a plain ``dict`` (non-dict inputs become ``{}``)
+        - each key must be a canonical rejection reason or a known
+          sampling-metrics reason prefix variant
+        - each value is normalized to a list of string band labels
+        - duplicate band labels are removed while preserving order
+
+        Parameters
+        ----------
+        diagnostics : dict
+            Top-level consensus diagnostics dictionary to mutate.
+        rejection_reasons : object
+            Candidate mapping from reason -> band labels.
+
+        Raises
+        ------
+        ValueError
+            If any rejection-reason key is not recognized.
+        """
+        canonical = {}
+        if isinstance(rejection_reasons, dict):
+            source = rejection_reasons
+        else:
+            source = {}
+
+        for reason, bands in source.items():
+            reason_str = str(reason).strip()
+            if not reason_str:
+                raise ValueError(
+                    "Top-level rejection_reasons contains an empty reason key."
+                )
+            if not self._consensus_is_allowed_rejection_reason(reason_str):
+                raise ValueError(
+                    f"Unknown top-level rejection reason {reason_str!r}; expected "
+                    f"one of {_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED} or a "
+                    "known sampling-metrics reason prefix."
+                )
+
+            if bands is None:
+                band_items = []
+            elif isinstance(bands, list | tuple | set):
+                band_items = list(bands)
+            else:
+                band_items = [bands]
+
+            normalized_bands = []
+            for band in band_items:
+                band_str = str(band).strip()
+                if band_str and band_str not in normalized_bands:
+                    normalized_bands.append(band_str)
+            canonical[reason_str] = normalized_bands
+
+        diagnostics["rejection_reasons"] = canonical
+
     @staticmethod
     def _consensus_initialize_result_structure(*, fit_strategy="consensus"):
         """Create a canonical top-level consensus diagnostics schema.
@@ -7650,9 +7713,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
 
         rejection_reasons = canonical.get("rejection_reasons") or {}
-        if not isinstance(rejection_reasons, dict):
-            rejection_reasons = {}
-        canonical["rejection_reasons"] = rejection_reasons
+        self._consensus_set_top_level_rejection_reasons(
+            canonical, rejection_reasons
+        )
+        rejection_reasons = canonical.get("rejection_reasons", {})
         canonical["rejection_summary"] = self._consensus_build_rejection_summary(
             per_band_diagnostics=per_band,
             rejected_bands=rejected,

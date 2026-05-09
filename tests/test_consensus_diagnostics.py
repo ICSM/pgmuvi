@@ -448,7 +448,51 @@ class TestSetAcfComparisonStatus(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 5. Invalid GP status/reason combinations (validator)
+# 5. Top-level rejection-reasons helper
+# ---------------------------------------------------------------------------
+
+
+class TestSetTopLevelRejectionReasons(unittest.TestCase):
+    """_consensus_set_top_level_rejection_reasons canonicalizes top-level map."""
+
+    def _lc(self):
+        return _make_minimal_lc()
+
+    def test_helper_canonicalizes_duplicate_band_entries(self):
+        diagnostics = {"rejection_reasons": {}}
+        self._lc()._consensus_set_top_level_rejection_reasons(
+            diagnostics,
+            {
+                REJECTION_REASON_NO_LS_PEAKS: ["A", "A", 2, "2", "B"],
+            },
+        )
+        self.assertEqual(
+            diagnostics["rejection_reasons"][REJECTION_REASON_NO_LS_PEAKS],
+            ["A", "2", "B"],
+        )
+
+    def test_helper_rejects_invalid_rejection_reason_keys(self):
+        diagnostics = {"rejection_reasons": {}}
+        with self.assertRaises(ValueError):
+            self._lc()._consensus_set_top_level_rejection_reasons(
+                diagnostics,
+                {"not_a_valid_reason": ["A"]},
+            )
+
+    def test_finalization_returns_canonicalized_top_level_rejection_reasons(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
+        diag["rejection_reasons"] = {
+            REJECTION_REASON_NO_LS_PEAKS: ["A", "A", 5, "5"],
+        }
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        self.assertEqual(
+            result["rejection_reasons"][REJECTION_REASON_NO_LS_PEAKS],
+            ["A", "5"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# 6. Invalid GP status/reason combinations (validator)
 # ---------------------------------------------------------------------------
 
 class TestValidateGpReasonStatusCombinations(unittest.TestCase):
