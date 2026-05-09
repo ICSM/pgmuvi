@@ -76,6 +76,16 @@ _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED = tuple(
     sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES)
 )
 
+# Allowed gp_validation_reason values for each gp_validation_status.  Used by
+# _consensus_validate_result_structure to enforce the reason/status invariant.
+_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS = {
+    "not_requested": (None,),
+    "success": (None,),
+    "skipped": (None, "band_not_accepted"),
+    "rejected": (None, "diagnostics_failed"),
+    "failed": (None, "exception"),
+}
+
 # Required keys for a finalized top-level consensus diagnostics dict.  Used by
 # _consensus_validate_result_structure to check structural completeness.
 _CONSENSUS_REQUIRED_RESULT_KEYS = frozenset(
@@ -7536,14 +7546,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             # 10. gp_validation_reason invariant per status ---
             gp_reason = record.get("gp_validation_reason")
-            _allowed_reasons_by_status = {
-                "not_requested": (None,),
-                "success": (None,),
-                "skipped": (None, "band_not_accepted"),
-                "rejected": (None, "diagnostics_failed"),
-                "failed": (None, "exception"),
-            }
-            allowed_reasons = _allowed_reasons_by_status.get(gp_status)
+            allowed_reasons = _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS.get(
+                gp_status
+            )
             if allowed_reasons is not None and gp_reason not in allowed_reasons:
                 raise ValueError(
                     f"Band {_b!r} has gp_validation_status={gp_status!r} "
