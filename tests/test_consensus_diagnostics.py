@@ -419,6 +419,14 @@ class TestRejectionSummaryConsistency(unittest.TestCase):
         )
         self._assert_raises(diag)
 
+    def test_duplicate_band_in_summary_list_raises(self):
+        diag = _make_valid_diagnostics(
+            accepted_bands=[],
+            rejected_bands=["B"],
+            rejection_summary={"some_reason": ["B", "B"]},
+        )
+        self._assert_raises(diag)
+
     def test_valid_rejection_summary_passes(self):
         diag = _make_valid_diagnostics(
             accepted_bands=["A"],
@@ -552,6 +560,36 @@ class TestJsonSafeFinalization(unittest.TestCase):
         lst = [np.int64(1), float("inf"), "ok"]
         result = Lightcurve._consensus_make_json_safe(lst)
         self.assertEqual(result, [1, None, "ok"])
+
+    def test_finalize_result_structure_makes_values_json_safe(self):
+        lc = _make_minimal_lc()
+        diagnostics = _make_valid_diagnostics(
+            consensus_frequency=np.float64(0.5),
+            trusted_candidate_count=np.int64(3),
+        )
+        diagnostics["controls"] = {
+            "array_val": np.array([1.0, 2.0]),
+            "non_finite": float("inf"),
+        }
+        diagnostics["robust_frequency_width"] = float("inf")
+        diagnostics["mad_frequency_scatter"] = float("nan")
+        diagnostics["per_band_dominant_frequencies"] = {
+            "B": np.array([0.1, np.float64(0.2)])
+        }
+
+        result = lc._consensus_finalize_result_structure(diagnostics)
+
+        self.assertIsInstance(result["consensus_frequency"], float)
+        self.assertEqual(result["trusted_candidate_count"], 3)
+        self.assertIsInstance(result["trusted_candidate_count"], int)
+        self.assertEqual(result["controls"]["array_val"], [1.0, 2.0])
+        self.assertIsNone(result["controls"]["non_finite"])
+        self.assertIsNone(result["consensus_frequency_width"])
+        self.assertIsNone(result["consensus_frequency_scatter"])
+        self.assertEqual(
+            result["per_band_dominant_frequencies"]["B"],
+            [0.1, 0.2],
+        )
 
 
 # ---------------------------------------------------------------------------
