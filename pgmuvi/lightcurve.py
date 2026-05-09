@@ -7490,6 +7490,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"rejection_summary[{reason!r}] must be a list; "
                     f"got {type(bands).__name__!r}."
                 )
+            band_labels = [str(b) for b in bands]
+            duplicate_bands = sorted(
+                {b for b in band_labels if band_labels.count(b) > 1}
+            )
+            if duplicate_bands:
+                raise ValueError(
+                    f"rejection_summary[{reason!r}] contains duplicate "
+                    "band label(s): "
+                    + ", ".join(f"{b!r}" for b in duplicate_bands)
+                    + "."
+                )
             for band in bands:
                 band_str = str(band)
                 if band_str not in rejected_set:
