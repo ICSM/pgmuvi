@@ -44,22 +44,22 @@ def _coerce_uploaded_file_record(record):
 def resolve_latest_uploaded_files(uploaded_files):
     """Resolve latest uploaded files per logical name with deterministic ties."""
     grouped = defaultdict(list)
-    for raw in uploaded_files:
+    for index, raw in enumerate(uploaded_files):
         rec = _coerce_uploaded_file_record(raw)
         if rec.sentinel != UPLOAD_VALIDATION_SENTINEL:
             raise RuntimeError(
                 "Uploaded file record has an unexpected sentinel and may be stale."
             )
-        grouped[rec.logical_name].append(rec)
+        grouped[rec.logical_name].append((index, rec))
 
     latest = {}
-    for logical_name, records in grouped.items():
-        if not records:
+    for logical_name, indexed_records in grouped.items():
+        if not indexed_records:
             continue
         latest[logical_name] = max(
-            records,
-            key=lambda rec: (rec.revision, rec.uploaded_at, rec.file_path),
-        )
+            indexed_records,
+            key=lambda item: (item[1].revision, item[1].uploaded_at, item[0]),
+        )[1]
     return latest
 
 

@@ -9,13 +9,8 @@ import os
 import re
 import sys
 
-from pgmuvi.upload_validation import (
-    UPLOAD_VALIDATION_SENTINEL,
-    assert_no_duplicate_uploaded_files,
-    assert_selected_files_are_latest,
-)
-
 _DIST_VERSION_RE = re.compile(r"^pgmuvi-(?P<version>[^-]+)")
+UPLOAD_VALIDATION_SENTINEL = "PGMUVI_UPLOAD_VALIDATION_V1"
 
 
 def _extract_version(path):
@@ -38,6 +33,48 @@ def _build_records(paths, logical_name, sentinel):
             "sentinel": sentinel,
         })
     return records
+
+
+def _resolve_latest_uploaded_files(uploaded_files):
+    grouped = {}
+    for index, rec in enumerate(uploaded_files):
+        logical_name = rec["logical_name"]
+        current = grouped.get(logical_name)
+        candidate_key = (rec["revision"], rec["uploaded_at"], index)
+        if current is None or candidate_key > current[0]:
+            grouped[logical_name] = (candidate_key, rec)
+    return {logical_name: entry[1] for logical_name, entry in grouped.items()}
+
+
+def _assert_no_duplicate_uploaded_files(uploaded_files):
+    grouped = {}
+    for rec in uploaded_files:
+        grouped.setdefault(rec["logical_name"], []).append(rec["file_path"])
+    duplicate_map = {
+        logical_name: sorted(paths)
+        for logical_name, paths in grouped.items()
+        if len(paths) > 1
+    }
+    if duplicate_map:
+        raise RuntimeError(
+            f"Detected duplicate uploaded files for logical names: {duplicate_map}"
+        )
+
+
+def _assert_selected_files_are_latest(uploaded_files, selected_files):
+    latest = _resolve_latest_uploaded_files(uploaded_files)
+    for logical_name, latest_record in latest.items():
+        selected_path = selected_files.get(logical_name)
+        if selected_path is None:
+            raise RuntimeError(
+                f"Missing selected file for logical name {logical_name!r}."
+            )
+        if str(selected_path) != latest_record["file_path"]:
+            raise RuntimeError(
+                f"Selected uploaded file for logical name {logical_name!r} "
+                f"is stale: expected {latest_record['file_path']!r}, "
+                f"got {selected_path!r}."
+            )
 
 
 def main():
@@ -68,13 +105,13 @@ def main():
     records = []
     records.extend(_build_records(wheel_paths, "wheel", sentinel_value))
     records.extend(_build_records(sdist_paths, "sdist", sentinel_value))
-    assert_no_duplicate_uploaded_files(records)
+    _assert_no_duplicate_uploaded_files(records)
 
     selected = {
         "wheel": max(wheel_paths, key=lambda p: os.stat(p).st_mtime_ns),
         "sdist": max(sdist_paths, key=lambda p: os.stat(p).st_mtime_ns),
     }
-    assert_selected_files_are_latest(records, selected)
+    _assert_selected_files_are_latest(records, selected)
 
     for path in selected.values():
         version = _extract_version(path)
