@@ -27,10 +27,18 @@ from pgmuvi import lightcurve as lightcurve_module
 GP_STATUS_NOT_REQUESTED = (
     lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED
 )
-GP_STATUS_SKIPPED = lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_SKIPPED
-GP_STATUS_FAILED = lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_FAILED
-GP_STATUS_SUCCESS = lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_SUCCESS
-GP_STATUS_REJECTED = lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_REJECTED
+GP_STATUS_SKIPPED = (
+    lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_SKIPPED
+)
+GP_STATUS_FAILED = (
+    lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_FAILED
+)
+GP_STATUS_SUCCESS = (
+    lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_SUCCESS
+)
+GP_STATUS_REJECTED = (
+    lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_REJECTED
+)
 
 
 # ---------------------------------------------------------------------------
