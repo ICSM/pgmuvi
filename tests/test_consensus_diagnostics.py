@@ -24,6 +24,14 @@ import numpy as np
 from pgmuvi.lightcurve import Lightcurve
 from pgmuvi import lightcurve as lightcurve_module
 
+GP_STATUS_NOT_REQUESTED = (
+    lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED
+)
+GP_STATUS_SKIPPED = lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_SKIPPED
+GP_STATUS_FAILED = lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_FAILED
+GP_STATUS_SUCCESS = lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_SUCCESS
+GP_STATUS_REJECTED = lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_REJECTED
+
 
 # ---------------------------------------------------------------------------
 # Minimal Lightcurve factory (no GP training)
@@ -42,7 +50,7 @@ def _make_minimal_lc():
 
 def _make_band_record(
     band="B",
-    status="not_requested",
+    status=GP_STATUS_NOT_REQUESTED,
     reason=None,
     rejection_reasons=None,
     band_status="accepted",
@@ -180,7 +188,7 @@ class TestInitializeBandRecord(unittest.TestCase):
 
     def test_default_gp_validation_status(self):
         record = self.lc._consensus_initialize_band_record("R")
-        self.assertEqual(record["gp_validation_status"], "not_requested")
+        self.assertEqual(record["gp_validation_status"], GP_STATUS_NOT_REQUESTED)
 
     def test_default_gp_validation_reason_is_none(self):
         record = self.lc._consensus_initialize_band_record("R")
@@ -206,7 +214,13 @@ class TestSetGpValidationStatus(unittest.TestCase):
         return _make_minimal_lc()._consensus_initialize_band_record("X")
 
     def test_valid_statuses_accepted(self):
-        for status in ("not_requested", "skipped", "failed", "success", "rejected"):
+        for status in (
+            GP_STATUS_NOT_REQUESTED,
+            GP_STATUS_SKIPPED,
+            GP_STATUS_FAILED,
+            GP_STATUS_SUCCESS,
+            GP_STATUS_REJECTED,
+        ):
             record = self._fresh_record()
             Lightcurve._consensus_set_gp_validation_status(record, status)
             self.assertEqual(record["gp_validation_status"], status)
@@ -219,7 +233,7 @@ class TestSetGpValidationStatus(unittest.TestCase):
     def test_reason_is_set_when_provided(self):
         record = self._fresh_record()
         Lightcurve._consensus_set_gp_validation_status(
-            record, "failed", reason="exception"
+            record, GP_STATUS_FAILED, reason="exception"
         )
         self.assertEqual(record["gp_validation_reason"], "exception")
 
@@ -227,20 +241,22 @@ class TestSetGpValidationStatus(unittest.TestCase):
         record = self._fresh_record()
         # First inject a stale reason via a failed status.
         Lightcurve._consensus_set_gp_validation_status(
-            record, "failed", reason="exception"
+            record, GP_STATUS_FAILED, reason="exception"
         )
         self.assertEqual(record["gp_validation_reason"], "exception")
         # Transition to success without a reason; stale value must be cleared.
-        Lightcurve._consensus_set_gp_validation_status(record, "success")
+        Lightcurve._consensus_set_gp_validation_status(record, GP_STATUS_SUCCESS)
         self.assertIsNone(record["gp_validation_reason"])
 
     def test_stale_reason_cleared_on_not_requested(self):
         record = self._fresh_record()
         Lightcurve._consensus_set_gp_validation_status(
-            record, "skipped", reason="band_not_accepted"
+            record, GP_STATUS_SKIPPED, reason="band_not_accepted"
         )
         self.assertEqual(record["gp_validation_reason"], "band_not_accepted")
-        Lightcurve._consensus_set_gp_validation_status(record, "not_requested")
+        Lightcurve._consensus_set_gp_validation_status(
+            record, GP_STATUS_NOT_REQUESTED
+        )
         self.assertIsNone(record["gp_validation_reason"])
 
     def test_reason_preserved_on_other_statuses_without_explicit_reason(self):
@@ -248,10 +264,10 @@ class TestSetGpValidationStatus(unittest.TestCase):
         the existing reason should not be cleared."""
         record = self._fresh_record()
         Lightcurve._consensus_set_gp_validation_status(
-            record, "rejected", reason="diagnostics_failed"
+            record, GP_STATUS_REJECTED, reason="diagnostics_failed"
         )
         # Calling again with same status and no reason preserves the reason.
-        Lightcurve._consensus_set_gp_validation_status(record, "rejected")
+        Lightcurve._consensus_set_gp_validation_status(record, GP_STATUS_REJECTED)
         self.assertEqual(record["gp_validation_reason"], "diagnostics_failed")
 
 
@@ -286,54 +302,64 @@ class TestValidateGpReasonStatusCombinations(unittest.TestCase):
     # --- invalid combos ----
 
     def test_success_with_exception_reason_raises(self):
-        record = _make_band_record(band="A", status="success", reason="exception")
+        record = _make_band_record(
+            band="A", status=GP_STATUS_SUCCESS, reason="exception"
+        )
         self._assert_validation_raises(self._diag_with_band_record(record))
 
     def test_not_requested_with_band_not_accepted_reason_raises(self):
         record = _make_band_record(
-            band="A", status="not_requested", reason="band_not_accepted"
+            band="A",
+            status=GP_STATUS_NOT_REQUESTED,
+            reason="band_not_accepted",
         )
         self._assert_validation_raises(self._diag_with_band_record(record))
 
     def test_rejected_with_exception_reason_raises(self):
-        record = _make_band_record(band="A", status="rejected", reason="exception")
+        record = _make_band_record(
+            band="A", status=GP_STATUS_REJECTED, reason="exception"
+        )
         self._assert_validation_raises(self._diag_with_band_record(record))
 
     def test_failed_with_diagnostics_failed_reason_raises(self):
         record = _make_band_record(
-            band="A", status="failed", reason="diagnostics_failed"
+            band="A", status=GP_STATUS_FAILED, reason="diagnostics_failed"
         )
         self._assert_validation_raises(self._diag_with_band_record(record))
 
     # --- valid combos ----
 
     def test_not_requested_with_none_reason_passes(self):
-        record = _make_band_record(band="A", status="not_requested", reason=None)
+        record = _make_band_record(
+            band="A", status=GP_STATUS_NOT_REQUESTED, reason=None
+        )
         self._validate(self._diag_with_band_record(record))
 
     def test_success_with_none_reason_passes(self):
-        record = _make_band_record(band="A", status="success", reason=None)
+        record = _make_band_record(band="A", status=GP_STATUS_SUCCESS, reason=None)
         self._validate(self._diag_with_band_record(record))
 
     def test_skipped_with_band_not_accepted_reason_passes(self):
         record = _make_band_record(
-            band="A", status="skipped", reason="band_not_accepted"
+            band="A", status=GP_STATUS_SKIPPED, reason="band_not_accepted"
         )
         self._validate(self._diag_with_band_record(record))
 
     def test_rejected_with_diagnostics_failed_reason_passes(self):
         record = _make_band_record(
-            band="A", status="rejected", reason="diagnostics_failed"
+            band="A", status=GP_STATUS_REJECTED, reason="diagnostics_failed"
         )
         self._validate(self._diag_with_band_record(record))
 
     def test_failed_with_exception_reason_passes(self):
-        record = _make_band_record(band="A", status="failed", reason="exception")
+        record = _make_band_record(
+            band="A", status=GP_STATUS_FAILED, reason="exception"
+        )
         self._validate(self._diag_with_band_record(record))
 
     def test_error_message_includes_band_label(self):
         record = _make_band_record(
-            band="MY_BAND", status="success", reason="exception"
+            band="MY_BAND", status=GP_STATUS_SUCCESS, reason="exception"
         )
         try:
             self._validate(self._diag_with_band_record(record))
@@ -662,7 +688,9 @@ class TestFinalizeValidatePipeline(unittest.TestCase):
         for key in required_band_keys:
             with self.subTest(key=key):
                 diag = self._finalized_valid_diag()
-                diag["per_band_diagnostics"]["A"] = dict(diag["per_band_diagnostics"]["A"])
+                diag["per_band_diagnostics"]["A"] = dict(
+                    diag["per_band_diagnostics"]["A"]
+                )
                 del diag["per_band_diagnostics"]["A"][key]
                 with self.assertRaises(RuntimeError) as exc:
                     self._lc()._consensus_validate_result_structure(diag)
@@ -862,11 +890,11 @@ class TestConsensusCategoricalConstants(unittest.TestCase):
 
     def test_individual_gp_validation_status_constants_exist(self):
         expected = {
-            "_CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED": "not_requested",
-            "_CONSENSUS_GP_VALIDATION_STATUS_SKIPPED": "skipped",
-            "_CONSENSUS_GP_VALIDATION_STATUS_FAILED": "failed",
-            "_CONSENSUS_GP_VALIDATION_STATUS_SUCCESS": "success",
-            "_CONSENSUS_GP_VALIDATION_STATUS_REJECTED": "rejected",
+            "_CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED": GP_STATUS_NOT_REQUESTED,
+            "_CONSENSUS_GP_VALIDATION_STATUS_SKIPPED": GP_STATUS_SKIPPED,
+            "_CONSENSUS_GP_VALIDATION_STATUS_FAILED": GP_STATUS_FAILED,
+            "_CONSENSUS_GP_VALIDATION_STATUS_SUCCESS": GP_STATUS_SUCCESS,
+            "_CONSENSUS_GP_VALIDATION_STATUS_REJECTED": GP_STATUS_REJECTED,
         }
         for name, expected_value in expected.items():
             with self.subTest(name=name):
