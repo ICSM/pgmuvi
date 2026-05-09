@@ -76,6 +76,80 @@ _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED = tuple(
     sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES)
 )
 
+# Required keys for a finalized top-level consensus diagnostics dict.  Used by
+# _consensus_validate_result_structure to check structural completeness.
+_CONSENSUS_REQUIRED_RESULT_KEYS = frozenset(
+    {
+        "fit_strategy",
+        "consensus_success",
+        "consensus_frequency",
+        "consensus_period",
+        "consensus_frequency_width",
+        "consensus_frequency_scatter",
+        "accepted_bands",
+        "rejected_bands",
+        "rejection_summary",
+        "per_band_diagnostics",
+        "n_total_bands",
+        "n_accepted_bands",
+        "n_rejected_bands",
+        "use_acf_validation",
+        "use_gp_validation",
+        "gp_validation_requested",
+        "gp_validation_performed",
+        "trusted_candidate_count",
+        "candidate_count",
+        "consensus_generation_method",
+        "rejection_reasons",
+        "per_band_dominant_periods",
+        "per_band_dominant_frequencies",
+        "median_frequency",
+        "mad_frequency_scatter",
+        "consensus_inlier_bands",
+        "consensus_outlier_bands",
+        "final_consensus_frequency",
+        "final_consensus_period",
+        "robust_frequency_width",
+        "final_constraint_bounds",
+        "controls",
+        "mode",
+    }
+)
+
+# Required keys for every per-band record in per_band_diagnostics.  Used by
+# _consensus_validate_result_structure to check per-band completeness.
+_CONSENSUS_REQUIRED_BAND_KEYS = frozenset(
+    {
+        "band",
+        "status",
+        "rejection_reason",
+        "rejection_reasons",
+        "metrics",
+        "dominant_frequency",
+        "dominant_period",
+        "ls_significant",
+        "ls_peak_power",
+        "ls_peak_prominence",
+        "ls_peak_area_fraction",
+        "acf_frequency",
+        "acf_period",
+        "acf_supported",
+        "acf_comparison_status",
+        "acf_period_ratio",
+        "acf_harmonic_order",
+        "acf_error",
+        "selected_from",
+        "gp_validation_used",
+        "gp_dominant_frequency",
+        "gp_dominant_period",
+        "gp_frequency_difference",
+        "gp_fractional_frequency_difference",
+        "gp_frequency_tolerance",
+        "gp_validation_error",
+        "gp_validation_status",
+    }
+)
+
 
 def _reraise_with_note(e, note):
     """Reraise an exception with a note added to the message
@@ -7211,7 +7285,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             for reason, bands in sorted(summary.items(), key=lambda kv: kv[0])
         }
 
-    def _consensus_finalize_result_structure(self, diagnostics):
+    def _consensus_finalize_result_structure(self, diagnostics, *, validate=True):
         """Normalize and finalize top-level consensus diagnostics."""
         canonical = self._consensus_initialize_result_structure(
             fit_strategy=(diagnostics or {}).get("fit_strategy", "consensus")
@@ -7291,7 +7365,194 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ):
             canonical[key] = bool(canonical.get(key))
 
-        return self._consensus_make_json_safe(canonical)
+        result = self._consensus_make_json_safe(canonical)
+        if validate:
+            self._consensus_validate_result_structure(result)
+        return result
+
+    def _consensus_validate_result_structure(self, diagnostics):
+        """Validate internal consistency of a finalized consensus diagnostics dict.
+
+        This method enforces structural invariants that must hold for every
+        finalized consensus diagnostics structure.  It is intended to catch
+        corruption introduced by bugs in the consensus machinery before the
+        structure is attached to ``self.consensus_diagnostics``.
+
+        Validation only — this method never silently repairs a corrupted
+        structure.  Raise ``RuntimeError`` or ``ValueError`` with an
+        informative message on any violation.
+
+        Parameters
+        ----------
+        diagnostics : dict
+            A finalized consensus diagnostics dict, typically the return value
+            of :meth:`_consensus_finalize_result_structure`.
+
+        Raises
+        ------
+        RuntimeError
+            If a required key is absent, count fields are inconsistent, or
+            ``consensus_success`` semantics are violated.
+        ValueError
+            If ``accepted_bands``/``rejected_bands`` overlap, the
+            ``rejection_summary`` is malformed, an unknown GP status is found,
+            or ``rejection_reasons`` entries are not lists.
+        """
+        if not isinstance(diagnostics, dict):
+            raise RuntimeError(
+                "Consensus diagnostics must be a dict; "
+                f"got {type(diagnostics).__name__!r}."
+            )
+
+        # --- 1. Required top-level keys must all be present ---
+        missing_keys = _CONSENSUS_REQUIRED_RESULT_KEYS - diagnostics.keys()
+        if missing_keys:
+            raise RuntimeError(
+                "Consensus diagnostics is missing required top-level key(s): "
+                + ", ".join(f"'{k}'" for k in sorted(missing_keys))
+                + "."
+            )
+
+        accepted_bands = diagnostics["accepted_bands"]
+        rejected_bands = diagnostics["rejected_bands"]
+
+        # --- 2. accepted_bands and rejected_bands must be lists ---
+        if not isinstance(accepted_bands, list):
+            raise RuntimeError(
+                "'accepted_bands' must be a list; "
+                f"got {type(accepted_bands).__name__!r}."
+            )
+        if not isinstance(rejected_bands, list):
+            raise RuntimeError(
+                "'rejected_bands' must be a list; "
+                f"got {type(rejected_bands).__name__!r}."
+            )
+
+        # --- 3. No band may appear in both lists ---
+        accepted_set = {str(b) for b in accepted_bands}
+        rejected_set = {str(b) for b in rejected_bands}
+        overlap = accepted_set & rejected_set
+        if overlap:
+            raise ValueError(
+                "Band(s) appear in both 'accepted_bands' and 'rejected_bands': "
+                + ", ".join(f"'{b}'" for b in sorted(overlap))
+                + "."
+            )
+
+        # --- 4. Count fields must be consistent with the band lists ---
+        n_accepted = diagnostics["n_accepted_bands"]
+        n_rejected = diagnostics["n_rejected_bands"]
+        n_total = diagnostics["n_total_bands"]
+        if n_accepted != len(accepted_set):
+            raise RuntimeError(
+                f"'n_accepted_bands' ({n_accepted}) does not match "
+                f"len(accepted_bands) ({len(accepted_set)})."
+            )
+        if n_rejected != len(rejected_set):
+            raise RuntimeError(
+                f"'n_rejected_bands' ({n_rejected}) does not match "
+                f"len(rejected_bands) ({len(rejected_set)})."
+            )
+        if n_total != n_accepted + n_rejected:
+            raise RuntimeError(
+                f"'n_total_bands' ({n_total}) != "
+                f"n_accepted_bands ({n_accepted}) + "
+                f"n_rejected_bands ({n_rejected})."
+            )
+
+        # --- 5. rejection_summary must map str -> list-of-str ---
+        rejection_summary = diagnostics["rejection_summary"]
+        if not isinstance(rejection_summary, dict):
+            raise RuntimeError(
+                "'rejection_summary' must be a dict; "
+                f"got {type(rejection_summary).__name__!r}."
+            )
+        for reason, bands in rejection_summary.items():
+            if not isinstance(bands, list):
+                raise ValueError(
+                    f"rejection_summary[{reason!r}] must be a list; "
+                    f"got {type(bands).__name__!r}."
+                )
+            for band in bands:
+                band_str = str(band)
+                if band_str not in rejected_set:
+                    raise ValueError(
+                        f"Band {band_str!r} in rejection_summary[{reason!r}] "
+                        "is not present in 'rejected_bands'."
+                    )
+                if band_str in accepted_set:
+                    raise ValueError(
+                        f"Accepted band {band_str!r} appears in "
+                        f"rejection_summary[{reason!r}]."
+                    )
+
+        # --- 6. per_band_diagnostics must be a dict ---
+        per_band = diagnostics["per_band_diagnostics"]
+        if not isinstance(per_band, dict):
+            raise RuntimeError(
+                "'per_band_diagnostics' must be a dict; "
+                f"got {type(per_band).__name__!r}."
+            )
+
+        # --- 7-9. Per-band record invariants ---
+        for band_label, record in per_band.items():
+            _b = str(band_label)
+            if not isinstance(record, dict):
+                raise RuntimeError(
+                    f"per_band_diagnostics[{_b!r}] must be a dict; "
+                    f"got {type(record).__name__!r}."
+                )
+            missing_band = _CONSENSUS_REQUIRED_BAND_KEYS - record.keys()
+            if missing_band:
+                raise RuntimeError(
+                    f"Band {_b!r} is missing required key(s): "
+                    + ", ".join(f"'{k}'" for k in sorted(missing_band))
+                    + "."
+                )
+
+            # 8. gp_validation_status must be a known value ---
+            gp_status = record["gp_validation_status"]
+            if gp_status not in _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES:
+                raise ValueError(
+                    f"Band {_b!r} has unknown 'gp_validation_status' "
+                    f"{gp_status!r}; expected one of "
+                    f"{_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED}."
+                )
+
+            # 9. rejection_reasons must be a list ---
+            rr = record["rejection_reasons"]
+            if not isinstance(rr, list):
+                raise ValueError(
+                    f"Band {_b!r}: 'rejection_reasons' must be a list; "
+                    f"got {type(rr).__name__!r}."
+                )
+
+        # --- 10. consensus_success semantics ---
+        consensus_success = diagnostics["consensus_success"]
+        if consensus_success:
+            consensus_frequency = diagnostics.get("consensus_frequency")
+            n_accepted_bands = diagnostics["n_accepted_bands"]
+            trusted_candidate_count = diagnostics.get("trusted_candidate_count")
+            if consensus_frequency is None:
+                raise RuntimeError(
+                    "consensus_success is True but 'consensus_frequency' "
+                    "is None."
+                )
+            if n_accepted_bands <= 0:
+                raise RuntimeError(
+                    "consensus_success is True but 'n_accepted_bands' is "
+                    f"{n_accepted_bands} (must be > 0)."
+                )
+            if (
+                trusted_candidate_count is None
+                or int(trusted_candidate_count) <= 0
+            ):
+                raise RuntimeError(
+                    "consensus_success is True but 'trusted_candidate_count' "
+                    f"is {trusted_candidate_count!r} (must be > 0)."
+                )
+
+
 
     def _consensus_collect_band_candidates(
         self,
@@ -8818,8 +9079,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             fit_result = self.fit(**fit_kwargs)
         except Exception:
             result_diagnostics["consensus_success"] = False
+            # validate=False prevents masking the original exception when the
+            # partial error-recovery diagnostics are finalized.
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
-                result_diagnostics
+                result_diagnostics, validate=False
             )
             raise
 
