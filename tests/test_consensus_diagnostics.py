@@ -860,6 +860,41 @@ class TestConsensusCategoricalConstants(unittest.TestCase):
                 self.assertIsNotNone(value)
                 self.assertIsInstance(value, frozenset)
 
+    def test_individual_gp_validation_status_constants_exist(self):
+        expected = {
+            "_CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED": "not_requested",
+            "_CONSENSUS_GP_VALIDATION_STATUS_SKIPPED": "skipped",
+            "_CONSENSUS_GP_VALIDATION_STATUS_FAILED": "failed",
+            "_CONSENSUS_GP_VALIDATION_STATUS_SUCCESS": "success",
+            "_CONSENSUS_GP_VALIDATION_STATUS_REJECTED": "rejected",
+        }
+        for name, expected_value in expected.items():
+            with self.subTest(name=name):
+                value = getattr(lightcurve_module, name, None)
+                self.assertIsNotNone(
+                    value, f"{name} constant is missing from lightcurve module"
+                )
+                self.assertEqual(value, expected_value)
+
+    def test_individual_gp_status_constants_match_allowed_set(self):
+        allowed = lightcurve_module._CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES
+        individual_names = (
+            "_CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED",
+            "_CONSENSUS_GP_VALIDATION_STATUS_SKIPPED",
+            "_CONSENSUS_GP_VALIDATION_STATUS_FAILED",
+            "_CONSENSUS_GP_VALIDATION_STATUS_SUCCESS",
+            "_CONSENSUS_GP_VALIDATION_STATUS_REJECTED",
+        )
+        for name in individual_names:
+            val = getattr(lightcurve_module, name)
+            with self.subTest(name=name):
+                self.assertIn(
+                    val,
+                    allowed,
+                    f"{name}={val!r} is not in "
+                    "_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES",
+                )
+
 
 # ---------------------------------------------------------------------------
 # 10. Recursive-fit protection

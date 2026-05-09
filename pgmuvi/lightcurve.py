@@ -66,6 +66,11 @@ _ACF_STATUS_UNAVAILABLE = "unavailable"
 _CONSENSUS_BAND_STATUS_PENDING = "pending"
 _CONSENSUS_BAND_STATUS_ACCEPTED = "accepted"
 _CONSENSUS_BAND_STATUS_REJECTED = "rejected"
+_CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED = "not_requested"
+_CONSENSUS_GP_VALIDATION_STATUS_SKIPPED = "skipped"
+_CONSENSUS_GP_VALIDATION_STATUS_FAILED = "failed"
+_CONSENSUS_GP_VALIDATION_STATUS_SUCCESS = "success"
+_CONSENSUS_GP_VALIDATION_STATUS_REJECTED = "rejected"
 _CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED = "band_not_accepted"
 _CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED = "diagnostics_failed"
 _CONSENSUS_GP_VALIDATION_REASON_EXCEPTION = "exception"
@@ -103,11 +108,11 @@ _CONSENSUS_ALLOWED_BAND_STATUSES = frozenset(
 )
 _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES = frozenset(
     {
-        "not_requested",
-        "skipped",
-        "failed",
-        "success",
-        "rejected",
+        _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED,
+        _CONSENSUS_GP_VALIDATION_STATUS_SKIPPED,
+        _CONSENSUS_GP_VALIDATION_STATUS_FAILED,
+        _CONSENSUS_GP_VALIDATION_STATUS_SUCCESS,
+        _CONSENSUS_GP_VALIDATION_STATUS_REJECTED,
     }
 )
 _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED = tuple(
@@ -115,8 +120,8 @@ _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED = tuple(
 )
 _CONSENSUS_GP_VALIDATION_STATUSES_CLEAR_REASON = frozenset(
     {
-        "not_requested",
-        "success",
+        _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED,
+        _CONSENSUS_GP_VALIDATION_STATUS_SUCCESS,
     }
 )
 _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS = frozenset(
@@ -146,11 +151,20 @@ _CONSENSUS_ALLOWED_REJECTION_REASON_PREFIXES = (
 # Allowed gp_validation_reason values for each gp_validation_status.  Used by
 # _consensus_validate_result_structure to enforce the reason/status invariant.
 _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS = {
-    "not_requested": (None,),
-    "success": (None,),
-    "skipped": (None, _CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED),
-    "rejected": (None, _CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED),
-    "failed": (None, _CONSENSUS_GP_VALIDATION_REASON_EXCEPTION),
+    _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED: (None,),
+    _CONSENSUS_GP_VALIDATION_STATUS_SUCCESS: (None,),
+    _CONSENSUS_GP_VALIDATION_STATUS_SKIPPED: (
+        None,
+        _CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED,
+    ),
+    _CONSENSUS_GP_VALIDATION_STATUS_REJECTED: (
+        None,
+        _CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED,
+    ),
+    _CONSENSUS_GP_VALIDATION_STATUS_FAILED: (
+        None,
+        _CONSENSUS_GP_VALIDATION_REASON_EXCEPTION,
+    ),
 }
 _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS_SORTED = {
     status: tuple(
@@ -7281,7 +7295,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "gp_validation_error": None,
             "gp_validation_reason": None,
         }
-        self._consensus_set_gp_validation_status(record, "not_requested")
+        self._consensus_set_gp_validation_status(
+            record, _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED
+        )
         return record
 
     @staticmethod
@@ -8267,7 +8283,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if "gp_validation_status" not in record:
                 self._consensus_set_gp_validation_status(
                     record,
-                    "not_requested",
+                    _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED,
                 )
             record.setdefault("gp_validation_error", None)
 
@@ -8280,7 +8296,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ):
                 self._consensus_set_gp_validation_status(
                     record,
-                    "skipped",
+                    _CONSENSUS_GP_VALIDATION_STATUS_SKIPPED,
                     reason=_CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED,
                 )
 
@@ -8300,9 +8316,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band_records[band_label] = record
 
             record["gp_validation_used"] = True
-            # "failed" is the pre-attempt state while the GP fit is attempted.
-            # It remains "failed" if any exception is raised.
-            self._consensus_set_gp_validation_status(record, "failed")
+            # The pre-attempt state is "failed"; it remains "failed" if any
+            # exception is raised during the GP fit.
+            self._consensus_set_gp_validation_status(
+                record, _CONSENSUS_GP_VALIDATION_STATUS_FAILED
+            )
             record["gp_validation_error"] = None
 
             _candidate_frequency_raw = record.get("dominant_frequency", np.nan)
@@ -8375,7 +8393,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
                 if frequency_difference <= frequency_tolerance:
                     # GP fit succeeded and the band is accepted.
-                    self._consensus_set_gp_validation_status(record, "success")
+                    self._consensus_set_gp_validation_status(
+                        record, _CONSENSUS_GP_VALIDATION_STATUS_SUCCESS
+                    )
                     record["status"] = _CONSENSUS_BAND_STATUS_ACCEPTED
                     record["rejection_reasons"] = []
                     record["rejection_reason"] = None
@@ -8384,7 +8404,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     # GP fit succeeded but disagreed with the LS candidate.
                     self._consensus_set_gp_validation_status(
                         record,
-                        "rejected",
+                        _CONSENSUS_GP_VALIDATION_STATUS_REJECTED,
                         reason=_CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED,
                     )
                     reason = _CONSENSUS_REJECTION_REASON_GP_LS_DISAGREEMENT
@@ -8393,7 +8413,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # GP fit attempt raised/failed.
                 self._consensus_set_gp_validation_status(
                     record,
-                    "failed",
+                    _CONSENSUS_GP_VALIDATION_STATUS_FAILED,
                     reason=_CONSENSUS_GP_VALIDATION_REASON_EXCEPTION,
                 )
                 record["gp_validation_error"] = (
