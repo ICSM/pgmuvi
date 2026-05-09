@@ -471,6 +471,19 @@ class TestSetTopLevelRejectionReasons(unittest.TestCase):
             ["A", "2", "B"],
         )
 
+    def test_helper_preserves_first_occurrence_order_when_deduplicating(self):
+        diagnostics = {"rejection_reasons": {}}
+        self._lc()._consensus_set_top_level_rejection_reasons(
+            diagnostics,
+            {
+                REJECTION_REASON_NO_LS_PEAKS: ["A", "B", "A", "C", "B"],
+            },
+        )
+        self.assertEqual(
+            diagnostics["rejection_reasons"][REJECTION_REASON_NO_LS_PEAKS],
+            ["A", "B", "C"],
+        )
+
     def test_helper_rejects_invalid_rejection_reason_keys(self):
         diagnostics = {"rejection_reasons": {}}
         with self.assertRaises(ValueError):
@@ -489,6 +502,12 @@ class TestSetTopLevelRejectionReasons(unittest.TestCase):
             result["rejection_reasons"][REJECTION_REASON_NO_LS_PEAKS],
             ["A", "5"],
         )
+
+    def test_finalization_rejects_invalid_top_level_rejection_reason_keys(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
+        diag["rejection_reasons"] = {"not_a_valid_reason": ["A"]}
+        with self.assertRaises(ValueError):
+            self._lc()._consensus_finalize_result_structure(diag)
 
 
 # ---------------------------------------------------------------------------
