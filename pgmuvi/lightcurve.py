@@ -9079,8 +9079,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             fit_result = self.fit(**fit_kwargs)
         except Exception:
             result_diagnostics["consensus_success"] = False
-            # validate=False prevents masking the original exception when the
-            # partial error-recovery diagnostics are finalized.
+            # validate=False prevents masking the original exception when
+            # partial error-recovery diagnostics are finalized.  Validation
+            # is skipped here because diagnostics may be incomplete during
+            # exception handling, and the original error is more important.
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
                 result_diagnostics, validate=False
             )
