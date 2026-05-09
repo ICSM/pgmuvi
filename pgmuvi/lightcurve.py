@@ -63,6 +63,44 @@ _ACF_STATUS_AGREEMENT = "agreement"
 _ACF_STATUS_HARMONIC = "harmonic"
 _ACF_STATUS_DISAGREEMENT = "disagreement"
 _ACF_STATUS_UNAVAILABLE = "unavailable"
+_CONSENSUS_BAND_STATUS_PENDING = "pending"
+_CONSENSUS_BAND_STATUS_ACCEPTED = "accepted"
+_CONSENSUS_BAND_STATUS_REJECTED = "rejected"
+_CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED = "band_not_accepted"
+_CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED = "diagnostics_failed"
+_CONSENSUS_GP_VALIDATION_REASON_EXCEPTION = "exception"
+_CONSENSUS_REJECTION_REASON_SAMPLING_METRICS_UNAVAILABLE = (
+    "sampling metrics unavailable"
+)
+_CONSENSUS_REJECTION_REASON_NO_LS_PEAKS = "no_ls_peaks"
+_CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK = (
+    "no_physically_plausible_ls_peak"
+)
+_CONSENSUS_REJECTION_REASON_CANDIDATE_FREQUENCY_TOO_LOW = (
+    "candidate_frequency_too_low"
+)
+_CONSENSUS_REJECTION_REASON_LS_ACF_DISAGREEMENT = "ls_acf_disagreement"
+_CONSENSUS_REJECTION_REASON_GP_LS_DISAGREEMENT = "gp_ls_frequency_disagreement"
+_CONSENSUS_REJECTION_REASON_GP_VALIDATION_FAILED = "gp_validation_failed"
+_CONSENSUS_REJECTION_REASON_PREFIX_TOO_FEW_POINTS = "too_few_points ("
+_CONSENSUS_REJECTION_REASON_PREFIX_MAX_GAP_FRACTION = "max_gap_fraction ("
+_CONSENSUS_REJECTION_REASON_PREFIX_DUTY_CYCLE = "duty_cycle ("
+
+_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES = frozenset(
+    {
+        _ACF_STATUS_AGREEMENT,
+        _ACF_STATUS_HARMONIC,
+        _ACF_STATUS_DISAGREEMENT,
+        _ACF_STATUS_UNAVAILABLE,
+    }
+)
+_CONSENSUS_ALLOWED_BAND_STATUSES = frozenset(
+    {
+        _CONSENSUS_BAND_STATUS_PENDING,
+        _CONSENSUS_BAND_STATUS_ACCEPTED,
+        _CONSENSUS_BAND_STATUS_REJECTED,
+    }
+)
 _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES = frozenset(
     {
         "not_requested",
@@ -75,16 +113,63 @@ _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES = frozenset(
 _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED = tuple(
     sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES)
 )
+_CONSENSUS_GP_VALIDATION_STATUSES_CLEAR_REASON = frozenset(
+    {
+        "not_requested",
+        "success",
+    }
+)
+_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS = frozenset(
+    {
+        _CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED,
+        _CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED,
+        _CONSENSUS_GP_VALIDATION_REASON_EXCEPTION,
+    }
+)
+_CONSENSUS_ALLOWED_REJECTION_REASONS = frozenset(
+    {
+        _CONSENSUS_REJECTION_REASON_SAMPLING_METRICS_UNAVAILABLE,
+        _CONSENSUS_REJECTION_REASON_NO_LS_PEAKS,
+        _CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK,
+        _CONSENSUS_REJECTION_REASON_CANDIDATE_FREQUENCY_TOO_LOW,
+        _CONSENSUS_REJECTION_REASON_LS_ACF_DISAGREEMENT,
+        _CONSENSUS_REJECTION_REASON_GP_LS_DISAGREEMENT,
+        _CONSENSUS_REJECTION_REASON_GP_VALIDATION_FAILED,
+    }
+)
+_CONSENSUS_ALLOWED_REJECTION_REASON_PREFIXES = (
+    _CONSENSUS_REJECTION_REASON_PREFIX_TOO_FEW_POINTS,
+    _CONSENSUS_REJECTION_REASON_PREFIX_MAX_GAP_FRACTION,
+    _CONSENSUS_REJECTION_REASON_PREFIX_DUTY_CYCLE,
+)
 
 # Allowed gp_validation_reason values for each gp_validation_status.  Used by
 # _consensus_validate_result_structure to enforce the reason/status invariant.
 _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS = {
     "not_requested": (None,),
     "success": (None,),
-    "skipped": (None, "band_not_accepted"),
-    "rejected": (None, "diagnostics_failed"),
-    "failed": (None, "exception"),
+    "skipped": (None, _CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED),
+    "rejected": (None, _CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED),
+    "failed": (None, _CONSENSUS_GP_VALIDATION_REASON_EXCEPTION),
 }
+_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS_SORTED = {
+    status: tuple(
+        sorted(val for val in allowed_reasons if val is not None)
+    )
+    for (
+        status,
+        allowed_reasons,
+    ) in _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS.items()
+}
+_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES_SORTED = tuple(
+    sorted(_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES)
+)
+_CONSENSUS_ALLOWED_BAND_STATUSES_SORTED = tuple(
+    sorted(_CONSENSUS_ALLOWED_BAND_STATUSES)
+)
+_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED = tuple(
+    sorted(_CONSENSUS_ALLOWED_REJECTION_REASONS)
+)
 
 # Required keys for a finalized top-level consensus diagnostics dict.  Used by
 # _consensus_validate_result_structure to check structural completeness.
@@ -6815,7 +6900,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Return a list of deterministic rejection reasons from sampling metrics."""
         reasons = []
         if not isinstance(metrics, dict):
-            return ["sampling metrics unavailable"]
+            return [_CONSENSUS_REJECTION_REASON_SAMPLING_METRICS_UNAVAILABLE]
         if "error" in metrics:
             reasons.append(str(metrics["error"]))
             return reasons
@@ -6823,19 +6908,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         n_points = float(metrics.get("n_points", np.nan))
         if not (np.isfinite(n_points) and n_points >= min_points_per_band):
             reasons.append(
-                f"too_few_points ({n_points:g} < {int(min_points_per_band)})"
+                f"{_CONSENSUS_REJECTION_REASON_PREFIX_TOO_FEW_POINTS}"
+                f"{n_points:g} < {int(min_points_per_band)})"
             )
 
         gap_fraction = float(metrics.get("max_gap_fraction", np.nan))
         if not (np.isfinite(gap_fraction) and gap_fraction <= max_gap_fraction):
             reasons.append(
-                f"max_gap_fraction ({gap_fraction:.3g} > {max_gap_fraction:.3g})"
+                f"{_CONSENSUS_REJECTION_REASON_PREFIX_MAX_GAP_FRACTION}"
+                f"{gap_fraction:.3g} > {max_gap_fraction:.3g})"
             )
 
         duty_cycle = float(metrics.get("duty_cycle", np.nan))
         if not (np.isfinite(duty_cycle) and duty_cycle >= min_duty_cycle):
             reasons.append(
-                f"duty_cycle ({duty_cycle:.3g} < {min_duty_cycle:.3g})"
+                f"{_CONSENSUS_REJECTION_REASON_PREFIX_DUTY_CYCLE}"
+                f"{duty_cycle:.3g} < {min_duty_cycle:.3g})"
             )
 
         return reasons
@@ -7141,7 +7229,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         record["gp_validation_status"] = status
         if reason is not None:
             record["gp_validation_reason"] = reason
-        elif status in ("not_requested", "success"):
+        elif status in _CONSENSUS_GP_VALIDATION_STATUSES_CLEAR_REASON:
             # Clear any stale reason that may have been set by an earlier
             # status transition so these terminal/clean statuses never carry
             # leftover failure/rejection/skip reason strings.
@@ -7166,7 +7254,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # only when the GP-validation stage is actually executed.
         record = {
             "band": str(band_label),
-            "status": "pending",
+            "status": _CONSENSUS_BAND_STATUS_PENDING,
             "rejection_reason": None,
             "rejection_reasons": [],
             "metrics": self._consensus_make_json_safe(metrics),
@@ -7196,6 +7284,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self._consensus_set_gp_validation_status(record, "not_requested")
         return record
 
+    @staticmethod
+    def _consensus_is_allowed_rejection_reason(reason):
+        """Return True if a rejection reason is canonical or known free-form."""
+        if reason in _CONSENSUS_ALLOWED_REJECTION_REASONS:
+            return True
+        return any(
+            reason.startswith(prefix)
+            for prefix in _CONSENSUS_ALLOWED_REJECTION_REASON_PREFIXES
+        )
+
     def _consensus_add_rejection_reasons(self, record, reasons):
         """Append rejection reasons to a band record without duplicates."""
         merged = self._consensus_normalize_rejection_reasons(
@@ -7207,7 +7305,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         record["rejection_reasons"] = merged
         record["rejection_reason"] = merged[0] if merged else None
         if merged:
-            record["status"] = "rejected"
+            record["status"] = _CONSENSUS_BAND_STATUS_REJECTED
 
     @staticmethod
     def _consensus_initialize_result_structure(*, fit_strategy="consensus"):
@@ -7554,6 +7652,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     + "."
                 )
 
+            band_status = record["status"]
+            if band_status not in _CONSENSUS_ALLOWED_BAND_STATUSES:
+                raise ValueError(
+                    f"Band {_b!r} has unknown 'status' {band_status!r}; "
+                    "expected one of "
+                    f"{_CONSENSUS_ALLOWED_BAND_STATUSES_SORTED}."
+                )
+
             # 8. gp_validation_status must be a known value ---
             gp_status = record["gp_validation_status"]
             if gp_status not in _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES:
@@ -7563,6 +7669,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"{_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED}."
                 )
 
+            acf_status = record.get("acf_comparison_status")
+            if (
+                acf_status is not None
+                and acf_status not in _CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES
+            ):
+                raise ValueError(
+                    f"Band {_b!r} has unknown 'acf_comparison_status' "
+                    f"{acf_status!r}; expected one of "
+                    f"{_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES_SORTED} or "
+                    "None."
+                )
+
             # 9. rejection_reasons must be a list ---
             rr = record["rejection_reasons"]
             if not isinstance(rr, list):
@@ -7570,17 +7688,112 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"Band {_b!r}: 'rejection_reasons' must be a list; "
                     f"got {type(rr).__name__!r}."
                 )
+            normalized_rr = []
+            for reason in rr:
+                if not isinstance(reason, str):
+                    raise ValueError(
+                        f"Band {_b!r}: rejection reason {reason!r} must be a "
+                        "string."
+                    )
+                reason_str = reason.strip()
+                if not reason_str:
+                    raise ValueError(
+                        f"Band {_b!r}: rejection reason {reason!r} is empty."
+                    )
+                if not self._consensus_is_allowed_rejection_reason(reason_str):
+                    raise ValueError(
+                        f"Band {_b!r} has unknown rejection reason "
+                        f"{reason_str!r}; expected one of "
+                        f"{_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED} "
+                        "or a known sampling-metrics reason prefix."
+                    )
+                normalized_rr.append(reason_str)
+
+            rejection_reason = record.get("rejection_reason")
+            if rejection_reason is not None:
+                if not isinstance(rejection_reason, str):
+                    raise ValueError(
+                        f"Band {_b!r}: 'rejection_reason' must be a string or "
+                        f"None; got {type(rejection_reason).__name__!r}."
+                    )
+                rejection_reason = rejection_reason.strip()
+                if not rejection_reason:
+                    raise ValueError(
+                        f"Band {_b!r}: 'rejection_reason' must not be empty."
+                    )
+                if not self._consensus_is_allowed_rejection_reason(rejection_reason):
+                    raise ValueError(
+                        f"Band {_b!r} has unknown 'rejection_reason' "
+                        f"{rejection_reason!r}; expected one of "
+                        f"{_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED} "
+                        "or a known sampling-metrics reason prefix."
+                    )
+            if normalized_rr and rejection_reason != normalized_rr[0]:
+                raise ValueError(
+                    f"Band {_b!r} has 'rejection_reason'={rejection_reason!r} "
+                    "but first entry in 'rejection_reasons' is "
+                    f"{normalized_rr[0]!r}."
+                )
+
+            if (
+                band_status == _CONSENSUS_BAND_STATUS_ACCEPTED
+                and normalized_rr
+            ):
+                raise ValueError(
+                    f"Band {_b!r} has status='accepted' but carries rejection "
+                    f"reasons {normalized_rr!r}."
+                )
+            if (
+                band_status == _CONSENSUS_BAND_STATUS_REJECTED
+                and not normalized_rr
+            ):
+                raise ValueError(
+                    f"Band {_b!r} has status='rejected' but no rejection reasons."
+                )
+            if (
+                _b in accepted_set
+                and band_status == _CONSENSUS_BAND_STATUS_REJECTED
+            ):
+                raise ValueError(
+                    f"Band {_b!r} is in 'accepted_bands' but has status "
+                    "'rejected'."
+                )
+            if (
+                _b in rejected_set
+                and band_status == _CONSENSUS_BAND_STATUS_ACCEPTED
+            ):
+                raise ValueError(
+                    f"Band {_b!r} is in 'rejected_bands' but has status "
+                    "'accepted'."
+                )
 
             # 10. gp_validation_reason invariant per status ---
             gp_reason = record.get("gp_validation_reason")
+            if (
+                gp_reason is not None
+                and gp_reason not in _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS
+            ):
+                allowed_gp_reasons = tuple(
+                    sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS)
+                )
+                raise ValueError(
+                    f"Band {_b!r} has unknown 'gp_validation_reason' "
+                    f"{gp_reason!r}; expected one of {allowed_gp_reasons} "
+                    "or None."
+                )
             allowed_reasons = _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS.get(
                 gp_status
             )
             if allowed_reasons is not None and gp_reason not in allowed_reasons:
+                allowed_sorted = (
+                    _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS_SORTED[
+                        gp_status
+                    ]
+                )
                 raise ValueError(
                     f"Band {_b!r} has gp_validation_status={gp_status!r} "
                     f"but gp_validation_reason={gp_reason!r} is not allowed "
-                    f"for this status (allowed: {allowed_reasons})."
+                    f"for this status (allowed: {allowed_sorted} and/or None)."
                 )
 
         # --- 10. consensus_success semantics ---
@@ -7706,7 +7919,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ls_freqs_np = np.asarray(ls_freqs.detach().cpu().numpy(), dtype=float)
             ls_sig_np = np.asarray(ls_sig.detach().cpu().numpy(), dtype=bool)
             if ls_freqs_np.size == 0:
-                _reject_band(record, ["no_ls_peaks"])
+                _reject_band(record, [_CONSENSUS_REJECTION_REASON_NO_LS_PEAKS])
                 band_records[band_label] = record
                 continue
 
@@ -7736,7 +7949,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 plausible_idx.append(idx)
 
             if not plausible_idx:
-                _reject_band(record, ["no_physically_plausible_ls_peak"])
+                _reject_band(
+                    record, [_CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK]
+                )
                 band_records[band_label] = record
                 continue
 
@@ -7756,7 +7971,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 min_detectable_frequency > 0
                 and dominant_freq < min_detectable_frequency
             ):
-                _reject_band(record, ["candidate_frequency_too_low"])
+                _reject_band(
+                    record,
+                    [_CONSENSUS_REJECTION_REASON_CANDIDATE_FREQUENCY_TOO_LOW],
+                )
                 band_records[band_label] = record
                 continue
 
@@ -7801,7 +8019,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # LS-vs-ACF disagreement is treated conservatively as likely
                 # LS window/alias contamination for shared-timescale consensus.
                 if acf_compare["status"] == _ACF_STATUS_DISAGREEMENT:
-                    _reject_band(record, ["ls_acf_disagreement"])
+                    _reject_band(
+                        record, [_CONSENSUS_REJECTION_REASON_LS_ACF_DISAGREEMENT]
+                    )
                     band_records[band_label] = record
                     continue
 
@@ -7814,7 +8034,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 best_idx < ls_sig_np.size and ls_sig_np[best_idx]
             )
             record["selected_from"] = "ls_primary_peak"
-            record["status"] = "accepted"
+            record["status"] = _CONSENSUS_BAND_STATUS_ACCEPTED
             band_records[band_label] = record
             accepted_bands.append(band_label)
 
@@ -7849,18 +8069,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _record["rejection_reasons"] = _reasons
             _record["rejection_reason"] = _reasons[0] if _reasons else None
             if _reasons:
-                _record["status"] = "rejected"
+                _record["status"] = _CONSENSUS_BAND_STATUS_REJECTED
                 if _band in accepted_bands:
                     accepted_bands.remove(_band)
                 if _band not in rejected_bands:
                     rejected_bands.append(_band)
                 rejection_reasons[_band] = list(_reasons)
             else:
-                if _record.get("status") != "accepted":
+                if _record.get("status") != _CONSENSUS_BAND_STATUS_ACCEPTED:
                     _record["status"] = (
-                        "accepted" if _band in accepted_bands else "rejected"
+                        _CONSENSUS_BAND_STATUS_ACCEPTED
+                        if _band in accepted_bands
+                        else _CONSENSUS_BAND_STATUS_REJECTED
                     )
-                if _record["status"] == "accepted":
+                if _record["status"] == _CONSENSUS_BAND_STATUS_ACCEPTED:
                     rejection_reasons.pop(_band, None)
                 elif _band not in rejected_bands:
                     rejected_bands.append(_band)
@@ -8025,7 +8247,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 else None
             )
             if canonical["rejection_reasons"]:
-                canonical["status"] = "rejected"
+                canonical["status"] = _CONSENSUS_BAND_STATUS_REJECTED
             band_records[band] = canonical
         accepted_bands = list(candidate_diag.get("accepted_bands", []))
         rejected_bands = list(candidate_diag.get("rejected_bands", []))
@@ -8059,7 +8281,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self._consensus_set_gp_validation_status(
                     record,
                     "skipped",
-                    reason="band_not_accepted",
+                    reason=_CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED,
                 )
 
         default_gp_fit_kwargs = (
@@ -8154,7 +8376,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if frequency_difference <= frequency_tolerance:
                     # GP fit succeeded and the band is accepted.
                     self._consensus_set_gp_validation_status(record, "success")
-                    record["status"] = "accepted"
+                    record["status"] = _CONSENSUS_BAND_STATUS_ACCEPTED
                     record["rejection_reasons"] = []
                     record["rejection_reason"] = None
                     accepted_after_gp.append(band_label)
@@ -8163,21 +8385,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     self._consensus_set_gp_validation_status(
                         record,
                         "rejected",
-                        reason="diagnostics_failed",
+                        reason=_CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED,
                     )
-                    reason = "gp_ls_frequency_disagreement"
+                    reason = _CONSENSUS_REJECTION_REASON_GP_LS_DISAGREEMENT
 
             except Exception as exc:
                 # GP fit attempt raised/failed.
                 self._consensus_set_gp_validation_status(
                     record,
                     "failed",
-                    reason="exception",
+                    reason=_CONSENSUS_GP_VALIDATION_REASON_EXCEPTION,
                 )
                 record["gp_validation_error"] = (
                     f"band={band_label}: {type(exc).__name__}: {exc}"
                 )
-                reason = "gp_validation_failed"
+                reason = _CONSENSUS_REJECTION_REASON_GP_VALIDATION_FAILED
 
             if reason is not None:
                 self._consensus_add_rejection_reasons(record, [reason])
@@ -8214,13 +8436,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # a missing LS frequency) and was somehow also added to accepted_after_gp.
         for band in rejected_bands:
             if band in band_records:
-                band_records[band]["status"] = "rejected"
+                band_records[band]["status"] = _CONSENSUS_BAND_STATUS_REJECTED
 
         _rejected_set = set(rejected_bands)
         final_accepted = [b for b in accepted_after_gp if b not in _rejected_set]
         for band in final_accepted:
             if band in band_records:
-                band_records[band]["status"] = "accepted"
+                band_records[band]["status"] = _CONSENSUS_BAND_STATUS_ACCEPTED
                 band_records[band]["rejection_reasons"] = []
                 band_records[band]["rejection_reason"] = None
                 rejection_reasons.pop(band, None)
@@ -8232,10 +8454,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record["rejection_reasons"] = reasons
             record["rejection_reason"] = reasons[0] if reasons else None
             if reasons:
-                record["status"] = "rejected"
+                record["status"] = _CONSENSUS_BAND_STATUS_REJECTED
                 rejection_reasons[band] = list(reasons)
-            elif record.get("status") != "accepted":
-                record["status"] = "rejected" if band in rejected_bands else "accepted"
+            elif record.get("status") != _CONSENSUS_BAND_STATUS_ACCEPTED:
+                record["status"] = (
+                    _CONSENSUS_BAND_STATUS_REJECTED
+                    if band in rejected_bands
+                    else _CONSENSUS_BAND_STATUS_ACCEPTED
+                )
             band_records[band] = self._consensus_make_json_safe(record)
 
         return {
