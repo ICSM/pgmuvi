@@ -1352,5 +1352,365 @@ class TestPrepareGpValidationFitKwargs(unittest.TestCase):
         self.assertNotIn("period_summary_kwargs", result)
 
 
+# ---------------------------------------------------------------------------
+# 11. Execution-path-oriented transition tests
+# ---------------------------------------------------------------------------
+
+
+class TestExecutionPathTransitions(unittest.TestCase):
+    """Sequential helper-call chains that simulate the consensus execution path.
+
+    Tests verify that state transitions leave no stale metadata and that the
+    finalized result is always structurally valid.
+    """
+
+    def _lc(self):
+        return _make_minimal_lc()
+
+    # --- rejected → accepted ---
+
+    def test_rejected_to_accepted_clears_rejection_metadata(self):
+        """Transitioning a record from rejected to accepted clears reasons."""
+        record = self._lc()._consensus_initialize_band_record("X")
+        # Reject first
+        Lightcurve._consensus_set_band_status(
+            record, BAND_STATUS_REJECTED, [REJECTION_REASON_NO_LS_PEAKS]
+        )
+        self.assertEqual(record["status"], BAND_STATUS_REJECTED)
+        self.assertIn(REJECTION_REASON_NO_LS_PEAKS, record["rejection_reasons"])
+
+        # Then accept — reasons must be cleared
+        Lightcurve._consensus_set_band_status(record, BAND_STATUS_ACCEPTED, [])
+        self.assertEqual(record["status"], BAND_STATUS_ACCEPTED)
+        self.assertEqual(record["rejection_reasons"], [])
+        self.assertIsNone(record["rejection_reason"])
+
+    def test_rejected_to_accepted_then_re_rejected_is_consistent(self):
+        """Record can cycle rejected → accepted → rejected without corruption."""
+        record = self._lc()._consensus_initialize_band_record("Y")
+        Lightcurve._consensus_set_band_status(
+            record, BAND_STATUS_REJECTED, [REJECTION_REASON_NO_LS_PEAKS]
+        )
+        Lightcurve._consensus_set_band_status(record, BAND_STATUS_ACCEPTED, [])
+        Lightcurve._consensus_set_band_status(
+            record,
+            BAND_STATUS_REJECTED,
+            [REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK],
+        )
+        self.assertEqual(record["status"], BAND_STATUS_REJECTED)
+        self.assertEqual(
+            record["rejection_reasons"], [REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK]
+        )
+        self.assertEqual(
+            record["rejection_reason"], REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK
+        )
+
+    # --- GP failed → success ---
+
+    def test_gp_failed_to_success_clears_reason(self):
+        """Transitioning GP status from failed to success clears the reason."""
+        record = self._lc()._consensus_initialize_band_record("A")
+        Lightcurve._consensus_set_gp_validation_status(
+            record,
+            GP_STATUS_FAILED,
+            reason="exception",
+        )
+        self.assertEqual(record["gp_validation_status"], GP_STATUS_FAILED)
+        self.assertEqual(record["gp_validation_reason"], "exception")
+
+        Lightcurve._consensus_set_gp_validation_status(record, GP_STATUS_SUCCESS)
+        self.assertEqual(record["gp_validation_status"], GP_STATUS_SUCCESS)
+        self.assertIsNone(record["gp_validation_reason"])
+
+    def test_gp_rejected_then_failed_reason_updated(self):
+        """GP status can transition from rejected to failed with new reason."""
+        record = self._lc()._consensus_initialize_band_record("B")
+        Lightcurve._consensus_set_gp_validation_status(
+            record,
+            GP_STATUS_REJECTED,
+            reason="diagnostics_failed",
+        )
+        Lightcurve._consensus_set_gp_validation_status(
+            record,
+            GP_STATUS_FAILED,
+            reason="exception",
+        )
+        self.assertEqual(record["gp_validation_status"], GP_STATUS_FAILED)
+        self.assertEqual(record["gp_validation_reason"], "exception")
+
+    # --- ACF harmonic → unavailable ---
+
+    def test_acf_harmonic_to_unavailable_clears_metadata(self):
+        """Transitioning ACF status from harmonic to unavailable clears metadata."""
+        record = self._lc()._consensus_initialize_band_record("C")
+        Lightcurve._consensus_set_acf_comparison_status(
+            record,
+            ACF_STATUS_HARMONIC,
+            period_ratio=2.0,
+            harmonic_order=2,
+        )
+        self.assertEqual(record["acf_comparison_status"], ACF_STATUS_HARMONIC)
+        self.assertEqual(record["acf_harmonic_order"], 2)
+        self.assertAlmostEqual(record["acf_period_ratio"], 2.0)
+
+        Lightcurve._consensus_set_acf_comparison_status(
+            record, ACF_STATUS_UNAVAILABLE
+        )
+        self.assertEqual(record["acf_comparison_status"], ACF_STATUS_UNAVAILABLE)
+        self.assertIsNone(record["acf_harmonic_order"])
+        self.assertIsNone(record["acf_period_ratio"])
+
+    def test_acf_disagreement_to_agreement_updates_ratio(self):
+        """ACF metadata is overwritten cleanly when transitioning statuses."""
+        record = self._lc()._consensus_initialize_band_record("D")
+        Lightcurve._consensus_set_acf_comparison_status(
+            record,
+            ACF_STATUS_DISAGREEMENT,
+            period_ratio=5.0,
+        )
+        Lightcurve._consensus_set_acf_comparison_status(
+            record,
+            ACF_STATUS_AGREEMENT,
+            period_ratio=1.05,
+        )
+        self.assertEqual(record["acf_comparison_status"], ACF_STATUS_AGREEMENT)
+        self.assertAlmostEqual(record["acf_period_ratio"], 1.05)
+        self.assertIsNone(record["acf_harmonic_order"])
+
+    # --- _consensus_add_rejection_reasons deduplication ---
+
+    def test_add_rejection_reasons_no_duplicates(self):
+        """_consensus_add_rejection_reasons deduplicates across multiple calls."""
+        lc = self._lc()
+        record = lc._consensus_initialize_band_record("E")
+        lc._consensus_add_rejection_reasons(
+            record, [REJECTION_REASON_NO_LS_PEAKS]
+        )
+        lc._consensus_add_rejection_reasons(
+            record, [REJECTION_REASON_NO_LS_PEAKS]
+        )
+        lc._consensus_add_rejection_reasons(
+            record,
+            [REJECTION_REASON_NO_LS_PEAKS, REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK],
+        )
+        reasons = record["rejection_reasons"]
+        self.assertEqual(
+            reasons.count(REJECTION_REASON_NO_LS_PEAKS), 1
+        )
+        self.assertEqual(
+            reasons.count(REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK), 1
+        )
+
+    def test_add_rejection_reasons_sets_band_status_rejected(self):
+        """Adding any rejection reason marks the band as rejected."""
+        lc = self._lc()
+        record = lc._consensus_initialize_band_record("F")
+        lc._consensus_add_rejection_reasons(
+            record, [REJECTION_REASON_NO_LS_PEAKS]
+        )
+        self.assertEqual(record["status"], BAND_STATUS_REJECTED)
+
+    # --- finalized output always has both keys, synchronized ---
+
+    def test_finalized_result_has_both_rejection_keys(self):
+        """Finalized diagnostics always contain both rejection_reasons and
+        rejection_summary."""
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["G"])
+        diag["rejection_reasons"] = {REJECTION_REASON_NO_LS_PEAKS: ["G"]}
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        self.assertIn("rejection_reasons", result)
+        self.assertIn("rejection_summary", result)
+        self.assertEqual(result["rejection_reasons"], result["rejection_summary"])
+
+    def test_finalized_both_keys_synchronized_after_migration(self):
+        """Keys stay synchronized when only rejection_summary is provided."""
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["H"])
+        diag["rejection_summary"] = {
+            REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK: ["H"]
+        }
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        self.assertEqual(
+            result["rejection_reasons"],
+            {REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK: ["H"]},
+        )
+        self.assertEqual(result["rejection_summary"], result["rejection_reasons"])
+
+
+# ---------------------------------------------------------------------------
+# 12. _consensus_build_rejection_summary format-conversion tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRejectionSummary(unittest.TestCase):
+    """_consensus_build_rejection_summary converts {band:[reasons]} to
+    {reason:[bands]}."""
+
+    def _lc(self):
+        return _make_minimal_lc()
+
+    def test_single_band_single_reason(self):
+        result = self._lc()._consensus_build_rejection_summary(
+            per_band_diagnostics={
+                "A": _make_band_record(
+                    band="A",
+                    band_status=BAND_STATUS_REJECTED,
+                    rejection_reasons=[REJECTION_REASON_NO_LS_PEAKS],
+                )
+            },
+            rejected_bands=["A"],
+        )
+        self.assertEqual(result, {REJECTION_REASON_NO_LS_PEAKS: ["A"]})
+
+    def test_multiple_bands_same_reason_grouped(self):
+        """Two bands with the same reason appear in the same list."""
+        result = self._lc()._consensus_build_rejection_summary(
+            per_band_diagnostics={
+                "A": _make_band_record(
+                    band="A",
+                    band_status=BAND_STATUS_REJECTED,
+                    rejection_reasons=[REJECTION_REASON_NO_LS_PEAKS],
+                ),
+                "B": _make_band_record(
+                    band="B",
+                    band_status=BAND_STATUS_REJECTED,
+                    rejection_reasons=[REJECTION_REASON_NO_LS_PEAKS],
+                ),
+            },
+            rejected_bands=["A", "B"],
+        )
+        self.assertIn(REJECTION_REASON_NO_LS_PEAKS, result)
+        self.assertEqual(sorted(result[REJECTION_REASON_NO_LS_PEAKS]), ["A", "B"])
+
+    def test_multiple_bands_different_reasons(self):
+        """Bands with different reasons produce separate mapping entries."""
+        result = self._lc()._consensus_build_rejection_summary(
+            per_band_diagnostics={
+                "A": _make_band_record(
+                    band="A",
+                    band_status=BAND_STATUS_REJECTED,
+                    rejection_reasons=[REJECTION_REASON_NO_LS_PEAKS],
+                ),
+                "B": _make_band_record(
+                    band="B",
+                    band_status=BAND_STATUS_REJECTED,
+                    rejection_reasons=[REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK],
+                ),
+            },
+            rejected_bands=["A", "B"],
+        )
+        self.assertEqual(result[REJECTION_REASON_NO_LS_PEAKS], ["A"])
+        self.assertEqual(
+            result[REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK], ["B"]
+        )
+
+    def test_band_not_in_per_band_diagnostics_uses_accumulator(self):
+        """Bands in rejection_reasons accumulator but missing from
+        per_band_diagnostics are still mapped."""
+        result = self._lc()._consensus_build_rejection_summary(
+            per_band_diagnostics={},
+            rejected_bands=["C"],
+            rejection_reasons={"C": [REJECTION_REASON_NO_LS_PEAKS]},
+        )
+        self.assertIn(REJECTION_REASON_NO_LS_PEAKS, result)
+        self.assertIn("C", result[REJECTION_REASON_NO_LS_PEAKS])
+
+    def test_empty_rejected_bands_returns_empty(self):
+        result = self._lc()._consensus_build_rejection_summary(
+            per_band_diagnostics={},
+            rejected_bands=[],
+        )
+        self.assertEqual(result, {})
+
+    def test_output_passable_to_set_top_level_rejection_reasons(self):
+        """Output of build_rejection_summary is in {reason:[bands]} format
+        accepted by _consensus_set_top_level_rejection_reasons."""
+        lc = self._lc()
+        summary = lc._consensus_build_rejection_summary(
+            per_band_diagnostics={
+                "A": _make_band_record(
+                    band="A",
+                    band_status=BAND_STATUS_REJECTED,
+                    rejection_reasons=[REJECTION_REASON_NO_LS_PEAKS],
+                )
+            },
+            rejected_bands=["A"],
+        )
+        holder = {}
+        # Should not raise
+        lc._consensus_set_top_level_rejection_reasons(holder, summary)
+        self.assertEqual(
+            holder["rejection_reasons"][REJECTION_REASON_NO_LS_PEAKS], ["A"]
+        )
+
+
+# ---------------------------------------------------------------------------
+# 13. _consensus_debug_checkpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestConsensusDebugCheckpoint(unittest.TestCase):
+    """_consensus_debug_checkpoint validates intermediate diagnostics snapshots."""
+
+    def _lc(self):
+        return _make_minimal_lc()
+
+    def test_no_op_when_debug_flag_off(self):
+        """Checkpoint is a no-op when _CONSENSUS_DEBUG_VALIDATE is False."""
+        import pgmuvi.lightcurve as lc_mod
+
+        original = lc_mod._CONSENSUS_DEBUG_VALIDATE
+        try:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = False
+            # Even invalid diagnostics must not raise when flag is off.
+            self._lc()._consensus_debug_checkpoint({}, "test-label")
+        finally:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = original
+
+    def test_valid_state_passes_when_debug_flag_on(self):
+        """Checkpoint passes for a valid intermediate diagnostics dict."""
+        import pgmuvi.lightcurve as lc_mod
+
+        original = lc_mod._CONSENSUS_DEBUG_VALIDATE
+        try:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = True
+            valid_diag = _make_valid_diagnostics(
+                accepted_bands=["A"], rejected_bands=[]
+            )
+            # Should not raise
+            self._lc()._consensus_debug_checkpoint(valid_diag, "test-pass")
+        finally:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = original
+
+    def test_invalid_state_raises_assertion_error_when_debug_flag_on(self):
+        """Checkpoint raises AssertionError for structurally invalid state."""
+        import pgmuvi.lightcurve as lc_mod
+
+        original = lc_mod._CONSENSUS_DEBUG_VALIDATE
+        try:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = True
+            # Build a diagnostics dict where per_band_diagnostics contains an
+            # extra band not present in accepted_bands or rejected_bands.
+            # Finalization does not remove extra per-band entries, so the
+            # validator will raise for this structural violation.
+            bad_diag = _make_valid_diagnostics(
+                accepted_bands=["A"], rejected_bands=[]
+            )
+            bad_diag["per_band_diagnostics"]["Z"] = _make_band_record(band="Z")
+            with self.assertRaises(AssertionError) as ctx:
+                self._lc()._consensus_debug_checkpoint(bad_diag, "bad-label")
+            self.assertIn("bad-label", str(ctx.exception))
+        finally:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = original
+
+    def test_debug_flag_constant_exposed_on_module(self):
+        """_CONSENSUS_DEBUG_VALIDATE is accessible as a module attribute."""
+        import pgmuvi.lightcurve as lc_mod
+
+        self.assertFalse(
+            lc_mod._CONSENSUS_DEBUG_VALIDATE,
+            "_CONSENSUS_DEBUG_VALIDATE should default to False",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
