@@ -147,6 +147,7 @@ _CONSENSUS_REQUIRED_BAND_KEYS = frozenset(
         "gp_frequency_tolerance",
         "gp_validation_error",
         "gp_validation_status",
+        "gp_validation_reason",
     }
 )
 
@@ -7130,6 +7131,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         record["gp_validation_status"] = status
         if reason is not None:
             record["gp_validation_reason"] = reason
+        elif status in ("not_requested", "success"):
+            # Clear any stale reason that may have been set by an earlier
+            # status transition so these terminal/clean statuses never carry
+            # leftover failure/rejection/skip reason strings.
+            record["gp_validation_reason"] = None
 
     def _consensus_initialize_band_record(
         self,
@@ -7175,6 +7181,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "gp_fractional_frequency_difference": None,
             "gp_frequency_tolerance": None,
             "gp_validation_error": None,
+            "gp_validation_reason": None,
         }
         self._consensus_set_gp_validation_status(record, "not_requested")
         return record
@@ -7525,6 +7532,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 raise ValueError(
                     f"Band {_b!r}: 'rejection_reasons' must be a list; "
                     f"got {type(rr).__name__!r}."
+                )
+
+            # 10. gp_validation_reason invariant per status ---
+            gp_reason = record.get("gp_validation_reason")
+            _allowed_reasons_by_status = {
+                "not_requested": (None,),
+                "success": (None,),
+                "skipped": (None, "band_not_accepted"),
+                "rejected": (None, "diagnostics_failed"),
+                "failed": (None, "exception"),
+            }
+            allowed_reasons = _allowed_reasons_by_status.get(gp_status)
+            if allowed_reasons is not None and gp_reason not in allowed_reasons:
+                raise ValueError(
+                    f"Band {_b!r} has gp_validation_status={gp_status!r} "
+                    f"but gp_validation_reason={gp_reason!r} is not allowed "
+                    f"for this status (allowed: {allowed_reasons})."
                 )
 
         # --- 10. consensus_success semantics ---
