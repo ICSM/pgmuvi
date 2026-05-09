@@ -29,6 +29,10 @@ jobs:
       run: python3 -m build
     - name: Check dist metadata
       run: python3 -m twine check dist/*
+    - name: Create upload-validation sentinel
+      run: >-
+        printf '%s\n' '${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:PGMUVI_UPLOAD_VALIDATION_V1'
+        > dist/.upload_validation_sentinel
     - name: Store the distribution packages
       uses: actions/upload-artifact@v4
       with:
@@ -49,11 +53,18 @@ jobs:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
     steps:
+    - uses: actions/checkout@v4
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
+    - name: Validate latest uploaded dists
+      run: >-
+        python .github/scripts/validate_uploaded_artifacts.py
+        --dist-dir dist
+        --expected-version '${{ github.ref_name }}'
+        --expected-sentinel '${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:PGMUVI_UPLOAD_VALIDATION_V1'
     - name: Publish distribution 📦 to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
 
@@ -70,11 +81,18 @@ jobs:
       id-token: write  # IMPORTANT: mandatory for sigstore
 
     steps:
+    - uses: actions/checkout@v4
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
+    - name: Validate latest uploaded dists
+      run: >-
+        python .github/scripts/validate_uploaded_artifacts.py
+        --dist-dir dist
+        --expected-version '${{ github.ref_name }}'
+        --expected-sentinel '${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:PGMUVI_UPLOAD_VALIDATION_V1'
     - name: Sign the dists with Sigstore
       uses: sigstore/gh-action-sigstore-python@v3.3.0
       with:
