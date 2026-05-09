@@ -249,31 +249,38 @@ class TestValidateGpReasonStatusCombinations(unittest.TestCase):
             per_band_diagnostics={band: record},
         )
 
+    def _assert_validation_raises(self, diag):
+        """Assert that validation raises ValueError (reason/status invariant).
+
+        _consensus_validate_result_structure uses ValueError specifically for
+        semantic violations such as invalid status/reason combinations, while
+        RuntimeError is reserved for structural violations (missing keys,
+        type errors, etc.).  The per-band reason invariant raises ValueError.
+        """
+        with self.assertRaises(ValueError):
+            self._validate(diag)
+
     # --- invalid combos ----
 
     def test_success_with_exception_reason_raises(self):
         record = _make_band_record(band="A", status="success", reason="exception")
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._validate(self._diag_with_band_record(record))
+        self._assert_validation_raises(self._diag_with_band_record(record))
 
     def test_not_requested_with_band_not_accepted_reason_raises(self):
         record = _make_band_record(
             band="A", status="not_requested", reason="band_not_accepted"
         )
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._validate(self._diag_with_band_record(record))
+        self._assert_validation_raises(self._diag_with_band_record(record))
 
     def test_rejected_with_exception_reason_raises(self):
         record = _make_band_record(band="A", status="rejected", reason="exception")
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._validate(self._diag_with_band_record(record))
+        self._assert_validation_raises(self._diag_with_band_record(record))
 
     def test_failed_with_diagnostics_failed_reason_raises(self):
         record = _make_band_record(
             band="A", status="failed", reason="diagnostics_failed"
         )
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._validate(self._diag_with_band_record(record))
+        self._assert_validation_raises(self._diag_with_band_record(record))
 
     # --- valid combos ----
 
@@ -320,6 +327,9 @@ class TestAcceptedRejectedOverlap(unittest.TestCase):
     """Validator detects when a band appears in both accepted and rejected."""
 
     def test_overlap_raises(self):
+        # _consensus_validate_result_structure raises ValueError for overlap
+        # (semantic violation: a band cannot be simultaneously accepted and
+        # rejected).
         band_rec = _make_band_record(band="B")
         diag = _make_valid_diagnostics(
             accepted_bands=["A", "B"],
@@ -330,7 +340,7 @@ class TestAcceptedRejectedOverlap(unittest.TestCase):
         diag["n_accepted_bands"] = 2
         diag["n_rejected_bands"] = 2
         diag["n_total_bands"] = 4
-        with self.assertRaises((ValueError, RuntimeError)):
+        with self.assertRaises(ValueError):
             _make_minimal_lc()._consensus_validate_result_structure(diag)
 
 
@@ -344,23 +354,29 @@ class TestCountConsistency(unittest.TestCase):
     def _lc(self):
         return _make_minimal_lc()
 
+    def _assert_structural_raises(self, diag):
+        """Assert that validation raises RuntimeError for structural violations.
+
+        Count inconsistencies (n_accepted != len(accepted_bands), etc.) are
+        structural errors reported as RuntimeError by the validator.
+        """
+        with self.assertRaises(RuntimeError):
+            self._lc()._consensus_validate_result_structure(diag)
+
     def test_wrong_n_accepted_raises(self):
         diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
         diag["n_accepted_bands"] = 99  # wrong
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._lc()._consensus_validate_result_structure(diag)
+        self._assert_structural_raises(diag)
 
     def test_wrong_n_rejected_raises(self):
         diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
         diag["n_rejected_bands"] = 0  # wrong
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._lc()._consensus_validate_result_structure(diag)
+        self._assert_structural_raises(diag)
 
     def test_wrong_n_total_raises(self):
         diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=["B"])
         diag["n_total_bands"] = 10  # should be 2
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._lc()._consensus_validate_result_structure(diag)
+        self._assert_structural_raises(diag)
 
     def test_valid_counts_pass(self):
         diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=["B"])
@@ -378,14 +394,22 @@ class TestRejectionSummaryConsistency(unittest.TestCase):
     def _lc(self):
         return _make_minimal_lc()
 
+    def _assert_raises(self, diag):
+        """Assert validation raises ValueError for summary-band mismatches.
+
+        Rejection-summary violations (band not in rejected_bands, accepted
+        band in summary) are semantic errors reported as ValueError.
+        """
+        with self.assertRaises(ValueError):
+            self._lc()._consensus_validate_result_structure(diag)
+
     def test_band_not_in_rejected_raises(self):
         diag = _make_valid_diagnostics(
             accepted_bands=["A"],
             rejected_bands=["B"],
             rejection_summary={"low_snr": ["C"]},  # C not in rejected
         )
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._lc()._consensus_validate_result_structure(diag)
+        self._assert_raises(diag)
 
     def test_accepted_band_in_summary_raises(self):
         diag = _make_valid_diagnostics(
@@ -393,8 +417,7 @@ class TestRejectionSummaryConsistency(unittest.TestCase):
             rejected_bands=["B"],
             rejection_summary={"low_snr": ["A"]},  # A is accepted
         )
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._lc()._consensus_validate_result_structure(diag)
+        self._assert_raises(diag)
 
     def test_valid_rejection_summary_passes(self):
         diag = _make_valid_diagnostics(
@@ -424,6 +447,16 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
     def _lc(self):
         return _make_minimal_lc()
 
+    def _assert_structural_raises(self, diag):
+        """Assert validation raises RuntimeError for success-semantics violations.
+
+        Violations of consensus_success invariants (null frequency, zero
+        accepted bands, zero trusted candidates) are structural/semantic
+        errors reported as RuntimeError by the validator.
+        """
+        with self.assertRaises(RuntimeError):
+            self._lc()._consensus_validate_result_structure(diag)
+
     def test_success_true_with_null_frequency_raises(self):
         diag = _make_valid_diagnostics(
             accepted_bands=["A"],
@@ -431,8 +464,7 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
             consensus_frequency=None,
             trusted_candidate_count=3,
         )
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._lc()._consensus_validate_result_structure(diag)
+        self._assert_structural_raises(diag)
 
     def test_success_true_with_zero_accepted_raises(self):
         diag = _make_valid_diagnostics(
@@ -442,8 +474,7 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
             consensus_frequency=0.5,
             trusted_candidate_count=2,
         )
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._lc()._consensus_validate_result_structure(diag)
+        self._assert_structural_raises(diag)
 
     def test_success_true_with_zero_trusted_candidates_raises(self):
         diag = _make_valid_diagnostics(
@@ -452,8 +483,7 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
             consensus_frequency=0.5,
             trusted_candidate_count=0,
         )
-        with self.assertRaises((ValueError, RuntimeError)):
-            self._lc()._consensus_validate_result_structure(diag)
+        self._assert_structural_raises(diag)
 
     def test_valid_success_passes(self):
         diag = _make_valid_diagnostics(
