@@ -8272,6 +8272,45 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"structural inconsistency: {exc}"
             ) from exc
 
+    def _consensus_debug_checkpoint_from_candidate_state(
+        self,
+        *,
+        label,
+        controls,
+        band_records,
+        accepted_bands,
+        rejected_bands,
+        rejection_reasons,
+        use_acf,
+        use_gp_validation,
+        gp_validation_requested,
+        gp_validation_performed,
+    ):
+        """Build and validate a staged diagnostics snapshot from candidate state."""
+        staged_diag = self._consensus_initialize_result_structure(
+            fit_strategy="consensus"
+        )
+        _band_records = dict(band_records or {})
+        _accepted = list(accepted_bands or [])
+        _rejected = list(rejected_bands or [])
+        _band_reasons = dict(rejection_reasons or {})
+        staged_diag.update({
+            "controls": self._consensus_make_json_safe(dict(controls or {})),
+            "per_band_diagnostics": self._consensus_make_json_safe(_band_records),
+            "accepted_bands": self._consensus_make_json_safe(_accepted),
+            "rejected_bands": self._consensus_make_json_safe(_rejected),
+            "rejection_reasons": self._consensus_build_rejection_summary(
+                per_band_diagnostics=_band_records,
+                rejected_bands=_rejected,
+                rejection_reasons=_band_reasons,
+            ),
+            "use_acf_validation": bool(use_acf),
+            "use_gp_validation": bool(use_gp_validation),
+            "gp_validation_requested": bool(gp_validation_requested),
+            "gp_validation_performed": bool(gp_validation_performed),
+        })
+        self._consensus_debug_checkpoint(staged_diag, label)
+
     def _consensus_collect_band_candidates(
         self,
         *,
@@ -8559,6 +8598,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band_records[_band] = self._consensus_make_json_safe(_record)
 
         accepted_bands = [b for b in accepted_bands if b not in set(rejected_bands)]
+
+        self._consensus_debug_checkpoint_from_candidate_state(
+            label="after_per_band_ls_candidate_extraction",
+            controls=controls,
+            band_records=band_records,
+            accepted_bands=accepted_bands,
+            rejected_bands=rejected_bands,
+            rejection_reasons=rejection_reasons,
+            use_acf=False,
+            use_gp_validation=bool(gp_validation_requested),
+            gp_validation_requested=bool(gp_validation_requested),
+            gp_validation_performed=False,
+        )
+        if use_acf:
+            self._consensus_debug_checkpoint_from_candidate_state(
+                label="after_acf_validation_comparison",
+                controls=controls,
+                band_records=band_records,
+                accepted_bands=accepted_bands,
+                rejected_bands=rejected_bands,
+                rejection_reasons=rejection_reasons,
+                use_acf=True,
+                use_gp_validation=bool(gp_validation_requested),
+                gp_validation_requested=bool(gp_validation_requested),
+                gp_validation_performed=False,
+            )
 
         return {
             "controls": self._consensus_make_json_safe(controls),
@@ -9476,9 +9541,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "rejection_reasons": _top_level_rr,
                 "per_band_diagnostics": _band_records_snap,
             })
-            self._consensus_debug_checkpoint(
-                result_diagnostics, "post-candidate-collection"
-            )
+            if use_gp_validation:
+                self._consensus_debug_checkpoint(
+                    result_diagnostics, "after_gp_validation"
+                )
             accepted_bands = candidate_diag.get("accepted_bands", [])
             if not accepted_bands:
                 rejection_reasons = candidate_diag.get("rejection_reasons", {})
@@ -9490,6 +9556,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "survived consensus candidate vetting. "
                     f"Rejection reasons: {rejection_reasons!r}."
                 )
+            self._consensus_debug_checkpoint(
+                result_diagnostics, "before_consensus_frequency_generation"
+            )
             try:
                 consensus_diag = self._consensus_build_frequency_consensus(
                     band_records=candidate_diag["band_records"],
@@ -9606,7 +9675,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "auto_ls_acf_gp" if use_gp_validation else "auto_ls_acf"
             )
             self._consensus_debug_checkpoint(
-                result_diagnostics, "pre-finalization"
+                result_diagnostics, "before_finalization"
             )
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
                 result_diagnostics
