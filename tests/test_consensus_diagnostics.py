@@ -629,8 +629,9 @@ class TestFinalizeValidatePipeline(unittest.TestCase):
             with self.subTest(key=key):
                 diag = dict(self._finalized_valid_diag())
                 del diag[key]
-                with self.assertRaises(RuntimeError):
+                with self.assertRaises(RuntimeError) as exc:
                     self._lc()._consensus_validate_result_structure(diag)
+                self.assertIn(key, str(exc.exception))
 
     def test_missing_required_per_band_keys_raise(self):
         required_band_keys = (
@@ -645,8 +646,10 @@ class TestFinalizeValidatePipeline(unittest.TestCase):
                 diag = self._finalized_valid_diag()
                 diag["per_band_diagnostics"]["A"] = dict(diag["per_band_diagnostics"]["A"])
                 del diag["per_band_diagnostics"]["A"][key]
-                with self.assertRaises(RuntimeError):
+                with self.assertRaises(RuntimeError) as exc:
                     self._lc()._consensus_validate_result_structure(diag)
+                self.assertIn("A", str(exc.exception))
+                self.assertIn(key, str(exc.exception))
 
     def test_finalization_preserves_count_consistency(self):
         diag = _make_valid_diagnostics(
