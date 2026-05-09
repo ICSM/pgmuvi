@@ -7221,8 +7221,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ----------
         record : dict
             Per-band consensus diagnostic record.
-        status : {"not_requested", "skipped", "failed", "success", "rejected"}
-            GP-validation status to store.
+        status : str
+            GP-validation status to store.  Must be one of the values defined
+            by the ``_CONSENSUS_GP_VALIDATION_STATUS_*`` constants (currently
+            ``_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES``).
         reason : str or None, optional
             Optional GP-validation reason string stored in
             ``record["gp_validation_reason"]``. If ``None``, existing reason
