@@ -39,6 +39,14 @@ GP_STATUS_SUCCESS = (
 GP_STATUS_REJECTED = (
     lightcurve_module._CONSENSUS_GP_VALIDATION_STATUS_REJECTED
 )
+BAND_STATUS_PENDING = lightcurve_module._CONSENSUS_BAND_STATUS_PENDING
+BAND_STATUS_ACCEPTED = lightcurve_module._CONSENSUS_BAND_STATUS_ACCEPTED
+BAND_STATUS_REJECTED = lightcurve_module._CONSENSUS_BAND_STATUS_REJECTED
+ACF_STATUS_AGREEMENT = lightcurve_module._ACF_STATUS_AGREEMENT
+ACF_STATUS_HARMONIC = lightcurve_module._ACF_STATUS_HARMONIC
+ACF_STATUS_DISAGREEMENT = lightcurve_module._ACF_STATUS_DISAGREEMENT
+ACF_STATUS_UNAVAILABLE = lightcurve_module._ACF_STATUS_UNAVAILABLE
+REJECTION_REASON_NO_LS_PEAKS = lightcurve_module._CONSENSUS_REJECTION_REASON_NO_LS_PEAKS
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +104,7 @@ def _make_band_record(
     }
     if record["rejection_reasons"]:
         record["rejection_reason"] = record["rejection_reasons"][0]
-        record["status"] = "rejected"
+        record["status"] = BAND_STATUS_REJECTED
     return record
 
 
@@ -115,11 +123,13 @@ def _make_valid_diagnostics(
     per_band = dict(per_band_diagnostics or {})
     for band in accepted + rejected:
         band_key = str(band)
-        default_band_status = "accepted" if band_key in accepted else "rejected"
+        default_band_status = (
+            BAND_STATUS_ACCEPTED if band_key in accepted else BAND_STATUS_REJECTED
+        )
         default_reasons = (
             []
-            if default_band_status == "accepted"
-            else ["no_ls_peaks"]
+            if default_band_status == BAND_STATUS_ACCEPTED
+            else [REJECTION_REASON_NO_LS_PEAKS]
         )
         per_band.setdefault(
             band_key,
@@ -280,7 +290,165 @@ class TestSetGpValidationStatus(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 3. Invalid GP status/reason combinations (validator)
+# 3. Band-status helper
+# ---------------------------------------------------------------------------
+
+
+class TestSetBandStatus(unittest.TestCase):
+    """_consensus_set_band_status enforces status/rejection invariants."""
+
+    def _fresh_record(self):
+        return _make_minimal_lc()._consensus_initialize_band_record("X")
+
+    def test_accepted_clears_stale_rejection_data(self):
+        record = self._fresh_record()
+        Lightcurve._consensus_set_band_status(
+            record,
+            BAND_STATUS_REJECTED,
+            [REJECTION_REASON_NO_LS_PEAKS],
+        )
+        Lightcurve._consensus_set_band_status(record, BAND_STATUS_ACCEPTED, [])
+        self.assertEqual(record["status"], BAND_STATUS_ACCEPTED)
+        self.assertEqual(record["rejection_reasons"], [])
+        self.assertIsNone(record["rejection_reason"])
+
+    def test_rejected_requires_reasons(self):
+        record = self._fresh_record()
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_band_status(
+                record,
+                BAND_STATUS_REJECTED,
+                [],
+            )
+
+    def test_invalid_reasons_rejected(self):
+        record = self._fresh_record()
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_band_status(
+                record,
+                BAND_STATUS_REJECTED,
+                ["not_a_known_reason"],
+            )
+
+    def test_duplicate_reasons_are_deduplicated(self):
+        record = self._fresh_record()
+        Lightcurve._consensus_set_band_status(
+            record,
+            BAND_STATUS_REJECTED,
+            [
+                REJECTION_REASON_NO_LS_PEAKS,
+                REJECTION_REASON_NO_LS_PEAKS,
+            ],
+        )
+        self.assertEqual(
+            record["rejection_reasons"],
+            [REJECTION_REASON_NO_LS_PEAKS],
+        )
+
+    def test_rejection_reason_is_synchronized(self):
+        record = self._fresh_record()
+        Lightcurve._consensus_set_band_status(
+            record,
+            BAND_STATUS_REJECTED,
+            [REJECTION_REASON_NO_LS_PEAKS],
+        )
+        self.assertEqual(record["rejection_reason"], REJECTION_REASON_NO_LS_PEAKS)
+
+    def test_invalid_status_rejected(self):
+        record = self._fresh_record()
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_band_status(
+                record,
+                "bad_status",
+                [],
+            )
+
+
+# ---------------------------------------------------------------------------
+# 4. ACF comparison status helper
+# ---------------------------------------------------------------------------
+
+
+class TestSetAcfComparisonStatus(unittest.TestCase):
+    """_consensus_set_acf_comparison_status enforces metadata invariants."""
+
+    def _fresh_record(self):
+        return _make_minimal_lc()._consensus_initialize_band_record("X")
+
+    def test_valid_combinations_pass(self):
+        record = self._fresh_record()
+        Lightcurve._consensus_set_acf_comparison_status(
+            record,
+            ACF_STATUS_AGREEMENT,
+            period_ratio=1.02,
+        )
+        self.assertEqual(record["acf_comparison_status"], ACF_STATUS_AGREEMENT)
+        self.assertAlmostEqual(record["acf_period_ratio"], 1.02)
+        self.assertIsNone(record["acf_harmonic_order"])
+
+        Lightcurve._consensus_set_acf_comparison_status(
+            record,
+            ACF_STATUS_HARMONIC,
+            period_ratio=2.0,
+            harmonic_order=2,
+        )
+        self.assertEqual(record["acf_comparison_status"], ACF_STATUS_HARMONIC)
+        self.assertEqual(record["acf_harmonic_order"], 2)
+
+    def test_invalid_metadata_combinations_raise(self):
+        record = self._fresh_record()
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_acf_comparison_status(
+                record,
+                ACF_STATUS_AGREEMENT,
+            )
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_acf_comparison_status(
+                record,
+                ACF_STATUS_UNAVAILABLE,
+                period_ratio=1.0,
+            )
+
+    def test_stale_metadata_cleared(self):
+        record = self._fresh_record()
+        Lightcurve._consensus_set_acf_comparison_status(
+            record,
+            ACF_STATUS_HARMONIC,
+            period_ratio=2.0,
+            harmonic_order=2,
+        )
+        Lightcurve._consensus_set_acf_comparison_status(
+            record,
+            ACF_STATUS_UNAVAILABLE,
+        )
+        self.assertIsNone(record["acf_period_ratio"])
+        self.assertIsNone(record["acf_harmonic_order"])
+
+    def test_harmonic_requires_harmonic_order(self):
+        record = self._fresh_record()
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_acf_comparison_status(
+                record,
+                ACF_STATUS_HARMONIC,
+                period_ratio=2.0,
+            )
+
+    def test_none_status_clears_metadata(self):
+        record = self._fresh_record()
+        Lightcurve._consensus_set_acf_comparison_status(
+            record,
+            ACF_STATUS_DISAGREEMENT,
+            period_ratio=1.5,
+            harmonic_order=3,
+        )
+        Lightcurve._consensus_set_acf_comparison_status(record, None)
+        self.assertIsNone(record["acf_comparison_status"])
+        self.assertIsNone(record["acf_period_ratio"])
+        self.assertIsNone(record["acf_harmonic_order"])
+
+
+# ---------------------------------------------------------------------------
+# 5. Invalid GP status/reason combinations (validator)
 # ---------------------------------------------------------------------------
 
 class TestValidateGpReasonStatusCombinations(unittest.TestCase):
@@ -850,33 +1018,72 @@ class TestFinalizeValidatePipeline(unittest.TestCase):
 
     def test_validator_rejects_accepted_status_with_rejection_reasons(self):
         diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
-        diag["per_band_diagnostics"]["A"]["status"] = "accepted"
-        diag["per_band_diagnostics"]["A"]["rejection_reasons"] = ["no_ls_peaks"]
-        diag["per_band_diagnostics"]["A"]["rejection_reason"] = "no_ls_peaks"
+        diag["per_band_diagnostics"]["A"]["status"] = BAND_STATUS_ACCEPTED
+        diag["per_band_diagnostics"]["A"]["rejection_reasons"] = [
+            REJECTION_REASON_NO_LS_PEAKS
+        ]
+        diag["per_band_diagnostics"]["A"]["rejection_reason"] = (
+            REJECTION_REASON_NO_LS_PEAKS
+        )
         with self.assertRaises(ValueError) as exc:
             self._lc()._consensus_validate_result_structure(diag)
         self.assertIn("A", str(exc.exception))
-        self.assertIn("accepted", str(exc.exception))
+        self.assertIn(BAND_STATUS_ACCEPTED, str(exc.exception))
 
     def test_validator_rejects_rejected_status_without_reasons(self):
         diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
-        diag["per_band_diagnostics"]["A"]["status"] = "rejected"
+        diag["per_band_diagnostics"]["A"]["status"] = BAND_STATUS_REJECTED
         diag["per_band_diagnostics"]["A"]["rejection_reasons"] = []
         diag["per_band_diagnostics"]["A"]["rejection_reason"] = None
         with self.assertRaises(ValueError) as exc:
             self._lc()._consensus_validate_result_structure(diag)
         self.assertIn("A", str(exc.exception))
-        self.assertIn("rejected", str(exc.exception))
+        self.assertIn(BAND_STATUS_REJECTED, str(exc.exception))
 
     def test_validator_rejects_list_membership_status_mismatch(self):
         diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
-        diag["per_band_diagnostics"]["A"]["status"] = "rejected"
-        diag["per_band_diagnostics"]["A"]["rejection_reasons"] = ["no_ls_peaks"]
-        diag["per_band_diagnostics"]["A"]["rejection_reason"] = "no_ls_peaks"
+        diag["per_band_diagnostics"]["A"]["status"] = BAND_STATUS_REJECTED
+        diag["per_band_diagnostics"]["A"]["rejection_reasons"] = [
+            REJECTION_REASON_NO_LS_PEAKS
+        ]
+        diag["per_band_diagnostics"]["A"]["rejection_reason"] = (
+            REJECTION_REASON_NO_LS_PEAKS
+        )
         with self.assertRaises(ValueError) as exc:
             self._lc()._consensus_validate_result_structure(diag)
         self.assertIn("A", str(exc.exception))
         self.assertIn("accepted_bands", str(exc.exception))
+
+    def test_validator_rejects_harmonic_without_order(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        diag["per_band_diagnostics"]["A"]["acf_comparison_status"] = ACF_STATUS_HARMONIC
+        diag["per_band_diagnostics"]["A"]["acf_period_ratio"] = 2.0
+        diag["per_band_diagnostics"]["A"]["acf_harmonic_order"] = None
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("acf_harmonic_order", str(exc.exception))
+
+    def test_validator_rejects_none_status_with_ratio(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        diag["per_band_diagnostics"]["A"]["acf_comparison_status"] = None
+        diag["per_band_diagnostics"]["A"]["acf_period_ratio"] = 1.0
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("acf_comparison_status=None", str(exc.exception))
+
+    def test_validator_rejects_agreement_without_ratio(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        diag["per_band_diagnostics"]["A"]["acf_comparison_status"] = (
+            ACF_STATUS_AGREEMENT
+        )
+        diag["per_band_diagnostics"]["A"]["acf_period_ratio"] = None
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("acf_period_ratio", str(exc.exception))
+
+    def test_existing_valid_finalized_diagnostics_still_pass(self):
+        diag = self._finalized_valid_diag()
+        self._lc()._consensus_validate_result_structure(diag)
 
 
 class TestConsensusCategoricalConstants(unittest.TestCase):
@@ -930,6 +1137,54 @@ class TestConsensusCategoricalConstants(unittest.TestCase):
                     f"{name}={val!r} is not in "
                     "_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES",
                 )
+
+    def test_allowed_acf_statuses_include_all_known_constants(self):
+        allowed = lightcurve_module._CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES
+        expected = {
+            lightcurve_module._ACF_STATUS_AGREEMENT,
+            lightcurve_module._ACF_STATUS_HARMONIC,
+            lightcurve_module._ACF_STATUS_DISAGREEMENT,
+            lightcurve_module._ACF_STATUS_UNAVAILABLE,
+        }
+        self.assertSetEqual(set(allowed), expected)
+
+    def test_allowed_band_statuses_include_all_known_constants(self):
+        allowed = lightcurve_module._CONSENSUS_ALLOWED_BAND_STATUSES
+        expected = {
+            lightcurve_module._CONSENSUS_BAND_STATUS_PENDING,
+            lightcurve_module._CONSENSUS_BAND_STATUS_ACCEPTED,
+            lightcurve_module._CONSENSUS_BAND_STATUS_REJECTED,
+        }
+        self.assertSetEqual(set(allowed), expected)
+
+    def test_allowed_rejection_reasons_include_all_known_constants(self):
+        allowed = lightcurve_module._CONSENSUS_ALLOWED_REJECTION_REASONS
+        expected = {
+            lightcurve_module._CONSENSUS_REJECTION_REASON_SAMPLING_METRICS_UNAVAILABLE,
+            lightcurve_module._CONSENSUS_REJECTION_REASON_NO_LS_PEAKS,
+            lightcurve_module._CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK,
+            lightcurve_module._CONSENSUS_REJECTION_REASON_CANDIDATE_FREQUENCY_TOO_LOW,
+            lightcurve_module._CONSENSUS_REJECTION_REASON_LS_ACF_DISAGREEMENT,
+            lightcurve_module._CONSENSUS_REJECTION_REASON_GP_LS_DISAGREEMENT,
+            lightcurve_module._CONSENSUS_REJECTION_REASON_GP_VALIDATION_FAILED,
+        }
+        self.assertSetEqual(set(allowed), expected)
+
+    def test_helpers_reject_values_outside_allowed_sets(self):
+        record = _make_minimal_lc()._consensus_initialize_band_record("X")
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_band_status(record, "not_a_band_status", [])
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_band_status(
+                record,
+                BAND_STATUS_REJECTED,
+                ["not_a_known_reason"],
+            )
+        with self.assertRaises(ValueError):
+            Lightcurve._consensus_set_acf_comparison_status(
+                record,
+                "not_an_acf_status",
+            )
 
 
 # ---------------------------------------------------------------------------
