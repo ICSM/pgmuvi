@@ -91,6 +91,12 @@ _CONSENSUS_REJECTION_REASON_PREFIX_TOO_FEW_POINTS = "too_few_points ("
 _CONSENSUS_REJECTION_REASON_PREFIX_MAX_GAP_FRACTION = "max_gap_fraction ("
 _CONSENSUS_REJECTION_REASON_PREFIX_DUTY_CYCLE = "duty_cycle ("
 
+# Set to True to enable lightweight structural validation at key consensus
+# checkpoints inside _consensus_standard_fit.  Off by default to avoid
+# performance overhead in production.  Can be toggled at runtime by setting
+# pgmuvi.lightcurve._CONSENSUS_DEBUG_VALIDATE = True.
+_CONSENSUS_DEBUG_VALIDATE = False
+
 _CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES = frozenset(
     {
         _ACF_STATUS_AGREEMENT,
@@ -8228,7 +8234,43 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"is {trusted_candidate_count!r} (must be > 0)."
                 )
 
+    def _consensus_debug_checkpoint(self, result_diagnostics, label):
+        """Validate a partial diagnostics snapshot at a consensus checkpoint.
 
+        Only active when :data:`_CONSENSUS_DEBUG_VALIDATE` is ``True``.
+        Finalizes a shallow copy of *result_diagnostics* (without mutating
+        the original) and passes the result to
+        :meth:`_consensus_validate_result_structure`.  Any
+        ``RuntimeError`` or ``ValueError`` raised by validation is
+        re-raised as ``AssertionError`` with the checkpoint label prepended.
+
+        This method is a no-op (fast path) when
+        ``_CONSENSUS_DEBUG_VALIDATE`` is ``False``.
+
+        Parameters
+        ----------
+        result_diagnostics : dict
+            Intermediate consensus diagnostics dict to snapshot and check.
+        label : str
+            Short human-readable identifier for this checkpoint (used in
+            the ``AssertionError`` message).
+
+        Raises
+        ------
+        AssertionError
+            If the finalized snapshot fails structural validation.
+        """
+        if not _CONSENSUS_DEBUG_VALIDATE:
+            return
+        try:
+            self._consensus_finalize_result_structure(
+                dict(result_diagnostics), validate=True
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise AssertionError(
+                f"[consensus debug] Checkpoint {label!r} detected a "
+                f"structural inconsistency: {exc}"
+            ) from exc
 
     def _consensus_collect_band_candidates(
         self,
@@ -9418,12 +9460,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     for rec in candidate_diag.get("band_records", {}).values()
                 )
             auto_controls = candidate_diag["controls"]
+            _band_records_snap = dict(candidate_diag.get("band_records", {}))
+            _rejected_bands_snap = list(candidate_diag.get("rejected_bands", []))
+            # Convert per-band {band: [reasons]} accumulator to canonical
+            # top-level {reason: [bands]} format via the rejection-summary
+            # builder before storing in result_diagnostics.
+            _top_level_rr = self._consensus_build_rejection_summary(
+                per_band_diagnostics=_band_records_snap,
+                rejected_bands=_rejected_bands_snap,
+                rejection_reasons=dict(candidate_diag.get("rejection_reasons", {})),
+            )
             result_diagnostics.update({
                 "accepted_bands": list(candidate_diag.get("accepted_bands", [])),
-                "rejected_bands": list(candidate_diag.get("rejected_bands", [])),
-                "rejection_reasons": dict(candidate_diag.get("rejection_reasons", {})),
-                "per_band_diagnostics": dict(candidate_diag.get("band_records", {})),
+                "rejected_bands": _rejected_bands_snap,
+                "rejection_reasons": _top_level_rr,
+                "per_band_diagnostics": _band_records_snap,
             })
+            self._consensus_debug_checkpoint(
+                result_diagnostics, "post-candidate-collection"
+            )
             accepted_bands = candidate_diag.get("accepted_bands", [])
             if not accepted_bands:
                 rejection_reasons = candidate_diag.get("rejection_reasons", {})
@@ -9500,7 +9555,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             result_diagnostics.update({
                 "accepted_bands": candidate_diag["accepted_bands"],
                 "rejected_bands": candidate_diag["rejected_bands"],
-                "rejection_reasons": candidate_diag["rejection_reasons"],
+                # Convert per-band {band: [reasons]} accumulator to canonical
+                # top-level {reason: [bands]} format.
+                "rejection_reasons": self._consensus_build_rejection_summary(
+                    per_band_diagnostics=candidate_diag["band_records"],
+                    rejected_bands=candidate_diag["rejected_bands"],
+                    rejection_reasons=dict(
+                        candidate_diag.get("rejection_reasons", {})
+                    ),
+                ),
                 "per_band_diagnostics": candidate_diag["band_records"],
                 "per_band_dominant_periods": {
                     band: rec["dominant_period"]
@@ -9541,6 +9604,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             })
             result_diagnostics["consensus_generation_method"] = (
                 "auto_ls_acf_gp" if use_gp_validation else "auto_ls_acf"
+            )
+            self._consensus_debug_checkpoint(
+                result_diagnostics, "pre-finalization"
             )
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
                 result_diagnostics
