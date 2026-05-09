@@ -87,10 +87,31 @@ def assert_selected_files_are_latest(uploaded_files, selected_files):
         selected_path = selected_files.get(logical_name)
         if selected_path is None:
             raise RuntimeError(
-                f"Missing selected file for logical name {logical_name!r}."
+                f"Missing selected file for logical name {logical_name!r}; expected "
+                f"latest path {latest_record.file_path!r}."
             )
         if str(selected_path) != latest_record.file_path:
             raise RuntimeError(
                 f"Selected uploaded file for logical name {logical_name!r} is stale: "
                 f"expected {latest_record.file_path!r}, got {selected_path!r}."
             )
+
+
+def validate_uploaded_file_selection(
+    uploaded_files,
+    selected_files,
+    *,
+    allow_duplicates=False,
+):
+    """Validate deterministic latest-file selection for review/validation steps.
+
+    Stale uploaded artifacts are dangerous during review because checks may pass
+    against old outputs rather than the newest upload. This helper enforces a
+    deterministic latest-file resolution and prevents ambiguous filename-only
+    matching from silently selecting outdated files.
+    """
+    latest = resolve_latest_uploaded_files(uploaded_files)
+    if not allow_duplicates:
+        assert_no_duplicate_uploaded_files(uploaded_files)
+    assert_selected_files_are_latest(uploaded_files, selected_files)
+    return latest

@@ -11,8 +11,7 @@ import sys
 
 from pgmuvi.upload_validation import (
     UPLOAD_VALIDATION_SENTINEL,
-    assert_no_duplicate_uploaded_files,
-    assert_selected_files_are_latest,
+    validate_uploaded_file_selection,
 )
 
 _DIST_VERSION_RE = re.compile(r"^pgmuvi-(?P<version>[^-]+)")
@@ -67,13 +66,12 @@ def main():
     records = []
     records.extend(_build_records(wheel_paths, "wheel", sentinel_value))
     records.extend(_build_records(sdist_paths, "sdist", sentinel_value))
-    assert_no_duplicate_uploaded_files(records)
 
     selected = {
         "wheel": max(wheel_paths, key=lambda p: os.stat(p).st_mtime_ns),
         "sdist": max(sdist_paths, key=lambda p: os.stat(p).st_mtime_ns),
     }
-    assert_selected_files_are_latest(records, selected)
+    validate_uploaded_file_selection(records, selected, allow_duplicates=False)
 
     for path in selected.values():
         version = _extract_version(path)
