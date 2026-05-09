@@ -1712,5 +1712,174 @@ class TestConsensusDebugCheckpoint(unittest.TestCase):
         )
 
 
+class TestStagedConsensusDebugCheckpoints(unittest.TestCase):
+    """Execution-path tests for staged debug checkpoint labels."""
+
+    def _lc(self):
+        return _make_minimal_lc()
+
+    def test_collect_band_candidates_emits_ls_and_acf_stage_labels(self):
+        """Collect stage emits LS and ACF checkpoint labels when ACF runs."""
+        import pgmuvi.lightcurve as lc_mod
+        import torch
+
+        class _FakeBandLightcurve:
+            def compute_sampling_metrics(self):
+                return {
+                    "n_points": 20,
+                    "baseline": 10.0,
+                    "longest_detectable_period": 5.0,
+                    "nyquist_frequency": 5.0,
+                }
+
+            def fit_LS(self, num_peaks=5):  # noqa: ARG002
+                return torch.tensor([1.0]), torch.tensor([True])
+
+            def acf(self, method="data", normalize=True):  # noqa: ARG002
+                return {"dummy": True}
+
+        lc = self._lc()
+        labels = []
+        original_flag = lc_mod._CONSENSUS_DEBUG_VALIDATE
+        original_checkpoint = lc._consensus_debug_checkpoint
+        try:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = True
+
+            def _recording_checkpoint(result_diagnostics, label):
+                labels.append(label)
+                return original_checkpoint(result_diagnostics, label)
+
+            with unittest.mock.patch.object(
+                lc,
+                "_consensus_debug_checkpoint",
+                side_effect=_recording_checkpoint,
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_iter_band_lightcurves",
+                return_value=[("B", _FakeBandLightcurve())],
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_resolve_controls",
+                return_value={
+                    "min_points_per_band": 5,
+                    "max_gap_fraction": 0.5,
+                    "min_duty_cycle": 0.05,
+                    "outlier_sigma": 3.5,
+                    "consensus_width_factor": 3.0,
+                },
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_reject_bad_bands",
+                return_value=[],
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_compare_ls_acf",
+                return_value={
+                    "status": ACF_STATUS_AGREEMENT,
+                    "ratio": 1.0,
+                    "harmonic_order": None,
+                },
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_extract_acf_candidate",
+                return_value={"frequency": 1.0, "period": 1.0},
+            ):
+                lc._consensus_collect_band_candidates(
+                    use_acf=True,
+                    gp_validation_requested=False,
+                )
+        finally:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = original_flag
+
+        self.assertIn("after_per_band_ls_candidate_extraction", labels)
+        self.assertIn("after_acf_validation_comparison", labels)
+
+    def test_standard_fit_emits_gp_and_pre_finalize_stage_labels(self):
+        """Standard consensus fit emits GP and pre-consensus/finalization labels."""
+        import pgmuvi.lightcurve as lc_mod
+
+        lc = self._lc()
+        lc.model = object()
+        lc._model_pars = {}
+        labels = []
+        original_flag = lc_mod._CONSENSUS_DEBUG_VALIDATE
+        original_checkpoint = lc._consensus_debug_checkpoint
+        try:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = True
+
+            def _recording_checkpoint(result_diagnostics, label):
+                labels.append(label)
+                return original_checkpoint(result_diagnostics, label)
+
+            candidate_diag = {
+                "controls": {
+                    "outlier_sigma": 3.5,
+                    "consensus_width_factor": 3.0,
+                },
+                "band_records": {
+                    "B": {
+                        **lc._consensus_initialize_band_record("B"),
+                        "status": BAND_STATUS_ACCEPTED,
+                        "dominant_frequency": 1.0,
+                        "dominant_period": 1.0,
+                        "gp_validation_used": True,
+                    }
+                },
+                "accepted_bands": ["B"],
+                "rejected_bands": [],
+                "rejection_reasons": {},
+            }
+            consensus_diag = {
+                "frequencies_all": [1.0],
+                "inlier_bands": ["B"],
+                "outlier_bands": [],
+                "final_consensus_frequency": 1.0,
+                "final_mad_frequency_scatter": 0.1,
+                "mad_frequency_scatter": 0.1,
+                "median_frequency": 1.0,
+            }
+
+            with unittest.mock.patch.object(
+                lc,
+                "_consensus_debug_checkpoint",
+                side_effect=_recording_checkpoint,
+            ), unittest.mock.patch(
+                "pgmuvi.lightcurve.Lightcurve.ndim",
+                new_callable=unittest.mock.PropertyMock,
+                return_value=2,
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_collect_band_candidates",
+                return_value=candidate_diag,
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_validate_candidates_with_1d_gp",
+                return_value=candidate_diag,
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_build_frequency_consensus",
+                return_value=consensus_diag,
+            ), unittest.mock.patch.object(
+                lc,
+                "_consensus_build_guess",
+                return_value={"dummy_param": 1.0},
+            ), unittest.mock.patch.object(
+                lc,
+                "fit",
+                return_value=None,
+            ):
+                lc._consensus_standard_fit(
+                    use_gp_validation=True,
+                    constrain_consensus=False,
+                    verbose=False,
+                )
+        finally:
+            lc_mod._CONSENSUS_DEBUG_VALIDATE = original_flag
+
+        self.assertIn("after_gp_validation", labels)
+        self.assertIn("before_consensus_frequency_generation", labels)
+        self.assertIn("before_finalization", labels)
+
+
 if __name__ == "__main__":
     unittest.main()
