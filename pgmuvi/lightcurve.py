@@ -8592,7 +8592,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 consensus_frequency_width = floor_width
             _median_frequency = float(np.median(consensus_frequencies))
             _mad_frequency_scatter = float(
-                np.median(np.abs(consensus_frequencies - np.median(consensus_frequencies)))
+                np.median(
+                    np.abs(consensus_frequencies - np.median(consensus_frequencies))
+                )
             )
             result_diagnostics.update({
                 "accepted_bands": [],
@@ -8605,7 +8607,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "trusted_candidate_count": int(consensus_frequencies.size),
                 "consensus_frequency": _median_frequency,
                 "consensus_period": float(1.0 / _median_frequency),
-                "consensus_frequency_width": float(np.median(consensus_frequency_width)),
+                "consensus_frequency_width": float(
+                    np.median(consensus_frequency_width)
+                ),
                 "consensus_frequency_scatter": _mad_frequency_scatter,
                 "median_frequency": _median_frequency,
                 "mad_frequency_scatter": _mad_frequency_scatter,
