@@ -7714,19 +7714,41 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             canonical["n_accepted_bands"] + canonical["n_rejected_bands"]
         )
 
-        rejection_reasons_input = canonical.get("rejection_reasons") or {}
+        rejection_reasons_input = canonical.get("rejection_reasons")
+        rejection_summary_input = canonical.get("rejection_summary")
+        canonicalized_rejection_reasons = {}
+
         # Canonicalize top-level rejection bookkeeping only after accepted/
         # rejected membership has been normalized so reason->band mappings are
         # interpreted against stable, finalized band labels.
-        self._consensus_set_top_level_rejection_reasons(
-            canonical, rejection_reasons_input
-        )
-        rejection_reasons = canonical.get("rejection_reasons", {})
-        canonical["rejection_summary"] = self._consensus_build_rejection_summary(
-            per_band_diagnostics=per_band,
-            rejected_bands=rejected,
-            rejection_reasons=rejection_reasons,
-        )
+        if rejection_reasons_input:
+            canonical_source = {}
+            self._consensus_set_top_level_rejection_reasons(
+                canonical_source, rejection_reasons_input
+            )
+            canonicalized_rejection_reasons = canonical_source["rejection_reasons"]
+
+        canonicalized_rejection_summary = {}
+        if rejection_summary_input:
+            deprecated_source = {}
+            self._consensus_set_top_level_rejection_reasons(
+                deprecated_source, rejection_summary_input
+            )
+            canonicalized_rejection_summary = deprecated_source["rejection_reasons"]
+
+        if canonicalized_rejection_reasons and canonicalized_rejection_summary:
+            if canonicalized_rejection_reasons != canonicalized_rejection_summary:
+                raise ValueError(
+                    "Top-level 'rejection_reasons' and deprecated "
+                    "'rejection_summary' disagree after canonicalization."
+                )
+        elif canonicalized_rejection_summary:
+            canonicalized_rejection_reasons = canonicalized_rejection_summary
+
+        canonical["rejection_reasons"] = canonicalized_rejection_reasons
+        # 'rejection_summary' is a deprecated compatibility alias for the
+        # canonical top-level 'rejection_reasons' mapping.
+        canonical["rejection_summary"] = canonicalized_rejection_reasons.copy()
 
         # Keep canonical frequency-first keys and synchronize legacy aliases.
         consensus_frequency = canonical.get("consensus_frequency")
@@ -7795,8 +7817,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ``consensus_success`` semantics are violated.
         ValueError
             If ``accepted_bands``/``rejected_bands`` overlap, the
-            ``rejection_summary`` is malformed, an unknown GP status is found,
-            or ``rejection_reasons`` entries are not lists.
+            top-level rejection mappings disagree, an unknown GP status is
+            found, or ``rejection_reasons`` entries are not lists.
         """
         if not isinstance(diagnostics, dict):
             raise RuntimeError(
@@ -7860,17 +7882,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"n_rejected_bands ({n_rejected})."
             )
 
-        # --- 5. rejection_summary must map str -> list-of-str ---
-        rejection_summary = diagnostics["rejection_summary"]
-        if not isinstance(rejection_summary, dict):
-            raise RuntimeError(
-                "'rejection_summary' must be a dict; "
-                f"got {type(rejection_summary).__name__!r}."
-            )
-        for reason, bands in rejection_summary.items():
+        # --- 5. rejection_reasons is canonical; rejection_summary is alias ---
+        canonical_rejection_source = {}
+        self._consensus_set_top_level_rejection_reasons(
+            canonical_rejection_source, diagnostics["rejection_reasons"]
+        )
+        rejection_reasons = canonical_rejection_source["rejection_reasons"]
+
+        for reason, bands in rejection_reasons.items():
             if not isinstance(bands, list):
                 raise ValueError(
-                    f"rejection_summary[{reason!r}] must be a list; "
+                    f"rejection_reasons[{reason!r}] must be a list; "
                     f"got {type(bands).__name__!r}."
                 )
             band_labels = [str(b) for b in bands]
@@ -7879,7 +7901,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             if duplicate_bands:
                 raise ValueError(
-                    f"rejection_summary[{reason!r}] contains duplicate "
+                    f"rejection_reasons[{reason!r}] contains duplicate "
                     "band label(s): "
                     + ", ".join(f"{b!r}" for b in duplicate_bands)
                     + "."
@@ -7888,14 +7910,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 band_str = str(band)
                 if band_str not in rejected_set:
                     raise ValueError(
-                        f"Band {band_str!r} in rejection_summary[{reason!r}] "
+                        f"Band {band_str!r} in rejection_reasons[{reason!r}] "
                         "is not present in 'rejected_bands'."
                     )
                 if band_str in accepted_set:
                     raise ValueError(
                         f"Accepted band {band_str!r} appears in "
-                        f"rejection_summary[{reason!r}]."
+                        f"rejection_reasons[{reason!r}]."
                     )
+
+        alias_rejection_source = {}
+        self._consensus_set_top_level_rejection_reasons(
+            alias_rejection_source, diagnostics["rejection_summary"]
+        )
+        rejection_summary = alias_rejection_source["rejection_reasons"]
+        if rejection_summary != rejection_reasons:
+            raise ValueError(
+                "Top-level 'rejection_summary' must match canonical "
+                "'rejection_reasons'."
+            )
 
         # --- 6. per_band_diagnostics must be a dict ---
         per_band = diagnostics["per_band_diagnostics"]

@@ -47,6 +47,9 @@ ACF_STATUS_HARMONIC = lightcurve_module._ACF_STATUS_HARMONIC
 ACF_STATUS_DISAGREEMENT = lightcurve_module._ACF_STATUS_DISAGREEMENT
 ACF_STATUS_UNAVAILABLE = lightcurve_module._ACF_STATUS_UNAVAILABLE
 REJECTION_REASON_NO_LS_PEAKS = lightcurve_module._CONSENSUS_REJECTION_REASON_NO_LS_PEAKS
+REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK = (
+    lightcurve_module._CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK
+)
 
 
 # ---------------------------------------------------------------------------
@@ -493,21 +496,66 @@ class TestSetTopLevelRejectionReasons(unittest.TestCase):
             )
 
     def test_finalization_returns_canonicalized_top_level_rejection_reasons(self):
-        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A", "B"])
         diag["rejection_reasons"] = {
-            REJECTION_REASON_NO_LS_PEAKS: ["A", "A", 5, "5"],
+            REJECTION_REASON_NO_LS_PEAKS: ["A", "A", "B", "B"],
         }
         result = self._lc()._consensus_finalize_result_structure(diag)
         self.assertEqual(
             result["rejection_reasons"][REJECTION_REASON_NO_LS_PEAKS],
-            ["A", "5"],
+            ["A", "B"],
         )
+        self.assertIn("rejection_reasons", result)
+        self.assertIn("rejection_summary", result)
+        self.assertEqual(result["rejection_summary"], result["rejection_reasons"])
 
     def test_finalization_rejects_invalid_top_level_rejection_reason_keys(self):
         diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
         diag["rejection_reasons"] = {"not_a_valid_reason": ["A"]}
         with self.assertRaises(ValueError):
             self._lc()._consensus_finalize_result_structure(diag)
+
+    def test_finalization_migrates_rejection_summary_when_canonical_missing(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A", "B"])
+        diag["rejection_summary"] = {
+            REJECTION_REASON_NO_LS_PEAKS: ["A", "A", "B", "B"],
+        }
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        self.assertEqual(
+            result["rejection_reasons"],
+            {REJECTION_REASON_NO_LS_PEAKS: ["A", "B"]},
+        )
+        self.assertEqual(result["rejection_summary"], result["rejection_reasons"])
+
+    def test_finalization_accepts_identical_rejection_maps(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
+        mapping = {REJECTION_REASON_NO_LS_PEAKS: ["A"]}
+        diag["rejection_reasons"] = mapping.copy()
+        diag["rejection_summary"] = mapping.copy()
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        self.assertEqual(result["rejection_reasons"], mapping)
+        self.assertEqual(result["rejection_summary"], mapping)
+
+    def test_finalization_rejects_differing_rejection_maps(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
+        diag["rejection_reasons"] = {REJECTION_REASON_NO_LS_PEAKS: ["A"]}
+        diag["rejection_summary"] = {
+            REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK: ["A"]
+        }
+        with self.assertRaises(ValueError):
+            self._lc()._consensus_finalize_result_structure(diag)
+
+    def test_duplicate_band_canonicalization_works_via_rejection_summary_only(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A", "B"])
+        diag["rejection_summary"] = {
+            REJECTION_REASON_NO_LS_PEAKS: ["A", "A", "B", "B"],
+        }
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        self.assertEqual(
+            result["rejection_reasons"],
+            {REJECTION_REASON_NO_LS_PEAKS: ["A", "B"]},
+        )
+        self.assertEqual(result["rejection_summary"], result["rejection_reasons"])
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +725,7 @@ class TestCountConsistency(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestRejectionSummaryConsistency(unittest.TestCase):
-    """Validator enforces rejection_summary only references rejected_bands."""
+    """Validator treats rejection_summary as an alias of rejection_reasons."""
 
     def _lc(self):
         return _make_minimal_lc()
@@ -695,32 +743,38 @@ class TestRejectionSummaryConsistency(unittest.TestCase):
         diag = _make_valid_diagnostics(
             accepted_bands=["A"],
             rejected_bands=["B"],
-            rejection_summary={"low_snr": ["C"]},  # C not in rejected
+            rejection_summary={REJECTION_REASON_NO_LS_PEAKS: ["C"]},
         )
+        diag["rejection_reasons"] = {REJECTION_REASON_NO_LS_PEAKS: ["C"]}
         self._assert_raises(diag)
 
     def test_accepted_band_in_summary_raises(self):
         diag = _make_valid_diagnostics(
             accepted_bands=["A"],
             rejected_bands=["B"],
-            rejection_summary={"low_snr": ["A"]},  # A is accepted
+            rejection_summary={REJECTION_REASON_NO_LS_PEAKS: ["A"]},
         )
+        diag["rejection_reasons"] = {REJECTION_REASON_NO_LS_PEAKS: ["A"]}
         self._assert_raises(diag)
 
-    def test_duplicate_band_in_summary_list_raises(self):
+    def test_validator_rejects_mismatched_rejection_reasons_and_summary(self):
         diag = _make_valid_diagnostics(
             accepted_bands=[],
-            rejected_bands=["B"],
-            rejection_summary={"some_reason": ["B", "B"]},
+            rejected_bands=["A"],
+            rejection_summary={REJECTION_REASON_NO_LS_PEAKS: ["A"]},
         )
+        diag["rejection_reasons"] = {
+            REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK: ["A"]
+        }
         self._assert_raises(diag)
 
-    def test_valid_rejection_summary_passes(self):
+    def test_valid_matching_rejection_summary_passes(self):
         diag = _make_valid_diagnostics(
             accepted_bands=["A"],
             rejected_bands=["B"],
-            rejection_summary={"low_snr": ["B"]},
+            rejection_summary={REJECTION_REASON_NO_LS_PEAKS: ["B"]},
         )
+        diag["rejection_reasons"] = {REJECTION_REASON_NO_LS_PEAKS: ["B"]}
         # Should not raise
         self._lc()._consensus_validate_result_structure(diag)
 
