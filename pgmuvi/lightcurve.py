@@ -7230,6 +7230,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         rejected_set = set(rejected)
         overlap = accepted_set & rejected_set
         if overlap:
+            # Rejections take precedence: if a band appears in both lists due to
+            # upstream partial bookkeeping, keep it only in rejected_bands.
             accepted_set -= overlap
             accepted = sorted(accepted_set)
         canonical["accepted_bands"] = accepted
