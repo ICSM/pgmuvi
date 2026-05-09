@@ -8792,6 +8792,28 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         fit_kwargs["guess"] = merged_guess
         fit_kwargs["fit_strategy"] = None
+
+        _consensus_frequency_raw = result_diagnostics.get("consensus_frequency")
+        _consensus_frequency_ok = bool(
+            _consensus_frequency_raw is not None
+            and np.isfinite(float(_consensus_frequency_raw))
+            and float(_consensus_frequency_raw) > 0
+        )
+        _trusted_candidate_count = result_diagnostics.get("trusted_candidate_count")
+        _trusted_candidate_ok = bool(
+            _trusted_candidate_count is not None
+            and int(_trusted_candidate_count) > 0
+        )
+        _consensus_init_prepared = bool(consensus_guess)
+        _consensus_ready_for_success = bool(
+            _consensus_frequency_ok
+            and _trusted_candidate_ok
+            and _consensus_init_prepared
+        )
+
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
         try:
             fit_result = self.fit(**fit_kwargs)
         except Exception:
@@ -8801,13 +8823,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             raise
 
-        result_diagnostics["consensus_success"] = bool(
-            result_diagnostics.get("consensus_frequency") is not None
-            and (
-                result_diagnostics.get("trusted_candidate_count") is None
-                or int(result_diagnostics.get("trusted_candidate_count")) > 0
-            )
-        )
+        result_diagnostics["consensus_success"] = _consensus_ready_for_success
         self.consensus_diagnostics = self._consensus_finalize_result_structure(
             result_diagnostics
         )
