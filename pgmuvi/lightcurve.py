@@ -7543,8 +7543,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ----------
         diagnostics : dict
             Top-level consensus diagnostics dictionary to mutate.
-        rejection_reasons : object
-            Candidate mapping from reason -> band labels.
+        rejection_reasons : dict or object
+            Candidate reason-to-band mapping. Expected shape is
+            ``{reason_key: [band_label, ...], ...}``; non-dict inputs are
+            normalized to an empty mapping.
 
         Raises
         ------
@@ -7712,9 +7714,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             canonical["n_accepted_bands"] + canonical["n_rejected_bands"]
         )
 
-        rejection_reasons = canonical.get("rejection_reasons") or {}
+        rejection_reasons_input = canonical.get("rejection_reasons") or {}
+        # Canonicalize top-level rejection bookkeeping only after accepted/
+        # rejected membership has been normalized so reason->band mappings are
+        # interpreted against stable, finalized band labels.
         self._consensus_set_top_level_rejection_reasons(
-            canonical, rejection_reasons
+            canonical, rejection_reasons_input
         )
         rejection_reasons = canonical.get("rejection_reasons", {})
         canonical["rejection_summary"] = self._consensus_build_rejection_summary(
