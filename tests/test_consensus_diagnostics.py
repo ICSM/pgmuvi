@@ -22,6 +22,7 @@ import unittest
 import numpy as np
 
 from pgmuvi.lightcurve import Lightcurve
+from pgmuvi import lightcurve as lightcurve_module
 
 
 # ---------------------------------------------------------------------------
@@ -44,11 +45,12 @@ def _make_band_record(
     status="not_requested",
     reason=None,
     rejection_reasons=None,
+    band_status="accepted",
 ):
     """Return a band record that satisfies _CONSENSUS_REQUIRED_BAND_KEYS."""
     record = {
         "band": band,
-        "status": status,
+        "status": band_status,
         "rejection_reason": None,
         "rejection_reasons": rejection_reasons if rejection_reasons is not None else [],
         "metrics": None,
@@ -76,6 +78,9 @@ def _make_band_record(
         "gp_validation_status": status,
         "gp_validation_reason": reason,
     }
+    if record["rejection_reasons"]:
+        record["rejection_reason"] = record["rejection_reasons"][0]
+        record["status"] = "rejected"
     return record
 
 
@@ -94,7 +99,20 @@ def _make_valid_diagnostics(
     per_band = dict(per_band_diagnostics or {})
     for band in accepted + rejected:
         band_key = str(band)
-        per_band.setdefault(band_key, _make_band_record(band=band_key))
+        default_band_status = "accepted" if band_key in accepted else "rejected"
+        default_reasons = (
+            []
+            if default_band_status == "accepted"
+            else ["no_ls_peaks"]
+        )
+        per_band.setdefault(
+            band_key,
+            _make_band_record(
+                band=band_key,
+                band_status=default_band_status,
+                rejection_reasons=default_reasons,
+            ),
+        )
     n_acc = len(accepted)
     n_rej = len(rejected)
     return {
@@ -768,6 +786,79 @@ class TestFinalizeValidatePipeline(unittest.TestCase):
         diag["per_band_diagnostics"]["Z"] = _make_band_record(band="Z")
         with self.assertRaises(RuntimeError):
             self._lc()._consensus_validate_result_structure(diag)
+
+    def test_validator_rejects_invalid_band_status(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        diag["per_band_diagnostics"]["A"]["status"] = "bad_status"
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("A", str(exc.exception))
+        self.assertIn("bad_status", str(exc.exception))
+
+    def test_validator_rejects_invalid_acf_status(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        diag["per_band_diagnostics"]["A"]["acf_comparison_status"] = "bad_acf_status"
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("A", str(exc.exception))
+        self.assertIn("bad_acf_status", str(exc.exception))
+
+    def test_validator_rejects_invalid_rejection_reason_entry(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
+        diag["per_band_diagnostics"]["A"]["rejection_reasons"] = ["unknown_reason"]
+        diag["per_band_diagnostics"]["A"]["rejection_reason"] = "unknown_reason"
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("A", str(exc.exception))
+        self.assertIn("unknown_reason", str(exc.exception))
+
+    def test_validator_rejects_accepted_status_with_rejection_reasons(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        diag["per_band_diagnostics"]["A"]["status"] = "accepted"
+        diag["per_band_diagnostics"]["A"]["rejection_reasons"] = ["no_ls_peaks"]
+        diag["per_band_diagnostics"]["A"]["rejection_reason"] = "no_ls_peaks"
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("A", str(exc.exception))
+        self.assertIn("accepted", str(exc.exception))
+
+    def test_validator_rejects_rejected_status_without_reasons(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["A"])
+        diag["per_band_diagnostics"]["A"]["status"] = "rejected"
+        diag["per_band_diagnostics"]["A"]["rejection_reasons"] = []
+        diag["per_band_diagnostics"]["A"]["rejection_reason"] = None
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("A", str(exc.exception))
+        self.assertIn("rejected", str(exc.exception))
+
+    def test_validator_rejects_list_membership_status_mismatch(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        diag["per_band_diagnostics"]["A"]["status"] = "rejected"
+        diag["per_band_diagnostics"]["A"]["rejection_reasons"] = ["no_ls_peaks"]
+        diag["per_band_diagnostics"]["A"]["rejection_reason"] = "no_ls_peaks"
+        with self.assertRaises(ValueError) as exc:
+            self._lc()._consensus_validate_result_structure(diag)
+        self.assertIn("A", str(exc.exception))
+        self.assertIn("accepted_bands", str(exc.exception))
+
+
+class TestConsensusCategoricalConstants(unittest.TestCase):
+    """Categorical consensus constants exist and are immutable containers."""
+
+    def test_required_categorical_constant_sets_exist(self):
+        names = (
+            "_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES",
+            "_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS",
+            "_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES",
+            "_CONSENSUS_ALLOWED_BAND_STATUSES",
+            "_CONSENSUS_ALLOWED_REJECTION_REASONS",
+        )
+        for name in names:
+            with self.subTest(name=name):
+                value = getattr(lightcurve_module, name, None)
+                self.assertIsNotNone(value)
+                self.assertIsInstance(value, frozenset)
 
 
 # ---------------------------------------------------------------------------
