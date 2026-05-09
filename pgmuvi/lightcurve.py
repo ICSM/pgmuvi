@@ -7118,6 +7118,179 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if merged:
             record["status"] = "rejected"
 
+    @staticmethod
+    def _consensus_initialize_result_structure(*, fit_strategy="consensus"):
+        """Create a canonical top-level consensus diagnostics schema.
+
+        A stable schema is required so downstream consumers can reliably inspect
+        consensus outputs regardless of whether the workflow succeeds, fails
+        early, or fails after partial candidate construction.
+
+        This consistency is important for:
+
+        - JSON serialization/export pipelines (fixed key presence),
+        - notebooks and plotting/reporting code (reduced key-guard logic),
+        - regression tests (deterministic structure assertions),
+        - future consensus-recovery/fallback workflows (portable diagnostics).
+        """
+        return {
+            "fit_strategy": fit_strategy,
+            "consensus_success": False,
+            "consensus_frequency": None,
+            "consensus_period": None,
+            "consensus_frequency_width": None,
+            "consensus_frequency_scatter": None,
+            "accepted_bands": [],
+            "rejected_bands": [],
+            "rejection_summary": {},
+            "per_band_diagnostics": {},
+            "n_total_bands": 0,
+            "n_accepted_bands": 0,
+            "n_rejected_bands": 0,
+            "use_acf_validation": False,
+            "use_gp_validation": False,
+            "gp_validation_requested": False,
+            "gp_validation_performed": False,
+            "trusted_candidate_count": None,
+            "candidate_count": None,
+            "consensus_generation_method": None,
+            # Backward-compatible/extended diagnostics keys.
+            "rejection_reasons": {},
+            "per_band_dominant_periods": {},
+            "per_band_dominant_frequencies": {},
+            "median_frequency": None,
+            "mad_frequency_scatter": None,
+            "consensus_inlier_bands": [],
+            "consensus_outlier_bands": [],
+            "final_consensus_frequency": None,
+            "final_consensus_period": None,
+            "robust_frequency_width": None,
+            "final_constraint_bounds": None,
+            "controls": {},
+            "mode": None,
+        }
+
+    def _consensus_build_rejection_summary(
+        self,
+        *,
+        per_band_diagnostics,
+        rejected_bands,
+        rejection_reasons=None,
+    ):
+        """Build deterministic reason->bands rejection summary."""
+        summary = {}
+        per_band_diagnostics = per_band_diagnostics or {}
+        rejection_reasons = rejection_reasons or {}
+        for band in rejected_bands or []:
+            reasons = []
+            band_record = per_band_diagnostics.get(band, {})
+            if isinstance(band_record, dict):
+                reasons.extend(
+                    self._consensus_normalize_rejection_reasons(
+                        band_record.get("rejection_reasons")
+                    )
+                )
+                reasons.extend(
+                    self._consensus_normalize_rejection_reasons(
+                        band_record.get("rejection_reason")
+                    )
+                )
+            reasons.extend(
+                self._consensus_normalize_rejection_reasons(
+                    rejection_reasons.get(band)
+                )
+            )
+            normalized = self._consensus_normalize_rejection_reasons(reasons)
+            if not normalized:
+                normalized = ["unspecified_rejection"]
+            for reason in normalized:
+                summary.setdefault(str(reason), set()).add(str(band))
+
+        return {
+            reason: sorted(bands)
+            for reason, bands in sorted(summary.items(), key=lambda kv: kv[0])
+        }
+
+    def _consensus_finalize_result_structure(self, diagnostics):
+        """Normalize and finalize top-level consensus diagnostics."""
+        canonical = self._consensus_initialize_result_structure(
+            fit_strategy=(diagnostics or {}).get("fit_strategy", "consensus")
+        )
+        if diagnostics:
+            canonical.update(dict(diagnostics))
+
+        per_band = canonical.get("per_band_diagnostics") or {}
+        if not isinstance(per_band, dict):
+            per_band = {}
+        canonical["per_band_diagnostics"] = per_band
+
+        accepted = sorted({str(b) for b in (canonical.get("accepted_bands") or [])})
+        rejected = sorted({str(b) for b in (canonical.get("rejected_bands") or [])})
+        accepted_set = set(accepted)
+        rejected_set = set(rejected)
+        overlap = accepted_set & rejected_set
+        if overlap:
+            accepted_set -= overlap
+            accepted = sorted(accepted_set)
+        canonical["accepted_bands"] = accepted
+        canonical["rejected_bands"] = rejected
+
+        # Counts are anchored to mutually exclusive accepted/rejected sets.
+        canonical["n_accepted_bands"] = len(accepted)
+        canonical["n_rejected_bands"] = len(rejected)
+        canonical["n_total_bands"] = (
+            canonical["n_accepted_bands"] + canonical["n_rejected_bands"]
+        )
+
+        rejection_reasons = canonical.get("rejection_reasons") or {}
+        if not isinstance(rejection_reasons, dict):
+            rejection_reasons = {}
+        canonical["rejection_reasons"] = rejection_reasons
+        canonical["rejection_summary"] = self._consensus_build_rejection_summary(
+            per_band_diagnostics=per_band,
+            rejected_bands=rejected,
+            rejection_reasons=rejection_reasons,
+        )
+
+        # Keep canonical frequency-first keys and synchronize legacy aliases.
+        consensus_frequency = canonical.get("consensus_frequency")
+        if consensus_frequency is None:
+            consensus_frequency = canonical.get("final_consensus_frequency")
+        if consensus_frequency is not None:
+            consensus_frequency = float(consensus_frequency)
+        canonical["consensus_frequency"] = consensus_frequency
+        canonical["final_consensus_frequency"] = consensus_frequency
+
+        consensus_period = canonical.get("consensus_period")
+        if consensus_period is None and consensus_frequency is not None:
+            consensus_period = float(1.0 / consensus_frequency)
+        canonical["consensus_period"] = consensus_period
+        canonical["final_consensus_period"] = consensus_period
+
+        frequency_scatter = canonical.get("consensus_frequency_scatter")
+        if frequency_scatter is None:
+            frequency_scatter = canonical.get("mad_frequency_scatter")
+        canonical["consensus_frequency_scatter"] = frequency_scatter
+        canonical["mad_frequency_scatter"] = frequency_scatter
+
+        frequency_width = canonical.get("consensus_frequency_width")
+        if frequency_width is None:
+            frequency_width = canonical.get("robust_frequency_width")
+        canonical["consensus_frequency_width"] = frequency_width
+        canonical["robust_frequency_width"] = frequency_width
+
+        # Ensure bool fields are stable booleans.
+        for key in (
+            "consensus_success",
+            "use_acf_validation",
+            "use_gp_validation",
+            "gp_validation_requested",
+            "gp_validation_performed",
+        ):
+            canonical[key] = bool(canonical.get(key))
+
+        return self._consensus_make_json_safe(canonical)
+
     def _consensus_collect_band_candidates(
         self,
         *,
@@ -8176,6 +8349,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "positive float."
             )
 
+        result_diagnostics = self._consensus_initialize_result_structure(
+            fit_strategy="consensus"
+        )
+        result_diagnostics.update({
+            "use_acf_validation": bool(use_acf),
+            "use_gp_validation": bool(use_gp_validation),
+            "gp_validation_requested": bool(use_gp_validation),
+            "gp_validation_performed": False,
+            "consensus_generation_method": (
+                "auto_consensus"
+                if consensus_frequencies is None
+                else "manual_consensus_frequencies"
+            ),
+        })
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
+
         auto_constraint_bounds = None
         auto_controls = None
         if consensus_frequencies is None:
@@ -8200,10 +8391,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     verbose=verbose,
                 )
                 candidate_diag = validated_diag
+                result_diagnostics["gp_validation_performed"] = any(
+                    bool(rec.get("gp_validation_used", False))
+                    for rec in candidate_diag.get("band_records", {}).values()
+                )
             auto_controls = candidate_diag["controls"]
+            result_diagnostics.update({
+                "accepted_bands": list(candidate_diag.get("accepted_bands", [])),
+                "rejected_bands": list(candidate_diag.get("rejected_bands", [])),
+                "rejection_reasons": dict(candidate_diag.get("rejection_reasons", {})),
+                "per_band_diagnostics": dict(candidate_diag.get("band_records", {})),
+            })
             accepted_bands = candidate_diag.get("accepted_bands", [])
             if not accepted_bands:
                 rejection_reasons = candidate_diag.get("rejection_reasons", {})
+                self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                    result_diagnostics
+                )
                 raise RuntimeError(
                     "Consensus construction failed: no acceptable bands "
                     "survived consensus candidate vetting. "
@@ -8222,6 +8426,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     verbose=verbose,
                 )
             except Exception as exc:
+                self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                    result_diagnostics
+                )
                 raise RuntimeError(
                     "Consensus construction failed during robust frequency "
                     "aggregation. This may occur if accepted per-band "
@@ -8236,6 +8443,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 np.isfinite(final_consensus_frequency)
                 and final_consensus_frequency > 0
             ):
+                self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                    result_diagnostics
+                )
                 raise RuntimeError(
                     "Consensus construction failed: final consensus frequency "
                     "is not finite or not strictly positive."
@@ -8265,7 +8475,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 consensus_frequency_width = np.asarray([robust_width], dtype=float)
             auto_constraint_bounds = None
 
-            self.consensus_diagnostics = self._consensus_make_json_safe({
+            result_diagnostics.update({
                 "accepted_bands": candidate_diag["accepted_bands"],
                 "rejected_bands": candidate_diag["rejected_bands"],
                 "rejection_reasons": candidate_diag["rejection_reasons"],
@@ -8280,6 +8490,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     for band, rec in candidate_diag["band_records"].items()
                     if rec["dominant_frequency"] is not None
                 },
+                "candidate_count": len(consensus_diag.get("frequencies_all", [])),
+                "trusted_candidate_count": len(consensus_diag.get("inlier_bands", [])),
+                "consensus_frequency": final_consensus_frequency,
+                "consensus_period": float(1.0 / final_consensus_frequency),
+                "consensus_frequency_width": robust_width,
+                "consensus_frequency_scatter": consensus_diag["mad_frequency_scatter"],
                 "median_frequency": consensus_diag["median_frequency"],
                 "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
                 "consensus_inlier_bands": consensus_diag["inlier_bands"],
@@ -8301,6 +8517,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                 },
             })
+            result_diagnostics["consensus_generation_method"] = (
+                "auto_ls_acf_gp" if use_gp_validation else "auto_ls_acf"
+            )
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
             if verbose:
                 print("[consensus] accepted bands:", candidate_diag["accepted_bands"])
                 print("[consensus] rejected bands:", candidate_diag["rejected_bands"])
@@ -8368,20 +8590,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if consensus_frequency_width is None:
                 floor_width = np.maximum(consensus_frequencies * 0.01, 1.0e-8)
                 consensus_frequency_width = floor_width
-            self.consensus_diagnostics = self._consensus_make_json_safe({
+            _median_frequency = float(np.median(consensus_frequencies))
+            _mad_frequency_scatter = float(
+                np.median(np.abs(consensus_frequencies - np.median(consensus_frequencies)))
+            )
+            result_diagnostics.update({
                 "accepted_bands": [],
                 "rejected_bands": [],
                 "rejection_reasons": {},
                 "per_band_diagnostics": {},
                 "per_band_dominant_periods": {},
                 "per_band_dominant_frequencies": {},
-                "median_frequency": float(np.median(consensus_frequencies)),
-                "mad_frequency_scatter": float(
-                    np.median(
-                        np.abs(consensus_frequencies - np.median(consensus_frequencies))
-                    )
-                ),
-                "final_consensus_frequency": float(np.median(consensus_frequencies)),
+                "candidate_count": int(consensus_frequencies.size),
+                "trusted_candidate_count": int(consensus_frequencies.size),
+                "consensus_frequency": _median_frequency,
+                "consensus_period": float(1.0 / _median_frequency),
+                "consensus_frequency_width": float(np.median(consensus_frequency_width)),
+                "consensus_frequency_scatter": _mad_frequency_scatter,
+                "median_frequency": _median_frequency,
+                "mad_frequency_scatter": _mad_frequency_scatter,
+                "final_consensus_frequency": _median_frequency,
                 "final_constraint_bounds": None,
                 "controls": {
                     "outlier_sigma": outlier_sigma,
@@ -8396,6 +8624,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 },
                 "mode": "manual_consensus_frequencies",
             })
+            result_diagnostics["consensus_generation_method"] = (
+                "manual_consensus_frequencies"
+            )
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
 
         model_is_ready = (
             hasattr(self, "model")
@@ -8552,7 +8786,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         fit_kwargs["guess"] = merged_guess
         fit_kwargs["fit_strategy"] = None
-        return self.fit(**fit_kwargs)
+        try:
+            fit_result = self.fit(**fit_kwargs)
+        except Exception:
+            result_diagnostics["consensus_success"] = False
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
+            raise
+
+        result_diagnostics["consensus_success"] = bool(
+            result_diagnostics.get("consensus_frequency") is not None
+            and (
+                result_diagnostics.get("trusted_candidate_count") is None
+                or int(result_diagnostics.get("trusted_candidate_count")) > 0
+            )
+        )
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
+        return fit_result
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
         """Frequency-space consensus-fit stub for multi-component fitting."""
