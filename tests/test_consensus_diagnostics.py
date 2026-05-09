@@ -16,6 +16,7 @@ No real GP model training is performed.
 """
 
 import math
+import json
 import unittest
 
 import numpy as np
@@ -91,6 +92,9 @@ def _make_valid_diagnostics(
     accepted = list(accepted_bands or [])
     rejected = list(rejected_bands or [])
     per_band = dict(per_band_diagnostics or {})
+    for band in accepted + rejected:
+        band_key = str(band)
+        per_band.setdefault(band_key, _make_band_record(band=band_key))
     n_acc = len(accepted)
     n_rej = len(rejected)
     return {
@@ -246,6 +250,7 @@ class TestValidateGpReasonStatusCombinations(unittest.TestCase):
     def _diag_with_band_record(self, record):
         band = record["band"]
         return _make_valid_diagnostics(
+            accepted_bands=[band],
             per_band_diagnostics={band: record},
         )
 
@@ -593,7 +598,177 @@ class TestJsonSafeFinalization(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 9. Recursive-fit protection
+# 9. Finalized diagnostics end-to-end validation
+# ---------------------------------------------------------------------------
+
+
+class TestFinalizeValidatePipeline(unittest.TestCase):
+    """Finalize+validate pipeline invariants for consensus diagnostics."""
+
+    def _lc(self):
+        return _make_minimal_lc()
+
+    def _finalized_valid_diag(self):
+        return self._lc()._consensus_finalize_result_structure(
+            _make_valid_diagnostics(
+                accepted_bands=["A"],
+                rejected_bands=["B"],
+            )
+        )
+
+    def test_missing_required_top_level_keys_raise(self):
+        required_keys = (
+            "fit_strategy",
+            "consensus_success",
+            "accepted_bands",
+            "rejected_bands",
+            "per_band_diagnostics",
+            "n_total_bands",
+        )
+        for key in required_keys:
+            with self.subTest(key=key):
+                diag = dict(self._finalized_valid_diag())
+                del diag[key]
+                with self.assertRaises(RuntimeError):
+                    self._lc()._consensus_validate_result_structure(diag)
+
+    def test_missing_required_per_band_keys_raise(self):
+        required_band_keys = (
+            "band",
+            "status",
+            "gp_validation_status",
+            "gp_validation_reason",
+            "rejection_reasons",
+        )
+        for key in required_band_keys:
+            with self.subTest(key=key):
+                diag = self._finalized_valid_diag()
+                diag["per_band_diagnostics"]["A"] = dict(diag["per_band_diagnostics"]["A"])
+                del diag["per_band_diagnostics"]["A"][key]
+                with self.assertRaises(RuntimeError):
+                    self._lc()._consensus_validate_result_structure(diag)
+
+    def test_finalization_preserves_count_consistency(self):
+        diag = _make_valid_diagnostics(
+            accepted_bands=["A", "B"],
+            rejected_bands=["C", "D"],
+        )
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        self.assertIsInstance(result["accepted_bands"], list)
+        self.assertIsInstance(result["rejected_bands"], list)
+        self.assertIsInstance(result["n_accepted_bands"], int)
+        self.assertIsInstance(result["n_rejected_bands"], int)
+        self.assertIsInstance(result["n_total_bands"], int)
+        self.assertEqual(result["n_accepted_bands"], len(result["accepted_bands"]))
+        self.assertEqual(result["n_rejected_bands"], len(result["rejected_bands"]))
+        self.assertEqual(
+            result["n_total_bands"],
+            result["n_accepted_bands"] + result["n_rejected_bands"],
+        )
+
+    def test_finalization_recursively_sanitizes_nested_structures(self):
+        diag = _make_valid_diagnostics(
+            accepted_bands=["A"],
+            rejected_bands=["B"],
+        )
+        diag["controls"] = {
+            "level1": [
+                np.float32(1.25),
+                {
+                    "level2": np.array(
+                        [
+                            np.int64(2),
+                            np.float64(np.nan),
+                            np.float64(np.inf),
+                        ]
+                    ),
+                    "level3": [
+                        {"x": np.array([np.float64(3.5), np.float64(np.nan)])},
+                        np.float64(np.inf),
+                    ],
+                },
+            ],
+            "scalar": np.int32(4),
+        }
+
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        controls = result["controls"]
+        self.assertEqual(controls["level1"][0], 1.25)
+        self.assertIsInstance(controls["level1"][0], float)
+        self.assertEqual(controls["level1"][1]["level2"], [2, None, None])
+        self.assertEqual(controls["level1"][1]["level3"][0]["x"], [3.5, None])
+        self.assertIsNone(controls["level1"][1]["level3"][1])
+        self.assertEqual(controls["scalar"], 4)
+        self.assertIsInstance(controls["scalar"], int)
+
+    def test_finalized_structure_is_strict_json_serializable(self):
+        diag = _make_valid_diagnostics(
+            accepted_bands=["A"],
+            rejected_bands=["B"],
+        )
+        diag["controls"] = {
+            "bad_values": [np.float64(np.nan), np.float64(np.inf), np.array([1, 2])],
+        }
+        result = self._lc()._consensus_finalize_result_structure(diag)
+        json.dumps(result, allow_nan=False)
+
+    def test_validator_rejects_non_list_accepted_bands(self):
+        bad_values = (
+            ("A",),
+            {"A"},
+            np.array(["A"]),
+        )
+        for value in bad_values:
+            with self.subTest(container=type(value).__name__):
+                diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+                diag["accepted_bands"] = value
+                with self.assertRaises(RuntimeError):
+                    self._lc()._consensus_validate_result_structure(diag)
+
+    def test_validator_rejects_non_list_rejected_bands(self):
+        bad_values = (
+            ("B",),
+            {"B"},
+            np.array(["B"]),
+        )
+        for value in bad_values:
+            with self.subTest(container=type(value).__name__):
+                diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["B"])
+                diag["rejected_bands"] = value
+                with self.assertRaises(RuntimeError):
+                    self._lc()._consensus_validate_result_structure(diag)
+
+    def test_validator_rejects_duplicate_entries_in_accepted(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A", "A"], rejected_bands=[])
+        with self.assertRaises(RuntimeError):
+            self._lc()._consensus_validate_result_structure(diag)
+
+    def test_validator_rejects_duplicate_entries_in_rejected(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["B", "B"])
+        with self.assertRaises(RuntimeError):
+            self._lc()._consensus_validate_result_structure(diag)
+
+    def test_validator_rejects_missing_per_band_for_accepted(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        del diag["per_band_diagnostics"]["A"]
+        with self.assertRaises(RuntimeError):
+            self._lc()._consensus_validate_result_structure(diag)
+
+    def test_validator_rejects_missing_per_band_for_rejected(self):
+        diag = _make_valid_diagnostics(accepted_bands=[], rejected_bands=["B"])
+        del diag["per_band_diagnostics"]["B"]
+        with self.assertRaises(RuntimeError):
+            self._lc()._consensus_validate_result_structure(diag)
+
+    def test_validator_rejects_extra_per_band_entries(self):
+        diag = _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=[])
+        diag["per_band_diagnostics"]["Z"] = _make_band_record(band="Z")
+        with self.assertRaises(RuntimeError):
+            self._lc()._consensus_validate_result_structure(diag)
+
+
+# ---------------------------------------------------------------------------
+# 10. Recursive-fit protection
 # ---------------------------------------------------------------------------
 
 class TestPrepareGpValidationFitKwargs(unittest.TestCase):

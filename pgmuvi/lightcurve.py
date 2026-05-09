@@ -7521,6 +7521,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "'per_band_diagnostics' must be a dict; "
                 f"got {type(per_band).__name__!r}."
             )
+        referenced_bands = accepted_set | rejected_set
+        per_band_labels = {str(label) for label in per_band}
+        missing_per_band = sorted(referenced_bands - per_band_labels)
+        if missing_per_band:
+            raise RuntimeError(
+                "per_band_diagnostics is missing entries for referenced band(s): "
+                + ", ".join(f"'{b}'" for b in missing_per_band)
+                + "."
+            )
+        extra_per_band = sorted(per_band_labels - referenced_bands)
+        if extra_per_band:
+            raise RuntimeError(
+                "per_band_diagnostics contains entries for unknown band(s): "
+                + ", ".join(f"'{b}'" for b in extra_per_band)
+                + "."
+            )
 
         # --- 7-9. Per-band record invariants ---
         for band_label, record in per_band.items():
