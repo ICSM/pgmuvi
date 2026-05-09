@@ -50,6 +50,7 @@ import warnings
 import dataclasses
 import json
 import math
+from types import MappingProxyType
 
 try:
     from scipy.signal import find_peaks as _scipy_find_peaks
@@ -191,80 +192,217 @@ _CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED = tuple(
     sorted(_CONSENSUS_ALLOWED_REJECTION_REASONS)
 )
 
-# Required keys for a finalized top-level consensus diagnostics dict.  Used by
-# _consensus_validate_result_structure to check structural completeness.
-_CONSENSUS_REQUIRED_RESULT_KEYS = frozenset(
+def _consensus_schema_field(
+    *,
+    default=None,
+    default_factory=None,
+    nullable=True,
+    container_type=None,
+    allowed_values=None,
+    deprecated_alias=False,
+    canonical_alias_for=None,
+):
+    """Build immutable schema metadata for one diagnostics field."""
+    if default is not None and default_factory is not None:
+        raise ValueError(
+            "Consensus schema field cannot define both default and "
+            "default_factory."
+        )
+    if default_factory is not None and default_factory not in {"list", "dict"}:
+        raise ValueError(
+            "Consensus schema field default_factory must be one of "
+            "{'list', 'dict'}."
+        )
+    if container_type is not None and container_type not in {"list", "dict"}:
+        raise ValueError(
+            "Consensus schema field container_type must be one of "
+            "{'list', 'dict'} or None."
+        )
+    if allowed_values is None:
+        allowed_values_tuple = None
+    else:
+        allowed_values_tuple = tuple(allowed_values)
+    return MappingProxyType(
+        {
+            "default": default,
+            "default_factory": default_factory,
+            "nullable": bool(nullable),
+            "container_type": container_type,
+            "allowed_values": allowed_values_tuple,
+            "deprecated_alias": bool(deprecated_alias),
+            "canonical_alias_for": canonical_alias_for,
+        }
+    )
+
+
+def _consensus_schema_default_record(schema_fields):
+    """Instantiate a mutable diagnostics record from immutable schema metadata."""
+    record = {}
+    for key, metadata in schema_fields.items():
+        default_factory = metadata.get("default_factory")
+        if default_factory == "list":
+            record[key] = []
+        elif default_factory == "dict":
+            record[key] = {}
+        else:
+            record[key] = metadata.get("default")
+    return record
+
+
+_CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
     {
-        "fit_strategy",
-        "consensus_success",
-        "consensus_frequency",
-        "consensus_period",
-        "consensus_frequency_width",
-        "consensus_frequency_scatter",
-        "accepted_bands",
-        "rejected_bands",
-        "rejection_summary",
-        "per_band_diagnostics",
-        "n_total_bands",
-        "n_accepted_bands",
-        "n_rejected_bands",
-        "use_acf_validation",
-        "use_gp_validation",
-        "gp_validation_requested",
-        "gp_validation_performed",
-        "trusted_candidate_count",
-        "candidate_count",
-        "consensus_generation_method",
-        "rejection_reasons",
-        "per_band_dominant_periods",
-        "per_band_dominant_frequencies",
-        "median_frequency",
-        "mad_frequency_scatter",
-        "consensus_inlier_bands",
-        "consensus_outlier_bands",
-        "final_consensus_frequency",
-        "final_consensus_period",
-        "robust_frequency_width",
-        "final_constraint_bounds",
-        "controls",
-        "mode",
+        "fit_strategy": _consensus_schema_field(default="consensus", nullable=False),
+        "consensus_success": _consensus_schema_field(default=False, nullable=False),
+        "consensus_frequency": _consensus_schema_field(default=None, nullable=True),
+        "consensus_period": _consensus_schema_field(default=None, nullable=True),
+        "consensus_frequency_width": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_frequency_scatter": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "accepted_bands": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "rejected_bands": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "rejection_summary": _consensus_schema_field(
+            default_factory="dict",
+            nullable=False,
+            container_type="dict",
+            deprecated_alias=True,
+            canonical_alias_for="rejection_reasons",
+        ),
+        "per_band_diagnostics": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "n_total_bands": _consensus_schema_field(default=0, nullable=False),
+        "n_accepted_bands": _consensus_schema_field(default=0, nullable=False),
+        "n_rejected_bands": _consensus_schema_field(default=0, nullable=False),
+        "use_acf_validation": _consensus_schema_field(default=False, nullable=False),
+        "use_gp_validation": _consensus_schema_field(default=False, nullable=False),
+        "gp_validation_requested": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "gp_validation_performed": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "trusted_candidate_count": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "candidate_count": _consensus_schema_field(default=None, nullable=True),
+        "consensus_generation_method": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "rejection_reasons": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "per_band_dominant_periods": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "per_band_dominant_frequencies": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "median_frequency": _consensus_schema_field(default=None, nullable=True),
+        "mad_frequency_scatter": _consensus_schema_field(default=None, nullable=True),
+        "consensus_inlier_bands": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "consensus_outlier_bands": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "final_consensus_frequency": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "final_consensus_period": _consensus_schema_field(default=None, nullable=True),
+        "robust_frequency_width": _consensus_schema_field(default=None, nullable=True),
+        "final_constraint_bounds": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "controls": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "mode": _consensus_schema_field(default=None, nullable=True),
+    }
+)
+_CONSENSUS_TOP_LEVEL_SCHEMA = MappingProxyType(
+    {
+        "fields": _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS,
+        "required_keys": tuple(_CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS.keys()),
+        "deprecated_alias_fields": tuple(
+            key
+            for key, metadata in _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS.items()
+            if metadata["deprecated_alias"]
+        ),
     }
 )
 
-# Required keys for every per-band record in per_band_diagnostics.  Used by
-# _consensus_validate_result_structure to check per-band completeness.
-_CONSENSUS_REQUIRED_BAND_KEYS = frozenset(
+_CONSENSUS_BAND_SCHEMA_FIELDS = MappingProxyType(
     {
-        "band",
-        "status",
-        "rejection_reason",
-        "rejection_reasons",
-        "metrics",
-        "dominant_frequency",
-        "dominant_period",
-        "ls_significant",
-        "ls_peak_power",
-        "ls_peak_prominence",
-        "ls_peak_area_fraction",
-        "acf_frequency",
-        "acf_period",
-        "acf_supported",
-        "acf_comparison_status",
-        "acf_period_ratio",
-        "acf_harmonic_order",
-        "acf_error",
-        "selected_from",
-        "gp_validation_used",
-        "gp_dominant_frequency",
-        "gp_dominant_period",
-        "gp_frequency_difference",
-        "gp_fractional_frequency_difference",
-        "gp_frequency_tolerance",
-        "gp_validation_error",
-        "gp_validation_status",
-        "gp_validation_reason",
+        "band": _consensus_schema_field(default="", nullable=False),
+        "status": _consensus_schema_field(
+            default=_CONSENSUS_BAND_STATUS_PENDING,
+            nullable=False,
+            allowed_values=_CONSENSUS_ALLOWED_BAND_STATUSES_SORTED,
+        ),
+        "rejection_reason": _consensus_schema_field(default=None, nullable=True),
+        "rejection_reasons": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "metrics": _consensus_schema_field(default=None, nullable=True),
+        "dominant_frequency": _consensus_schema_field(default=None, nullable=True),
+        "dominant_period": _consensus_schema_field(default=None, nullable=True),
+        "ls_significant": _consensus_schema_field(default=None, nullable=True),
+        "ls_peak_power": _consensus_schema_field(default=None, nullable=True),
+        "ls_peak_prominence": _consensus_schema_field(default=None, nullable=True),
+        "ls_peak_area_fraction": _consensus_schema_field(default=None, nullable=True),
+        "acf_frequency": _consensus_schema_field(default=None, nullable=True),
+        "acf_period": _consensus_schema_field(default=None, nullable=True),
+        "acf_supported": _consensus_schema_field(default=None, nullable=True),
+        "acf_comparison_status": _consensus_schema_field(
+            default=None,
+            nullable=True,
+            allowed_values=_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES_SORTED,
+        ),
+        "acf_period_ratio": _consensus_schema_field(default=None, nullable=True),
+        "acf_harmonic_order": _consensus_schema_field(default=None, nullable=True),
+        "acf_error": _consensus_schema_field(default=None, nullable=True),
+        "selected_from": _consensus_schema_field(default=None, nullable=True),
+        "gp_validation_used": _consensus_schema_field(default=False, nullable=False),
+        "gp_dominant_frequency": _consensus_schema_field(default=None, nullable=True),
+        "gp_dominant_period": _consensus_schema_field(default=None, nullable=True),
+        "gp_frequency_difference": _consensus_schema_field(default=None, nullable=True),
+        "gp_fractional_frequency_difference": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "gp_frequency_tolerance": _consensus_schema_field(default=None, nullable=True),
+        "gp_validation_error": _consensus_schema_field(default=None, nullable=True),
+        "gp_validation_status": _consensus_schema_field(
+            default=_CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED,
+            nullable=False,
+            allowed_values=_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED,
+        ),
+        "gp_validation_reason": _consensus_schema_field(
+            default=None,
+            nullable=True,
+            allowed_values=tuple(sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS)),
+        ),
     }
 )
+_CONSENSUS_BAND_SCHEMA = MappingProxyType(
+    {
+        "fields": _CONSENSUS_BAND_SCHEMA_FIELDS,
+        "required_keys": tuple(_CONSENSUS_BAND_SCHEMA_FIELDS.keys()),
+        "deprecated_alias_fields": tuple(),
+    }
+)
+
+# Required-key sets are derived from the canonical schema definitions.
+_CONSENSUS_REQUIRED_RESULT_KEYS = frozenset(
+    _CONSENSUS_TOP_LEVEL_SCHEMA["required_keys"]
+)
+_CONSENSUS_REQUIRED_BAND_KEYS = frozenset(_CONSENSUS_BAND_SCHEMA["required_keys"])
 
 
 def _reraise_with_note(e, note):
@@ -7470,35 +7608,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # "not_requested" means GP validation was not invoked for this record.
         # Records are upgraded to "skipped"/"failed"/"rejected"/"success" later
         # only when the GP-validation stage is actually executed.
-        record = {
-            "band": str(band_label),
-            "status": _CONSENSUS_BAND_STATUS_PENDING,
-            "rejection_reason": None,
-            "rejection_reasons": [],
-            "metrics": self._consensus_make_json_safe(metrics),
-            "dominant_frequency": None,
-            "dominant_period": None,
-            "ls_significant": None,
-            "ls_peak_power": None,
-            "ls_peak_prominence": None,
-            "ls_peak_area_fraction": None,
-            "acf_frequency": None,
-            "acf_period": None,
-            "acf_supported": None,
-            "acf_comparison_status": None,
-            "acf_period_ratio": None,
-            "acf_harmonic_order": None,
-            "acf_error": None,
-            "selected_from": None,
-            "gp_validation_used": False,
-            "gp_dominant_frequency": None,
-            "gp_dominant_period": None,
-            "gp_frequency_difference": None,
-            "gp_fractional_frequency_difference": None,
-            "gp_frequency_tolerance": None,
-            "gp_validation_error": None,
-            "gp_validation_reason": None,
-        }
+        record = _consensus_schema_default_record(_CONSENSUS_BAND_SCHEMA_FIELDS)
+        record["band"] = str(band_label)
+        record["metrics"] = self._consensus_make_json_safe(metrics)
         self._consensus_set_gp_validation_status(
             record, _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED
         )
@@ -7609,42 +7721,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         - regression tests (deterministic structure assertions),
         - future consensus-recovery/fallback workflows (portable diagnostics).
         """
-        return {
-            "fit_strategy": fit_strategy,
-            "consensus_success": False,
-            "consensus_frequency": None,
-            "consensus_period": None,
-            "consensus_frequency_width": None,
-            "consensus_frequency_scatter": None,
-            "accepted_bands": [],
-            "rejected_bands": [],
-            "rejection_summary": {},
-            "per_band_diagnostics": {},
-            "n_total_bands": 0,
-            "n_accepted_bands": 0,
-            "n_rejected_bands": 0,
-            "use_acf_validation": False,
-            "use_gp_validation": False,
-            "gp_validation_requested": False,
-            "gp_validation_performed": False,
-            "trusted_candidate_count": None,
-            "candidate_count": None,
-            "consensus_generation_method": None,
-            # Backward-compatible/extended diagnostics keys.
-            "rejection_reasons": {},
-            "per_band_dominant_periods": {},
-            "per_band_dominant_frequencies": {},
-            "median_frequency": None,
-            "mad_frequency_scatter": None,
-            "consensus_inlier_bands": [],
-            "consensus_outlier_bands": [],
-            "final_consensus_frequency": None,
-            "final_consensus_period": None,
-            "robust_frequency_width": None,
-            "final_constraint_bounds": None,
-            "controls": {},
-            "mode": None,
-        }
+        result = _consensus_schema_default_record(_CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS)
+        result["fit_strategy"] = fit_strategy
+        return result
 
     def _consensus_build_rejection_summary(
         self,
@@ -7841,20 +7920,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 + "."
             )
 
+        top_schema_fields = _CONSENSUS_TOP_LEVEL_SCHEMA["fields"]
         accepted_bands = diagnostics["accepted_bands"]
         rejected_bands = diagnostics["rejected_bands"]
 
-        # --- 2. accepted_bands and rejected_bands must be lists ---
-        if not isinstance(accepted_bands, list):
-            raise RuntimeError(
-                "'accepted_bands' must be a list; "
-                f"got {type(accepted_bands).__name__!r}."
-            )
-        if not isinstance(rejected_bands, list):
-            raise RuntimeError(
-                "'rejected_bands' must be a list; "
-                f"got {type(rejected_bands).__name__!r}."
-            )
+        # --- 2. Top-level container fields must match canonical schema ---
+        for field_name in ("accepted_bands", "rejected_bands"):
+            expected_container = top_schema_fields[field_name]["container_type"]
+            if expected_container == "list":
+                expected_type = list
+            elif expected_container == "dict":
+                expected_type = dict
+            else:
+                continue
+            field_value = diagnostics[field_name]
+            if not isinstance(field_value, expected_type):
+                raise RuntimeError(
+                    f"'{field_name}' must be a {expected_container}; got "
+                    f"{type(field_value).__name__!r}."
+                )
 
         # --- 3. No band may appear in both lists ---
         accepted_set = {str(b) for b in accepted_bands}
@@ -7938,9 +8022,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # --- 6. per_band_diagnostics must be a dict ---
         per_band = diagnostics["per_band_diagnostics"]
+        expected_per_band_container = top_schema_fields["per_band_diagnostics"][
+            "container_type"
+        ]
         if not isinstance(per_band, dict):
             raise RuntimeError(
-                "'per_band_diagnostics' must be a dict; "
+                f"'per_band_diagnostics' must be a "
+                f"{expected_per_band_container}; "
                 f"got {type(per_band).__name__!r}."
             )
         referenced_bands = accepted_set | rejected_set
@@ -7961,6 +8049,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         # --- 7-9. Per-band record invariants ---
+        band_schema_fields = _CONSENSUS_BAND_SCHEMA["fields"]
         for band_label, record in per_band.items():
             _b = str(band_label)
             if not isinstance(record, dict):
@@ -7977,31 +8066,37 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
 
             band_status = record["status"]
-            if band_status not in _CONSENSUS_ALLOWED_BAND_STATUSES:
+            band_status_allowed = band_schema_fields["status"]["allowed_values"]
+            if band_status not in band_status_allowed:
                 raise ValueError(
                     f"Band {_b!r} has unknown 'status' {band_status!r}; "
                     "expected one of "
-                    f"{_CONSENSUS_ALLOWED_BAND_STATUSES_SORTED}."
+                    f"{band_status_allowed}."
                 )
 
             # 8. gp_validation_status must be a known value ---
             gp_status = record["gp_validation_status"]
-            if gp_status not in _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES:
+            gp_status_allowed = band_schema_fields["gp_validation_status"][
+                "allowed_values"
+            ]
+            if gp_status not in gp_status_allowed:
                 raise ValueError(
                     f"Band {_b!r} has unknown 'gp_validation_status' "
                     f"{gp_status!r}; expected one of "
-                    f"{_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED}."
+                    f"{gp_status_allowed}."
                 )
 
             acf_status = record.get("acf_comparison_status")
+            acf_nullable = band_schema_fields["acf_comparison_status"]["nullable"]
+            acf_allowed = band_schema_fields["acf_comparison_status"]["allowed_values"]
             if (
-                acf_status is not None
-                and acf_status not in _CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES
+                (acf_status is not None or not acf_nullable)
+                and acf_status not in acf_allowed
             ):
                 raise ValueError(
                     f"Band {_b!r} has unknown 'acf_comparison_status' "
                     f"{acf_status!r}; expected one of "
-                    f"{_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES_SORTED} or "
+                    f"{acf_allowed} or "
                     "None."
                 )
             acf_ratio = record.get("acf_period_ratio")
@@ -8182,16 +8277,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             # 10. gp_validation_reason invariant per status ---
             gp_reason = record.get("gp_validation_reason")
+            gp_reason_allowed = band_schema_fields["gp_validation_reason"][
+                "allowed_values"
+            ]
             if (
                 gp_reason is not None
-                and gp_reason not in _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS
+                and gp_reason not in gp_reason_allowed
             ):
-                allowed_gp_reasons = tuple(
-                    sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS)
-                )
                 raise ValueError(
                     f"Band {_b!r} has unknown 'gp_validation_reason' "
-                    f"{gp_reason!r}; expected one of {allowed_gp_reasons} "
+                    f"{gp_reason!r}; expected one of {gp_reason_allowed} "
                     "or None."
                 )
             allowed_reasons = _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS.get(

@@ -1304,6 +1304,92 @@ class TestConsensusCategoricalConstants(unittest.TestCase):
             )
 
 
+class TestConsensusSchemaCentralization(unittest.TestCase):
+    """Canonical schema definitions remain the single source of truth."""
+
+    def _lc(self):
+        return _make_minimal_lc()
+
+    def test_initialized_band_record_contains_all_schema_required_keys(self):
+        record = self._lc()._consensus_initialize_band_record("S")
+        required = set(lightcurve_module._CONSENSUS_BAND_SCHEMA["required_keys"])
+        self.assertSetEqual(set(record.keys()), required)
+
+    def test_required_key_sets_derive_from_schema(self):
+        self.assertEqual(
+            lightcurve_module._CONSENSUS_REQUIRED_RESULT_KEYS,
+            frozenset(lightcurve_module._CONSENSUS_TOP_LEVEL_SCHEMA["required_keys"]),
+        )
+        self.assertEqual(
+            lightcurve_module._CONSENSUS_REQUIRED_BAND_KEYS,
+            frozenset(lightcurve_module._CONSENSUS_BAND_SCHEMA["required_keys"]),
+        )
+
+    def test_categorical_schema_domains_match_constant_sets(self):
+        band_fields = lightcurve_module._CONSENSUS_BAND_SCHEMA["fields"]
+        self.assertSetEqual(
+            set(band_fields["status"]["allowed_values"]),
+            lightcurve_module._CONSENSUS_ALLOWED_BAND_STATUSES,
+        )
+        self.assertSetEqual(
+            set(band_fields["gp_validation_status"]["allowed_values"]),
+            lightcurve_module._CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES,
+        )
+        self.assertSetEqual(
+            set(band_fields["acf_comparison_status"]["allowed_values"]),
+            lightcurve_module._CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES,
+        )
+
+    def test_deprecated_alias_fields_marked_in_schema(self):
+        schema = lightcurve_module._CONSENSUS_TOP_LEVEL_SCHEMA
+        self.assertIn("rejection_summary", schema["deprecated_alias_fields"])
+        alias_field = schema["fields"]["rejection_summary"]
+        self.assertTrue(alias_field["deprecated_alias"])
+        self.assertEqual(alias_field["canonical_alias_for"], "rejection_reasons")
+
+    def test_finalized_result_contains_all_schema_required_keys(self):
+        finalized = self._lc()._consensus_finalize_result_structure(
+            _make_valid_diagnostics(accepted_bands=["A"], rejected_bands=["B"])
+        )
+        required = set(lightcurve_module._CONSENSUS_TOP_LEVEL_SCHEMA["required_keys"])
+        self.assertSetEqual(set(finalized.keys()), required)
+
+    def test_no_duplicate_required_key_definitions_outside_schema_generation(self):
+        top_required = tuple(
+            lightcurve_module._CONSENSUS_TOP_LEVEL_SCHEMA["required_keys"]
+        )
+        top_field_order = tuple(
+            lightcurve_module._CONSENSUS_TOP_LEVEL_SCHEMA["fields"].keys()
+        )
+        band_required = tuple(lightcurve_module._CONSENSUS_BAND_SCHEMA["required_keys"])
+        band_field_order = tuple(
+            lightcurve_module._CONSENSUS_BAND_SCHEMA["fields"].keys()
+        )
+        self.assertEqual(top_required, top_field_order)
+        self.assertEqual(band_required, band_field_order)
+        self.assertEqual(len(top_required), len(set(top_required)))
+        self.assertEqual(len(band_required), len(set(band_required)))
+
+
+class TestConsensusSchemaImmutability(unittest.TestCase):
+    """Canonical schema definitions are immutable at runtime."""
+
+    def test_top_level_schema_mapping_is_immutable(self):
+        schema = lightcurve_module._CONSENSUS_TOP_LEVEL_SCHEMA
+        with self.assertRaises(TypeError):
+            schema["new_key"] = "bad"
+
+    def test_nested_schema_field_mapping_is_immutable(self):
+        field = lightcurve_module._CONSENSUS_BAND_SCHEMA["fields"]["status"]
+        with self.assertRaises(TypeError):
+            field["nullable"] = True
+
+    def test_required_keys_tuple_is_immutable(self):
+        required = lightcurve_module._CONSENSUS_TOP_LEVEL_SCHEMA["required_keys"]
+        with self.assertRaises(AttributeError):
+            required.append("bad_key")
+
+
 # ---------------------------------------------------------------------------
 # 10. Recursive-fit protection
 # ---------------------------------------------------------------------------
@@ -1732,10 +1818,10 @@ class TestStagedConsensusDebugCheckpoints(unittest.TestCase):
                     "nyquist_frequency": 5.0,
                 }
 
-            def fit_LS(self, num_peaks=5):  # noqa: ARG002
+            def fit_LS(self, num_peaks=5):
                 return torch.tensor([1.0]), torch.tensor([True])
 
-            def acf(self, method="data", normalize=True):  # noqa: ARG002
+            def acf(self, method="data", normalize=True):
                 return {"dummy": True}
 
         lc = self._lc()
