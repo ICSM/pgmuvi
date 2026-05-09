@@ -1386,8 +1386,8 @@ class TestConsensusSchemaImmutability(unittest.TestCase):
 
     def test_required_keys_tuple_is_immutable(self):
         required = lightcurve_module._CONSENSUS_TOP_LEVEL_SCHEMA["required_keys"]
-        with self.assertRaises(AttributeError):
-            required.append("bad_key")
+        with self.assertRaises(TypeError):
+            required[0] = "bad_key"
 
 
 # ---------------------------------------------------------------------------

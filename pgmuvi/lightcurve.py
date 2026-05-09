@@ -202,7 +202,31 @@ def _consensus_schema_field(
     deprecated_alias=False,
     canonical_alias_for=None,
 ):
-    """Build immutable schema metadata for one diagnostics field."""
+    """Build immutable schema metadata for one diagnostics field.
+
+    Parameters
+    ----------
+    default : object, optional
+        Scalar default value used when ``default_factory`` is not set.
+    default_factory : {"list", "dict"} or None, optional
+        Factory identifier for container defaults. When set, a fresh container
+        is created per-record at initialization.
+    nullable : bool, optional
+        Whether ``None`` is considered a valid value for the field.
+    container_type : {"list", "dict"} or None, optional
+        Expected container type for validator type checks.
+    allowed_values : iterable or None, optional
+        Optional categorical domain for validator membership checks.
+    deprecated_alias : bool, optional
+        Whether this field is a deprecated alias retained for compatibility.
+    canonical_alias_for : str or None, optional
+        Canonical field name referenced by a deprecated alias.
+
+    Returns
+    -------
+    MappingProxyType
+        Immutable field metadata mapping.
+    """
     if default is not None and default_factory is not None:
         raise ValueError(
             "Consensus schema field cannot define both default and "
@@ -236,7 +260,20 @@ def _consensus_schema_field(
 
 
 def _consensus_schema_default_record(schema_fields):
-    """Instantiate a mutable diagnostics record from immutable schema metadata."""
+    """Instantiate a mutable diagnostics record from immutable schema metadata.
+
+    Parameters
+    ----------
+    schema_fields : Mapping[str, Mapping]
+        Canonical schema field definitions where each value is a metadata
+        mapping produced by :func:`_consensus_schema_field`.
+
+    Returns
+    -------
+    dict
+        Mutable diagnostics record containing one initialized value per schema
+        field key.
+    """
     record = {}
     for key, metadata in schema_fields.items():
         default_factory = metadata.get("default_factory")
