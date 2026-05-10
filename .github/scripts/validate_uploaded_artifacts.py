@@ -55,7 +55,8 @@ def main():
         sentinel_value = sentinel_file.read().strip()
     if sentinel_value != args.expected_sentinel:
         raise RuntimeError(
-            "Upload-validation sentinel mismatch; artifact may come from a stale run."
+            "Upload-validation sentinel mismatch; artifact may come from a stale "
+            f"run. expected={args.expected_sentinel!r}, got={sentinel_value!r}."
         )
     if not sentinel_value.endswith(UPLOAD_VALIDATION_SENTINEL):
         raise RuntimeError("Sentinel version token mismatch in uploaded artifacts.")
