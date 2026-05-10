@@ -58,6 +58,80 @@ except ImportError:
     _scipy_find_peaks = None
 
 
+class ConsensusFitError(RuntimeError):
+    """Raised when the consensus-fit pipeline cannot produce a valid result.
+
+    This exception is raised instead of a bare ``RuntimeError`` whenever the
+    consensus-fit algorithm determines that the data do not support a coherent
+    shared period.  It is **not** raised for unrelated optimisation or GP
+    errors; those continue to raise standard exceptions.
+
+    Attributes
+    ----------
+    failure_diagnostics : dict
+        A lightweight, JSON-safe structured description of the failure.
+        The dict always contains the key ``"status": "failed"`` and a
+        machine-readable ``"reason"`` string.  Additional keys vary by
+        failure mode and are described in the individual ``reason`` values
+        below.
+
+        Common ``reason`` values:
+
+        ``"no_accepted_bands"``
+            Every band was rejected by the pre-LS sampling quality gate
+            before any frequency could be extracted.  Extra keys:
+            ``rejection_reasons`` (dict).
+
+        ``"insufficient_consensus_inliers"``
+            Accepted bands carry mutually inconsistent frequencies; after
+            sigma-clipping fewer than ``min_consensus_inliers`` bands remain
+            in the inlier cluster.  Extra keys: ``n_inlier_bands`` (int),
+            ``required_inliers`` (int), ``n_candidate_bands`` (int),
+            ``candidate_periods`` (list[float | None]).
+
+        ``"frequency_aggregation_error"``
+            An unexpected error occurred during robust frequency aggregation.
+            Extra keys: ``detail`` (str).
+
+        ``"invalid_consensus_frequency"``
+            The aggregated consensus frequency is not finite or not strictly
+            positive.  Extra keys: ``frequency_value`` (float | None).
+
+    Parameters
+    ----------
+    message : str
+        Human-readable description of the failure.  Must be scientifically
+        informative and must not imply a software bug when the cause is a
+        data-quality issue.
+    failure_diagnostics : dict, optional
+        Structured diagnostics dict (see ``failure_diagnostics`` attribute).
+        If omitted, an empty ``{"status": "failed"}`` dict is attached.
+
+    Examples
+    --------
+    >>> raise ConsensusFitError(
+    ...     "Consensus fit failed: only 1 inlier band remained after period"
+    ...     " consistency filtering (minimum required: 2).",
+    ...     failure_diagnostics={
+    ...         "status": "failed",
+    ...         "reason": "insufficient_consensus_inliers",
+    ...         "n_inlier_bands": 1,
+    ...         "required_inliers": 2,
+    ...         "n_candidate_bands": 4,
+    ...         "candidate_periods": [18.0, 31.0, 47.0, 73.0],
+    ...     },
+    ... )
+    """
+
+    def __init__(self, message, *, failure_diagnostics=None):
+        super().__init__(message)
+        self.failure_diagnostics = (
+            dict(failure_diagnostics)
+            if failure_diagnostics is not None
+            else {"status": "failed"}
+        )
+
+
 _CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
 _CONSENSUS_MIN_SCALE_BOUND = 1.0e-6
 _ACF_STATUS_AGREEMENT = "agreement"
@@ -9589,7 +9663,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               Minimum number of original (pre-deduplication) photometric bands
               that must lie within the inlier frequency window for the
               consensus to be accepted.  When fewer bands agree, the fit
-              raises ``RuntimeError`` and ``consensus_success`` is ``False``.
+              raises :class:`ConsensusFitError` and
+              ``consensus_success`` is ``False``.
               This guards against spurious consensus frequencies when all
               accepted bands have mutually inconsistent periods.
             - ``use_gp_validation`` : bool, default ``False``
@@ -9613,6 +9688,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ValueError
             If automatic consensus construction is requested for a non-2D light
             curve, or if consensus inputs fail validation.
+        ConsensusFitError
+            If the consensus pipeline determines that the data do not support a
+            coherent shared period.  The exception carries a
+            ``failure_diagnostics`` attribute with structured diagnostics.
+            Possible reasons: all bands fail quality gating
+            (``"no_accepted_bands"``); too few inlier bands after outlier
+            rejection (``"insufficient_consensus_inliers"``); frequency
+            aggregation error (``"frequency_aggregation_error"``); or an
+            invalid aggregated frequency (``"invalid_consensus_frequency"``).
+            In all cases ``lc.consensus_diagnostics`` is populated before the
+            exception is raised.
         """
         consensus_frequencies = fit_kwargs.pop("consensus_frequencies", None)
         consensus_scales = fit_kwargs.pop("consensus_scales", None)
@@ -9740,10 +9826,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self.consensus_diagnostics = self._consensus_finalize_result_structure(
                     result_diagnostics
                 )
-                raise RuntimeError(
-                    "Consensus construction failed: no acceptable bands "
-                    "survived consensus candidate vetting. "
-                    f"Rejection reasons: {rejection_reasons!r}."
+                _rr_summary = {
+                    reason: list(bands)
+                    for reason, bands in rejection_reasons.items()
+                }
+                raise ConsensusFitError(
+                    "Consensus fit failed: the bands do not support a common "
+                    "periodicity. Every band was rejected before LS frequency "
+                    "extraction (e.g. too few points, excessive gaps, or no "
+                    "reliable LS peaks). Check per-band sampling quality. "
+                    f"Rejection reasons: {_rr_summary!r}.",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "no_accepted_bands",
+                        "rejection_reasons": _rr_summary,
+                    },
                 )
             self._consensus_debug_checkpoint(
                 result_diagnostics, "before_consensus_frequency_generation"
@@ -9765,11 +9862,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self.consensus_diagnostics = self._consensus_finalize_result_structure(
                     result_diagnostics
                 )
-                raise RuntimeError(
-                    "Consensus construction failed during robust frequency "
-                    "aggregation. This may occur if accepted per-band "
-                    "frequencies are invalid/outlying or too sparse. "
-                    f"Details: {exc}"
+                raise ConsensusFitError(
+                    "Consensus fit failed during robust frequency aggregation. "
+                    "This may occur if accepted per-band frequencies are "
+                    "invalid, all identical, or too sparse to compute a "
+                    "reliable median. Check per-band dominant frequencies in "
+                    f"consensus_diagnostics. Details: {exc}",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "frequency_aggregation_error",
+                        "detail": str(exc),
+                    },
                 ) from exc
 
             # Insufficient inliers: the accepted bands do not cluster around
@@ -9825,11 +9928,27 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self.consensus_diagnostics = (
                     self._consensus_finalize_result_structure(result_diagnostics)
                 )
-                raise RuntimeError(
-                    f"Consensus construction failed: insufficient number of "
-                    f"consistent inlier bands ({n_found} found, {n_req} "
-                    f"required). The accepted bands do not cluster around a "
-                    "common frequency."
+                _cand_periods = [
+                    (float(1.0 / f) if f and f > 0 else None)
+                    for f in consensus_diag.get("frequencies_all", [])
+                ]
+                raise ConsensusFitError(
+                    f"Consensus fit failed: the inferred periods are mutually "
+                    f"inconsistent across bands. Only {n_found} band(s) "
+                    f"clustered around a common frequency after outlier "
+                    f"rejection, but {n_req} are required. The bands do not "
+                    "support a coherent shared period — this is a data-quality "
+                    "issue, not a software error.",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "insufficient_consensus_inliers",
+                        "n_inlier_bands": n_found,
+                        "required_inliers": n_req,
+                        "n_candidate_bands": len(
+                            consensus_diag.get("frequencies_all", [])
+                        ),
+                        "candidate_periods": _cand_periods,
+                    },
                 )
 
             final_consensus_frequency = float(
@@ -9842,9 +9961,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self.consensus_diagnostics = self._consensus_finalize_result_structure(
                     result_diagnostics
                 )
-                raise RuntimeError(
-                    "Consensus construction failed: final consensus frequency "
-                    "is not finite or not strictly positive."
+                raise ConsensusFitError(
+                    "Consensus fit failed: the aggregated consensus frequency "
+                    "is not finite or not strictly positive. This may indicate "
+                    "that the accepted band frequencies are dominated by noise "
+                    "or contain invalid (NaN/Inf) values.",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "invalid_consensus_frequency",
+                        "frequency_value": (
+                            None
+                            if not math.isfinite(final_consensus_frequency)
+                            else float(final_consensus_frequency)
+                        ),
+                    },
                 )
             robust_width = float(
                 consensus_diag.get("final_mad_frequency_scatter", np.nan)

@@ -68,7 +68,7 @@ import unittest
 
 import numpy as np
 
-from pgmuvi.lightcurve import Lightcurve
+from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
 
 
 # ---------------------------------------------------------------------------
@@ -510,15 +510,8 @@ class TestConsensusScientificRegression(unittest.TestCase):
 
         Algorithm note
         --------------
-        ``consensus_success=False`` is produced by the current algorithm
-        only when **every** band is rejected before LS frequency extraction.
-        Bands with mutually inconsistent periods that nevertheless pass
-        quality gating will always yield *some* consensus frequency (the
-        algorithm falls back to all-inlier treatment when robust scatter is
-        zero).  This test therefore uses bands with genuine period
-        inconsistency **and** insufficient sampling — both conditions motivate
-        the failure and are scientifically realistic (too few observations to
-        determine any period reliably).
+        ``consensus_success=False`` is produced here because every band is
+        rejected before LS frequency extraction (too few points).
 
         Injected periods : 7, 30, 130 days  (mutually inconsistent)
         Sample counts    : 6, 7, 5  (all < min_points_per_band=20)
@@ -526,8 +519,8 @@ class TestConsensusScientificRegression(unittest.TestCase):
 
         Expected behaviour
         ------------------
-        * ``lc.fit(...)`` raises ``RuntimeError`` (re-raised from consensus
-          pipeline after quality rejection).
+        * ``lc.fit(...)`` raises :class:`ConsensusFitError` (a subclass of
+          ``RuntimeError``) with ``reason="no_accepted_bands"``.
         * After the exception, ``lc.consensus_diagnostics["consensus_success"]``
           is False.
         * ``final_consensus_frequency`` is None.
@@ -542,11 +535,15 @@ class TestConsensusScientificRegression(unittest.TestCase):
             seed=31,
         )
 
-        # lc.fit raises RuntimeError when all bands fail quality gating.
-        # lc.consensus_diagnostics is set *before* the error is raised, so
-        # it is accessible after the assertRaises block.
-        with self.assertRaises(RuntimeError):
+        # lc.fit raises ConsensusFitError (subclass of RuntimeError) when all
+        # bands fail quality gating.  lc.consensus_diagnostics is set before
+        # the error is raised, so it is accessible after assertRaises.
+        with self.assertRaises(ConsensusFitError) as cm:
             run_public_consensus_fit(lc, min_points_per_band=20)
+
+        exc = cm.exception
+        self.assertIsInstance(exc, RuntimeError)
+        self.assertEqual(exc.failure_diagnostics.get("reason"), "no_accepted_bands")
 
         diagnostics = lc.consensus_diagnostics
         self.assertFalse(diagnostics["consensus_success"])
@@ -595,7 +592,11 @@ class TestConsensusScientificRegression(unittest.TestCase):
 
         Expected behaviour
         ------------------
-        * ``lc.fit(...)`` raises ``RuntimeError``.
+        * ``lc.fit(...)`` raises :class:`ConsensusFitError` (a subclass of
+          ``RuntimeError``) with ``reason="insufficient_consensus_inliers"``.
+        * The exception's ``failure_diagnostics`` contains structured data:
+          ``n_inlier_bands``, ``required_inliers``, ``n_candidate_bands``,
+          ``candidate_periods``.
         * ``lc.consensus_diagnostics["consensus_success"]`` is ``False``.
         * ``final_consensus_frequency`` is ``None``.
         * ``final_consensus_period`` is ``None``.
@@ -610,15 +611,26 @@ class TestConsensusScientificRegression(unittest.TestCase):
             seed=77,
         )
 
-        # lc.fit raises RuntimeError via the insufficient-inliers guard.
-        # lc.consensus_diagnostics is set before the error, so it is
-        # accessible after the assertRaises block.
-        with self.assertRaises(RuntimeError):
+        # lc.fit raises ConsensusFitError (subclass of RuntimeError) via the
+        # insufficient-inliers guard.  lc.consensus_diagnostics is set before
+        # the error, so it is accessible after the assertRaises block.
+        with self.assertRaises(ConsensusFitError) as cm:
             run_public_consensus_fit(
                 lc,
                 outlier_sigma=1.5,
                 min_consensus_inliers=4,
             )
+
+        exc = cm.exception
+        self.assertIsInstance(exc, RuntimeError)
+        fd = exc.failure_diagnostics
+        self.assertEqual(fd.get("status"), "failed")
+        self.assertEqual(fd.get("reason"), "insufficient_consensus_inliers")
+        self.assertIn("n_inlier_bands", fd)
+        self.assertIn("required_inliers", fd)
+        self.assertIn("n_candidate_bands", fd)
+        self.assertIn("candidate_periods", fd)
+        self.assertIsInstance(fd["candidate_periods"], list)
 
         diagnostics = lc.consensus_diagnostics
 
