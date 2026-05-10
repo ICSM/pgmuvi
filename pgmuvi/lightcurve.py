@@ -6477,13 +6477,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # mutation (MLS init / fallback default).  Used later to decide
         # whether to substitute the stored _model_num_mixtures.
         _num_mixtures_arg = num_mixtures
-        _skip_fit_state_reset = bool(kwargs.pop("_skip_fit_state_reset", False))
-        if not _skip_fit_state_reset:
-            self._reset_fit_state(
-                clear_failure=True,
-                clear_model_state=False,
-                clear_consensus=bool(fit_strategy is not None),
-            )
+        self._reset_fit_state(
+            clear_failure=True,
+            clear_model_state=False,
+            clear_consensus=bool(fit_strategy is not None),
+        )
 
         # Dispatch alternative fit strategies before any stateful setup from
         # the default/general fit pathway mutates this Lightcurve instance.
