@@ -135,7 +135,9 @@ class TestConsensusFitErrorClass(unittest.TestCase):
             "candidate_periods": [18.0, 31.0, 47.0, 73.0],
         }
         exc = ConsensusFitError("msg", failure_diagnostics=fd)
-        self.assertEqual(exc.failure_diagnostics["reason"], "insufficient_consensus_inliers")
+        self.assertEqual(
+            exc.failure_diagnostics["reason"], "insufficient_consensus_inliers"
+        )
         self.assertEqual(exc.failure_diagnostics["n_inlier_bands"], 1)
         self.assertEqual(exc.failure_diagnostics["required_inliers"], 2)
 
@@ -428,7 +430,7 @@ class TestConsensusFailureStateAndUX(unittest.TestCase):
             ),
             diagnostics={
                 "candidate_periods": np.array([26.0, 30.0, 34.0]),
-                "scatter": np.float64(np.nan),
+                "scatter": np.nan,
                 "quality_flag": True,
             },
         )
