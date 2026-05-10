@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import json
 import math
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
+from pgmuvi.lightcurve import ConsensusFitError, FitFailureSummary, Lightcurve
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +375,111 @@ class TestConsensusFitErrorRaised(unittest.TestCase):
         self.assertIsNotNone(final_freq)
         # Consensus frequency should be close to 1/30 ≈ 0.0333 day⁻¹
         self.assertAlmostEqual(float(final_freq), 1.0 / 30.0, delta=0.01)
+
+
+class TestConsensusFailureStateAndUX(unittest.TestCase):
+    """Regression tests for failure-state robustness and notebook UX."""
+
+    def _fit_success_then_fail(self):
+        lc = _make_multiband_lightcurve(
+            {"g": 30.0, "r": 30.0, "i": 30.0},
+            noise_std=0.01,
+            seed=123,
+        )
+        _run_consensus_fit(lc)
+        _ = lc.get_period_summary()
+        with self.assertRaises(ConsensusFitError):
+            _run_consensus_fit(lc, min_points_per_band=10_000)
+        return lc
+
+    def test_failed_consensus_sets_formal_failure_contract(self):
+        """Failed consensus run populates canonical failure-state fields."""
+        lc = self._fit_success_then_fail()
+        self.assertFalse(lc.is_fitted)
+        self.assertTrue(lc.fit_failed)
+        self.assertIsNotNone(lc.failure_reason)
+        self.assertIsNotNone(lc.failure_diagnostics)
+        self.assertTrue(_is_json_serializable(lc.failure_diagnostics))
+
+    def test_period_summary_and_plots_raise_cleanly_after_failure(self):
+        """Summary/plot helpers raise clean ConsensusFitError after failure."""
+        lc = self._fit_success_then_fail()
+        with self.assertRaises(ConsensusFitError) as cm_summary:
+            lc.get_period_summary()
+        self.assertIn("Cannot generate GP period summary", str(cm_summary.exception))
+
+        with self.assertRaises(ConsensusFitError) as cm_plot:
+            lc.plot(show=False)
+        self.assertIn("Cannot generate GP fit plot", str(cm_plot.exception))
+
+        with self.assertRaises(ConsensusFitError):
+            lc.plot_psd(show=False)
+        with self.assertRaises(ConsensusFitError):
+            lc.plot_period_summary(show=False)
+
+    def test_fit_failure_summary_serializes_and_is_readable(self):
+        """FitFailureSummary to_dict/write_json/to_text are notebook-friendly."""
+        summary = FitFailureSummary(
+            status="failed",
+            reason="mutually_inconsistent_periods",
+            message=(
+                "Consensus fit failed because only one band remained after "
+                "consistency filtering."
+            ),
+            diagnostics={
+                "candidate_periods": np.array([26.0, 30.0, 34.0]),
+                "scatter": np.float64(np.nan),
+                "quality_flag": True,
+            },
+        )
+        as_dict = summary.to_dict()
+        self.assertEqual(as_dict["status"], "failed")
+        self.assertTrue(_is_json_serializable(as_dict))
+        self.assertIsNone(as_dict["diagnostics"]["scatter"])
+        self.assertIn("Consensus fit failed because", summary.to_text())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "failure_summary.json"
+            summary.write_json(out_path)
+            loaded = json.loads(out_path.read_text(encoding="utf-8"))
+        self.assertEqual(loaded["reason"], "mutually_inconsistent_periods")
+        self.assertIn("candidate_periods", loaded["diagnostics"])
+
+    def test_reset_fit_state_clears_relevant_attributes(self):
+        """_reset_fit_state clears fit, cache, diagnostics, and model handles."""
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0}, seed=9)
+        lc.results = {"loss": [1.0]}
+        lc._period_summary_cache = {"dummy": 1}
+        lc.optimizer = object()
+        lc.gp_model = object()
+        lc.consensus_diagnostics = {"status": "ok"}
+        lc.failure_summary = FitFailureSummary(reason="x", message="y")
+        lc.fit_failed = True
+        lc.failure_reason = "x"
+        lc.failure_diagnostics = {"status": "failed", "reason": "x"}
+        lc.model = object()
+        lc.likelihood = object()
+        lc._model_pars = {"k": 1}
+
+        lc._reset_fit_state(
+            clear_failure=True,
+            clear_model_state=True,
+            clear_consensus=True,
+        )
+
+        self.assertFalse(lc.is_fitted)
+        self.assertFalse(lc.fit_failed)
+        self.assertIsNone(lc.failure_reason)
+        self.assertIsNone(lc.failure_diagnostics)
+        self.assertIsNone(lc.failure_summary)
+        self.assertIsNone(lc.results)
+        self.assertIsNone(lc._period_summary_cache)
+        self.assertIsNone(lc.optimizer)
+        self.assertIsNone(lc.gp_model)
+        self.assertIsNone(lc.consensus_diagnostics)
+        self.assertIsNone(lc.model)
+        self.assertIsNone(lc.likelihood)
+        self.assertIsNone(lc._model_pars)
 
 
 if __name__ == "__main__":

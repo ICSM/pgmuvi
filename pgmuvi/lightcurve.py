@@ -3346,12 +3346,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             f"{action_message}: the most recent consensus fit failed"
         )
         _reason_messages = {
-            "no_accepted_bands": "because the bands did not support a common periodicity.",
+            "no_accepted_bands": (
+                "because the bands did not support a common periodicity."
+            ),
             "insufficient_consensus_inliers": (
                 "because too few reliable bands survived the consensus filtering stage."
             ),
             "frequency_aggregation_error": (
-                "because robust frequency aggregation could not build a stable consensus."
+                "because robust frequency aggregation could not build a "
+                "stable consensus."
             ),
             "invalid_consensus_frequency": (
                 "because the inferred consensus frequency was not physically valid."
@@ -6996,18 +6999,33 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def _consensus_fit(self, fit_strategy, **fit_kwargs):
         """Dispatch consensus fit strategies to their internal handlers."""
-        if fit_strategy == "consensus":
-            return self._consensus_standard_fit(**fit_kwargs)
-        if fit_strategy == "consensus_multicomp":
-            return self._consensus_multicomp_fit(**fit_kwargs)
-        if fit_strategy == "consensus_relaxed":
-            return self._consensus_relaxed_fit(**fit_kwargs)
-        msg = (
-            "Invalid fit_strategy. Expected None or one of: "
-            "'consensus', 'consensus_multicomp', 'consensus_relaxed'. "
-            f"Got {fit_strategy!r}."
-        )
-        raise ValueError(msg)
+        try:
+            if fit_strategy == "consensus":
+                return self._consensus_standard_fit(**fit_kwargs)
+            if fit_strategy == "consensus_multicomp":
+                return self._consensus_multicomp_fit(**fit_kwargs)
+            if fit_strategy == "consensus_relaxed":
+                return self._consensus_relaxed_fit(**fit_kwargs)
+            msg = (
+                "Invalid fit_strategy. Expected None or one of: "
+                "'consensus', 'consensus_multicomp', 'consensus_relaxed'. "
+                f"Got {fit_strategy!r}."
+            )
+            raise ValueError(msg)
+        except ConsensusFitError as exc:
+            _failure_diagnostics = getattr(exc, "failure_diagnostics", None) or {}
+            _failure_reason = _failure_diagnostics.get("reason") or "consensus_failure"
+            _failure_message = str(exc)
+            failure_summary = self._record_failure_state(
+                reason=_failure_reason,
+                message=_failure_message,
+                diagnostics=_failure_diagnostics,
+                clear_model_state=False,
+                clear_consensus=False,
+            )
+            exc.failure_diagnostics = self.failure_diagnostics
+            exc.failure_summary = failure_summary
+            raise
 
     def _consensus_resolve_time_spectral_mixture_keys(self):
         """Resolve time-kernel spectral-mixture parameter keys for consensus fit."""
@@ -12941,6 +12959,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         NotImplementedError
             If an unsupported ``uncertainty`` method is requested.
         """
+        self._raise_if_fit_failed("GP period summary")
         _sm_uncertainties = {"peak_mass"}
         if uncertainty not in _sm_uncertainties:
             raise NotImplementedError(
@@ -13069,6 +13088,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Returned when ``show=False``; otherwise ``None``.
             For the multi-panel case ``ax`` is the top axes.
         """
+        self._raise_if_fit_failed("period summary plot")
         if summary is None:
             summary = self.get_period_summary(**kwargs)
 
@@ -13889,6 +13909,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fig, ax : matplotlib.pyplot.Figure, matplotlib.pyplot.Axes
             The figure and axes objects of the plot.
         """
+        self._raise_if_fit_failed("PSD plot")
 
         if freq is None:
             if self.ndim == 1:
@@ -14179,6 +14200,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The power spectral density of the model at the frequencies given
             by freq.
         """
+        self._raise_if_fit_failed("PSD evaluation")
         if means is None:
             means = self.model.sci_kernel.mixture_means
             # now apply the transform too!
@@ -14311,6 +14333,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The figure object of the plot.  For 2-D (multiwavelength) data a
             list of figures is returned, one per wavelength.
         """
+        self._raise_if_fit_failed("GP fit plot")
         _VALID_YSCALES = ("auto", "linear", "log")
         if yscale not in _VALID_YSCALES:
             raise ValueError(
