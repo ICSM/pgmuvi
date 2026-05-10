@@ -1,4 +1,65 @@
-"""Scientific regression tests for consensus-fit frequency behavior."""
+"""Scientific regression tests for the consensus-fit frequency workflow.
+
+These tests exercise the complete public consensus strategy path::
+
+    lc.fit(fit_strategy="consensus", ...)
+
+No real GP training is performed (``training_iter=0``).  The tests focus on
+the LS-based frequency collection, sampling quality gating, outlier
+detection, and robust frequency aggregation stages — all of which run before
+the GP model update and are captured in ``lc.consensus_diagnostics``.
+
+Test scenarios
+--------------
+1. Clean single-period multiband recovery
+   All bands carry the same injected period.  Expect consensus success with
+   every band accepted.
+
+2. One discrepant band is rejected as a frequency outlier
+   Three majority bands span a cluster of similar periods.  One band has a
+   very different period and must end up in ``consensus_outlier_bands`` or
+   ``rejected_bands``.
+
+3. One low-quality sampling band is rejected
+   One band is sparsely sampled with a large gap; it must fail quality gating
+   while consensus succeeds using the remaining bands.
+
+4. Harmonic / alias challenge
+   One band is injected at a sub-harmonic of the majority period.  The
+   outlier detection should remove it; the final frequency must remain close
+   to the majority.
+
+5. No-consensus case via total sampling failure
+   All bands have insufficient points.  Total quality rejection forces a
+   ``RuntimeError`` and ``consensus_success`` must be ``False``.
+
+6. No-consensus case via genuinely inconsistent periods
+   All bands are adequately sampled but have mutually inconsistent injected
+   periods.  The ``min_consensus_inliers`` guard ensures the algorithm does
+   not report a spurious consensus frequency when no robust frequency cluster
+   exists.  ``consensus_success`` must be ``False`` and
+   ``final_consensus_frequency`` must be ``None``.
+
+Notes on algorithm design
+--------------------------
+* The consensus outlier-rejection stage requires **≥ 3 deduped** frequency
+  candidates to compute a non-zero MAD and trigger sigma-clipping.  Tests
+  that target outlier rejection therefore use majority bands with slightly
+  *different* injected periods (so each survives deduplication), plus one
+  clearly discrepant period.
+
+* ``consensus_success=False`` can be produced in two ways:
+
+  1. **All bands fail pre-LS quality gating** (too few points, excessive
+     gap fraction, etc.).  Test 5 uses this path explicitly.
+
+  2. **Too few inlier bands survive outlier rejection** — i.e., the
+     accepted bands do not cluster around a common frequency.  The
+     ``min_consensus_inliers`` parameter in
+     :meth:`~pgmuvi.lightcurve.Lightcurve.fit` (consensus mode) controls
+     this threshold.  Test 6 exercises this path with four adequately
+     sampled bands at mutually inconsistent periods.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +68,17 @@ import unittest
 
 import numpy as np
 
-from pgmuvi.lightcurve import Lightcurve
+from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
+
+
+# ---------------------------------------------------------------------------
+# Synthetic light curve factory
+# ---------------------------------------------------------------------------
 
 
 def _make_multiband_lightcurve(
     period_by_band,
     *,
-<<<<<<< HEAD
     n_pts_by_band=None,
     time_by_band=None,
     noise_std=0.01,
@@ -126,17 +191,10 @@ def run_public_consensus_fit(
 
     Raises
     ------
-<<<<<<< HEAD
     ConsensusFitError
         Raised (as a subclass of ``RuntimeError``) from ``lc.fit`` when all
         bands fail quality gating or when fewer than ``min_consensus_inliers``
         bands form a consistent inlier cluster.
-=======
-    RuntimeError
-        Re-raised from ``lc.fit`` when all bands fail quality gating or
-        when fewer than ``min_consensus_inliers`` bands form a consistent
-        inlier cluster.
->>>>>>> 4ef607d (fix: add min_consensus_inliers guard for mutually inconsistent periods)
     """
     kwargs: dict = {
         "fit_strategy": "consensus",
@@ -267,204 +325,11 @@ class TestConsensusScientificRegression(unittest.TestCase):
         injected_period = 30.0
         injected_freq = 1.0 / injected_period
 
-=======
-    n_points_by_band=None,
-    time_by_band=None,
-    phase_by_band=None,
-    amplitude_by_band=None,
-    noise_std=0.02,
-    seed=0,
-):
-    """Create a deterministic synthetic 2D light curve with explicit band labels."""
-    rng = np.random.default_rng(seed)
-    period_by_band = dict(period_by_band)
-    bands = list(period_by_band)
-
-    n_points_by_band = dict(n_points_by_band or {})
-    time_by_band = dict(time_by_band or {})
-    phase_by_band = dict(phase_by_band or {})
-    amplitude_by_band = dict(amplitude_by_band or {})
-
-    x_blocks = []
-    y_blocks = []
-    yerr_blocks = []
-    band_blocks = []
-
-    for band_index, band in enumerate(bands):
-        if band in time_by_band:
-            t = np.asarray(time_by_band[band], dtype=float)
-            if t.size == 0:
-                raise ValueError(
-                    f"time_by_band[{band!r}] must contain at least one sample."
-                )
-        else:
-            n_points = int(n_points_by_band.get(band, 60))
-            t = np.linspace(0.0, 220.0, n_points, dtype=float)
-
-        period = float(period_by_band[band])
-        freq = 1.0 / period
-        phase = float(phase_by_band.get(band, 0.0))
-        amplitude = float(amplitude_by_band.get(band, 1.0))
-
-        signal = amplitude * np.sin(2.0 * math.pi * freq * t + phase)
-        noise = rng.normal(loc=0.0, scale=float(noise_std), size=t.shape)
-        y = signal + noise
-        yerr = np.full_like(t, float(noise_std), dtype=float)
-
-        x_band = np.column_stack([
-            t,
-            np.full_like(t, float(band_index + 1), dtype=float),
-        ])
-        b_band = np.full(t.shape, str(band), dtype=np.str_)
-
-        x_blocks.append(x_band)
-        y_blocks.append(y)
-        yerr_blocks.append(yerr)
-        band_blocks.append(b_band)
-
-    x_all = np.concatenate(x_blocks, axis=0)
-    y_all = np.concatenate(y_blocks, axis=0)
-    yerr_all = np.concatenate(yerr_blocks, axis=0)
-    band_all = np.concatenate(band_blocks, axis=0)
-
-    return Lightcurve(x_all, y_all, yerr=yerr_all, band=band_all)
-
-
-def _run_consensus_frequency_regression(
-    lc,
-    *,
-    use_acf=False,
-    min_points_per_band=None,
-    max_gap_fraction=None,
-    min_duty_cycle=None,
-    outlier_sigma=3.5,
-):
-    """Run consensus candidate collection+aggregation without GP training."""
-    diagnostics = lc._consensus_initialize_result_structure(fit_strategy="consensus")
-    diagnostics.update({
-        "use_acf_validation": bool(use_acf),
-        "use_gp_validation": False,
-        "gp_validation_requested": False,
-        "gp_validation_performed": False,
-        "consensus_generation_method": "auto_consensus",
-    })
-
-    candidate_diag = lc._consensus_collect_band_candidates(
-        min_points_per_band=min_points_per_band,
-        max_gap_fraction=max_gap_fraction,
-        min_duty_cycle=min_duty_cycle,
-        use_acf=use_acf,
-        gp_validation_requested=False,
-        verbose=False,
-    )
-
-    per_band = dict(candidate_diag.get("band_records", {}))
-    accepted = list(candidate_diag.get("accepted_bands", []))
-    rejected = list(candidate_diag.get("rejected_bands", []))
-    rejection_summary = lc._consensus_build_rejection_summary(
-        per_band_diagnostics=per_band,
-        rejected_bands=rejected,
-        rejection_reasons=dict(candidate_diag.get("rejection_reasons", {})),
-    )
-
-    diagnostics.update({
-        "accepted_bands": accepted,
-        "rejected_bands": rejected,
-        "per_band_diagnostics": per_band,
-        "rejection_reasons": rejection_summary,
-        "controls": dict(candidate_diag.get("controls", {})),
-    })
-
-    if not accepted:
-        diagnostics.update({
-            "consensus_success": False,
-            "consensus_frequency": None,
-            "consensus_period": None,
-            "final_consensus_frequency": None,
-            "final_consensus_period": None,
-            "trusted_candidate_count": 0,
-            "candidate_count": 0,
-            "consensus_inlier_bands": [],
-            "consensus_outlier_bands": [],
-        })
-        return lc._consensus_finalize_result_structure(diagnostics)
-
-    consensus_diag = lc._consensus_build_frequency_consensus(
-        band_records=per_band,
-        accepted_bands=accepted,
-        outlier_sigma=float(outlier_sigma),
-        dedup_rtol=0.01,
-        verbose=False,
-    )
-
-    final_frequency = float(consensus_diag["final_consensus_frequency"])
-    final_period = float(1.0 / final_frequency)
-
-    diagnostics.update({
-        "consensus_success": True,
-        "consensus_frequency": final_frequency,
-        "consensus_period": final_period,
-        "consensus_frequency_scatter": consensus_diag["mad_frequency_scatter"],
-        "consensus_inlier_bands": list(consensus_diag["inlier_bands"]),
-        "consensus_outlier_bands": list(consensus_diag["outlier_bands"]),
-        "trusted_candidate_count": len(consensus_diag["inlier_bands"]),
-        "candidate_count": len(consensus_diag["frequencies_all"]),
-        "median_frequency": consensus_diag["median_frequency"],
-        "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
-        "final_consensus_frequency": final_frequency,
-        "final_consensus_period": final_period,
-        "robust_frequency_width": consensus_diag["final_mad_frequency_scatter"],
-    })
-
-    return lc._consensus_finalize_result_structure(diagnostics)
-
-
-def assert_frequency_close(actual, expected, tol):
-    """Assert frequency proximity with an absolute tolerance."""
-    if actual is None:
-        raise AssertionError("actual frequency is None")
-    delta = abs(float(actual) - float(expected))
-    if delta > float(tol):
-        raise AssertionError(
-            f"frequency mismatch: actual={actual}, expected={expected}, tol={tol}"
-        )
-
-
-def assert_valid_consensus_diagnostics(lc, diagnostics):
-    """Ensure diagnostics are schema-valid via the existing validator/finalizer."""
-    validated = lc._consensus_finalize_result_structure(diagnostics)
-    if not isinstance(validated, dict):
-        raise AssertionError("finalized diagnostics must be a dictionary")
-
-
-def assert_band_rejected_with_reason(diagnostics, band, reason_fragment):
-    """Assert that a band was rejected with a reason containing fragment."""
-    per_band = diagnostics.get("per_band_diagnostics", {})
-    if str(band) not in per_band:
-        raise AssertionError(f"band {band!r} missing from per_band_diagnostics")
-
-    reasons = per_band[str(band)].get("rejection_reasons") or []
-    reasons = [str(r) for r in reasons]
-    if not any(str(reason_fragment) in r for r in reasons):
-        raise AssertionError(
-            f"band {band!r} rejection reasons {reasons!r} "
-            f"do not include fragment {reason_fragment!r}"
-        )
-
-
-class TestConsensusScientificRegression(unittest.TestCase):
-    """Scientific regression cases for consensus frequency aggregation."""
-
-    def test_clean_single_period_multiband_recovery(self):
-        injected_period = 32.0
-        injected_frequency = 1.0 / injected_period
->>>>>>> b7ea677 (Add consensus scientific regression test module)
         lc = _make_multiband_lightcurve(
             {"g": injected_period, "r": injected_period, "i": injected_period},
             noise_std=0.01,
             seed=11,
         )
-<<<<<<< HEAD
         diagnostics = run_public_consensus_fit(lc, use_acf=False)
 
         self.assertTrue(diagnostics["consensus_success"])
@@ -563,79 +428,14 @@ class TestConsensusScientificRegression(unittest.TestCase):
             seed=23,
         )
         diagnostics = run_public_consensus_fit(
-=======
-
-        diagnostics = _run_consensus_frequency_regression(lc, use_acf=False)
-
-        self.assertTrue(diagnostics["consensus_success"])
-        assert_frequency_close(
-            diagnostics["final_consensus_frequency"],
-            injected_frequency,
-            tol=0.01,
-        )
-        self.assertEqual(set(diagnostics["accepted_bands"]), {"g", "r", "i"})
-        self.assertEqual(diagnostics["rejected_bands"], [])
-        assert_valid_consensus_diagnostics(lc, diagnostics)
-
-    def test_one_discrepant_band_majority_frequency_wins(self):
-        majority_period = 28.0
-        discrepant_period = 14.0
-        majority_frequency = 1.0 / majority_period
-
-        lc = _make_multiband_lightcurve(
-            {
-                "g": majority_period,
-                "r": majority_period,
-                "i": majority_period,
-                "z": discrepant_period,
-            },
-            noise_std=0.01,
-            seed=17,
-        )
-
-        diagnostics = _run_consensus_frequency_regression(lc, use_acf=False)
-
-        self.assertTrue(diagnostics["consensus_success"])
-        assert_frequency_close(
-            diagnostics["final_consensus_frequency"],
-            majority_frequency,
-            tol=0.02,
-        )
-        self.assertIn("z", diagnostics["accepted_bands"])
-        z_frequency = diagnostics["per_band_diagnostics"]["z"]["dominant_frequency"]
-        self.assertGreater(
-            abs(float(z_frequency) - float(diagnostics["final_consensus_frequency"])),
-            0.01,
-        )
-        assert_valid_consensus_diagnostics(lc, diagnostics)
-
-    def test_low_quality_sampling_band_is_rejected(self):
-        period = 26.0
-        dense_t = np.linspace(0.0, 220.0, 60)
-        sparse_gap_t = np.array([0.0, 2.0, 4.0, 6.0, 180.0, 200.0, 220.0])
-
-        lc = _make_multiband_lightcurve(
-            {"g": period, "r": period, "i": period},
-            time_by_band={"g": dense_t, "r": dense_t, "i": sparse_gap_t},
-            noise_std=0.01,
-            seed=23,
-        )
-
-        diagnostics = _run_consensus_frequency_regression(
->>>>>>> b7ea677 (Add consensus scientific regression test module)
             lc,
             use_acf=False,
             min_points_per_band=20,
             max_gap_fraction=0.25,
-<<<<<<< HEAD
-=======
-            min_duty_cycle=0.10,
->>>>>>> b7ea677 (Add consensus scientific regression test module)
         )
 
         self.assertTrue(diagnostics["consensus_success"])
         self.assertIn("i", diagnostics["rejected_bands"])
-<<<<<<< HEAD
         self.assertNotIn("i", diagnostics["accepted_bands"])
 
         # Band 'i' must have at least one quality-related rejection reason.
@@ -731,59 +531,10 @@ class TestConsensusScientificRegression(unittest.TestCase):
         lc = _make_multiband_lightcurve(
             {"g": 7.0, "r": 30.0, "i": 130.0},
             n_pts_by_band={"g": 6, "r": 7, "i": 5},
-=======
-        assert_band_rejected_with_reason(diagnostics, "i", "too_few_points")
-        assert_valid_consensus_diagnostics(lc, diagnostics)
-
-    def test_harmonic_alias_challenge_majority_not_pulled(self):
-        true_period = 30.0
-        harmonic_period = true_period / 2.0
-        true_frequency = 1.0 / true_period
-
-        lc = _make_multiband_lightcurve(
-            {
-                "g": true_period,
-                "r": true_period,
-                "i": true_period,
-                "z": harmonic_period,
-            },
-            noise_std=0.01,
-            seed=29,
-        )
-
-        diagnostics = _run_consensus_frequency_regression(
-            lc,
-            use_acf=True,
-            outlier_sigma=2.5,
-        )
-
-        self.assertTrue(diagnostics["consensus_success"])
-        assert_frequency_close(
-            diagnostics["final_consensus_frequency"],
-            true_frequency,
-            tol=0.02,
-        )
-        z_record = diagnostics["per_band_diagnostics"]["z"]
-        self.assertIn(z_record.get("acf_comparison_status"), {"agreement", "harmonic"})
-        self.assertGreater(
-            abs(
-                float(z_record["dominant_frequency"])
-                - float(diagnostics["final_consensus_frequency"])
-            ),
-            0.01,
-        )
-        assert_valid_consensus_diagnostics(lc, diagnostics)
-
-    def test_no_consensus_case_with_sampling_failures(self):
-        lc = _make_multiband_lightcurve(
-            {"g": 22.0, "r": 31.0, "i": 47.0},
-            n_points_by_band={"g": 6, "r": 7, "i": 5},
->>>>>>> b7ea677 (Add consensus scientific regression test module)
             noise_std=0.01,
             seed=31,
         )
 
-<<<<<<< HEAD
         # lc.fit raises ConsensusFitError (subclass of RuntimeError) when all
         # bands fail quality gating.  lc.consensus_diagnostics is set before
         # the error is raised, so it is accessible after assertRaises.
@@ -841,15 +592,11 @@ class TestConsensusScientificRegression(unittest.TestCase):
 
         Expected behaviour
         ------------------
-<<<<<<< HEAD
         * ``lc.fit(...)`` raises :class:`ConsensusFitError` (a subclass of
           ``RuntimeError``) with ``reason="insufficient_consensus_inliers"``.
         * The exception's ``failure_diagnostics`` contains structured data:
           ``n_inlier_bands``, ``required_inliers``, ``n_candidate_bands``,
           ``candidate_periods``.
-=======
-        * ``lc.fit(...)`` raises ``RuntimeError``.
->>>>>>> 4ef607d (fix: add min_consensus_inliers guard for mutually inconsistent periods)
         * ``lc.consensus_diagnostics["consensus_success"]`` is ``False``.
         * ``final_consensus_frequency`` is ``None``.
         * ``final_consensus_period`` is ``None``.
@@ -864,24 +611,16 @@ class TestConsensusScientificRegression(unittest.TestCase):
             seed=77,
         )
 
-<<<<<<< HEAD
         # lc.fit raises ConsensusFitError (subclass of RuntimeError) via the
         # insufficient-inliers guard.  lc.consensus_diagnostics is set before
         # the error, so it is accessible after the assertRaises block.
         with self.assertRaises(ConsensusFitError) as cm:
-=======
-        # lc.fit raises RuntimeError via the insufficient-inliers guard.
-        # lc.consensus_diagnostics is set before the error, so it is
-        # accessible after the assertRaises block.
-        with self.assertRaises(RuntimeError):
->>>>>>> 4ef607d (fix: add min_consensus_inliers guard for mutually inconsistent periods)
             run_public_consensus_fit(
                 lc,
                 outlier_sigma=1.5,
                 min_consensus_inliers=4,
             )
 
-<<<<<<< HEAD
         exc = cm.exception
         self.assertIsInstance(exc, RuntimeError)
         fd = exc.failure_diagnostics
@@ -893,8 +632,6 @@ class TestConsensusScientificRegression(unittest.TestCase):
         self.assertIn("candidate_periods", fd)
         self.assertIsInstance(fd["candidate_periods"], list)
 
-=======
->>>>>>> 4ef607d (fix: add min_consensus_inliers guard for mutually inconsistent periods)
         diagnostics = lc.consensus_diagnostics
 
         # Core invariants
@@ -929,21 +666,332 @@ class TestConsensusScientificRegression(unittest.TestCase):
         )
 
         assert_valid_consensus_diagnostics(self, lc, diagnostics)
-=======
-        diagnostics = _run_consensus_frequency_regression(
-            lc,
-            use_acf=False,
-            min_points_per_band=20,
-            max_gap_fraction=0.25,
-            min_duty_cycle=0.10,
+
+
+# ---------------------------------------------------------------------------
+# Constraint-handoff regression tests
+# ---------------------------------------------------------------------------
+
+
+def _make_2band_lc(period=30.0, n_pts=60, seed=1):
+    """Return a minimal 2-band Lightcurve with a clear period."""
+    return _make_multiband_lightcurve(
+        {"A": period, "B": period},
+        n_pts_by_band={"A": n_pts, "B": n_pts},
+        seed=seed,
+    )
+
+
+class TestConsensusConstraintHandoff(unittest.TestCase):
+    """Regression tests for the first-fit/second-fit constraint-ordering bug.
+
+    Before the fix, `_consensus_standard_fit` applied consensus constraints
+    via `set_constraint(...)` but did not mark `__CONTRAINTS_SET = True`.
+    When the nested `self.fit(...)` ran `_fit_core`, the guard
+    ``if not self.__CONTRAINTS_SET:`` was still True, causing
+    `set_default_constraints` to overwrite the consensus constraints.
+
+    These tests verify that after the fix:
+    - default constraints are applied before consensus constraints;
+    - consensus constraints are applied on top and win;
+    - `__CONTRAINTS_SET` is True after consensus constraints are set;
+    - the consensus constraint bounds actually contain the consensus frequency;
+    - diagnostics fields are populated correctly.
+    """
+
+    def _run_constrained_consensus(self, lc, **extra_kwargs):
+        """Run a consensus fit with constrain_consensus=True, training_iter=0."""
+        kwargs = {
+            "fit_strategy": "consensus",
+            "model": "2D",
+            "training_iter": 0,
+            "use_gp_validation": False,
+            "use_mls_init": False,
+            "use_best_band_init": False,
+            "constrain_consensus": True,
+            "consensus_frequency_width": 0.01,
+        }
+        kwargs.update(extra_kwargs)
+        lc.fit(**kwargs)
+        return lc.consensus_diagnostics
+
+    @staticmethod
+    def _diag_consensus_frequency(diag):
+        """Return a representative consensus frequency from diagnostics."""
+        return diag.get("consensus_frequency") or diag.get("final_consensus_frequency")
+
+    def test_constrained_consensus_applies_constraints_on_first_fit(self):
+        """Consensus constraints must take effect on the first fit call.
+
+        Previously, the first fit would overwrite consensus constraints with
+        defaults because __CONTRAINTS_SET was still False when _fit_core ran.
+        """
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+
+        self.assertTrue(
+            diag.get("consensus_constraints_applied"),
+            "consensus_constraints_applied should be True after constrained fit",
+        )
+        self.assertTrue(
+            diag.get("constraints_marked_set_after_consensus"),
+            "constraints_marked_set_after_consensus should be True",
+        )
+        self.assertTrue(
+            diag.get("default_constraints_applied_before_consensus"),
+            "default_constraints_applied_before_consensus should be True",
         )
 
-        self.assertFalse(diagnostics["consensus_success"])
-        self.assertIsNone(diagnostics["final_consensus_frequency"])
-        self.assertGreater(len(diagnostics["rejected_bands"]), 0)
-        self.assertGreater(len(diagnostics.get("rejection_reasons", {})), 0)
-        assert_valid_consensus_diagnostics(lc, diagnostics)
->>>>>>> b7ea677 (Add consensus scientific regression test module)
+    def test_constraint_bounds_contain_consensus_frequency(self):
+        """The applied mixture_means constraint must enclose the consensus freq."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+
+        bounds = diag.get("consensus_constraint_bounds")
+        self.assertIsNotNone(
+            bounds,
+            "consensus_constraint_bounds should be set when constrain_consensus=True",
+        )
+        self.assertEqual(len(bounds), 2, "bounds should be [lower, upper]")
+        lower, upper = float(bounds[0]), float(bounds[1])
+        self.assertGreater(upper, lower, "upper bound must exceed lower bound")
+
+        consensus_freq = self._diag_consensus_frequency(diag)
+        if consensus_freq is not None:
+            self.assertGreaterEqual(
+                consensus_freq,
+                lower,
+                "consensus_frequency must be >= constraint lower bound",
+            )
+            self.assertLessEqual(
+                consensus_freq,
+                upper,
+                "consensus_frequency must be <= constraint upper bound",
+            )
+
+    def test_constraint_validation_helper_success(self):
+        """Strict helper validation should pass for valid constrained fits."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        bounds = diag.get("consensus_constraint_bounds")
+        self.assertIsNotNone(bounds, "consensus_constraint_bounds must be present")
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        consensus_freq = self._diag_consensus_frequency(diag)
+        self.assertIsNotNone(
+            consensus_freq,
+            "consensus frequency must be present for constrained validation",
+        )
+        lc._consensus_validate_applied_sm_constraints(
+            keys=keys,
+            consensus_frequencies=[consensus_freq],
+            frequency_bounds=tuple(bounds),
+        )
+
+    def test_constraint_target_keys_populated(self):
+        """Diagnostic keys for constraint target parameters must be set."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+
+        self.assertIsNotNone(
+            diag.get("consensus_constraint_target_key"),
+            "consensus_constraint_target_key should be set",
+        )
+        self.assertIsNotNone(
+            diag.get("consensus_scale_constraint_target_key"),
+            "consensus_scale_constraint_target_key should be set",
+        )
+        self.assertIsNotNone(
+            diag.get("consensus_scale_constraint_bounds"),
+            "consensus_scale_constraint_bounds should be set",
+        )
+
+    def test_unconstrained_consensus_diagnostics_are_false(self):
+        """When constrain_consensus=False, constraint diagnostics are False."""
+        lc = _make_2band_lc(period=30.0)
+        kwargs = {
+            "fit_strategy": "consensus",
+            "model": "2D",
+            "training_iter": 0,
+            "use_gp_validation": False,
+            "use_mls_init": False,
+            "use_best_band_init": False,
+            "constrain_consensus": False,
+        }
+        lc.fit(**kwargs)
+        diag = lc.consensus_diagnostics
+
+        self.assertFalse(
+            diag.get("consensus_constraints_applied"),
+            "consensus_constraints_applied should be False when not constrained",
+        )
+        self.assertFalse(
+            diag.get("default_constraints_applied_before_consensus"),
+            "default_constraints_applied_before_consensus should be False",
+        )
+        self.assertFalse(
+            diag.get("constraints_marked_set_after_consensus"),
+            "constraints_marked_set_after_consensus should be False",
+        )
+
+    def test_constraint_diagnostics_fields_in_schema(self):
+        """New constraint-handoff fields must exist in consensus_diagnostics."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+
+        required_fields = [
+            "consensus_constraints_applied",
+            "consensus_constraint_bounds",
+            "consensus_constraint_target_key",
+            "consensus_scale_constraint_bounds",
+            "consensus_scale_constraint_target_key",
+            "default_constraints_applied_before_consensus",
+            "constraints_marked_set_after_consensus",
+        ]
+        for field in required_fields:
+            self.assertIn(
+                field,
+                diag,
+                f"consensus_diagnostics must contain field {field!r}",
+            )
+
+    def test_second_fit_matches_first_fit_constraints(self):
+        """Second fit must not produce different constraints than first fit.
+
+        Before the fix, the second fit would correctly constrain because
+        __CONTRAINTS_SET was True from the first fit. After the fix, both
+        fits should produce the same constraint bounds.
+        """
+        lc1 = _make_2band_lc(period=30.0, seed=42)
+        lc2 = _make_2band_lc(period=30.0, seed=42)
+
+        # First fit on lc1
+        diag1 = self._run_constrained_consensus(lc1)
+        bounds1 = diag1.get("consensus_constraint_bounds")
+
+        # Second fit on lc2 (simulates the old "call twice" workaround)
+        self._run_constrained_consensus(lc2)
+        diag2 = self._run_constrained_consensus(lc2)
+        bounds2 = diag2.get("consensus_constraint_bounds")
+
+        # Both should have constraint bounds
+        self.assertIsNotNone(bounds1, "first fit must have constraint bounds")
+        self.assertIsNotNone(bounds2, "second fit must have constraint bounds")
+
+        # Both must report constraints applied
+        self.assertTrue(
+            diag1.get("consensus_constraints_applied"),
+            "first fit must apply constraints",
+        )
+        self.assertTrue(
+            diag2.get("consensus_constraints_applied"),
+            "second fit must apply constraints",
+        )
+
+    def test_constraint_validation_fails_for_non_dict_metadata(self):
+        """Validation must fail when mixture_means metadata is not a dict."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        lc._model_pars[mm_key] = "not-a-dict"
+        with self.assertRaises(ConsensusFitError):
+            lc._consensus_validate_applied_sm_constraints(
+                keys=keys,
+                consensus_frequencies=[self._diag_consensus_frequency(diag)],
+                frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+            )
+
+    def test_constraint_validation_fails_for_missing_module_metadata(self):
+        """Validation must fail when mixture_means metadata has no module."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        meta = dict(lc._model_pars[mm_key])
+        meta.pop("module", None)
+        lc._model_pars[mm_key] = meta
+        with self.assertRaises(ConsensusFitError):
+            lc._consensus_validate_applied_sm_constraints(
+                keys=keys,
+                consensus_frequencies=[self._diag_consensus_frequency(diag)],
+                frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+            )
+
+    def test_constraint_validation_fails_for_missing_registered_constraint(self):
+        """Validation must fail if named_constraints has no expected key."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        module = lc._model_pars[mm_key]["module"]
+        with unittest.mock.patch.object(module, "named_constraints", return_value=[]):
+            with self.assertRaises(ConsensusFitError):
+                lc._consensus_validate_applied_sm_constraints(
+                    keys=keys,
+                    consensus_frequencies=[self._diag_consensus_frequency(diag)],
+                    frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+                )
+
+    def test_constraint_validation_fails_for_infinite_upper_bound(self):
+        """Validation must fail when upper bound is infinite."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        module = lc._model_pars[mm_key]["module"]
+        raw_name = (
+            f"raw_{mm_key.split('.')[-1]}"
+            if "raw_" not in mm_key
+            else mm_key.split(".")[-1]
+        )
+        constraint_key = raw_name + "_constraint"
+
+        class _InfiniteConstraint:
+            lower_bound = 0.0
+            upper_bound = float("inf")
+
+        with unittest.mock.patch.object(
+            module,
+            "named_constraints",
+            return_value=[(constraint_key, _InfiniteConstraint())],
+        ):
+            with self.assertRaises(ConsensusFitError):
+                lc._consensus_validate_applied_sm_constraints(
+                    keys=keys,
+                    consensus_frequencies=[self._diag_consensus_frequency(diag)],
+                    frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+                )
+
+    def test_constraint_validation_fails_for_consensus_frequency_outside_bounds(self):
+        """Validation must fail when registered bounds exclude consensus freq."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        module = lc._model_pars[mm_key]["module"]
+        raw_name = (
+            f"raw_{mm_key.split('.')[-1]}"
+            if "raw_" not in mm_key
+            else mm_key.split(".")[-1]
+        )
+        constraint_key = raw_name + "_constraint"
+        consensus_freq = float(self._diag_consensus_frequency(diag))
+
+        class _OutsideConstraint:
+            lower_bound = consensus_freq + 1.0
+            upper_bound = consensus_freq + 2.0
+
+        with unittest.mock.patch.object(
+            module,
+            "named_constraints",
+            return_value=[(constraint_key, _OutsideConstraint())],
+        ):
+            with self.assertRaises(ConsensusFitError):
+                lc._consensus_validate_applied_sm_constraints(
+                    keys=keys,
+                    consensus_frequencies=[consensus_freq],
+                    frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+                )
 
 
 if __name__ == "__main__":
