@@ -9288,6 +9288,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         accepted_bands,
         outlier_sigma=3.5,
         dedup_rtol=0.01,
+        min_consensus_inliers=2,
         verbose=False,
     ):
         """Build a robust cross-band consensus frequency from dominant candidates.
@@ -9308,6 +9309,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         dedup_rtol : float, optional
             Relative tolerance used to cluster near-identical frequency
             candidates before consensus ranking.
+        min_consensus_inliers : int, optional
+            Minimum number of bands that must survive outlier rejection and
+            cluster around a common frequency for the consensus to be
+            considered valid.  When fewer inliers survive, the method returns
+            a diagnostics dict with ``insufficient_inliers=True`` and
+            ``final_consensus_frequency=nan`` so the caller can finalize
+            diagnostics and raise an informative ``RuntimeError``.  Defaults
+            to ``2``, meaning at least two bands must agree.
         verbose : bool, optional
             If ``True``, print outlier decisions and final consensus values.
 
@@ -9315,7 +9324,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         -------
         dict
             Aggregation diagnostics including median frequency, MAD scatter,
-            inlier/outlier bands, and final consensus frequency.
+            inlier/outlier bands, and final consensus frequency.  When the
+            inlier count is below ``min_consensus_inliers``, the dict
+            contains ``insufficient_inliers=True`` and
+            ``final_consensus_frequency=nan``.
 
         Raises
         ------
@@ -9389,6 +9401,43 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         outlier_bands = band_arr[~inlier_mask].tolist()
         inlier_freqs = freq_arr[inlier_mask]
         inlier_bands = band_arr[inlier_mask].tolist()
+
+        # Count how many ORIGINAL bands (pre-deduplication) lie within the
+        # inlier frequency window.  Near-identical frequencies from different
+        # bands may have been collapsed into one representative candidate by
+        # the deduplication step, so the deduped inlier list can be shorter
+        # than the true number of bands that agree on a common frequency.
+        # Using the original freq_pairs count correctly handles both the
+        # "all bands agree" case (robust_sigma ≈ 0 → all original bands are
+        # inliers) and the "mutually inconsistent" case (robust_sigma > 0 →
+        # only original bands within the inlier window are counted).
+        if len(freq_arr) >= 3 and robust_sigma > 0 and np.isfinite(robust_sigma):
+            _inlier_tol = float(outlier_sigma) * robust_sigma
+            n_original_inlier_bands = sum(
+                1 for _, f in freq_pairs if abs(f - median_freq) <= _inlier_tol
+            )
+        else:
+            # Robust scatter is zero or undefined: all original bands are
+            # treated as inliers (no sigma-clipping is possible).
+            n_original_inlier_bands = len(freq_pairs)
+
+        # Require a minimum number of original bands in the inlier cluster.
+        # If too few original bands agree, no scientifically defensible
+        # consensus exists and the caller should report failure.
+        if n_original_inlier_bands < int(min_consensus_inliers):
+            return {
+                "frequencies_all": freq_arr.tolist(),
+                "bands_all": band_arr.tolist(),
+                "median_frequency": median_freq,
+                "mad_frequency_scatter": mad_freq,
+                "inlier_bands": inlier_bands,
+                "outlier_bands": outlier_bands,
+                "final_consensus_frequency": float("nan"),
+                "final_mad_frequency_scatter": float("nan"),
+                "insufficient_inliers": True,
+                "insufficient_inliers_count": n_original_inlier_bands,
+                "required_min_consensus_inliers": int(min_consensus_inliers),
+            }
 
         final_consensus_frequency = float(np.median(inlier_freqs))
         mad_scatter = float(np.median(np.abs(inlier_freqs - final_consensus_frequency)))
@@ -9512,10 +9561,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         **fit_kwargs : dict
             Standard :meth:`fit` kwargs plus consensus-specific controls:
             ``min_points_per_band``, ``max_gap_fraction``, ``min_duty_cycle``,
-            ``outlier_sigma``, ``use_acf``, ``constrain_consensus``,
-            ``consensus_width_factor``, ``consensus_dedup_rtol``,
-            ``use_gp_validation``, ``gp_validation_kwargs``, and
-            ``gp_frequency_tolerance_factor``.
+            ``outlier_sigma``, ``min_consensus_inliers``, ``use_acf``,
+            ``constrain_consensus``, ``consensus_width_factor``,
+            ``consensus_dedup_rtol``, ``use_gp_validation``,
+            ``gp_validation_kwargs``, and ``gp_frequency_tolerance_factor``.
 
             Manual overrides are also accepted via:
 
@@ -9536,6 +9585,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               Relative tolerance used to cluster near-identical frequency
               candidates before consensus ranking. Must be finite and strictly
               positive.
+            - ``min_consensus_inliers`` : int, default ``2``
+              Minimum number of original (pre-deduplication) photometric bands
+              that must lie within the inlier frequency window for the
+              consensus to be accepted.  When fewer bands agree, the fit
+              raises ``RuntimeError`` and ``consensus_success`` is ``False``.
+              This guards against spurious consensus frequencies when all
+              accepted bands have mutually inconsistent periods.
             - ``use_gp_validation`` : bool, default ``False``
               If ``True``, run optional per-band 1D GP frequency validation on
               LS/ACF-vetted candidates before final consensus aggregation.
@@ -9579,6 +9635,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         max_gap_fraction = fit_kwargs.pop("max_gap_fraction", None)
         min_duty_cycle = fit_kwargs.pop("min_duty_cycle", None)
         outlier_sigma = fit_kwargs.pop("outlier_sigma", None)
+        min_consensus_inliers = fit_kwargs.pop("min_consensus_inliers", 2)
         use_acf = fit_kwargs.pop("use_acf", False)
         consensus_width_factor = fit_kwargs.pop("consensus_width_factor", None)
         consensus_dedup_rtol = fit_kwargs.pop("consensus_dedup_rtol", 0.01)
@@ -9701,6 +9758,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         else float(outlier_sigma)
                     ),
                     dedup_rtol=consensus_dedup_rtol,
+                    min_consensus_inliers=int(min_consensus_inliers),
                     verbose=verbose,
                 )
             except Exception as exc:
@@ -9713,6 +9771,66 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "frequencies are invalid/outlying or too sparse. "
                     f"Details: {exc}"
                 ) from exc
+
+            # Insufficient inliers: the accepted bands do not cluster around
+            # a common frequency.  Populate partial diagnostics for inspection
+            # before raising a RuntimeError.
+            if consensus_diag.get("insufficient_inliers"):
+                n_found = consensus_diag.get("insufficient_inliers_count", 0)
+                n_req = consensus_diag.get(
+                    "required_min_consensus_inliers", int(min_consensus_inliers)
+                )
+                _resolved_outlier_sigma = (
+                    auto_controls["outlier_sigma"]
+                    if outlier_sigma is None
+                    else float(outlier_sigma)
+                )
+                _resolved_width_factor = (
+                    auto_controls["consensus_width_factor"]
+                    if consensus_width_factor is None
+                    else float(consensus_width_factor)
+                )
+                result_diagnostics.update({
+                    "median_frequency": consensus_diag["median_frequency"],
+                    "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
+                    "consensus_inlier_bands": consensus_diag["inlier_bands"],
+                    "consensus_outlier_bands": consensus_diag["outlier_bands"],
+                    "candidate_count": len(
+                        consensus_diag.get("frequencies_all", [])
+                    ),
+                    "trusted_candidate_count": n_found,
+                    "per_band_dominant_periods": {
+                        band: rec["dominant_period"]
+                        for band, rec in candidate_diag["band_records"].items()
+                        if rec.get("dominant_period") is not None
+                    },
+                    "per_band_dominant_frequencies": {
+                        band: rec["dominant_frequency"]
+                        for band, rec in candidate_diag["band_records"].items()
+                        if rec.get("dominant_frequency") is not None
+                    },
+                    "controls": {
+                        **auto_controls,
+                        "outlier_sigma": _resolved_outlier_sigma,
+                        "use_acf": bool(use_acf),
+                        "constrain_consensus": bool(apply_consensus_constraints),
+                        "consensus_width_factor": _resolved_width_factor,
+                        "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                        "use_gp_validation": bool(use_gp_validation),
+                        "gp_frequency_tolerance_factor": float(
+                            gp_frequency_tolerance_factor
+                        ),
+                    },
+                })
+                self.consensus_diagnostics = (
+                    self._consensus_finalize_result_structure(result_diagnostics)
+                )
+                raise RuntimeError(
+                    f"Consensus construction failed: insufficient number of "
+                    f"consistent inlier bands ({n_found} found, {n_req} "
+                    f"required). The accepted bands do not cluster around a "
+                    "common frequency."
+                )
 
             final_consensus_frequency = float(
                 consensus_diag.get("final_consensus_frequency", np.nan)

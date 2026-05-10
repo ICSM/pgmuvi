@@ -30,9 +30,15 @@ Test scenarios
    to the majority.
 
 5. No-consensus case via total sampling failure
-   All bands have insufficient points (mutually inconsistent periods).
-   Total quality rejection forces a RuntimeError from the consensus path,
-   and ``consensus_success`` must be False.
+   All bands have insufficient points.  Total quality rejection forces a
+   ``RuntimeError`` and ``consensus_success`` must be ``False``.
+
+6. No-consensus case via genuinely inconsistent periods
+   All bands are adequately sampled but have mutually inconsistent injected
+   periods.  The ``min_consensus_inliers`` guard ensures the algorithm does
+   not report a spurious consensus frequency when no robust frequency cluster
+   exists.  ``consensus_success`` must be ``False`` and
+   ``final_consensus_frequency`` must be ``None``.
 
 Notes on algorithm design
 --------------------------
@@ -42,10 +48,17 @@ Notes on algorithm design
   *different* injected periods (so each survives deduplication), plus one
   clearly discrepant period.
 
-* ``consensus_success=False`` can only be produced by the current algorithm
-  when **all** bands fail the pre-LS sampling quality gate (too few points,
-  excessive gap fraction, etc.).  Test 5 deliberately uses this path, with
-  genuinely inconsistent injected periods to motivate the failure.
+* ``consensus_success=False`` can be produced in two ways:
+
+  1. **All bands fail pre-LS quality gating** (too few points, excessive
+     gap fraction, etc.).  Test 5 uses this path explicitly.
+
+  2. **Too few inlier bands survive outlier rejection** — i.e., the
+     accepted bands do not cluster around a common frequency.  The
+     ``min_consensus_inliers`` parameter in
+     :meth:`~pgmuvi.lightcurve.Lightcurve.fit` (consensus mode) controls
+     this threshold.  Test 6 exercises this path with four adequately
+     sampled bands at mutually inconsistent periods.
 """
 
 from __future__ import annotations
@@ -144,6 +157,7 @@ def run_public_consensus_fit(
     min_points_per_band=None,
     max_gap_fraction=None,
     min_duty_cycle=None,
+    min_consensus_inliers=None,
 ):
     """Run consensus via the public ``lc.fit(fit_strategy="consensus", ...)`` path.
 
@@ -165,6 +179,10 @@ def run_public_consensus_fit(
         Maximum allowed largest-gap fraction per band.
     min_duty_cycle : float, optional
         Minimum allowed duty-cycle estimate per band.
+    min_consensus_inliers : int, optional
+        Minimum number of bands that must survive outlier rejection and
+        cluster around a common frequency for consensus to succeed.  When
+        provided, overrides the default (``2``).
 
     Returns
     -------
@@ -174,7 +192,9 @@ def run_public_consensus_fit(
     Raises
     ------
     RuntimeError
-        Re-raised from ``lc.fit`` when all bands fail quality gating.
+        Re-raised from ``lc.fit`` when all bands fail quality gating or
+        when fewer than ``min_consensus_inliers`` bands form a consistent
+        inlier cluster.
     """
     kwargs: dict = {
         "fit_strategy": "consensus",
@@ -194,6 +214,8 @@ def run_public_consensus_fit(
         kwargs["max_gap_fraction"] = float(max_gap_fraction)
     if min_duty_cycle is not None:
         kwargs["min_duty_cycle"] = float(min_duty_cycle)
+    if min_consensus_inliers is not None:
+        kwargs["min_consensus_inliers"] = int(min_consensus_inliers)
 
     lc.fit(**kwargs)
     return lc.consensus_diagnostics
@@ -536,6 +558,101 @@ class TestConsensusScientificRegression(unittest.TestCase):
             0,
             "rejection_reasons must be non-empty when all bands are rejected",
         )
+        assert_valid_consensus_diagnostics(self, lc, diagnostics)
+
+    # ------------------------------------------------------------------
+    # Test 6: no-consensus via genuinely inconsistent periods
+    # ------------------------------------------------------------------
+
+    def test_no_consensus_inconsistent_periods(self):
+        """Adequately sampled but mutually inconsistent periods → no consensus.
+
+        Algorithm note
+        --------------
+        Four bands are each given enough points to pass pre-LS quality gating
+        (60 pts over 220 days), but their injected periods are mutually
+        inconsistent (18, 31, 47, 73 days).  With ``outlier_sigma=1.5`` the
+        sigma-clipping removes the highest-frequency outlier (band 'g',
+        period 18 days), leaving 3 inliers.  Setting
+        ``min_consensus_inliers=4`` requires all 4 bands to cluster — a
+        condition that cannot be met here — so the consensus pipeline returns
+        ``consensus_success=False`` via the insufficient-inliers guard, rather
+        than silently reporting the median of inconsistent frequencies as a
+        valid result.
+
+        Theoretical verification
+        ~~~~~~~~~~~~~~~~~~~~~~~~
+        Frequencies: 1/73≈0.0137, 1/47≈0.0213, 1/31≈0.0323, 1/18≈0.0556
+        Median ≈ 0.0268; robust σ ≈ 0.0138.
+        Outlier threshold (σ=1.5) ≈ 0.0206.
+        Only 1/18 (deviation ≈ 0.0288 > 0.0206) is clipped → 3 inliers.
+        3 inliers < min_consensus_inliers=4 → failure.
+
+        Injected periods  : 18, 31, 47, 73 days
+        Sample count      : 60 per band
+        outlier_sigma     : 1.5
+        min_consensus_inliers : 4
+
+        Expected behaviour
+        ------------------
+        * ``lc.fit(...)`` raises ``RuntimeError``.
+        * ``lc.consensus_diagnostics["consensus_success"]`` is ``False``.
+        * ``final_consensus_frequency`` is ``None``.
+        * ``final_consensus_period`` is ``None``.
+        * ``consensus_outlier_bands`` is non-empty (the sigma-clipped band).
+        * ``accepted_bands`` is non-empty (all 4 bands passed quality gating).
+        * ``trusted_candidate_count`` < ``min_consensus_inliers``.
+        * Finalized failure diagnostics pass schema validation.
+        """
+        lc = _make_multiband_lightcurve(
+            {"g": 18.0, "r": 31.0, "i": 47.0, "z": 73.0},
+            noise_std=0.01,
+            seed=77,
+        )
+
+        # lc.fit raises RuntimeError via the insufficient-inliers guard.
+        # lc.consensus_diagnostics is set before the error, so it is
+        # accessible after the assertRaises block.
+        with self.assertRaises(RuntimeError):
+            run_public_consensus_fit(
+                lc,
+                outlier_sigma=1.5,
+                min_consensus_inliers=4,
+            )
+
+        diagnostics = lc.consensus_diagnostics
+
+        # Core invariants
+        self.assertFalse(diagnostics["consensus_success"])
+        self.assertIsNone(diagnostics["final_consensus_frequency"])
+        self.assertIsNone(diagnostics["final_consensus_period"])
+
+        # Bands passed quality gating but not the inlier-cluster requirement.
+        self.assertGreater(
+            len(diagnostics["accepted_bands"]),
+            0,
+            "accepted_bands must be non-empty: bands passed quality gating",
+        )
+
+        # Outlier rejection must have run (consensus_outlier_bands populated).
+        self.assertGreater(
+            len(diagnostics.get("consensus_outlier_bands", [])),
+            0,
+            "consensus_outlier_bands must be non-empty: outlier rejection ran",
+        )
+
+        # trusted_candidate_count must be below the required threshold.
+        trusted = diagnostics.get("trusted_candidate_count")
+        self.assertIsNotNone(
+            trusted,
+            "trusted_candidate_count must be set in failure diagnostics",
+        )
+        self.assertLess(
+            trusted,
+            4,
+            "trusted_candidate_count must be < min_consensus_inliers (4)",
+        )
+
         assert_valid_consensus_diagnostics(self, lc, diagnostics)
 
 
