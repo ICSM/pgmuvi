@@ -11,6 +11,7 @@ import sys
 
 from pgmuvi.upload_validation import (
     UPLOAD_VALIDATION_SENTINEL,
+    resolve_latest_uploaded_files,
     validate_uploaded_file_selection,
 )
 
@@ -25,7 +26,7 @@ def _extract_version(path):
     return match.group("version")
 
 
-def _build_records(paths, logical_name, sentinel):
+def _build_records(paths, logical_name):
     records = []
     for path in sorted(paths):
         stat_result = os.stat(path)
@@ -34,7 +35,7 @@ def _build_records(paths, logical_name, sentinel):
             "file_path": path,
             "revision": int(stat_result.st_mtime_ns),
             "uploaded_at": int(stat_result.st_mtime_ns),
-            "sentinel": sentinel,
+            "sentinel": UPLOAD_VALIDATION_SENTINEL,
         })
     return records
 
@@ -64,14 +65,21 @@ def main():
         raise RuntimeError("Expected both wheel and sdist artifacts in dist directory.")
 
     records = []
-    records.extend(_build_records(wheel_paths, "wheel", sentinel_value))
-    records.extend(_build_records(sdist_paths, "sdist", sentinel_value))
+    records.extend(_build_records(wheel_paths, "wheel"))
+    records.extend(_build_records(sdist_paths, "sdist"))
 
-    selected = {
-        "wheel": max(wheel_paths, key=lambda p: os.stat(p).st_mtime_ns),
-        "sdist": max(sdist_paths, key=lambda p: os.stat(p).st_mtime_ns),
-    }
-    validate_uploaded_file_selection(records, selected, allow_duplicates=False)
+    latest = resolve_latest_uploaded_files(records)
+    try:
+        selected = {
+            "wheel": latest["wheel"].file_path,
+            "sdist": latest["sdist"].file_path,
+        }
+    except KeyError as exc:
+        missing = exc.args[0]
+        raise RuntimeError(
+            f"Missing latest uploaded artifact for logical name {missing!r}."
+        ) from exc
+    validate_uploaded_file_selection(records, selected, allow_duplicates=True)
 
     for path in selected.values():
         version = _extract_version(path)
