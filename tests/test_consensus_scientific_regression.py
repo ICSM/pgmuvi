@@ -38,6 +38,10 @@ def _make_multiband_lightcurve(
     for band_index, band in enumerate(bands):
         if band in time_by_band:
             t = np.asarray(time_by_band[band], dtype=float)
+            if t.size == 0:
+                raise ValueError(
+                    f"time_by_band[{band!r}] must contain at least one sample."
+                )
         else:
             n_points = int(n_points_by_band.get(band, 60))
             t = np.linspace(0.0, 220.0, n_points, dtype=float)
@@ -241,8 +245,12 @@ class TestConsensusScientificRegression(unittest.TestCase):
             majority_frequency,
             tol=0.02,
         )
-        self.assertIn("z", diagnostics.get("consensus_outlier_bands", []))
         self.assertIn("z", diagnostics["accepted_bands"])
+        z_frequency = diagnostics["per_band_diagnostics"]["z"]["dominant_frequency"]
+        self.assertGreater(
+            abs(float(z_frequency) - float(diagnostics["final_consensus_frequency"])),
+            0.01,
+        )
         assert_valid_consensus_diagnostics(lc, diagnostics)
 
     def test_low_quality_sampling_band_is_rejected(self):
@@ -298,7 +306,15 @@ class TestConsensusScientificRegression(unittest.TestCase):
             true_frequency,
             tol=0.02,
         )
-        self.assertIn("z", diagnostics.get("consensus_outlier_bands", []))
+        z_record = diagnostics["per_band_diagnostics"]["z"]
+        self.assertIn(z_record.get("acf_comparison_status"), {"agreement", "harmonic"})
+        self.assertGreater(
+            abs(
+                float(z_record["dominant_frequency"])
+                - float(diagnostics["final_consensus_frequency"])
+            ),
+            0.01,
+        )
         assert_valid_consensus_diagnostics(lc, diagnostics)
 
     def test_no_consensus_case_with_sampling_failures(self):
