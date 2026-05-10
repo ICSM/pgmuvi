@@ -191,10 +191,10 @@ def run_public_consensus_fit(
 
     Raises
     ------
-    RuntimeError
-        Re-raised from ``lc.fit`` when all bands fail quality gating or
-        when fewer than ``min_consensus_inliers`` bands form a consistent
-        inlier cluster.
+    ConsensusFitError
+        Raised (as a subclass of ``RuntimeError``) from ``lc.fit`` when all
+        bands fail quality gating or when fewer than ``min_consensus_inliers``
+        bands form a consistent inlier cluster.
     """
     kwargs: dict = {
         "fit_strategy": "consensus",
