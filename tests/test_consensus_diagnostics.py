@@ -74,40 +74,31 @@ def _make_band_record(
     rejection_reasons=None,
     band_status="accepted",
 ):
-    """Return a band record that satisfies _CONSENSUS_REQUIRED_BAND_KEYS."""
-    record = {
-        "band": band,
-        "status": band_status,
-        "rejection_reason": None,
-        "rejection_reasons": rejection_reasons if rejection_reasons is not None else [],
-        "metrics": None,
-        "dominant_frequency": None,
-        "dominant_period": None,
-        "ls_significant": None,
-        "ls_peak_power": None,
-        "ls_peak_prominence": None,
-        "ls_peak_area_fraction": None,
-        "acf_frequency": None,
-        "acf_period": None,
-        "acf_supported": None,
-        "acf_comparison_status": None,
-        "acf_period_ratio": None,
-        "acf_harmonic_order": None,
-        "acf_error": None,
-        "selected_from": None,
-        "gp_validation_used": False,
-        "gp_dominant_frequency": None,
-        "gp_dominant_period": None,
-        "gp_frequency_difference": None,
-        "gp_fractional_frequency_difference": None,
-        "gp_frequency_tolerance": None,
-        "gp_validation_error": None,
-        "gp_validation_status": status,
-        "gp_validation_reason": reason,
-    }
-    if record["rejection_reasons"]:
-        record["rejection_reason"] = record["rejection_reasons"][0]
+    """Return a band record derived from the canonical schema machinery.
+
+    Uses ``_consensus_initialize_band_record`` as the base so that future
+    schema changes propagate automatically into the test fixtures.  Only
+    the minimal overrides needed for the specific test scenario are applied:
+    GP-validation status/reason, band status, and rejection bookkeeping.
+
+    GP-validation fields are set directly (bypassing the helper) so that
+    intentionally-invalid combinations used by validator tests are not
+    rejected here.
+    """
+    record = _make_minimal_lc()._consensus_initialize_band_record(band)
+    # Override GP-validation fields directly to allow invalid combos that
+    # are intentionally constructed to exercise the validator.
+    record["gp_validation_status"] = status
+    record["gp_validation_reason"] = reason
+    # Override band-status and rejection bookkeeping fields.
+    actual_reasons = rejection_reasons if rejection_reasons is not None else []
+    record["rejection_reasons"] = list(actual_reasons)
+    if actual_reasons:
+        record["rejection_reason"] = actual_reasons[0]
         record["status"] = BAND_STATUS_REJECTED
+    else:
+        record["rejection_reason"] = None
+        record["status"] = band_status
     return record
 
 
