@@ -137,7 +137,6 @@ class ConsensusFitError(RuntimeError):
             if failure_diagnostics is not None
             else {"status": "failed"}
         )
-        self.failure_summary = None
 
 
 _CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
