@@ -191,10 +191,17 @@ def run_public_consensus_fit(
 
     Raises
     ------
+<<<<<<< HEAD
     ConsensusFitError
         Raised (as a subclass of ``RuntimeError``) from ``lc.fit`` when all
         bands fail quality gating or when fewer than ``min_consensus_inliers``
         bands form a consistent inlier cluster.
+=======
+    RuntimeError
+        Re-raised from ``lc.fit`` when all bands fail quality gating or
+        when fewer than ``min_consensus_inliers`` bands form a consistent
+        inlier cluster.
+>>>>>>> 4ef607d (fix: add min_consensus_inliers guard for mutually inconsistent periods)
     """
     kwargs: dict = {
         "fit_strategy": "consensus",
@@ -592,11 +599,15 @@ class TestConsensusScientificRegression(unittest.TestCase):
 
         Expected behaviour
         ------------------
+<<<<<<< HEAD
         * ``lc.fit(...)`` raises :class:`ConsensusFitError` (a subclass of
           ``RuntimeError``) with ``reason="insufficient_consensus_inliers"``.
         * The exception's ``failure_diagnostics`` contains structured data:
           ``n_inlier_bands``, ``required_inliers``, ``n_candidate_bands``,
           ``candidate_periods``.
+=======
+        * ``lc.fit(...)`` raises ``RuntimeError``.
+>>>>>>> 4ef607d (fix: add min_consensus_inliers guard for mutually inconsistent periods)
         * ``lc.consensus_diagnostics["consensus_success"]`` is ``False``.
         * ``final_consensus_frequency`` is ``None``.
         * ``final_consensus_period`` is ``None``.
@@ -611,16 +622,24 @@ class TestConsensusScientificRegression(unittest.TestCase):
             seed=77,
         )
 
+<<<<<<< HEAD
         # lc.fit raises ConsensusFitError (subclass of RuntimeError) via the
         # insufficient-inliers guard.  lc.consensus_diagnostics is set before
         # the error, so it is accessible after the assertRaises block.
         with self.assertRaises(ConsensusFitError) as cm:
+=======
+        # lc.fit raises RuntimeError via the insufficient-inliers guard.
+        # lc.consensus_diagnostics is set before the error, so it is
+        # accessible after the assertRaises block.
+        with self.assertRaises(RuntimeError):
+>>>>>>> 4ef607d (fix: add min_consensus_inliers guard for mutually inconsistent periods)
             run_public_consensus_fit(
                 lc,
                 outlier_sigma=1.5,
                 min_consensus_inliers=4,
             )
 
+<<<<<<< HEAD
         exc = cm.exception
         self.assertIsInstance(exc, RuntimeError)
         fd = exc.failure_diagnostics
@@ -632,6 +651,8 @@ class TestConsensusScientificRegression(unittest.TestCase):
         self.assertIn("candidate_periods", fd)
         self.assertIsInstance(fd["candidate_periods"], list)
 
+=======
+>>>>>>> 4ef607d (fix: add min_consensus_inliers guard for mutually inconsistent periods)
         diagnostics = lc.consensus_diagnostics
 
         # Core invariants

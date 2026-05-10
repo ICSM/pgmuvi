@@ -12532,8 +12532,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               Minimum number of original (pre-deduplication) photometric bands
               that must lie within the inlier frequency window for the
               consensus to be accepted.  When fewer bands agree, the fit
-              raises :class:`ConsensusFitError` and
-              ``consensus_success`` is ``False``.
+              raises ``RuntimeError`` and ``consensus_success`` is ``False``.
               This guards against spurious consensus frequencies when all
               accepted bands have mutually inconsistent periods.
             - ``use_gp_validation`` : bool, default ``False``
@@ -12798,27 +12797,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self.consensus_diagnostics = (
                     self._consensus_finalize_result_structure(result_diagnostics)
                 )
-                _cand_periods = [
-                    (float(1.0 / f) if f and f > 0 else None)
-                    for f in consensus_diag.get("frequencies_all", [])
-                ]
-                raise ConsensusFitError(
-                    f"Consensus fit failed: the inferred periods are mutually "
-                    f"inconsistent across bands. Only {n_found} band(s) "
-                    f"clustered around a common frequency after outlier "
-                    f"rejection, but {n_req} are required. The bands do not "
-                    "support a coherent shared period — this is a data-quality "
-                    "issue, not a software error.",
-                    failure_diagnostics={
-                        "status": "failed",
-                        "reason": "insufficient_consensus_inliers",
-                        "n_inlier_bands": n_found,
-                        "required_inliers": n_req,
-                        "n_candidate_bands": len(
-                            consensus_diag.get("frequencies_all", [])
-                        ),
-                        "candidate_periods": _cand_periods,
-                    },
+                raise RuntimeError(
+                    f"Consensus construction failed: insufficient number of "
+                    f"consistent inlier bands ({n_found} found, {n_req} "
+                    f"required). The accepted bands do not cluster around a "
+                    "common frequency."
                 )
 
             final_consensus_frequency = float(
