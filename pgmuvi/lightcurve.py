@@ -130,6 +130,7 @@ class ConsensusFitError(RuntimeError):
             if failure_diagnostics is not None
             else {"status": "failed"}
         )
+        self.failure_summary = None
 
 
 _CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
@@ -2167,6 +2168,63 @@ class PeriodSummaryResult:
             json.dump(data, fh, indent=2, allow_nan=False)
 
 
+class FitFailureSummary:
+    """Lightweight structured summary for failed fit attempts."""
+
+    def __init__(self, status="failed", reason=None, message="", diagnostics=None):
+        self.status = status
+        self.reason = reason
+        self.message = message
+        self.diagnostics = dict(diagnostics or {})
+
+    def _json_serialize(self, obj):
+        if obj is None or isinstance(obj, (bool, str, int)):
+            return obj
+        if isinstance(obj, float):
+            return None if not math.isfinite(obj) else obj
+        if isinstance(obj, dict):
+            return {str(k): self._json_serialize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._json_serialize(item) for item in obj]
+        if isinstance(obj, np.ndarray):
+            return self._json_serialize(obj.tolist())
+        if isinstance(obj, np.floating):
+            scalar = obj.item()
+            return None if not math.isfinite(scalar) else scalar
+        if isinstance(obj, np.integer):
+            return obj.item()
+        raise TypeError(
+            f"Cannot JSON-serialize object of type {type(obj).__name__}"
+        )
+
+    def to_dict(self):
+        return self._json_serialize(
+            {
+                "status": self.status,
+                "reason": self.reason,
+                "message": self.message,
+                "diagnostics": self.diagnostics,
+            }
+        )
+
+    def to_text(self):
+        lines = [
+            "FIT FAILURE SUMMARY",
+            "===================",
+            f"Status : {self.status}",
+            f"Reason : {self.reason or 'N/A'}",
+            f"Message: {self.message or 'N/A'}",
+        ]
+        if self.diagnostics:
+            lines.append("Diagnostics:")
+            for key in sorted(self.diagnostics):
+                lines.append(f"  - {key}: {self.to_dict()['diagnostics'].get(key)}")
+        return "\n".join(lines)
+
+    def write_json(self, filename):
+        with open(filename, "w", encoding="utf-8") as fh:
+            json.dump(self.to_dict(), fh, indent=2, allow_nan=False)
+
 class Lightcurve(InputHelpers, gpytorch.Module):
     """A class for storing, manipulating and fitting light curves
 
@@ -2397,6 +2455,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.__PRIORS_SET = False
         self.__FITTED_MAP = False
         self.__FITTED_MCMC = False
+        self.is_fitted = False
+        self.fit_failed = False
+        self.failure_reason = None
+        self.failure_diagnostics = None
+        self.failure_summary = None
 
         # ------------------------------------------------------------------
         # Sampling quality check
@@ -3195,6 +3258,116 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             name=self.name,
             band=new_band,
         )
+
+    def _reset_fit_state(
+        self,
+        *,
+        clear_failure=False,
+        clear_model_state=False,
+        clear_consensus=False,
+    ):
+        """Reset cached fit artifacts to prevent stale-state leakage."""
+        self.__FITTED_MAP = False
+        self.__FITTED_MCMC = False
+        self.is_fitted = False
+        self.gp_model = None
+
+        for attr_name in (
+            "results",
+            "mcmc_results",
+            "posterior_samples",
+            "x_fine_transformed",
+            "expanded_test_x",
+            "consensus_failure_summary",
+            "_period_summary_cache",
+            "_last_consensus_fit_info",
+            "optimizer",
+        ):
+            if hasattr(self, attr_name):
+                setattr(self, attr_name, None)
+
+        if clear_consensus and hasattr(self, "consensus_diagnostics"):
+            self.consensus_diagnostics = None
+
+        if clear_model_state:
+            for attr_name in ("model", "likelihood", "_model_pars"):
+                if hasattr(self, attr_name):
+                    setattr(self, attr_name, None)
+
+        if clear_failure:
+            self.fit_failed = False
+            self.failure_reason = None
+            self.failure_diagnostics = None
+            self.failure_summary = None
+
+    def _record_failure_state(
+        self,
+        *,
+        reason,
+        message,
+        diagnostics=None,
+        clear_model_state=False,
+        clear_consensus=False,
+    ):
+        """Set canonical failed-fit state and return a failure summary object."""
+        _diagnostics = self._consensus_make_json_safe(dict(diagnostics or {}))
+        _diagnostics.setdefault("status", "failed")
+        _diagnostics.setdefault("reason", reason)
+
+        self._reset_fit_state(
+            clear_failure=False,
+            clear_model_state=clear_model_state,
+            clear_consensus=clear_consensus,
+        )
+        self.fit_failed = True
+        self.is_fitted = False
+        self.failure_reason = reason
+        self.failure_diagnostics = _diagnostics
+        self.failure_summary = FitFailureSummary(
+            status="failed",
+            reason=reason,
+            message=message,
+            diagnostics=_diagnostics,
+        )
+        self.consensus_failure_summary = self.failure_summary
+        return self.failure_summary
+
+    def get_failure_summary(self):
+        """Return the most recent failure summary object, if available."""
+        return self.failure_summary
+
+    def _raise_if_fit_failed(self, action_message):
+        """Raise a clean error for plot/summary requests after fit failure."""
+        if not self.fit_failed:
+            return
+
+        _base_message = (
+            "Cannot generate "
+            f"{action_message}: the most recent consensus fit failed"
+        )
+        _reason_messages = {
+            "no_accepted_bands": "because the bands did not support a common periodicity.",
+            "insufficient_consensus_inliers": (
+                "because too few reliable bands survived the consensus filtering stage."
+            ),
+            "frequency_aggregation_error": (
+                "because robust frequency aggregation could not build a stable consensus."
+            ),
+            "invalid_consensus_frequency": (
+                "because the inferred consensus frequency was not physically valid."
+            ),
+        }
+        _tail = _reason_messages.get(
+            self.failure_reason,
+            "because the data did not support a coherent shared period.",
+        )
+        _message = f"{_base_message} {_tail}"
+        exc = ConsensusFitError(
+            _message,
+            failure_diagnostics=self.failure_diagnostics or {"status": "failed"},
+        )
+        exc.failure_summary = self.failure_summary
+        raise exc
 
     def transform_x(self, values):
         if self.xtransform is None:
@@ -6301,6 +6474,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # mutation (MLS init / fallback default).  Used later to decide
         # whether to substitute the stored _model_num_mixtures.
         _num_mixtures_arg = num_mixtures
+        _skip_fit_state_reset = bool(kwargs.pop("_skip_fit_state_reset", False))
+        if not _skip_fit_state_reset:
+            self._reset_fit_state(
+                clear_failure=True,
+                clear_model_state=False,
+                clear_consensus=bool(fit_strategy is not None),
+            )
 
         # Dispatch alternative fit strategies before any stateful setup from
         # the default/general fit pathway mutates this Lightcurve instance.
@@ -6806,6 +6986,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 stopavg=stopavg,
             )
         self.__FITTED_MAP = True
+        self.is_fitted = True
+        self.fit_failed = False
+        self.failure_reason = None
+        self.failure_diagnostics = None
+        self.failure_summary = None
 
         return self.results
 
