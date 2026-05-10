@@ -1,6 +1,9 @@
 import contextlib
 import csv
+import copy
+import datetime
 from pathlib import Path
+import time
 from typing import ClassVar
 import numpy as np
 import torch
@@ -2460,6 +2463,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.failure_reason = None
         self.failure_diagnostics = None
         self.failure_summary = None
+        self.fit_history = []
 
         # ------------------------------------------------------------------
         # Sampling quality check
@@ -3259,6 +3263,156 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band=new_band,
         )
 
+    @staticmethod
+    def _sanitize_fit_history_value(value):
+        """Return a JSON-safe value for fit-history bookkeeping."""
+        if value is None:
+            return None
+        if isinstance(value, bool | int | str):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if isinstance(value, np.generic):
+            return Lightcurve._sanitize_fit_history_value(value.item())
+        if isinstance(value, np.ndarray):
+            return [
+                Lightcurve._sanitize_fit_history_value(item)
+                for item in value.tolist()
+            ]
+        if torch.is_tensor(value):
+            if value.numel() == 1:
+                return Lightcurve._sanitize_fit_history_value(value.item())
+            return Lightcurve._sanitize_fit_history_value(
+                value.detach().cpu().tolist()
+            )
+        if isinstance(value, dict):
+            return {
+                str(key): Lightcurve._sanitize_fit_history_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list | tuple | set):
+            return [Lightcurve._sanitize_fit_history_value(item) for item in value]
+        try:
+            candidate = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        return candidate if math.isfinite(candidate) else None
+
+    def _append_fit_history(
+        self,
+        *,
+        timestamp_utc=None,
+        model_class=None,
+        fit_strategy=None,
+        success=None,
+        failed=None,
+        exception_type=None,
+        exception_message=None,
+        training_iter=None,
+        num_mixtures=None,
+        elapsed_seconds=None,
+        backend=None,
+        notes=None,
+    ):
+        """Append a JSON-safe fit-history entry.
+
+        This helper is intentionally defensive and must never raise.
+        """
+        try:
+            if not hasattr(self, "fit_history") or not isinstance(
+                self.fit_history, list
+            ):
+                self.fit_history = []
+
+            _context = getattr(self, "_fit_history_context", {})
+            if not isinstance(_context, dict):
+                _context = {}
+
+            if timestamp_utc is None:
+                timestamp_utc = datetime.datetime.now(
+                    datetime.UTC
+                ).isoformat()
+
+            _entry = {
+                "timestamp_utc": timestamp_utc,
+                "model_class": (
+                    model_class
+                    if model_class is not None
+                    else _context.get("model_class")
+                ),
+                "fit_strategy": (
+                    fit_strategy
+                    if fit_strategy is not None
+                    else _context.get("fit_strategy")
+                ),
+                "success": success,
+                "failed": failed,
+                "exception_type": exception_type,
+                "exception_message": exception_message,
+                "training_iter": (
+                    training_iter
+                    if training_iter is not None
+                    else _context.get("training_iter")
+                ),
+                "num_mixtures": (
+                    num_mixtures
+                    if num_mixtures is not None
+                    else _context.get("num_mixtures")
+                ),
+                "elapsed_seconds": elapsed_seconds,
+                "backend": (
+                    backend if backend is not None else _context.get("backend")
+                ),
+                "notes": notes,
+            }
+
+            _entry = {
+                key: self._sanitize_fit_history_value(val)
+                for key, val in _entry.items()
+            }
+            self.fit_history.append(_entry)
+        except Exception:
+            return
+
+    def get_fit_history(self):
+        """Return a deep copy of fit-history entries."""
+        if not hasattr(self, "fit_history") or not isinstance(self.fit_history, list):
+            return []
+        return copy.deepcopy(self.fit_history)
+
+    def clear_fit_history(self):
+        """Clear all fit-history entries."""
+        if not hasattr(self, "fit_history") or not isinstance(self.fit_history, list):
+            self.fit_history = []
+            return
+        self.fit_history.clear()
+
+    def get_fit_history_summary(self):
+        """Return aggregate statistics for fit-history entries."""
+        _history = self.get_fit_history()
+        _total = len(_history)
+        _successful = sum(1 for entry in _history if entry.get("success") is True)
+        _failed = sum(1 for entry in _history if entry.get("failed") is True)
+        _success_fraction = (_successful / _total) if _total > 0 else 0.0
+
+        _last_success_ts = None
+        _last_failure_ts = None
+        for entry in _history:
+            _ts = entry.get("timestamp_utc")
+            if entry.get("success") is True:
+                _last_success_ts = _ts
+            if entry.get("failed") is True:
+                _last_failure_ts = _ts
+
+        return {
+            "total_attempts": _total,
+            "successful_fits": _successful,
+            "failed_fits": _failed,
+            "success_fraction": _success_fraction,
+            "last_success_timestamp": _last_success_ts,
+            "last_failure_timestamp": _last_failure_ts,
+        }
+
     def _reset_fit_state(
         self,
         *,
@@ -3330,6 +3484,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             diagnostics=_diagnostics,
         )
         self.consensus_failure_summary = self.failure_summary
+        self._append_fit_history(
+            success=False,
+            failed=True,
+            exception_type="ConsensusFitError",
+            exception_message=message,
+            notes={"reason": reason, "source": "_record_failure_state"},
+        )
+        self._fit_history_recorded = True
         return self.failure_summary
 
     def get_failure_summary(self):
@@ -3370,6 +3532,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             failure_diagnostics=self.failure_diagnostics or {"status": "failed"},
         )
         exc.failure_summary = self.failure_summary
+        self._append_fit_history(
+            success=False,
+            failed=True,
+            exception_type=exc.__class__.__name__,
+            exception_message=_message,
+            notes={
+                "reason": self.failure_reason,
+                "source": "_raise_if_fit_failed",
+                "action": action_message,
+            },
+        )
         raise exc
 
     def transform_x(self, values):
@@ -6266,7 +6439,74 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return model_str, diagnostics
 
-    def fit(
+    def fit(self, *args, **kwargs):
+        """Fit wrapper that records lightweight in-memory fit history."""
+        _fit_start = time.perf_counter()
+        _model_arg = kwargs.get("model")
+        _fit_strategy = kwargs.get("fit_strategy")
+        _training_iter = kwargs.get("training_iter")
+        _num_mixtures = kwargs.get("num_mixtures")
+        _backend = "cuda" if bool(kwargs.get("cuda", False)) else "cpu"
+
+        _model_class = None
+        if _model_arg is not None:
+            _model_class = (
+                _model_arg
+                if isinstance(_model_arg, str)
+                else _model_arg.__class__.__name__
+            )
+
+        self._fit_history_context = {
+            "model_class": _model_class,
+            "fit_strategy": _fit_strategy,
+            "training_iter": _training_iter,
+            "num_mixtures": _num_mixtures,
+            "backend": _backend,
+        }
+        self._fit_history_recorded = False
+
+        try:
+            result = self._fit_core(*args, **kwargs)
+        except Exception as exc:
+            if not bool(getattr(self, "_fit_history_recorded", False)):
+                self._append_fit_history(
+                    success=False,
+                    failed=True,
+                    exception_type=exc.__class__.__name__,
+                    exception_message=str(exc),
+                    elapsed_seconds=time.perf_counter() - _fit_start,
+                    notes={"source": "fit_exception"},
+                )
+            raise
+        else:
+            _model_obj = getattr(self, "model", None)
+            _resolved_model_class = (
+                _model_obj.__class__.__name__
+                if _model_obj is not None
+                else _model_class
+            )
+            _resolved_backend = (
+                "cuda"
+                if bool(getattr(self, "_cuda", False))
+                else _backend
+            )
+            self._append_fit_history(
+                model_class=_resolved_model_class,
+                fit_strategy=_fit_strategy,
+                success=True,
+                failed=False,
+                training_iter=_training_iter,
+                num_mixtures=_num_mixtures,
+                elapsed_seconds=time.perf_counter() - _fit_start,
+                backend=_resolved_backend,
+                notes={"source": "fit_success"},
+            )
+            self._fit_history_recorded = True
+            return result
+        finally:
+            self._fit_history_context = {}
+
+    def _fit_core(
         self,
         model=None,
         likelihood=None,
