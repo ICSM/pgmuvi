@@ -2,6 +2,8 @@ import contextlib
 import csv
 import copy
 import datetime
+import random
+import subprocess
 import sys
 from pathlib import Path
 import time
@@ -3299,8 +3301,127 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return Lightcurve._consensus_make_json_safe(value)
 
     @staticmethod
-    def _fit_history_environment_metadata():
-        """Return lightweight environment provenance for fit-history entries."""
+    def _fit_history_package_directory():
+        """Return the installed package directory used for provenance lookup."""
+        try:
+            return Path(__file__).resolve().parent
+        except Exception:
+            return None
+
+    @staticmethod
+    def _collect_git_provenance():
+        """Return best-effort git provenance for the installed package."""
+        provenance = {
+            "git_commit_hash": None,
+            "git_branch": None,
+            "git_dirty_worktree": None,
+            "git_remote_url": None,
+        }
+
+        def _run_git_command(args, cwd):
+            try:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=str(cwd),
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                    check=False,
+                )
+            except Exception:
+                return None
+            if result.returncode != 0:
+                return None
+            return result.stdout.strip() or None
+
+        try:
+            package_dir = Lightcurve._fit_history_package_directory()
+            if package_dir is None:
+                return provenance
+
+            repo_root = _run_git_command(["rev-parse", "--show-toplevel"], package_dir)
+            if repo_root is None:
+                return provenance
+
+            repo_root_path = Path(repo_root)
+            provenance["git_commit_hash"] = _run_git_command(
+                ["rev-parse", "HEAD"],
+                repo_root_path,
+            )
+            provenance["git_branch"] = _run_git_command(
+                ["rev-parse", "--abbrev-ref", "HEAD"],
+                repo_root_path,
+            )
+            _dirty = _run_git_command(
+                ["status", "--porcelain"],
+                repo_root_path,
+            )
+            provenance["git_dirty_worktree"] = (
+                bool(_dirty) if _dirty is not None else None
+            )
+            provenance["git_remote_url"] = _run_git_command(
+                ["config", "--get", "remote.origin.url"],
+                repo_root_path,
+            )
+        except Exception:
+            return provenance
+        return provenance
+
+    @staticmethod
+    def _collect_rng_provenance():
+        """Return best-effort RNG and determinism provenance."""
+        provenance = {
+            "numpy_random_seed": None,
+            "torch_random_seed": None,
+            "python_random_seed": None,
+            "torch_deterministic_algorithms": None,
+            "torch_cudnn_deterministic": None,
+            "torch_cudnn_benchmark": None,
+        }
+
+        try:
+            _np_state = np.random.get_state()
+            if len(_np_state) > 1 and len(_np_state[1]) > 0:
+                provenance["numpy_random_seed"] = int(_np_state[1][0])
+        except Exception:
+            pass
+
+        try:
+            _py_state = random.getstate()
+            if len(_py_state) > 1 and len(_py_state[1]) > 0:
+                provenance["python_random_seed"] = int(_py_state[1][0])
+        except Exception:
+            pass
+
+        try:
+            provenance["torch_random_seed"] = int(torch.initial_seed())
+        except Exception:
+            pass
+
+        try:
+            provenance["torch_deterministic_algorithms"] = bool(
+                torch.are_deterministic_algorithms_enabled()
+            )
+        except Exception:
+            pass
+
+        try:
+            provenance["torch_cudnn_deterministic"] = bool(
+                torch.backends.cudnn.deterministic
+            )
+        except Exception:
+            pass
+
+        try:
+            provenance["torch_cudnn_benchmark"] = bool(torch.backends.cudnn.benchmark)
+        except Exception:
+            pass
+
+        return provenance
+
+    @staticmethod
+    def _collect_environment_provenance():
+        """Return consolidated environment provenance for fit-history entries."""
         env = {"python_version": sys.version.split()[0]}
         try:
             from . import __version__ as _pgmuvi_version
@@ -3318,10 +3439,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         else:
             env["gpytorch_version"] = None
 
-        return {
-            str(key): Lightcurve._sanitize_fit_history_value(val)
-            for key, val in env.items()
-        }
+        env["git"] = Lightcurve._collect_git_provenance()
+        env["rng"] = Lightcurve._collect_rng_provenance()
+        return env
+
+    @staticmethod
+    def _fit_history_environment_metadata():
+        """Return lightweight environment provenance for fit-history entries."""
+        return Lightcurve._sanitize_fit_history_value(
+            Lightcurve._collect_environment_provenance()
+        )
 
     def _append_fit_history(
         self,
@@ -3393,6 +3520,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
             _entry = {
+                "fit_history_schema_version": 2,
                 "timestamp_utc": timestamp_utc,
                 "model_class": (
                     model_class
@@ -3981,6 +4109,47 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             f"model: {model}\n"
             f"runtime: {runtime_str}\n"
             f"timestamp: {timestamp}"
+        )
+
+    @staticmethod
+    def _fit_history_provenance_position(provenance_location="lower left"):
+        """Return axes-relative coordinates and alignment for provenance text."""
+        _positions = {
+            "lower left": (0.02, 0.02, "left", "bottom"),
+            "lower right": (0.98, 0.02, "right", "bottom"),
+            "upper left": (0.02, 0.98, "left", "top"),
+            "upper right": (0.98, 0.98, "right", "top"),
+        }
+        if provenance_location not in _positions:
+            raise ValueError(
+                "provenance_location must be one of "
+                "'lower left', 'lower right', 'upper left', 'upper right'."
+            )
+        return _positions[provenance_location]
+
+    def _plot_fit_history_provenance(
+        self,
+        ax,
+        *,
+        provenance_location="lower left",
+    ):
+        """Annotate an axes with compact fit-history provenance, if available."""
+        _prov = self._fit_history_plot_annotation_text()
+        if not _prov:
+            return None
+        _x, _y, _ha, _va = self._fit_history_provenance_position(
+            provenance_location=provenance_location
+        )
+        return ax.text(
+            _x,
+            _y,
+            _prov,
+            transform=ax.transAxes,
+            ha=_ha,
+            va=_va,
+            fontsize=7,
+            family="monospace",
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
         )
 
     def _reset_fit_state(
@@ -13914,6 +14083,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         log_y=True,
         close=False,
         annotate_provenance=False,
+        provenance_location="lower left",
         **kwargs,
     ):
         """Plot the period summary from :meth:`get_period_summary`.
@@ -13980,6 +14150,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If ``True``, annotate the plot with lightweight fit provenance
             (model, runtime, timestamp) from the most recent fit-history entry.
             Default is ``False``.
+        provenance_location : {"lower left", "lower right", "upper left",
+            "upper right"}, optional
+            Axes-relative location for provenance annotations when
+            ``annotate_provenance=True``. Default is ``"lower left"``.
         **kwargs
             Additional keyword arguments forwarded to
             :meth:`get_period_summary` when ``summary`` is ``None``.
@@ -14018,19 +14192,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.set_axis_off()
             ax.set_title("Period summary")
             if annotate_provenance:
-                _prov = self._fit_history_plot_annotation_text()
-                if _prov:
-                    ax.text(
-                        0.02,
-                        0.02,
-                        _prov,
-                        transform=ax.transAxes,
-                        ha="left",
-                        va="bottom",
-                        fontsize=7,
-                        family="monospace",
-                        bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
-                    )
+                self._plot_fit_history_provenance(
+                    ax,
+                    provenance_location=provenance_location,
+                )
             if show:
                 plt.show()
                 if close:
@@ -14333,19 +14498,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             fig.tight_layout()
             if annotate_provenance:
-                _prov = self._fit_history_plot_annotation_text()
-                if _prov:
-                    ax.text(
-                        0.02,
-                        0.02,
-                        _prov,
-                        transform=ax.transAxes,
-                        ha="left",
-                        va="bottom",
-                        fontsize=7,
-                        family="monospace",
-                        bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
-                    )
+                self._plot_fit_history_provenance(
+                    ax,
+                    provenance_location=provenance_location,
+                )
             if show:
                 plt.show()
                 return None
@@ -14467,19 +14623,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ax.set_title(f"Period summary ({method})")
         ax.legend(fontsize=8, loc="upper left")
         if annotate_provenance:
-            _prov = self._fit_history_plot_annotation_text()
-            if _prov:
-                ax.text(
-                    0.02,
-                    0.02,
-                    _prov,
-                    transform=ax.transAxes,
-                    ha="left",
-                    va="bottom",
-                    fontsize=7,
-                    family="monospace",
-                    bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
-                )
+            self._plot_fit_history_provenance(
+                ax,
+                provenance_location=provenance_location,
+            )
 
         if show:
             plt.show()
@@ -15251,6 +15398,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         mcmc_samples=False,
         n_pred=1000,
         annotate_provenance=False,
+        provenance_location="lower left",
         **kwargs,
     ):
         """Plot the model and data
@@ -15282,6 +15430,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         annotate_provenance : bool, optional
             If ``True``, annotate GP-fit plots with model/runtime/timestamp from
             the most recent fit-history entry. Default is ``False``.
+        provenance_location : {"lower left", "lower right", "upper left",
+            "upper right"}, optional
+            Axes-relative location for provenance annotations when
+            ``annotate_provenance=True``. Default is ``"lower left"``.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
 
@@ -15360,6 +15512,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     yscale=yscale,
                     show=show,
                     annotate_provenance=annotate_provenance,
+                    provenance_location=provenance_location,
                     **kwargs,
                 )
             else:
@@ -15369,6 +15522,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     yscale=yscale,
                     show=show,
                     annotate_provenance=annotate_provenance,
+                    provenance_location=provenance_location,
                     **kwargs,
                 )
         return fig
@@ -15587,6 +15741,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         show=False,
         save=True,
         annotate_provenance=False,
+        provenance_location="lower left",
         **kwargs,
     ):
         # transforming the x_fine_raw data to the space that the GP was
@@ -15649,19 +15804,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if current_ylim is not None:
             ax.set_ylim(current_ylim)
         if annotate_provenance:
-            _prov = self._fit_history_plot_annotation_text()
-            if _prov:
-                ax.text(
-                    0.02,
-                    0.02,
-                    _prov,
-                    transform=ax.transAxes,
-                    ha="left",
-                    va="bottom",
-                    fontsize=7,
-                    family="monospace",
-                    bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
-                )
+            self._plot_fit_history_provenance(
+                ax,
+                provenance_location=provenance_location,
+            )
         ax.legend()
         if save:
             plt.savefig(f"{self.name}_fit.png")
@@ -15677,6 +15823,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         show=False,
         save=True,
         annotate_provenance=False,
+        provenance_location="lower left",
         **kwargs,
     ):
         if self.xtransform is None:
@@ -15751,21 +15898,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if current_ylim is not None:
                 ax.set_ylim(current_ylim)
             if annotate_provenance:
-                _prov = self._fit_history_plot_annotation_text()
-                if _prov:
-                    ax.text(
-                        0.02,
-                        0.02,
-                        _prov,
-                        transform=ax.transAxes,
-                        ha="left",
-                        va="bottom",
-                        fontsize=7,
-                        family="monospace",
-                        bbox=dict(
-                            boxstyle="round,pad=0.2", fc="white", alpha=0.7
-                        ),
-                    )
+                self._plot_fit_history_provenance(
+                    ax,
+                    provenance_location=provenance_location,
+                )
 
             if save:
                 plt.savefig(f"{self.name}_{val}_fit.png")
