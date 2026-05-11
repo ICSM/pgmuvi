@@ -2,6 +2,7 @@ import contextlib
 import csv
 import copy
 import datetime
+import sys
 from pathlib import Path
 import time
 from typing import ClassVar
@@ -2160,12 +2161,23 @@ class PeriodSummaryResult:
             f"Cannot JSON-serialize object of type {type(obj).__name__}"
         )
 
-    def write_json(self, filename, include_psd=False):
+    def write_json(
+        self,
+        filename,
+        include_psd=False,
+        include_fit_history=False,
+        fit_history=None,
+    ):
+        """Write a JSON period summary with optional PSD and fit provenance."""
         d = self.as_dict()
         # Handle freq_grid/psd before general serialization: omit them
         # unless the caller explicitly requests PSD data.
         if not include_psd or d.get("freq_grid") is None:
             d = {**d, "freq_grid": None, "psd": None}
+        if include_fit_history:
+            d["fit_history"] = Lightcurve._sanitize_fit_history_value(
+                [] if fit_history is None else fit_history
+            )
         data = self._json_serialize(d)
         with open(filename, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, allow_nan=False)
@@ -2200,15 +2212,19 @@ class FitFailureSummary:
             f"Cannot JSON-serialize object of type {type(obj).__name__}"
         )
 
-    def to_dict(self):
-        return self._json_serialize(
-            {
-                "status": self.status,
-                "reason": self.reason,
-                "message": self.message,
-                "diagnostics": self.diagnostics,
-            }
-        )
+    def to_dict(self, include_fit_history=False, fit_history=None):
+        """Return a JSON-safe failure-summary dict with optional fit history."""
+        payload = {
+            "status": self.status,
+            "reason": self.reason,
+            "message": self.message,
+            "diagnostics": self.diagnostics,
+        }
+        if include_fit_history:
+            payload["fit_history"] = Lightcurve._sanitize_fit_history_value(
+                [] if fit_history is None else fit_history
+            )
+        return self._json_serialize(payload)
 
     def to_text(self):
         lines = [
@@ -2224,9 +2240,23 @@ class FitFailureSummary:
                 lines.append(f"  - {key}: {self.to_dict()['diagnostics'].get(key)}")
         return "\n".join(lines)
 
-    def write_json(self, filename):
+    def write_json(
+        self,
+        filename,
+        include_fit_history=False,
+        fit_history=None,
+    ):
+        """Write failure summary JSON with optional fit-history provenance."""
         with open(filename, "w", encoding="utf-8") as fh:
-            json.dump(self.to_dict(), fh, indent=2, allow_nan=False)
+            json.dump(
+                self.to_dict(
+                    include_fit_history=include_fit_history,
+                    fit_history=fit_history,
+                ),
+                fh,
+                indent=2,
+                allow_nan=False,
+            )
 
 class Lightcurve(InputHelpers, gpytorch.Module):
     """A class for storing, manipulating and fitting light curves
@@ -3266,37 +3296,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     @staticmethod
     def _sanitize_fit_history_value(value):
         """Return a JSON-safe value for fit-history bookkeeping."""
-        if value is None:
-            return None
-        if isinstance(value, bool | int | str):
-            return value
-        if isinstance(value, float):
-            return value if math.isfinite(value) else None
-        if isinstance(value, np.generic):
-            return Lightcurve._sanitize_fit_history_value(value.item())
-        if isinstance(value, np.ndarray):
-            return [
-                Lightcurve._sanitize_fit_history_value(item)
-                for item in value.tolist()
-            ]
-        if torch.is_tensor(value):
-            if value.numel() == 1:
-                return Lightcurve._sanitize_fit_history_value(value.item())
-            return Lightcurve._sanitize_fit_history_value(
-                value.detach().cpu().tolist()
-            )
-        if isinstance(value, dict):
-            return {
-                str(key): Lightcurve._sanitize_fit_history_value(item)
-                for key, item in value.items()
-            }
-        if isinstance(value, list | tuple | set):
-            return [Lightcurve._sanitize_fit_history_value(item) for item in value]
+        return Lightcurve._consensus_make_json_safe(value)
+
+    @staticmethod
+    def _fit_history_environment_metadata():
+        """Return lightweight environment provenance for fit-history entries."""
+        env = {"python_version": sys.version.split()[0]}
         try:
-            candidate = float(value)
-        except (TypeError, ValueError):
-            return str(value)
-        return candidate if math.isfinite(candidate) else None
+            from . import __version__ as _pgmuvi_version
+        except Exception:
+            _pgmuvi_version = None
+        env["pgmuvi_version"] = _pgmuvi_version
+
+        if "torch" in globals():
+            env["torch_version"] = getattr(torch, "__version__", None)
+        else:
+            env["torch_version"] = None
+
+        if "gpytorch" in globals():
+            env["gpytorch_version"] = getattr(gpytorch, "__version__", None)
+        else:
+            env["gpytorch_version"] = None
+
+        return {
+            str(key): Lightcurve._sanitize_fit_history_value(val)
+            for key, val in env.items()
+        }
 
     def _append_fit_history(
         self,
@@ -3312,6 +3337,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         num_mixtures=None,
         elapsed_seconds=None,
         backend=None,
+        constrained=None,
+        environment=None,
         notes=None,
     ):
         """Append a JSON-safe fit-history entry.
@@ -3363,6 +3390,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "backend": (
                     backend if backend is not None else _context.get("backend")
                 ),
+                "constrained": (
+                    constrained
+                    if constrained is not None
+                    else _context.get("constrained")
+                ),
+                "environment": (
+                    environment
+                    if environment is not None
+                    else _context.get(
+                        "environment", self._fit_history_environment_metadata()
+                    )
+                ),
                 "notes": notes,
             }
 
@@ -3397,12 +3436,84 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         _last_success_ts = None
         _last_failure_ts = None
+        _earliest_ts = None
+        _latest_ts = None
+        _runtime_seconds = []
+        _counts_by_backend = {}
+        _counts_by_model_class = {}
+        _counts_by_parameterization = {
+            "frequency_space": 0,
+            "period_space": 0,
+            "unknown": 0,
+        }
+        _counts_by_constraint_mode = {
+            "constrained": 0,
+            "unconstrained": 0,
+            "unknown": 0,
+        }
         for entry in _history:
             _ts = entry.get("timestamp_utc")
             if entry.get("success") is True:
                 _last_success_ts = _ts
             if entry.get("failed") is True:
                 _last_failure_ts = _ts
+
+            if isinstance(_ts, str):
+                try:
+                    _parsed = datetime.datetime.fromisoformat(_ts)
+                except ValueError:
+                    _parsed = None
+                if _parsed is not None:
+                    if _earliest_ts is None or _parsed < _earliest_ts:
+                        _earliest_ts = _parsed
+                    if _latest_ts is None or _parsed > _latest_ts:
+                        _latest_ts = _parsed
+
+            _elapsed = entry.get("elapsed_seconds")
+            if isinstance(_elapsed, int | float) and math.isfinite(float(_elapsed)):
+                _runtime_seconds.append(float(_elapsed))
+
+            _backend = str(entry.get("backend") or "unknown")
+            _counts_by_backend[_backend] = _counts_by_backend.get(_backend, 0) + 1
+
+            _model_class = str(entry.get("model_class") or "unknown")
+            _counts_by_model_class[_model_class] = (
+                _counts_by_model_class.get(_model_class, 0) + 1
+            )
+
+            _model_l = _model_class.lower()
+            _fit_strategy_l = str(entry.get("fit_strategy") or "").lower()
+            if (
+                "spectralmixture" in _model_l
+                or "separable" in _model_l
+                or _fit_strategy_l == "consensus"
+            ):
+                _param_space = "frequency_space"
+            elif "periodic" in _model_l or "quasiperiodic" in _model_l:
+                _param_space = "period_space"
+            else:
+                _param_space = "unknown"
+            _counts_by_parameterization[_param_space] += 1
+
+            _constrained = entry.get("constrained")
+            if _constrained is True:
+                _counts_by_constraint_mode["constrained"] += 1
+            elif _constrained is False:
+                _counts_by_constraint_mode["unconstrained"] += 1
+            else:
+                _counts_by_constraint_mode["unknown"] += 1
+
+        _total_runtime_seconds = float(sum(_runtime_seconds))
+        _mean_runtime_seconds = (
+            _total_runtime_seconds / len(_runtime_seconds)
+            if _runtime_seconds
+            else 0.0
+        )
+        _unique_bands = (
+            sorted({str(b) for b in np.asarray(self.band, dtype=np.str_)})
+            if self.band is not None
+            else []
+        )
 
         return {
             "total_attempts": _total,
@@ -3411,7 +3522,154 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "success_fraction": _success_fraction,
             "last_success_timestamp": _last_success_ts,
             "last_failure_timestamp": _last_failure_ts,
+            "counts_by_backend": _counts_by_backend,
+            "counts_by_model_class": _counts_by_model_class,
+            "counts_by_parameterization": _counts_by_parameterization,
+            "counts_by_constraint_mode": _counts_by_constraint_mode,
+            "total_runtime_seconds": _total_runtime_seconds,
+            "mean_runtime_seconds": _mean_runtime_seconds,
+            "earliest_timestamp": (
+                _earliest_ts.isoformat() if _earliest_ts is not None else None
+            ),
+            "latest_timestamp": (
+                _latest_ts.isoformat() if _latest_ts is not None else None
+            ),
+            "unique_bands_used": _unique_bands,
         }
+
+    @staticmethod
+    def _fit_history_abbreviate_message(message, max_len=56):
+        """Return a compact one-line failure reason for table display."""
+        if message is None:
+            return ""
+        text = " ".join(str(message).split())
+        if len(text) <= max_len:
+            return text
+        return f"{text[: max_len - 1]}…"
+
+    def fit_history_to_text(
+        self,
+        max_entries=None,
+        success_only=False,
+        failed_only=False,
+    ):
+        """Return a human-readable table of fit-history entries.
+
+        This helper is designed for notebook usage and concise run logs,
+        providing a quick provenance trail for scientific reproducibility.
+        """
+        if success_only and failed_only:
+            raise ValueError("success_only and failed_only cannot both be True.")
+        if max_entries is not None:
+            if isinstance(max_entries, bool) or not isinstance(
+                max_entries, (int, np.integer)
+            ):
+                raise ValueError("max_entries must be an integer or None.")
+            if int(max_entries) < 1:
+                raise ValueError("max_entries must be >= 1 when provided.")
+
+        history = self.get_fit_history()
+        if success_only:
+            history = [entry for entry in history if entry.get("success") is True]
+        if failed_only:
+            history = [entry for entry in history if entry.get("failed") is True]
+        if max_entries is not None:
+            history = history[-int(max_entries) :]
+
+        if not history:
+            return "No fit-history entries."
+
+        timestamp_w = 19
+        model_w = max(
+            12,
+            min(
+                28,
+                max(
+                    len(str(entry.get("model_class") or "N/A"))
+                    for entry in history
+                ),
+            ),
+        )
+        success_w = 7
+        runtime_w = 10
+        reason_w = 28
+
+        header = (
+            f"{'#':>3}  {'Timestamp':<{timestamp_w}}  {'Model':<{model_w}}  "
+            f"{'Success':<{success_w}}  {'Runtime(s)':>{runtime_w}}  "
+            f"{'Failure reason':<{reason_w}}"
+        )
+        sep = "-" * len(header)
+        lines = [sep, header, sep]
+
+        for idx, entry in enumerate(history, start=1):
+            timestamp = str(entry.get("timestamp_utc") or "N/A")[:timestamp_w]
+            model = str(entry.get("model_class") or "N/A")
+            model = model[:model_w]
+
+            success_val = entry.get("success")
+            if success_val is True:
+                success_str = "True"
+            elif success_val is False:
+                success_str = "False"
+            else:
+                success_str = "N/A"
+
+            elapsed = entry.get("elapsed_seconds")
+            if isinstance(elapsed, int | float) and math.isfinite(float(elapsed)):
+                runtime_str = f"{float(elapsed):.3g}"
+            else:
+                runtime_str = "N/A"
+
+            failure_reason = ""
+            if entry.get("failed") is True:
+                failure_reason = self._fit_history_abbreviate_message(
+                    entry.get("exception_message")
+                )
+            failure_reason = failure_reason[:reason_w]
+
+            lines.append(
+                f"{idx:>3}  {timestamp:<{timestamp_w}}  {model:<{model_w}}  "
+                f"{success_str:<{success_w}}  {runtime_str:>{runtime_w}}  "
+                f"{failure_reason:<{reason_w}}"
+            )
+
+        lines.append(sep)
+        return "\n".join(lines)
+
+    def print_fit_history(
+        self,
+        max_entries=None,
+        success_only=False,
+        failed_only=False,
+    ):
+        """Print a formatted fit-history table and return the rendered text."""
+        text = self.fit_history_to_text(
+            max_entries=max_entries,
+            success_only=success_only,
+            failed_only=failed_only,
+        )
+        print(text)
+        return text
+
+    def _fit_history_plot_annotation_text(self):
+        """Return a compact provenance string for optional plot annotations."""
+        history = self.get_fit_history()
+        if not history:
+            return ""
+        entry = history[-1]
+        model = str(entry.get("model_class") or "N/A")
+        timestamp = str(entry.get("timestamp_utc") or "N/A")
+        runtime = entry.get("elapsed_seconds")
+        if isinstance(runtime, int | float) and math.isfinite(float(runtime)):
+            runtime_str = f"{float(runtime):.3g}s"
+        else:
+            runtime_str = "N/A"
+        return (
+            f"model: {model}\n"
+            f"runtime: {runtime_str}\n"
+            f"timestamp: {timestamp}"
+        )
 
     def _reset_fit_state(
         self,
@@ -6459,6 +6717,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         _training_iter = kwargs.get("training_iter")
         _num_mixtures = kwargs.get("num_mixtures")
         _backend = "cuda" if bool(kwargs.get("cuda", False)) else "cpu"
+        _constraint_set = kwargs.get("constraint_set")
+        _constrain_consensus = kwargs.get("constrain_consensus")
+        if _constraint_set is not None or _constrain_consensus is True:
+            _constrained = True
+        elif _constrain_consensus is False:
+            _constrained = False
+        else:
+            _constrained = None
 
         _model_class = None
         if _model_arg is not None:
@@ -6474,6 +6740,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "training_iter": _training_iter,
             "num_mixtures": _num_mixtures,
             "backend": _backend,
+            "constrained": _constrained,
+            "environment": self._fit_history_environment_metadata(),
         }
         self._fit_history_recorded = False
 
@@ -6511,6 +6779,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 num_mixtures=_num_mixtures,
                 elapsed_seconds=time.perf_counter() - _fit_start,
                 backend=_resolved_backend,
+                constrained=_constrained,
                 notes={"source": "fit_success"},
             )
             self._fit_history_recorded = True
@@ -13267,6 +13536,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         max_peaks_to_mark=3,
         log_y=True,
         close=False,
+        annotate_provenance=False,
         **kwargs,
     ):
         """Plot the period summary from :meth:`get_period_summary`.
@@ -13329,6 +13599,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If True and show=True, close the figure immediately after displaying it.
             This is useful in notebooks or loops where many figures are generated.
             Ignored when show=False, because the figure is returned to the caller.
+        annotate_provenance : bool, optional
+            If ``True``, annotate the plot with lightweight fit provenance
+            (model, runtime, timestamp) from the most recent fit-history entry.
+            Default is ``False``.
         **kwargs
             Additional keyword arguments forwarded to
             :meth:`get_period_summary` when ``summary`` is ``None``.
@@ -13366,6 +13640,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             ax.set_axis_off()
             ax.set_title("Period summary")
+            if annotate_provenance:
+                _prov = self._fit_history_plot_annotation_text()
+                if _prov:
+                    ax.text(
+                        0.02,
+                        0.02,
+                        _prov,
+                        transform=ax.transAxes,
+                        ha="left",
+                        va="bottom",
+                        fontsize=7,
+                        family="monospace",
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
+                    )
             if show:
                 plt.show()
                 if close:
@@ -13667,6 +13955,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     )
 
             fig.tight_layout()
+            if annotate_provenance:
+                _prov = self._fit_history_plot_annotation_text()
+                if _prov:
+                    ax.text(
+                        0.02,
+                        0.02,
+                        _prov,
+                        transform=ax.transAxes,
+                        ha="left",
+                        va="bottom",
+                        fontsize=7,
+                        family="monospace",
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
+                    )
             if show:
                 plt.show()
                 return None
@@ -13787,6 +14089,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ax.set_ylabel("PSD" if has_psd else "")
         ax.set_title(f"Period summary ({method})")
         ax.legend(fontsize=8, loc="upper left")
+        if annotate_provenance:
+            _prov = self._fit_history_plot_annotation_text()
+            if _prov:
+                ax.text(
+                    0.02,
+                    0.02,
+                    _prov,
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="bottom",
+                    fontsize=7,
+                    family="monospace",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
+                )
 
         if show:
             plt.show()
@@ -13861,6 +14177,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         include_peaks=True,
         include_psd_info=False,
         include_psd_in_json=False,
+        include_fit_history=False,
         summary_kwargs=None,
         plot_kwargs=None,
     ):
@@ -13921,6 +14238,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ``True`` the full frequency grid and PSD arrays are embedded in
             the JSON file.  Default is ``False`` (arrays are omitted to keep
             the file small).
+        include_fit_history : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_json`.  When ``True``
+            the current ``Lightcurve.fit_history`` is included in the exported
+            JSON for reproducibility/debug provenance.  Default is ``False``.
         summary_kwargs : dict or None, optional
             Extra keyword arguments forwarded to :meth:`get_period_summary`
             when *summary* is ``None``.  Ignored if *summary* is supplied.
@@ -13974,7 +14295,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         if json_file is not None:
-            summary.write_json(json_file, include_psd=include_psd_in_json)
+            summary.write_json(
+                json_file,
+                include_psd=include_psd_in_json,
+                include_fit_history=include_fit_history,
+                fit_history=self.get_fit_history() if include_fit_history else None,
+            )
 
         if png_file is not None:
             self._save_period_summary_figure(
@@ -14547,6 +14873,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         show=True,
         mcmc_samples=False,
         n_pred=1000,
+        annotate_provenance=False,
         **kwargs,
     ):
         """Plot the model and data
@@ -14575,6 +14902,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Number of prediction points used to construct the fine time grid
             for plotting. Lower values reduce memory usage and speed up
             plotting, especially for 2D light curves. Default is 1000.
+        annotate_provenance : bool, optional
+            If ``True``, annotate GP-fit plots with model/runtime/timestamp from
+            the most recent fit-history entry. Default is ``False``.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
 
@@ -14648,11 +14978,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if self.ndim == 1:
                 fig = self._plot_1d(
-                    x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
+                    x_fine_raw,
+                    ylim=ylim,
+                    yscale=yscale,
+                    show=show,
+                    annotate_provenance=annotate_provenance,
+                    **kwargs,
                 )
             else:
                 fig = self._plot_2d(
-                    x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
+                    x_fine_raw,
+                    ylim=ylim,
+                    yscale=yscale,
+                    show=show,
+                    annotate_provenance=annotate_provenance,
+                    **kwargs,
                 )
         return fig
 
@@ -14863,7 +15203,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return f
 
     def _plot_1d(
-        self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
+        self,
+        x_fine_raw,
+        ylim=None,
+        yscale="auto",
+        show=False,
+        save=True,
+        annotate_provenance=False,
+        **kwargs,
     ):
         # transforming the x_fine_raw data to the space that the GP was
         # trained in (so it can predict)
@@ -14924,6 +15271,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ax.set_yscale(current_yscale)
         if current_ylim is not None:
             ax.set_ylim(current_ylim)
+        if annotate_provenance:
+            _prov = self._fit_history_plot_annotation_text()
+            if _prov:
+                ax.text(
+                    0.02,
+                    0.02,
+                    _prov,
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="bottom",
+                    fontsize=7,
+                    family="monospace",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
+                )
         ax.legend()
         if save:
             plt.savefig(f"{self.name}_fit.png")
@@ -14932,7 +15293,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return f
 
     def _plot_2d(
-        self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
+        self,
+        x_fine_raw,
+        ylim=None,
+        yscale="auto",
+        show=False,
+        save=True,
+        annotate_provenance=False,
+        **kwargs,
     ):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
@@ -15005,6 +15373,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.set_yscale(current_yscale)
             if current_ylim is not None:
                 ax.set_ylim(current_ylim)
+            if annotate_provenance:
+                _prov = self._fit_history_plot_annotation_text()
+                if _prov:
+                    ax.text(
+                        0.02,
+                        0.02,
+                        _prov,
+                        transform=ax.transAxes,
+                        ha="left",
+                        va="bottom",
+                        fontsize=7,
+                        family="monospace",
+                        bbox=dict(
+                            boxstyle="round,pad=0.2", fc="white", alpha=0.7
+                        ),
+                    )
 
             if save:
                 plt.savefig(f"{self.name}_{val}_fit.png")

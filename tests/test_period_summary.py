@@ -2156,6 +2156,38 @@ class TestWritePeriodSummaryOutputs(unittest.TestCase):
         finally:
             json_path.unlink(missing_ok=True)
 
+    def test_json_include_fit_history_writes_history(self):
+        """Wrapper forwards include_fit_history to JSON export."""
+        import tempfile
+        import json
+        from pathlib import Path
+
+        s = self._synthetic_summary()
+        lc = _make_1d_lc_no_transform(n_obs=40, period=100.0, seed=0)
+        lc.fit_history = [
+            {
+                "timestamp_utc": "2026-05-10T18:22:11+00:00",
+                "success": True,
+                "elapsed_seconds": 1.23,
+            }
+        ]
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            json_path = Path(tmp.name)
+        try:
+            lc.write_period_summary_outputs(
+                json_file=json_path,
+                summary=s,
+                include_fit_history=True,
+            )
+            with open(json_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertIn("fit_history", data)
+            self.assertEqual(len(data["fit_history"]), 1)
+        finally:
+            json_path.unlink(missing_ok=True)
+
     # ------------------------------------------------------------------
     # C. Reusing a pre-computed summary
     # ------------------------------------------------------------------
@@ -2661,6 +2693,60 @@ class TestWriteJsonRoundTrip(unittest.TestCase):
             self.assertIsInstance(data["psd"], list)
             self.assertGreater(len(data["freq_grid"]), 0)
             self.assertGreater(len(data["psd"]), 0)
+        finally:
+            os.remove(path)
+
+    def test_include_fit_history_false_omits_key_by_default(self):
+        """fit_history is omitted unless include_fit_history=True is requested."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_with_psd()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(path)
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertNotIn("fit_history", data)
+        finally:
+            os.remove(path)
+
+    def test_include_fit_history_true_serializes_nested_values(self):
+        """fit_history export sanitizes nested non-finite values recursively."""
+        import json
+        import tempfile
+        import os
+
+        summary = self._make_summary_no_psd()
+        fit_history = [
+            {
+                "timestamp_utc": "2026-05-10T18:22:11+00:00",
+                "success": True,
+                "elapsed_seconds": np.nan,
+                "notes": {"nested": [1.0, np.inf, {"x": np.nan}]},
+            }
+        ]
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            summary.write_json(
+                path,
+                include_fit_history=True,
+                fit_history=fit_history,
+            )
+            with open(path) as fh:
+                data = json.load(fh)
+            self.assertIn("fit_history", data)
+            self.assertEqual(len(data["fit_history"]), 1)
+            self.assertIsNone(data["fit_history"][0]["elapsed_seconds"])
+            self.assertIsNone(data["fit_history"][0]["notes"]["nested"][1])
+            self.assertIsNone(data["fit_history"][0]["notes"]["nested"][2]["x"])
         finally:
             os.remove(path)
 
