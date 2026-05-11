@@ -440,12 +440,29 @@ class TestConsensusFailureStateAndUX(unittest.TestCase):
         self.assertIsNone(as_dict["diagnostics"]["scatter"])
         self.assertIn("Consensus fit failed because", summary.to_text())
 
+        as_dict_with_history = summary.to_dict(
+            include_fit_history=True,
+            fit_history=[
+                {
+                    "timestamp_utc": "2026-05-10T18:24:03+00:00",
+                    "elapsed_seconds": np.nan,
+                }
+            ],
+        )
+        self.assertIn("fit_history", as_dict_with_history)
+        self.assertIsNone(as_dict_with_history["fit_history"][0]["elapsed_seconds"])
+
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = Path(tmpdir) / "failure_summary.json"
-            summary.write_json(out_path)
+            summary.write_json(
+                out_path,
+                include_fit_history=True,
+                fit_history=[{"timestamp_utc": "2026-05-10T18:24:03+00:00"}],
+            )
             loaded = json.loads(out_path.read_text(encoding="utf-8"))
         self.assertEqual(loaded["reason"], "mutually_inconsistent_periods")
         self.assertIn("candidate_periods", loaded["diagnostics"])
+        self.assertIn("fit_history", loaded)
 
     def test_reset_fit_state_clears_relevant_attributes(self):
         """_reset_fit_state clears fit, cache, diagnostics, and model handles."""

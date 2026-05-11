@@ -267,6 +267,21 @@ Do NOT compare individual component periods.
 * significant_periods
 * method
 * notes
+* fit_history (optional, for reproducibility provenance)
+
+---
+
+## Reproducibility provenance (recommended)
+
+For publication-quality reproducibility and debugging, export period summaries
+with fit-history provenance enabled so each output captures:
+
+* UTC fit timestamps
+* model/backend used
+* runtime
+* lightweight environment metadata (pgmuvi/Python/torch/gpytorch versions)
+
+In code, use the JSON-export option that includes fit history when needed.
 
 ---
 

@@ -5,6 +5,7 @@ import math
 import unittest
 
 import numpy as np
+import re
 
 from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
 
@@ -156,6 +157,69 @@ class TestFitHistory(unittest.TestCase):
         lc._append_fit_history(notes={"broken": _BrokenValue()})
         after_len = len(lc.get_fit_history())
         self.assertGreaterEqual(after_len, before_len)
+
+    def test_environment_metadata_is_recorded(self):
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0, "i": 30.0}, seed=108)
+        _run_consensus_fit(lc)
+        entry = lc.get_fit_history()[-1]
+        env = entry.get("environment", {})
+        self.assertIsInstance(env, dict)
+        self.assertIn("python_version", env)
+        self.assertIn("pgmuvi_version", env)
+        self.assertIn("torch_version", env)
+        self.assertIn("gpytorch_version", env)
+        self.assertRegex(str(env["python_version"]), r"^\d+\.\d+\.\d+")
+
+    def test_extended_summary_fields_present(self):
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0, "i": 30.0}, seed=109)
+        _run_consensus_fit(lc, model="2D")
+        with self.assertRaises(ConsensusFitError):
+            _run_consensus_fit(lc, min_points_per_band=10_000)
+        summary = lc.get_fit_history_summary()
+        self.assertIn("counts_by_backend", summary)
+        self.assertIn("counts_by_model_class", summary)
+        self.assertIn("counts_by_parameterization", summary)
+        self.assertIn("counts_by_constraint_mode", summary)
+        self.assertIn("total_runtime_seconds", summary)
+        self.assertIn("mean_runtime_seconds", summary)
+        self.assertIn("earliest_timestamp", summary)
+        self.assertIn("latest_timestamp", summary)
+        self.assertIn("unique_bands_used", summary)
+        self.assertIn("frequency_space", summary["counts_by_parameterization"])
+        self.assertIn("period_space", summary["counts_by_parameterization"])
+
+    def test_fit_history_to_text_and_filters(self):
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0, "i": 30.0}, seed=110)
+        _run_consensus_fit(lc)
+        with self.assertRaises(ConsensusFitError):
+            _run_consensus_fit(lc, min_points_per_band=10_000)
+
+        text_all = lc.fit_history_to_text()
+        self.assertIn("Timestamp", text_all)
+        self.assertIn("Runtime(s)", text_all)
+        self.assertIn("Failure reason", text_all)
+        self.assertIsNotNone(re.search(r"^\s*1", text_all, flags=re.MULTILINE))
+
+        text_success = lc.fit_history_to_text(success_only=True)
+        self.assertIn("True", text_success)
+        self.assertNotIn("False", text_success)
+
+        text_failed = lc.fit_history_to_text(failed_only=True)
+        self.assertIn("False", text_failed)
+        self.assertIn("Consensus", text_failed)
+
+        text_latest = lc.fit_history_to_text(max_entries=1)
+        rows = [ln for ln in text_latest.splitlines() if re.match(r"^\s*\d+", ln)]
+        self.assertEqual(len(rows), 1)
+
+        printed = lc.print_fit_history(max_entries=1)
+        self.assertEqual(printed, text_latest)
+
+    def test_consensus_nested_fit_records_single_entry(self):
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0, "i": 30.0}, seed=111)
+        _run_consensus_fit(lc)
+        history = lc.get_fit_history()
+        self.assertEqual(len(history), 1)
 
 
 if __name__ == "__main__":
