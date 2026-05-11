@@ -414,5 +414,346 @@ class TestFitHistory(unittest.TestCase):
         self.assertEqual(summary["counts_by_fit_strategy"].get("unknown", 0), 1)
 
 
+class TestValidateFitHistoryEntry(unittest.TestCase):
+    """Unit tests for the _validate_fit_history_entry static method."""
+
+    def test_elapsed_seconds_nan_becomes_none(self):
+        """NaN elapsed_seconds should be coerced to None."""
+        entry = {"elapsed_seconds": float("nan")}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertIsNone(entry["elapsed_seconds"])
+
+    def test_elapsed_seconds_inf_becomes_none(self):
+        """Inf elapsed_seconds should be coerced to None."""
+        entry = {"elapsed_seconds": float("inf")}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertIsNone(entry["elapsed_seconds"])
+
+    def test_elapsed_seconds_int_becomes_float(self):
+        """A valid integer elapsed_seconds should become a float."""
+        entry = {"elapsed_seconds": 3}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertIsInstance(entry["elapsed_seconds"], float)
+        self.assertAlmostEqual(entry["elapsed_seconds"], 3.0)
+
+    def test_elapsed_seconds_string_uncoercible_becomes_none(self):
+        """An uncoercible string elapsed_seconds should become None."""
+        entry = {"elapsed_seconds": "not-a-number"}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertIsNone(entry["elapsed_seconds"])
+
+    def test_constrained_fit_int_coerced_to_bool(self):
+        """Integer 1/0 constrained_fit values should be coerced to bool."""
+        for raw, expected in [(1, True), (0, False)]:
+            entry = {"constrained_fit": raw}
+            Lightcurve._validate_fit_history_entry(entry)
+            self.assertIsInstance(entry["constrained_fit"], bool)
+            self.assertEqual(entry["constrained_fit"], expected)
+
+    def test_constrained_fit_bool_unchanged(self):
+        """Bool constrained_fit values must not be changed."""
+        for val in (True, False):
+            entry = {"constrained_fit": val}
+            Lightcurve._validate_fit_history_entry(entry)
+            self.assertIs(entry["constrained_fit"], val)
+
+    def test_constrained_fit_none_unchanged(self):
+        """None constrained_fit must remain None."""
+        entry = {"constrained_fit": None}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertIsNone(entry["constrained_fit"])
+
+    def test_bands_list_of_strings_unchanged(self):
+        """A valid list of strings must be left intact (order preserved)."""
+        entry = {"bands": ["g", "r", "i"]}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertEqual(entry["bands"], ["g", "r", "i"])
+
+    def test_bands_non_string_elements_converted(self):
+        """Non-string band labels should be converted to strings."""
+        entry = {"bands": [1, 2.0, "i"]}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertEqual(entry["bands"], ["1", "2.0", "i"])
+
+    def test_bands_duplicates_removed(self):
+        """Duplicate band labels should be deduplicated (insertion order)."""
+        entry = {"bands": ["g", "r", "g", "i", "r"]}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertEqual(entry["bands"], ["g", "r", "i"])
+
+    def test_bands_tuple_converted_to_list(self):
+        """A tuple of bands should be converted to a list of strings."""
+        entry = {"bands": ("g", "r")}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertIsInstance(entry["bands"], list)
+        self.assertEqual(entry["bands"], ["g", "r"])
+
+    def test_timestamp_int_coerced_to_string(self):
+        """An integer timestamp should be coerced to a string."""
+        entry = {"timestamp_utc": 12345}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertIsInstance(entry["timestamp_utc"], str)
+        self.assertEqual(entry["timestamp_utc"], "12345")
+
+    def test_timestamp_string_unchanged(self):
+        """A string timestamp must not be modified."""
+        ts = "2024-01-01T00:00:00+00:00"
+        entry = {"timestamp_utc": ts}
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertEqual(entry["timestamp_utc"], ts)
+
+    def test_non_dict_entry_returned_unchanged(self):
+        """Non-dict inputs must be returned as-is without raising."""
+        for val in (None, 42, "string", [1, 2]):
+            result = Lightcurve._validate_fit_history_entry(val)
+            self.assertEqual(result, val)
+
+    def test_entry_with_no_relevant_keys_unchanged(self):
+        """Entries with unrelated keys must not be altered."""
+        entry = {"success": True, "failed": False, "notes": {"x": 1}}
+        before = dict(entry)
+        Lightcurve._validate_fit_history_entry(entry)
+        self.assertEqual(entry, before)
+
+
+class TestFitHistorySummaryRobustness(unittest.TestCase):
+    """Tests for get_fit_history_summary robustness and stable keys."""
+
+    def _make_lc(self):
+        return _make_multiband_lightcurve(
+            {"g": 30.0, "r": 30.0}, seed=200
+        )
+
+    def test_empty_history_all_keys_present(self):
+        """All expected summary keys are present even with empty history."""
+        lc = self._make_lc()
+        summary = lc.get_fit_history_summary()
+        expected_keys = {
+            "total_attempts",
+            "successful_fits",
+            "failed_fits",
+            "success_fraction",
+            "last_success_timestamp",
+            "last_failure_timestamp",
+            "earliest_timestamp",
+            "latest_timestamp",
+            "total_runtime_seconds",
+            "mean_runtime_seconds",
+            "counts_by_backend",
+            "counts_by_model_class",
+            "counts_by_fit_strategy",
+            "counts_by_parameterization",
+            "counts_by_constraint_mode",
+            "unique_bands",
+            "unique_bands_used",
+            "frequency_space_attempts",
+            "period_space_attempts",
+            "constrained_fits",
+            "unconstrained_fits",
+        }
+        for key in expected_keys:
+            self.assertIn(key, summary, f"Key '{key}' missing from empty summary")
+
+    def test_empty_history_zeros_and_nones(self):
+        """Empty history produces zeros for counts and None for mean/timestamps."""
+        lc = self._make_lc()
+        summary = lc.get_fit_history_summary()
+        self.assertEqual(summary["total_attempts"], 0)
+        self.assertEqual(summary["successful_fits"], 0)
+        self.assertEqual(summary["failed_fits"], 0)
+        self.assertEqual(summary["total_runtime_seconds"], 0.0)
+        self.assertIsNone(summary["mean_runtime_seconds"])
+        self.assertIsNone(summary["earliest_timestamp"])
+        self.assertIsNone(summary["latest_timestamp"])
+
+    def test_empty_history_empty_dicts_and_lists(self):
+        """Empty history returns empty dicts/lists for categorical fields."""
+        lc = self._make_lc()
+        lc.band = None  # strip band data to keep test predictable
+        summary = lc.get_fit_history_summary()
+        self.assertIsInstance(summary["counts_by_backend"], dict)
+        self.assertIsInstance(summary["counts_by_model_class"], dict)
+        self.assertIsInstance(summary["counts_by_fit_strategy"], dict)
+        self.assertIsInstance(summary["unique_bands"], list)
+
+    def test_summary_with_missing_runtime_entry(self):
+        """Entries missing elapsed_seconds do not affect total_runtime."""
+        lc = self._make_lc()
+        lc.fit_history.append(
+            {
+                "timestamp_utc": "2021-01-01T00:00:00+00:00",
+                "success": True,
+                "failed": False,
+                # elapsed_seconds deliberately absent
+            }
+        )
+        summary = lc.get_fit_history_summary()
+        self.assertEqual(summary["total_runtime_seconds"], 0.0)
+        self.assertIsNone(summary["mean_runtime_seconds"])
+
+    def test_summary_unique_bands_from_history_entries(self):
+        """unique_bands aggregates band labels stored in history entries."""
+        lc = self._make_lc()
+        lc.fit_history.append(
+            {
+                "timestamp_utc": "2021-06-01T00:00:00+00:00",
+                "success": True,
+                "failed": False,
+                "bands": ["g", "r", "i"],
+            }
+        )
+        lc.fit_history.append(
+            {
+                "timestamp_utc": "2021-06-02T00:00:00+00:00",
+                "success": True,
+                "failed": False,
+                "bands": ["g", "z"],
+            }
+        )
+        summary = lc.get_fit_history_summary()
+        for band in ("g", "r", "i", "z"):
+            self.assertIn(band, summary["unique_bands"])
+
+    def test_summary_unique_bands_deduplication(self):
+        """Bands appearing in multiple history entries are deduplicated."""
+        lc = self._make_lc()
+        lc.fit_history.append(
+            {
+                "timestamp_utc": "2021-06-01T00:00:00+00:00",
+                "success": True,
+                "failed": False,
+                "bands": ["g", "r", "g", "r"],
+            }
+        )
+        summary = lc.get_fit_history_summary()
+        # Sorted deduplicated list: ["g", "r"]
+        self.assertEqual(summary["unique_bands"].count("g"), 1)
+        self.assertEqual(summary["unique_bands"].count("r"), 1)
+
+    def test_summary_unique_bands_non_string_labels(self):
+        """Non-string band labels in history entries are normalized to strings."""
+        lc = self._make_lc()
+        lc.fit_history.append(
+            {
+                "timestamp_utc": "2021-06-01T00:00:00+00:00",
+                "success": True,
+                "failed": False,
+                "bands": [1, 2, "g"],
+            }
+        )
+        summary = lc.get_fit_history_summary()
+        self.assertIn("1", summary["unique_bands"])
+        self.assertIn("2", summary["unique_bands"])
+        self.assertIn("g", summary["unique_bands"])
+
+
+class TestPrintFitHistorySummary(unittest.TestCase):
+    """Tests for the print_fit_history_summary() method."""
+
+    def _make_lc_with_fit(self, seed=300):
+        lc = _make_multiband_lightcurve(
+            {"g": 30.0, "r": 30.0, "i": 30.0}, seed=seed
+        )
+        _run_consensus_fit(lc)
+        return lc
+
+    def test_returns_string(self):
+        """print_fit_history_summary must return a non-empty string."""
+        lc = self._make_lc_with_fit(seed=300)
+        result = lc.print_fit_history_summary(print_summary=False)
+        self.assertIsInstance(result, str)
+        self.assertGreater(len(result), 0)
+
+    def test_contains_section_headers(self):
+        """Output must contain all expected section headings."""
+        lc = self._make_lc_with_fit(seed=301)
+        text = lc.print_fit_history_summary(print_summary=False)
+        for heading in (
+            "Fit History Summary",
+            "Total fits",
+            "Total runtime",
+            "Mean runtime",
+            "Time span",
+            "Fit strategies",
+            "Backends",
+            "Models",
+            "Parameterization",
+            "Constraints",
+            "Bands encountered",
+        ):
+            self.assertIn(heading, text, f"Heading '{heading}' missing")
+
+    def test_contains_band_names(self):
+        """Band names present at fit time should appear in the output."""
+        lc = self._make_lc_with_fit(seed=302)
+        text = lc.print_fit_history_summary(print_summary=False)
+        for band in ("g", "r", "i"):
+            self.assertIn(band, text)
+
+    def test_contains_fit_counts(self):
+        """The total-fits count should appear in the output."""
+        lc = self._make_lc_with_fit(seed=303)
+        text = lc.print_fit_history_summary(print_summary=False)
+        self.assertIn("1", text)  # at least the count "1" for total fits
+
+    def test_empty_history_does_not_raise(self):
+        """print_fit_history_summary must not raise for empty history."""
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0}, seed=304)
+        try:
+            text = lc.print_fit_history_summary(print_summary=False)
+        except Exception as exc:
+            self.fail(
+                f"print_fit_history_summary raised with empty history: {exc}"
+            )
+        self.assertIsInstance(text, str)
+
+    def test_print_summary_true_prints(self, capsys=None):
+        """With print_summary=True the text should be emitted to stdout."""
+        import io
+        import sys
+
+        lc = self._make_lc_with_fit(seed=305)
+        captured = io.StringIO()
+        _old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            returned = lc.print_fit_history_summary(print_summary=True)
+        finally:
+            sys.stdout = _old_stdout
+        printed = captured.getvalue()
+        self.assertIn("Fit History Summary", printed)
+        self.assertEqual(returned, printed.rstrip("\n"))
+
+    def test_print_summary_false_does_not_print(self):
+        """With print_summary=False nothing should go to stdout."""
+        import io
+        import sys
+
+        lc = self._make_lc_with_fit(seed=306)
+        captured = io.StringIO()
+        _old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            lc.print_fit_history_summary(print_summary=False)
+        finally:
+            sys.stdout = _old_stdout
+        self.assertEqual(captured.getvalue(), "")
+
+    def test_indent_parameter_respected(self):
+        """A custom indent should appear in the formatted output."""
+        lc = self._make_lc_with_fit(seed=307)
+        text4 = lc.print_fit_history_summary(print_summary=False, indent=4)
+        # With indent=4, band lines begin with 4 spaces
+        self.assertIn("    g", text4)
+
+    def test_return_value_matches_printed_value(self):
+        """Returned string should match what would be printed."""
+        lc = self._make_lc_with_fit(seed=308)
+        result = lc.print_fit_history_summary(print_summary=False)
+        # Calling again with print_summary=True returns the same text
+        result2 = lc.print_fit_history_summary(print_summary=False)
+        self.assertEqual(result, result2)
+
+
 if __name__ == "__main__":
     unittest.main()
