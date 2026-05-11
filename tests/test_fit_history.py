@@ -815,6 +815,19 @@ class TestFitHistoryProvenance(unittest.TestCase):
         torch_after = torch.random.get_rng_state()
 
         self.assertIsInstance(provenance, dict)
+        self.assertIn("numpy_rng_state_token", provenance)
+        self.assertIn("python_rng_state_token", provenance)
+        self.assertIn("torch_initial_seed", provenance)
+        self.assertIn("numpy_random_seed", provenance)
+        self.assertIn("python_random_seed", provenance)
+        self.assertIn("torch_random_seed", provenance)
+        self.assertEqual(
+            provenance["numpy_rng_state_token"], provenance["numpy_random_seed"]
+        )
+        self.assertEqual(
+            provenance["python_rng_state_token"], provenance["python_random_seed"]
+        )
+        self.assertEqual(provenance["torch_initial_seed"], provenance["torch_random_seed"])
         self.assertEqual(np_before[0], np_after[0])
         self.assertTrue(np.array_equal(np_before[1], np_after[1]))
         self.assertEqual(np_before[2:], np_after[2:])
@@ -868,8 +881,11 @@ class TestFitHistoryProvenance(unittest.TestCase):
                     "git_remote_url": None,
                 },
                 "rng": {
+                    "numpy_rng_state_token": None,
                     "numpy_random_seed": None,
+                    "torch_initial_seed": None,
                     "torch_random_seed": None,
+                    "python_rng_state_token": None,
                     "python_random_seed": None,
                     "torch_deterministic_algorithms": None,
                     "torch_cudnn_deterministic": None,
@@ -879,6 +895,9 @@ class TestFitHistoryProvenance(unittest.TestCase):
         )
         entry = lc.get_fit_history()[-1]
         self.assertIsNone(entry["environment"]["git"]["git_commit_hash"])
+        self.assertIsNone(entry["environment"]["rng"]["numpy_rng_state_token"])
+        self.assertIsNone(entry["environment"]["rng"]["torch_initial_seed"])
+        self.assertIsNone(entry["environment"]["rng"]["python_rng_state_token"])
         self.assertIsNone(entry["environment"]["rng"]["torch_random_seed"])
         json.dumps(entry)
 
