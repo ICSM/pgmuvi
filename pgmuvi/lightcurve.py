@@ -3456,9 +3456,82 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 key: self._sanitize_fit_history_value(val)
                 for key, val in _entry.items()
             }
+            self._validate_fit_history_entry(_entry)
             self.fit_history.append(_entry)
         except Exception:
             return
+
+    @staticmethod
+    def _validate_fit_history_entry(entry):
+        """Sanitize a fit-history entry dict in-place; never raises.
+
+        Coerces field values to the expected types when possible.  Invalid
+        values are replaced conservatively (``None`` or empty list) rather
+        than raising.  This lets manually constructed or legacy entries be
+        consumed safely by :meth:`get_fit_history_summary`.
+
+        Parameters
+        ----------
+        entry : dict
+            A fit-history record to sanitize.
+
+        Returns
+        -------
+        dict
+            The same dict, mutated in-place and returned.
+        """
+        if not isinstance(entry, dict):
+            return entry
+        try:
+            # elapsed_seconds: must be a finite float or None.
+            _elapsed = entry.get("elapsed_seconds")
+            if _elapsed is not None:
+                try:
+                    _f = float(_elapsed)
+                    entry["elapsed_seconds"] = (
+                        None if not math.isfinite(_f) else _f
+                    )
+                except (TypeError, ValueError):
+                    entry["elapsed_seconds"] = None
+
+            # constrained_fit: coerce truthy/falsy values to bool.
+            _cf = entry.get("constrained_fit")
+            if _cf is not None and not isinstance(_cf, bool):
+                try:
+                    entry["constrained_fit"] = bool(_cf)
+                except (TypeError, ValueError):
+                    entry["constrained_fit"] = None
+
+            # bands: normalize to a list of unique strings (insertion order).
+            _bands = entry.get("bands")
+            if _bands is not None:
+                if not isinstance(_bands, list):
+                    try:
+                        _bands = list(_bands)
+                    except (TypeError, ValueError):
+                        _bands = []
+                _seen: set[str] = set()
+                _normalized: list[str] = []
+                for _b in _bands:
+                    try:
+                        _bs = str(_b)
+                        if _bs not in _seen:
+                            _seen.add(_bs)
+                            _normalized.append(_bs)
+                    except Exception:
+                        pass
+                entry["bands"] = _normalized
+
+            # timestamp_utc: coerce to string if not already one.
+            _ts = entry.get("timestamp_utc")
+            if _ts is not None and not isinstance(_ts, str):
+                try:
+                    entry["timestamp_utc"] = str(_ts)
+                except Exception:
+                    entry["timestamp_utc"] = None
+        except Exception:
+            pass
+        return entry
 
     def get_fit_history(self):
         """Return a deep copy of fit-history entries."""
@@ -3591,16 +3664,33 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _counts_by_constraint_mode["unknown"] += 1
 
         _total_runtime_seconds = float(sum(_runtime_seconds))
-        _mean_runtime_seconds = (
+        _mean_runtime_seconds: float | None = (
             _total_runtime_seconds / len(_runtime_seconds)
             if _runtime_seconds
-            else 0.0
+            else None
         )
-        _unique_bands = (
-            sorted({str(b) for b in np.asarray(self.band, dtype=np.str_)})
-            if self.band is not None
-            else []
-        )
+
+        # Collect unique bands from history entries; entries that predate the
+        # ``bands`` field contribute nothing to the set.  If no history entry
+        # recorded band information, fall back to the current self.band array.
+        _bands_from_history: set[str] = set()
+        for _he in _history:
+            _he_bands = _he.get("bands")
+            if isinstance(_he_bands, list):
+                for _hb in _he_bands:
+                    if _hb is not None:
+                        try:
+                            _bands_from_history.add(str(_hb))
+                        except Exception:
+                            pass
+        if _bands_from_history:
+            _unique_bands = sorted(_bands_from_history)
+        elif self.band is not None:
+            _unique_bands = sorted(
+                {str(b) for b in np.asarray(self.band, dtype=np.str_)}
+            )
+        else:
+            _unique_bands = []
 
         return {
             "total_attempts": _total,
@@ -3752,6 +3842,127 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         print(text)
         return text
+
+    def print_fit_history_summary(
+        self,
+        print_summary=True,
+        indent=2,
+    ):
+        """Return (and optionally print) a human-readable fit-history summary.
+
+        This method calls :meth:`get_fit_history_summary` internally and
+        formats the result as a multi-line textual report suitable for
+        notebook output.  The report aligns category counts in columns and
+        handles all missing or ``None`` values gracefully.
+
+        Parameters
+        ----------
+        print_summary : bool, optional
+            If ``True`` (the default), the formatted string is printed to
+            stdout in addition to being returned.
+        indent : int, optional
+            Number of spaces to use for indented lines (default 2).
+
+        Returns
+        -------
+        str
+            The formatted summary string.
+        """
+        _s = self.get_fit_history_summary()
+        _pad = " " * max(0, int(indent))
+        _sep = "-" * 50
+        _lines: list[str] = [_sep, "Fit History Summary", _sep, ""]
+
+        # --- top-level counts -------------------------------------------
+        _total = _s.get("total_attempts", 0)
+        _ok = _s.get("successful_fits", 0)
+        _fail = _s.get("failed_fits", 0)
+        _lines.append(f"Total fits   : {_total}")
+        _lines.append(f"  Successful : {_ok}")
+        _lines.append(f"  Failed     : {_fail}")
+
+        # --- runtime -------------------------------------------------------
+        _tot_rt = _s.get("total_runtime_seconds")
+        _mean_rt = _s.get("mean_runtime_seconds")
+        _lines.append("")
+        if isinstance(_tot_rt, int | float):
+            _lines.append(f"Total runtime : {_tot_rt:.3g} s")
+        else:
+            _lines.append("Total runtime : N/A")
+        if isinstance(_mean_rt, int | float):
+            _lines.append(f"Mean runtime  : {_mean_rt:.3g} s")
+        else:
+            _lines.append("Mean runtime  : N/A")
+
+        # --- timestamps ----------------------------------------------------
+        _earliest = _s.get("earliest_timestamp")
+        _latest = _s.get("latest_timestamp")
+        _lines.append("")
+        _lines.append("Time span:")
+        _lines.append(
+            f"{_pad}Earliest fit : {_earliest or 'N/A'}"
+        )
+        _lines.append(
+            f"{_pad}Latest fit   : {_latest or 'N/A'}"
+        )
+
+        def _format_counts(section_title, counts_dict):
+            """Append a left-aligned section of key : count rows."""
+            _lines.append("")
+            _lines.append(f"{section_title}:")
+            if counts_dict:
+                _max_key = max(len(str(k)) for k in counts_dict)
+                for _k, _v in sorted(
+                    counts_dict.items(), key=lambda kv: -kv[1]
+                ):
+                    _lines.append(
+                        f"{_pad}{_k!s:<{_max_key}} : {_v}"
+                    )
+            else:
+                _lines.append(f"{_pad}(none recorded)")
+
+        _format_counts("Fit strategies", _s.get("counts_by_fit_strategy", {}))
+        _format_counts("Backends", _s.get("counts_by_backend", {}))
+        _format_counts("Models", _s.get("counts_by_model_class", {}))
+
+        # --- parameterization -----------------------------------------------
+        _pcounts = _s.get("counts_by_parameterization", {})
+        _freq_n = _pcounts.get("frequency_space", 0)
+        _per_n = _pcounts.get("period_space", 0)
+        _lines.append("")
+        _lines.append("Parameterization:")
+        _lines.append(f"{_pad}Frequency-space fits : {_freq_n}")
+        _lines.append(f"{_pad}Period-space fits    : {_per_n}")
+
+        # --- constraints ---------------------------------------------------
+        _ccounts = _s.get("counts_by_constraint_mode", {})
+        _con_n = _ccounts.get("constrained", 0)
+        _unc_n = _ccounts.get("unconstrained", 0)
+        _unk_n = _ccounts.get("unknown", 0)
+        _lines.append("")
+        _lines.append("Constraints:")
+        _lines.append(f"{_pad}Constrained fits   : {_con_n}")
+        _lines.append(f"{_pad}Unconstrained fits : {_unc_n}")
+        if _unk_n:
+            _lines.append(f"{_pad}Unknown            : {_unk_n}")
+
+        # --- bands ---------------------------------------------------------
+        _bands = _s.get("unique_bands") or []
+        _lines.append("")
+        _lines.append("Bands encountered:")
+        if _bands:
+            for _band in _bands:
+                _lines.append(f"{_pad}{_band}")
+        else:
+            _lines.append(f"{_pad}(none recorded)")
+
+        _lines.append("")
+        _lines.append(_sep)
+
+        _text = "\n".join(_lines)
+        if print_summary:
+            print(_text)
+        return _text
 
     def _fit_history_plot_annotation_text(self):
         """Return a compact provenance string for optional plot annotations."""
