@@ -3338,12 +3338,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         elapsed_seconds=None,
         backend=None,
         constrained=None,
+        constrained_fit=None,
+        constraint_set=None,
+        bands=None,
+        uses_frequency_space=None,
+        uses_period_space=None,
         environment=None,
         notes=None,
     ):
         """Append a JSON-safe fit-history entry.
 
         This helper is intentionally defensive and must never raise.
+
+        Parameters
+        ----------
+        bands : list of str, optional
+            Unique band labels present in the lightcurve at fit time.
+        constrained_fit : bool, optional
+            Explicit flag for whether the fit used a constraint set.
+            If not provided, falls back to ``constrained``.
+        constraint_set : str, optional
+            Name or description of the constraint set used, if any.
+        uses_frequency_space : bool, optional
+            Whether the model is parameterized in frequency space.
+        uses_period_space : bool, optional
+            Whether the model is parameterized in period space.
         """
         try:
             if not hasattr(self, "fit_history") or not isinstance(
@@ -3359,6 +3378,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 timestamp_utc = datetime.datetime.now(
                     datetime.UTC
                 ).isoformat()
+
+            _constrained_resolved = (
+                constrained
+                if constrained is not None
+                else _context.get("constrained")
+            )
+            # constrained_fit is a structured alias for constrained, falling
+            # back to the ``constrained`` value if not explicitly provided.
+            _constrained_fit_resolved = (
+                constrained_fit
+                if constrained_fit is not None
+                else _context.get("constrained_fit", _constrained_resolved)
+            )
 
             _entry = {
                 "timestamp_utc": timestamp_utc,
@@ -3390,10 +3422,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "backend": (
                     backend if backend is not None else _context.get("backend")
                 ),
-                "constrained": (
-                    constrained
-                    if constrained is not None
-                    else _context.get("constrained")
+                "constrained": _constrained_resolved,
+                "constrained_fit": _constrained_fit_resolved,
+                "constraint_set": (
+                    constraint_set
+                    if constraint_set is not None
+                    else _context.get("constraint_set")
+                ),
+                "bands": (
+                    bands if bands is not None else _context.get("bands")
+                ),
+                "uses_frequency_space": (
+                    uses_frequency_space
+                    if uses_frequency_space is not None
+                    else _context.get("uses_frequency_space")
+                ),
+                "uses_period_space": (
+                    uses_period_space
+                    if uses_period_space is not None
+                    else _context.get("uses_period_space")
                 ),
                 "environment": (
                     environment
@@ -3427,7 +3474,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.fit_history.clear()
 
     def get_fit_history_summary(self):
-        """Return aggregate statistics for fit-history entries."""
+        """Return aggregate statistics for fit-history entries.
+
+        Returns a dict suitable for JSON serialisation.  All scalar counts
+        are plain Python ``int`` or ``float``; timestamps are ISO-8601
+        strings or ``None``.
+
+        The returned dict includes both a nested structure for backward
+        compatibility (``counts_by_parameterization``, ``counts_by_constraint_mode``,
+        ``unique_bands_used``) and flat convenience keys
+        (``frequency_space_attempts``, ``period_space_attempts``,
+        ``constrained_fits``, ``unconstrained_fits``, ``unique_bands``,
+        ``counts_by_fit_strategy``) added to support the enhanced summary
+        specification.
+
+        Missing fields in older history entries are silently ignored; such
+        entries contribute to ``total_attempts`` but not to per-category
+        counts where the relevant field is absent.
+        """
         _history = self.get_fit_history()
         _total = len(_history)
         _successful = sum(1 for entry in _history if entry.get("success") is True)
@@ -3441,6 +3505,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         _runtime_seconds = []
         _counts_by_backend = {}
         _counts_by_model_class = {}
+        _counts_by_fit_strategy = {}
         _counts_by_parameterization = {
             "frequency_space": 0,
             "period_space": 0,
@@ -3481,21 +3546,43 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _counts_by_model_class.get(_model_class, 0) + 1
             )
 
-            _model_l = _model_class.lower()
-            _fit_strategy_l = str(entry.get("fit_strategy") or "").lower()
-            if (
-                "spectralmixture" in _model_l
-                or "separable" in _model_l
-                or _fit_strategy_l == "consensus"
-            ):
+            # fit_strategy counts — entries without a strategy go under "unknown"
+            _fit_strategy_key = str(entry.get("fit_strategy") or "unknown")
+            _counts_by_fit_strategy[_fit_strategy_key] = (
+                _counts_by_fit_strategy.get(_fit_strategy_key, 0) + 1
+            )
+
+            # Parameterization space: prefer the explicit flag stored in the
+            # entry; fall back to inference from model class / fit strategy for
+            # older entries that predate the ``uses_frequency_space`` field.
+            _uses_freq = entry.get("uses_frequency_space")
+            _uses_period = entry.get("uses_period_space")
+            if _uses_freq is True:
                 _param_space = "frequency_space"
-            elif "periodic" in _model_l or "quasiperiodic" in _model_l:
+            elif _uses_period is True:
                 _param_space = "period_space"
             else:
-                _param_space = "unknown"
+                # Inference from model class / fit strategy for legacy entries
+                _model_l = _model_class.lower()
+                _fit_strategy_l = _fit_strategy_key.lower()
+                if (
+                    "spectralmixture" in _model_l
+                    or "separable" in _model_l
+                    or _fit_strategy_l == "consensus"
+                ):
+                    _param_space = "frequency_space"
+                elif "periodic" in _model_l or "quasiperiodic" in _model_l:
+                    _param_space = "period_space"
+                else:
+                    _param_space = "unknown"
             _counts_by_parameterization[_param_space] += 1
 
-            _constrained = entry.get("constrained")
+            # Constraint mode: ``constrained_fit`` takes precedence over the
+            # older ``constrained`` field so that both legacy and new entries
+            # are handled correctly.
+            _constrained = entry.get("constrained_fit")
+            if _constrained is None:
+                _constrained = entry.get("constrained")
             if _constrained is True:
                 _counts_by_constraint_mode["constrained"] += 1
             elif _constrained is False:
@@ -3524,6 +3611,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "last_failure_timestamp": _last_failure_ts,
             "counts_by_backend": _counts_by_backend,
             "counts_by_model_class": _counts_by_model_class,
+            # counts_by_fit_strategy is new; absent in earlier summaries
+            "counts_by_fit_strategy": _counts_by_fit_strategy,
             "counts_by_parameterization": _counts_by_parameterization,
             "counts_by_constraint_mode": _counts_by_constraint_mode,
             "total_runtime_seconds": _total_runtime_seconds,
@@ -3534,7 +3623,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "latest_timestamp": (
                 _latest_ts.isoformat() if _latest_ts is not None else None
             ),
+            # ``unique_bands_used`` is the canonical name; ``unique_bands`` is
+            # a flat alias included for the enhanced summary specification.
             "unique_bands_used": _unique_bands,
+            "unique_bands": _unique_bands,
+            # Flat convenience scalars derived from the nested dicts above.
+            # Kept consistent with ``counts_by_parameterization`` so callers
+            # can use whichever form they prefer.
+            "frequency_space_attempts": (
+                _counts_by_parameterization["frequency_space"]
+            ),
+            "period_space_attempts": _counts_by_parameterization["period_space"],
+            "constrained_fits": _counts_by_constraint_mode["constrained"],
+            "unconstrained_fits": _counts_by_constraint_mode["unconstrained"],
         }
 
     @staticmethod
@@ -6734,6 +6835,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 else _model_arg.__class__.__name__
             )
 
+        # Capture the unique bands present at call time for provenance.
+        try:
+            _bands = (
+                sorted({str(b) for b in np.asarray(self.band, dtype=np.str_)})
+                if self.band is not None
+                else None
+            )
+        except Exception:
+            _bands = None
+
+        # Infer parameterisation space from the model argument.  This is a
+        # best-effort guess; the resolved class is used in the success branch.
+        _model_class_lower = str(_model_class or "").lower()
+        _fit_strategy_lower = str(_fit_strategy or "").lower()
+        if (
+            "spectralmixture" in _model_class_lower
+            or "separable" in _model_class_lower
+            or _fit_strategy_lower == "consensus"
+            or _model_arg in ("2D", "1D", "2d", "1d")
+        ):
+            _uses_frequency_space: bool | None = True
+            _uses_period_space: bool | None = False
+        elif (
+            "periodic" in _model_class_lower
+            or "quasiperiodic" in _model_class_lower
+        ):
+            _uses_frequency_space = False
+            _uses_period_space = True
+        else:
+            _uses_frequency_space = None
+            _uses_period_space = None
+
         self._fit_history_context = {
             "model_class": _model_class,
             "fit_strategy": _fit_strategy,
@@ -6741,6 +6874,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "num_mixtures": _num_mixtures,
             "backend": _backend,
             "constrained": _constrained,
+            "constrained_fit": _constrained,
+            "constraint_set": (
+                str(_constraint_set) if _constraint_set is not None else None
+            ),
+            "bands": _bands,
+            "uses_frequency_space": _uses_frequency_space,
+            "uses_period_space": _uses_period_space,
             "environment": self._fit_history_environment_metadata(),
         }
         self._fit_history_recorded = False
@@ -6770,6 +6910,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if bool(getattr(self, "_cuda", False))
                 else _backend
             )
+            # Refine parameterisation inference from the resolved class name.
+            _resolved_class_lower = str(_resolved_model_class or "").lower()
+            if (
+                "spectralmixture" in _resolved_class_lower
+                or "separable" in _resolved_class_lower
+            ):
+                _resolved_freq = True
+                _resolved_period = False
+            elif (
+                "periodic" in _resolved_class_lower
+                or "quasiperiodic" in _resolved_class_lower
+            ):
+                _resolved_freq = False
+                _resolved_period = True
+            else:
+                _resolved_freq = _uses_frequency_space
+                _resolved_period = _uses_period_space
             self._append_fit_history(
                 model_class=_resolved_model_class,
                 fit_strategy=_fit_strategy,
@@ -6780,6 +6937,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 elapsed_seconds=time.perf_counter() - _fit_start,
                 backend=_resolved_backend,
                 constrained=_constrained,
+                constrained_fit=_constrained,
+                constraint_set=(
+                    str(_constraint_set)
+                    if _constraint_set is not None
+                    else None
+                ),
+                bands=_bands,
+                uses_frequency_space=_resolved_freq,
+                uses_period_space=_resolved_period,
                 notes={"source": "fit_success"},
             )
             self._fit_history_recorded = True
