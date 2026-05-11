@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import datetime
+import json
 import math
+from pathlib import Path
+import random
+import tempfile
 import unittest
+from unittest import mock
 
+import matplotlib.pyplot as plt
 import numpy as np
 import re
+import torch
 
 from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
 
@@ -229,7 +236,7 @@ class TestFitHistory(unittest.TestCase):
         """counts_by_fit_strategy groups entries by fit_strategy."""
         lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0, "i": 30.0}, seed=120)
         _run_consensus_fit(lc)
-        # second call – still consensus
+        # second call - still consensus
         _run_consensus_fit(lc)
         summary = lc.get_fit_history_summary()
         self.assertIn("counts_by_fit_strategy", summary)
@@ -753,6 +760,148 @@ class TestPrintFitHistorySummary(unittest.TestCase):
         # Calling again with print_summary=True returns the same text
         result2 = lc.print_fit_history_summary(print_summary=False)
         self.assertEqual(result, result2)
+
+
+class TestFitHistoryProvenance(unittest.TestCase):
+    """Tests for git/RNG/environment provenance integration."""
+
+    def test_git_provenance_helper_never_raises_outside_git_repo(self):
+        """Git provenance collection must degrade to None outside a git repo."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.object(
+                Lightcurve,
+                "_fit_history_package_directory",
+                return_value=Path(tmpdir),
+            ):
+                try:
+                    provenance = Lightcurve._collect_git_provenance()
+                except Exception as exc:
+                    self.fail(f"_collect_git_provenance raised unexpectedly: {exc}")
+        self.assertIsInstance(provenance, dict)
+        self.assertEqual(
+            provenance,
+            {
+                "git_commit_hash": None,
+                "git_branch": None,
+                "git_dirty_worktree": None,
+                "git_remote_url": None,
+            },
+        )
+
+    def test_git_helper_handles_subprocess_failure_gracefully(self):
+        """Subprocess failures must not escape the git provenance helper."""
+        with mock.patch(
+            "pgmuvi.lightcurve.subprocess.run",
+            side_effect=OSError("git unavailable"),
+        ):
+            provenance = Lightcurve._collect_git_provenance()
+        self.assertIsInstance(provenance, dict)
+        self.assertTrue(all(value is None for value in provenance.values()))
+
+    def test_rng_provenance_helper_never_mutates_rng_state(self):
+        """Collecting RNG provenance must not alter any RNG state."""
+        np.random.seed(123)
+        random.seed(456)
+        torch.manual_seed(789)
+
+        np_before = np.random.get_state()
+        py_before = random.getstate()
+        torch_before = torch.random.get_rng_state().clone()
+
+        provenance = Lightcurve._collect_rng_provenance()
+
+        np_after = np.random.get_state()
+        py_after = random.getstate()
+        torch_after = torch.random.get_rng_state()
+
+        self.assertIsInstance(provenance, dict)
+        self.assertEqual(np_before[0], np_after[0])
+        self.assertTrue(np.array_equal(np_before[1], np_after[1]))
+        self.assertEqual(np_before[2:], np_after[2:])
+        self.assertEqual(py_before, py_after)
+        self.assertTrue(torch.equal(torch_before, torch_after))
+
+    def test_environment_provenance_helper_always_returns_dict(self):
+        """Unified environment provenance must always return a dict."""
+        provenance = Lightcurve._collect_environment_provenance()
+        self.assertIsInstance(provenance, dict)
+        self.assertIn("python_version", provenance)
+        self.assertIn("pgmuvi_version", provenance)
+        self.assertIn("torch_version", provenance)
+        self.assertIn("gpytorch_version", provenance)
+        self.assertIn("git", provenance)
+        self.assertIn("rng", provenance)
+        self.assertIsInstance(provenance["git"], dict)
+        self.assertIsInstance(provenance["rng"], dict)
+
+    def test_fit_history_entry_includes_schema_version(self):
+        """Recorded fit-history entries must include schema version 2."""
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0, "i": 30.0}, seed=400)
+        _run_consensus_fit(lc)
+        entry = lc.get_fit_history()[-1]
+        self.assertIn("fit_history_schema_version", entry)
+        self.assertEqual(entry["fit_history_schema_version"], 2)
+
+    def test_fit_history_json_serialization_with_nested_provenance(self):
+        """Nested provenance data in fit history must remain JSON serializable."""
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0, "i": 30.0}, seed=401)
+        _run_consensus_fit(lc)
+        payload = json.dumps(lc.get_fit_history())
+        self.assertIsInstance(payload, str)
+        self.assertIn("fit_history_schema_version", payload)
+        self.assertIn("\"git\"", payload)
+        self.assertIn("\"rng\"", payload)
+
+    def test_fit_history_entry_sanitizable_with_none_provenance_fields(self):
+        """Entries with None-valued provenance fields must remain sanitizable."""
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0}, seed=402)
+        lc._append_fit_history(
+            environment={
+                "python_version": None,
+                "pgmuvi_version": None,
+                "torch_version": None,
+                "gpytorch_version": None,
+                "git": {
+                    "git_commit_hash": None,
+                    "git_branch": None,
+                    "git_dirty_worktree": None,
+                    "git_remote_url": None,
+                },
+                "rng": {
+                    "numpy_random_seed": None,
+                    "torch_random_seed": None,
+                    "python_random_seed": None,
+                    "torch_deterministic_algorithms": None,
+                    "torch_cudnn_deterministic": None,
+                    "torch_cudnn_benchmark": None,
+                },
+            },
+        )
+        entry = lc.get_fit_history()[-1]
+        self.assertIsNone(entry["environment"]["git"]["git_commit_hash"])
+        self.assertIsNone(entry["environment"]["rng"]["torch_random_seed"])
+        json.dumps(entry)
+
+    def test_plot_provenance_location_kwarg_works(self):
+        """Plot provenance annotations should respect provenance_location."""
+        lc = _make_multiband_lightcurve({"g": 30.0, "r": 30.0, "i": 30.0}, seed=403)
+        _run_consensus_fit(lc)
+        fig, ax = lc.plot_period_summary(
+            show=False,
+            annotate_provenance=True,
+            provenance_location="upper right",
+        )
+        try:
+            provenance_texts = [
+                text for text in ax.texts if "model:" in text.get_text()
+            ]
+            self.assertEqual(len(provenance_texts), 1)
+            text = provenance_texts[0]
+            self.assertEqual(text.get_ha(), "right")
+            self.assertEqual(text.get_va(), "top")
+            self.assertEqual(text.get_position(), (0.98, 0.98))
+        finally:
+            plt.close(fig)
 
 
 if __name__ == "__main__":
