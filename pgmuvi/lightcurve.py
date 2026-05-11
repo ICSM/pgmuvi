@@ -3369,10 +3369,27 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     @staticmethod
     def _collect_rng_provenance():
-        """Return best-effort RNG and determinism provenance."""
+        """Return best-effort RNG-state and determinism provenance.
+
+        Canonical field names:
+        ``numpy_rng_state_token``, ``python_rng_state_token``,
+        and ``torch_initial_seed``.
+
+        Backward-compatible aliases:
+        ``numpy_random_seed``, ``python_random_seed``,
+        and ``torch_random_seed``.
+
+        NumPy and Python's stdlib random module do not generally expose the
+        original user-provided seed once the RNG has advanced, so the NumPy and
+        Python values recorded here are current RNG-state tokens rather than
+        guaranteed original seeds.
+        """
         provenance = {
+            "numpy_rng_state_token": None,
             "numpy_random_seed": None,
+            "torch_initial_seed": None,
             "torch_random_seed": None,
+            "python_rng_state_token": None,
             "python_random_seed": None,
             "torch_deterministic_algorithms": None,
             "torch_cudnn_deterministic": None,
@@ -3382,19 +3399,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         try:
             _np_state = np.random.get_state()
             if len(_np_state) > 1 and len(_np_state[1]) > 0:
-                provenance["numpy_random_seed"] = int(_np_state[1][0])
+                _numpy_state_token = int(_np_state[1][0])
+                provenance["numpy_rng_state_token"] = _numpy_state_token
+                provenance["numpy_random_seed"] = _numpy_state_token
         except Exception:
             pass
 
         try:
             _py_state = random.getstate()
             if len(_py_state) > 1 and len(_py_state[1]) > 0:
-                provenance["python_random_seed"] = int(_py_state[1][0])
+                _python_state_token = int(_py_state[1][0])
+                provenance["python_rng_state_token"] = _python_state_token
+                provenance["python_random_seed"] = _python_state_token
         except Exception:
             pass
 
         try:
-            provenance["torch_random_seed"] = int(torch.initial_seed())
+            _torch_initial_seed = int(torch.initial_seed())
+            provenance["torch_initial_seed"] = _torch_initial_seed
+            provenance["torch_random_seed"] = _torch_initial_seed
         except Exception:
             pass
 
