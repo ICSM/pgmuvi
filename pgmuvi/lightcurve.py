@@ -6441,6 +6441,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def fit(self, *args, **kwargs):
         """Fit wrapper that records lightweight in-memory fit history."""
+        # Nested fit() calls (e.g. from _consensus_standard_fit) delegate
+        # to _fit_core directly so that only the outermost call records a
+        # single canonical history entry.
+        _nesting = getattr(self, "_fit_nesting_depth", 0)
+        if _nesting > 0:
+            self._fit_nesting_depth = _nesting + 1
+            try:
+                return self._fit_core(*args, **kwargs)
+            finally:
+                self._fit_nesting_depth -= 1
+
+        self._fit_nesting_depth = 1
         _fit_start = time.perf_counter()
         _model_arg = kwargs.get("model")
         _fit_strategy = kwargs.get("fit_strategy")
@@ -6504,6 +6516,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._fit_history_recorded = True
             return result
         finally:
+            self._fit_nesting_depth = 0
             self._fit_history_context = {}
 
     def _fit_core(
