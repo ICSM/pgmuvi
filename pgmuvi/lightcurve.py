@@ -3301,6 +3301,361 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return Lightcurve._consensus_make_json_safe(value)
 
     @staticmethod
+    def _sanitize_fit_configuration_value(
+        value,
+        *,
+        max_items=20,
+        _depth=0,
+        _seen=None,
+    ):
+        """Return a compact JSON-safe fit-configuration value.
+
+        This sanitizer is stricter than generic fit-history sanitization because
+        fit-configuration snapshots are intended to remain compact. Large arrays
+        and tensors are summarized instead of expanded.
+        """
+        if _seen is None:
+            _seen = set()
+        if _depth > 8:
+            try:
+                return f"<max-depth:{type(value).__name__}>"
+            except Exception:
+                return "<max-depth>"
+        try:
+            if value is None:
+                return None
+            if isinstance(value, bool | int | str):
+                return value
+            if isinstance(value, float):
+                return value if np.isfinite(value) else None
+            if isinstance(value, np.generic):
+                return Lightcurve._sanitize_fit_configuration_value(
+                    value.item(),
+                    max_items=max_items,
+                    _depth=_depth + 1,
+                    _seen=_seen,
+                )
+            if isinstance(value, Path):
+                return str(value)
+            if isinstance(value, Interval):
+                return {
+                    "lower": Lightcurve._sanitize_fit_configuration_value(
+                        value.lower_bound,
+                        max_items=max_items,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    ),
+                    "upper": Lightcurve._sanitize_fit_configuration_value(
+                        value.upper_bound,
+                        max_items=max_items,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    ),
+                }
+
+            _obj_id = id(value)
+            if _obj_id in _seen:
+                return f"<recursive:{type(value).__name__}>"
+            if isinstance(value, dict | list | tuple | set | np.ndarray) or (
+                torch.is_tensor(value)
+            ):
+                _seen.add(_obj_id)
+
+            if isinstance(value, np.ndarray):
+                _size = int(value.size)
+                if _size <= max_items:
+                    return [
+                        Lightcurve._sanitize_fit_configuration_value(
+                            v,
+                            max_items=max_items,
+                            _depth=_depth + 1,
+                            _seen=_seen,
+                        )
+                        for v in value.tolist()
+                    ]
+                _flat_preview = value.reshape(-1)[:max_items].tolist()
+                return {
+                    "type": "ndarray",
+                    "dtype": str(value.dtype),
+                    "shape": list(value.shape),
+                    "size": _size,
+                    "preview": [
+                        Lightcurve._sanitize_fit_configuration_value(
+                            v,
+                            max_items=max_items,
+                            _depth=_depth + 1,
+                            _seen=_seen,
+                        )
+                        for v in _flat_preview
+                    ],
+                }
+
+            if torch.is_tensor(value):
+                _numel = int(value.numel())
+                if _numel == 1:
+                    return Lightcurve._sanitize_fit_configuration_value(
+                        value.item(),
+                        max_items=max_items,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                _flat_preview = value.detach().cpu().reshape(-1)[:max_items].tolist()
+                return {
+                    "type": "tensor",
+                    "dtype": str(value.dtype),
+                    "shape": list(value.shape),
+                    "numel": _numel,
+                    "device": str(value.device),
+                    "preview": [
+                        Lightcurve._sanitize_fit_configuration_value(
+                            v,
+                            max_items=max_items,
+                            _depth=_depth + 1,
+                            _seen=_seen,
+                        )
+                        for v in _flat_preview
+                    ],
+                }
+
+            if isinstance(value, dict):
+                _items = list(value.items())
+                _truncated = len(_items) > max_items
+                if _truncated:
+                    _items = _items[:max_items]
+                _out = {
+                    str(k): Lightcurve._sanitize_fit_configuration_value(
+                        v,
+                        max_items=max_items,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                    for k, v in _items
+                }
+                if _truncated:
+                    _out["_truncated_items"] = int(len(value) - max_items)
+                return _out
+
+            if isinstance(value, list | tuple | set):
+                _seq = list(value)
+                _truncated = len(_seq) > max_items
+                _seq = _seq[:max_items] if _truncated else _seq
+                _out = [
+                    Lightcurve._sanitize_fit_configuration_value(
+                        v,
+                        max_items=max_items,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                    for v in _seq
+                ]
+                if _truncated:
+                    return {
+                        "type": type(value).__name__,
+                        "length": len(value),
+                        "preview": _out,
+                    }
+                return _out
+
+            if isinstance(value, type):
+                return getattr(value, "__name__", str(value))
+            if callable(value):
+                _name = getattr(value, "__qualname__", None) or getattr(
+                    value, "__name__", None
+                )
+                if _name is not None:
+                    return _name
+        except Exception:
+            pass
+
+        try:
+            _text = repr(value)
+        except Exception:
+            try:
+                _text = str(value)
+            except Exception:
+                _text = f"<unserializable:{type(value).__name__}>"
+        return _text
+
+    @staticmethod
+    def _collect_fit_configuration_snapshot(
+        *,
+        fit_kwargs=None,
+        context=None,
+    ):
+        """Return a compact reproducibility snapshot for fit configuration.
+
+        This helper is best-effort and must never raise. Missing values are
+        represented as ``None``.
+        """
+        _snapshot = {
+            "fit_strategy": None,
+            "model_class": None,
+            "backend": None,
+            "training_iter": None,
+            "learning_rate": None,
+            "optimizer": None,
+            "num_mixtures": None,
+            "use_best_band_init": None,
+            "use_gp_validation": None,
+            "constraint_set": None,
+            "prior_set": None,
+            "max_samples": None,
+            "max_samples_per_band": None,
+            "min_period": None,
+            "max_period": None,
+            "frequency_bounds": None,
+            "period_bounds": None,
+            "wavelength_bounds": None,
+            "xtransform": None,
+            "ytransform": None,
+            "normalize": None,
+            "detrend": None,
+            "consensus_configuration": None,
+            "outlier_thresholds": None,
+            "min_consensus_inliers": None,
+            "random_initialization_flags": None,
+            "user_kwargs": None,
+        }
+
+        try:
+            _kwargs = fit_kwargs if isinstance(fit_kwargs, dict) else {}
+            _context = context if isinstance(context, dict) else {}
+            _combined = {**_context, **_kwargs}
+
+            def _pick(*keys):
+                for _k in keys:
+                    if _k in _combined and _combined[_k] is not None:
+                        return _combined[_k]
+                return None
+
+            _model_value = _pick("model_class", "model")
+            if _model_value is not None:
+                if isinstance(_model_value, str):
+                    _snapshot["model_class"] = _model_value
+                else:
+                    _snapshot["model_class"] = _model_value.__class__.__name__
+
+            _backend = _pick("backend")
+            if _backend is None and "cuda" in _combined:
+                _backend = "cuda" if bool(_combined.get("cuda")) else "cpu"
+            _snapshot["backend"] = _backend
+
+            _snapshot["fit_strategy"] = _pick("fit_strategy")
+            _snapshot["training_iter"] = _pick("training_iter")
+            _snapshot["learning_rate"] = _pick("learning_rate", "lr")
+            _snapshot["optimizer"] = _pick("optimizer", "optim")
+            _snapshot["num_mixtures"] = _pick("num_mixtures")
+            _snapshot["use_best_band_init"] = _pick("use_best_band_init")
+            _snapshot["use_gp_validation"] = _pick("use_gp_validation")
+            _snapshot["constraint_set"] = _pick("constraint_set")
+            _snapshot["prior_set"] = _pick("prior_set")
+            _snapshot["max_samples"] = _pick("max_samples")
+            _snapshot["max_samples_per_band"] = _pick("max_samples_per_band")
+            _snapshot["min_period"] = _pick("min_period")
+            _snapshot["max_period"] = _pick("max_period")
+            _snapshot["xtransform"] = _pick("xtransform")
+            _snapshot["ytransform"] = _pick("ytransform")
+            _snapshot["normalize"] = _pick("normalize")
+            _snapshot["detrend"] = _pick("detrend")
+            _snapshot["min_consensus_inliers"] = _pick("min_consensus_inliers")
+
+            _freq_bounds = _pick("frequency_bounds")
+            if _freq_bounds is None:
+                _min_freq = _pick("min_frequency", "min_freq")
+                _max_freq = _pick("max_frequency", "max_freq")
+                if _min_freq is not None or _max_freq is not None:
+                    _freq_bounds = [_min_freq, _max_freq]
+            _snapshot["frequency_bounds"] = _freq_bounds
+
+            _period_bounds = _pick("period_bounds")
+            if _period_bounds is None:
+                _min_period = _pick("min_period")
+                _max_period = _pick("max_period")
+                if _min_period is not None or _max_period is not None:
+                    _period_bounds = [_min_period, _max_period]
+            _snapshot["period_bounds"] = _period_bounds
+
+            _wavelength_bounds = _pick("wavelength_bounds")
+            if _wavelength_bounds is None:
+                _min_w = _pick("min_wavelength", "min_lambda")
+                _max_w = _pick("max_wavelength", "max_lambda")
+                if _min_w is not None or _max_w is not None:
+                    _wavelength_bounds = [_min_w, _max_w]
+            _snapshot["wavelength_bounds"] = _wavelength_bounds
+
+            _consensus_config_keys = [
+                "constrain_consensus",
+                "consensus_method",
+                "consensus_sigma_clip",
+                "consensus_sigma",
+                "consensus_tolerance",
+                "consensus_max_harmonic",
+                "min_consensus_inliers",
+                "use_gp_validation",
+            ]
+            _consensus_configuration = {
+                _k: _combined.get(_k) for _k in _consensus_config_keys
+            }
+            if any(_v is not None for _v in _consensus_configuration.values()):
+                _snapshot["consensus_configuration"] = _consensus_configuration
+
+            _outlier_threshold_keys = [
+                "outlier_sigma_threshold",
+                "outlier_threshold",
+                "max_outlier_fraction",
+            ]
+            _outlier_thresholds = {
+                _k: _combined.get(_k) for _k in _outlier_threshold_keys
+            }
+            if any(_v is not None for _v in _outlier_thresholds.values()):
+                _snapshot["outlier_thresholds"] = _outlier_thresholds
+
+            _random_init_keys = [
+                "use_mls_init",
+                "use_best_band_init",
+                "random_init",
+                "use_random_init",
+                "randomize_initialization",
+            ]
+            _random_flags = {_k: _combined.get(_k) for _k in _random_init_keys}
+            if any(_v is not None for _v in _random_flags.values()):
+                _snapshot["random_initialization_flags"] = _random_flags
+
+            _canonical_keys = set(_snapshot).union(
+                {
+                    "model",
+                    "cuda",
+                    "lr",
+                    "optim",
+                    "min_frequency",
+                    "max_frequency",
+                    "min_freq",
+                    "max_freq",
+                    "min_wavelength",
+                    "max_wavelength",
+                    "min_lambda",
+                    "max_lambda",
+                }
+            )
+            _user_kwargs = {
+                _k: _v for _k, _v in _kwargs.items() if _k not in _canonical_keys
+            }
+            _snapshot["user_kwargs"] = _user_kwargs if _user_kwargs else None
+        except Exception:
+            pass
+
+        try:
+            return Lightcurve._sanitize_fit_configuration_value(_snapshot)
+        except Exception:
+            try:
+                return {
+                    _k: Lightcurve._sanitize_fit_configuration_value(_v)
+                    for _k, _v in _snapshot.items()
+                }
+            except Exception:
+                return None
+
+    @staticmethod
     def _fit_history_package_directory():
         """Return the installed package directory used for provenance lookup."""
         try:
@@ -3493,6 +3848,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         bands=None,
         uses_frequency_space=None,
         uses_period_space=None,
+        fit_configuration=None,
         environment=None,
         notes=None,
     ):
@@ -3593,6 +3949,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     if uses_period_space is not None
                     else _context.get("uses_period_space")
                 ),
+                "fit_configuration": (
+                    fit_configuration
+                    if fit_configuration is not None
+                    else _context.get("fit_configuration")
+                ),
                 "environment": (
                     environment
                     if environment is not None
@@ -3680,6 +4041,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     entry["timestamp_utc"] = str(_ts)
                 except Exception:
                     entry["timestamp_utc"] = None
+
+            # fit_configuration: ensure compact JSON-safe dict or None.
+            _cfg = entry.get("fit_configuration")
+            if _cfg is not None:
+                entry["fit_configuration"] = (
+                    Lightcurve._sanitize_fit_configuration_value(_cfg)
+                )
         except Exception:
             pass
         return entry
@@ -3978,6 +4346,74 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         lines.append(sep)
         return "\n".join(lines)
+
+    def get_last_fit_configuration(self):
+        """Return a deep copy of the latest fit-configuration snapshot."""
+        _history = self.get_fit_history()
+        if not _history:
+            return None
+        _cfg = _history[-1].get("fit_configuration")
+        if _cfg is None:
+            return None
+        return copy.deepcopy(_cfg)
+
+    @staticmethod
+    def _fit_configuration_display_value(value):
+        """Return a concise scalar display string for fit-configuration text."""
+        if value is None:
+            return "None"
+        if isinstance(value, bool):
+            return "True" if value else "False"
+        if isinstance(value, float):
+            return f"{value:.6g}" if math.isfinite(value) else "None"
+        if isinstance(value, int | str):
+            return str(value)
+        if isinstance(value, dict):
+            if "shape" in value and ("type" in value or "dtype" in value):
+                _shape = value.get("shape")
+                _vtype = value.get("type")
+                _dtype = value.get("dtype")
+                return f"{_vtype}(shape={_shape}, dtype={_dtype})"
+            if "length" in value and "type" in value and "preview" in value:
+                return f"{value['type']}(length={value['length']})"
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, list):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
+
+    def fit_configuration_to_text(self, fit_configuration=None):
+        """Return a concise notebook-readable fit-configuration summary."""
+        _cfg = fit_configuration
+        if _cfg is None:
+            _cfg = self.get_last_fit_configuration()
+        if _cfg is None:
+            return "No fit configuration available."
+
+        _cfg = self._sanitize_fit_configuration_value(_cfg)
+        _sep = "-" * 50
+        _lines = [_sep, "Fit Configuration", _sep]
+        _rows = [
+            ("Strategy", _cfg.get("fit_strategy")),
+            ("Backend", _cfg.get("backend")),
+            ("Model", _cfg.get("model_class")),
+            ("Training iterations", _cfg.get("training_iter")),
+            ("Num mixtures", _cfg.get("num_mixtures")),
+            ("Learning rate", _cfg.get("learning_rate")),
+            ("Optimizer", _cfg.get("optimizer")),
+            ("Constraint set", _cfg.get("constraint_set")),
+            ("Prior set", _cfg.get("prior_set")),
+            ("Best-band init", _cfg.get("use_best_band_init")),
+            ("GP validation", _cfg.get("use_gp_validation")),
+            ("Consensus inliers", _cfg.get("min_consensus_inliers")),
+        ]
+        _label_width = max(len(_label) for _label, _ in _rows)
+        for _label, _val in _rows:
+            _lines.append(
+                f"{_label:<{_label_width}} : "
+                f"{self._fit_configuration_display_value(_val)}"
+            )
+        _lines.append(_sep)
+        return "\n".join(_lines)
 
     def print_fit_history(
         self,
