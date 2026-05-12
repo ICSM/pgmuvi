@@ -9619,6 +9619,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "consensus SM keys."
             )
 
+        _available = [
+            k for k in self._model_pars if isinstance(k, str)
+        ]
+
         def _resolve_param_key(param_name):
             candidates = set()
             raw_token = "raw_"
@@ -9645,9 +9649,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         candidates.add(resolved)
 
             if not candidates:
+                _avail_str = ", ".join(_available[:20]) or "(none)"
                 raise RuntimeError(
                     f"Could not resolve a time-kernel '{param_name}' key from "
-                    "_model_pars."
+                    f"_model_pars. Available keys: {_avail_str}. "
+                    "Ensure the model uses a spectral-mixture time kernel "
+                    "(e.g. model='2D' or time_kernel_type='spectral_mixture')."
                 )
 
             def _candidate_rank(candidate):
@@ -9672,6 +9679,65 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "mixture_means": _resolve_param_key("mixture_means"),
             "mixture_scales": _resolve_param_key("mixture_scales"),
         }
+
+    def _consensus_clear_model_state(self):
+        """Clear stale model-related state before a fresh consensus model build.
+
+        Removes ``self.model``, ``self.likelihood``, and ``self._model_pars``
+        and resets the likelihood-set flag so that the subsequent
+        :meth:`set_model` call always starts from a clean slate.
+        Light-curve data and fit history are never touched.
+        """
+        for _attr in ("model", "likelihood", "_model_pars"):
+            try:
+                setattr(self, _attr, None)
+            except Exception:
+                pass
+        # Reset the likelihood-set guard so set_model will call set_likelihood
+        # again for the new model build.
+        try:
+            self.__SET_LIKELIHOOD_CALLED = False
+        except Exception:
+            pass
+
+    def _consensus_validate_final_model_supports_sm_time_kernel(
+        self, model_name, time_kernel_type
+    ):
+        """Validate that the built model exposes SM time-kernel parameters.
+
+        Parameters
+        ----------
+        model_name : str or None
+            The model identifier passed to the current fit call.
+        time_kernel_type : str or None
+            The time-kernel type passed to the current fit call.
+
+        Raises
+        ------
+        ConsensusFitError
+            If the model does not expose ``mixture_means`` / ``mixture_scales``
+            in ``_model_pars``.
+        """
+        try:
+            self._consensus_resolve_time_spectral_mixture_keys()
+        except RuntimeError as exc:
+            _model_str = repr(model_name)
+            _tkt_str = repr(time_kernel_type)
+            _msg = (
+                "Consensus constraints require a spectral-mixture time kernel, "
+                f"but the model {_model_str} built with "
+                f"time_kernel_type={_tkt_str} does not expose the required "
+                "mixture_means / mixture_scales parameters. "
+                "Pass time_kernel_type='spectral_mixture' or use model='2D'."
+            )
+            _exc = ConsensusFitError(_msg)
+            _exc.failure_diagnostics = {
+                "reason": "model_incompatible_with_sm_constraints",
+                "model": model_name,
+                "time_kernel_type": time_kernel_type,
+                "detail": str(exc),
+            }
+            raise _exc from exc
 
     def _consensus_build_spectral_mixture_initialization(
         self,
@@ -12955,64 +13021,82 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 result_diagnostics
             )
 
-        model_is_ready = (
-            hasattr(self, "model")
-            and self.model is not None
-            and hasattr(self, "_model_pars")
+        # When a model is explicitly specified, always build a fresh model for
+        # this consensus fit.  Never reuse stale model state from a previous
+        # fit: the user may have requested a different model, time_kernel_type,
+        # or num_mixtures in this call.
+        # If model is None (not specified), preserve any existing model that
+        # was pre-set by the caller (internal use / test scaffolding).
+        _requested_model = fit_kwargs.get("model")
+        if _requested_model is not None:
+            self._consensus_clear_model_state()
+        _set_model_excluded = {
+            "model",
+            "likelihood",
+            "num_mixtures",
+            "variance",
+            "guess",
+            "consensus_frequencies",
+            "consensus_scales",
+            "consensus_frequency_width",
+            "consensus_frequency_k",
+            "consensus_scale_max_factor",
+            "apply_consensus_constraints",
+            "constrain_consensus",
+            "min_points_per_band",
+            "max_gap_fraction",
+            "min_duty_cycle",
+            "outlier_sigma",
+            "use_acf",
+            "consensus_width_factor",
+            "use_gp_validation",
+            "gp_validation_kwargs",
+            "gp_frequency_tolerance_factor",
+            "periods",
+            "use_mls_init",
+            "use_best_band_init",
+            "constraint_set",
+            "grid_size",
+            "cuda",
+            "training_iter",
+            "max_cg_iterations",
+            "optim",
+            "miniter",
+            "stop",
+            "lr",
+            "stopavg",
+            "fit_strategy",
+        }
+        _model_needs_build = (
+            _requested_model is not None
+            or not (
+                hasattr(self, "model")
+                and self.model is not None
+                and hasattr(self, "_model_pars")
+            )
         )
-        if not model_is_ready:
-            _set_model_excluded = {
-                "model",
-                "likelihood",
-                "num_mixtures",
-                "variance",
-                "guess",
-                "consensus_frequencies",
-                "consensus_scales",
-                "consensus_frequency_width",
-                "consensus_frequency_k",
-                "consensus_scale_max_factor",
-                "apply_consensus_constraints",
-                "constrain_consensus",
-                "min_points_per_band",
-                "max_gap_fraction",
-                "min_duty_cycle",
-                "outlier_sigma",
-                "use_acf",
-                "consensus_width_factor",
-                "use_gp_validation",
-                "gp_validation_kwargs",
-                "gp_frequency_tolerance_factor",
-                "periods",
-                "use_mls_init",
-                "use_best_band_init",
-                "constraint_set",
-                "grid_size",
-                "cuda",
-                "training_iter",
-                "max_cg_iterations",
-                "optim",
-                "miniter",
-                "stop",
-                "lr",
-                "stopavg",
-                "fit_strategy",
-            }
+        if _model_needs_build:
             set_model_kwargs = {
                 key: value
                 for key, value in fit_kwargs.items()
                 if key not in _set_model_excluded
             }
             self.set_model(
-                fit_kwargs.get("model"),
+                _requested_model,
                 fit_kwargs.get("likelihood"),
                 num_mixtures=fit_kwargs.get("num_mixtures"),
                 variance=fit_kwargs.get("variance", False),
                 **set_model_kwargs,
             )
-            fit_kwargs["model"] = None
+        fit_kwargs["model"] = None
 
         if apply_consensus_constraints:
+            # Validate that the freshly built model supports SM time-kernel
+            # constraints before attempting to resolve keys.
+            self._consensus_validate_final_model_supports_sm_time_kernel(
+                model_name=_requested_model,
+                time_kernel_type=fit_kwargs.get("time_kernel_type"),
+            )
             _constraint_dict = {}
             _keys = self._consensus_resolve_time_spectral_mixture_keys()
             _frequency_constraint_bounds = None
