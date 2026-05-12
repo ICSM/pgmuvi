@@ -2,6 +2,7 @@ import contextlib
 import csv
 import copy
 import datetime
+import enum
 import random
 import subprocess
 import sys
@@ -3301,10 +3302,78 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return Lightcurve._consensus_make_json_safe(value)
 
     @staticmethod
+    def _fit_configuration_safe_repr(value, *, max_length=240):
+        """Return a bounded repr/str fallback for fit-configuration display."""
+        try:
+            _text = repr(value)
+        except Exception:
+            try:
+                _text = str(value)
+            except Exception:
+                _type = type(value)
+                _text = f"<{_type.__module__}.{_type.__name__}>"
+        if not isinstance(_text, str):
+            try:
+                _text = str(_text)
+            except Exception:
+                _text = "<unrepresentable>"
+        if len(_text) > max_length:
+            return _text[: max_length - 3] + "..."
+        return _text
+
+    @staticmethod
+    def _fit_configuration_make_unserializable_placeholder(
+        value,
+        *,
+        type_name=None,
+        module_name=None,
+        repr_text=None,
+        extra_fields=None,
+    ):
+        """Return an explicit placeholder for unsupported fit-config objects."""
+        _type = type(value)
+        _placeholder = {
+            "__unserializable__": True,
+            "type": type_name or _type.__name__,
+            "module": module_name or _type.__module__,
+            "repr": repr_text
+            if repr_text is not None
+            else Lightcurve._fit_configuration_safe_repr(value),
+        }
+        if isinstance(extra_fields, dict):
+            for _key, _val in extra_fields.items():
+                if _val is not None:
+                    _placeholder[_key] = _val
+        return _placeholder
+
+    @staticmethod
+    def _fit_configuration_make_truncation_marker(type_name, **metadata):
+        """Return a structured truncation marker for large/deep values."""
+        _marker = {
+            "__truncated__": True,
+            "type": type_name,
+        }
+        for _key, _val in metadata.items():
+            if _val is not None:
+                _marker[_key] = _val
+        return _marker
+
+    @staticmethod
+    def _fit_configuration_sort_key(value):
+        """Return a deterministic ordering key for unordered containers."""
+        _type = type(value)
+        return (
+            f"{_type.__module__}.{_type.__name__}:"
+            f"{Lightcurve._fit_configuration_safe_repr(value, max_length=120)}"
+        )
+
+    @staticmethod
     def _sanitize_fit_configuration_value(
         value,
         *,
         max_items=20,
+        max_string_length=240,
+        max_depth=8,
         _depth=0,
         _seen=None,
     ):
@@ -3319,17 +3388,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
           be stored verbatim; they also contain device/dtype metadata that is
           not JSON-native.  Arrays up to ``max_items`` elements are expanded;
           larger ones are replaced by a summary dict with a ``"preview"`` list.
-        * **Classes and callables** are environment-specific references that
-          cannot be round-tripped through JSON; only their qualified names are
-          stored.
+        * **Classes, callables, and opaque runtime objects** are
+          environment-specific references that cannot be round-tripped through
+          JSON; they are replaced by explicit placeholder dicts so downstream
+          tooling can detect them.
         * **Constraint / prior objects** from gpytorch / pyro carry internal
-          state that is non-serializable; they are reduced to a readable
-          description (``Interval`` objects) or their ``repr`` string.
+          state that is non-serializable; they are reduced to readable,
+          structured summaries instead of raw repr dumps.
         * **Non-finite floats** (NaN, ±Inf) are not valid JSON values and are
-          converted to ``None``.
+          converted to explicit marker dicts rather than leaking through.
         * **Circular references** would cause infinite recursion and are
           detected via an identity set; they are replaced by a sentinel string.
-        * **Sets and tuples** are converted to JSON arrays (lists).
+        * **Sets and tuples** are converted to JSON arrays (lists), with sets
+          sorted deterministically.
 
         The output is deterministic for a given input type: the same Python
         type always produces the same JSON-safe representation.
@@ -3355,44 +3426,110 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Returns
         -------
         bool | int | str | float | list | dict | None
-            A JSON-safe value.  Scalars are returned as scalars; sequences
-            as lists; large arrays and tensors as summary dicts containing
-            a ``"preview"`` list of the first ``max_items`` elements.
+            A JSON-safe value.  Scalars remain scalars where possible; large
+            strings and containers become explicit truncation markers; opaque
+            unsupported objects become explicit placeholder dicts.
         """
         if _seen is None:
             _seen = set()
-        if _depth > 8:
-            try:
-                return f"<max-depth:{type(value).__name__}>"
-            except Exception:
-                return "<max-depth>"
+        if _depth > max_depth:
+            return Lightcurve._fit_configuration_make_truncation_marker(
+                type(value).__name__,
+                reason="max_depth",
+                max_depth=max_depth,
+            )
+        _added_to_seen = False
         try:
             if value is None:
                 return None
-            if isinstance(value, bool | int | str):
+            if isinstance(value, bool):
                 return value
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                if len(value) <= max_string_length:
+                    return value
+                return Lightcurve._fit_configuration_make_truncation_marker(
+                    "str",
+                    length=len(value),
+                    preview=value[:max_string_length],
+                    truncated_chars=len(value) - max_string_length,
+                )
             if isinstance(value, float):
-                return value if np.isfinite(value) else None
+                if math.isfinite(value):
+                    return value
+                if math.isnan(value):
+                    _value_name = "nan"
+                elif value > 0:
+                    _value_name = "inf"
+                else:
+                    _value_name = "-inf"
+                return {
+                    "__non_finite__": True,
+                    "value": _value_name,
+                }
             if isinstance(value, np.generic):
                 return Lightcurve._sanitize_fit_configuration_value(
                     value.item(),
                     max_items=max_items,
+                    max_string_length=max_string_length,
+                    max_depth=max_depth,
                     _depth=_depth + 1,
                     _seen=_seen,
                 )
             if isinstance(value, Path):
                 return str(value)
+            if isinstance(value, enum.Enum):
+                return f"{type(value).__name__}.{value.name}"
+            if (
+                type(value).__module__ == "torch"
+                and type(value).__name__ in {"device", "dtype"}
+            ):
+                return str(value)
             if isinstance(value, Interval):
                 return {
+                    "type": type(value).__name__,
+                    "module": type(value).__module__,
                     "lower": Lightcurve._sanitize_fit_configuration_value(
                         value.lower_bound,
                         max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
                         _depth=_depth + 1,
                         _seen=_seen,
                     ),
                     "upper": Lightcurve._sanitize_fit_configuration_value(
                         value.upper_bound,
                         max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    ),
+                }
+            if isinstance(value, gpytorch.priors.Prior):
+                return {
+                    "type": type(value).__name__,
+                    "module": type(value).__module__,
+                    "repr": Lightcurve._fit_configuration_safe_repr(value),
+                }
+            if dataclasses.is_dataclass(value) and not isinstance(value, type):
+                try:
+                    _fields = dataclasses.asdict(value)
+                except Exception:
+                    return (
+                        Lightcurve._fit_configuration_make_unserializable_placeholder(
+                            value
+                        )
+                    )
+                return {
+                    "type": type(value).__name__,
+                    "module": type(value).__module__,
+                    "fields": Lightcurve._sanitize_fit_configuration_value(
+                        _fields,
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
                         _depth=_depth + 1,
                         _seen=_seen,
                     ),
@@ -3400,26 +3537,30 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             _obj_id = id(value)
             if _obj_id in _seen:
-                return f"<recursive:{type(value).__name__}>"
+                return Lightcurve._fit_configuration_make_truncation_marker(
+                    type(value).__name__,
+                    reason="recursive_reference",
+                )
             if isinstance(value, dict | list | tuple | set | np.ndarray) or (
                 torch.is_tensor(value)
             ):
                 _seen.add(_obj_id)
+                _added_to_seen = True
 
             if isinstance(value, np.ndarray):
                 _size = int(value.size)
                 if _size <= max_items:
-                    return [
-                        Lightcurve._sanitize_fit_configuration_value(
-                            v,
-                            max_items=max_items,
-                            _depth=_depth + 1,
-                            _seen=_seen,
-                        )
-                        for v in value.tolist()
-                    ]
+                    return Lightcurve._sanitize_fit_configuration_value(
+                        value.tolist(),
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
                 _flat_preview = value.reshape(-1)[:max_items].tolist()
                 return {
+                    "__truncated__": True,
                     "type": "ndarray",
                     "dtype": str(value.dtype),
                     "shape": list(value.shape),
@@ -3428,11 +3569,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         Lightcurve._sanitize_fit_configuration_value(
                             v,
                             max_items=max_items,
+                            max_string_length=max_string_length,
+                            max_depth=max_depth,
                             _depth=_depth + 1,
                             _seen=_seen,
                         )
                         for v in _flat_preview
                     ],
+                    "truncated_items": max(_size - max_items, 0),
                 }
 
             if torch.is_tensor(value):
@@ -3441,11 +3585,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     return Lightcurve._sanitize_fit_configuration_value(
                         value.item(),
                         max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                if _numel <= max_items:
+                    return Lightcurve._sanitize_fit_configuration_value(
+                        value.detach().cpu().tolist(),
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
                         _depth=_depth + 1,
                         _seen=_seen,
                     )
                 _flat_preview = value.detach().cpu().reshape(-1)[:max_items].tolist()
                 return {
+                    "__truncated__": True,
                     "type": "tensor",
                     "dtype": str(value.dtype),
                     "shape": list(value.shape),
@@ -3455,71 +3611,95 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         Lightcurve._sanitize_fit_configuration_value(
                             v,
                             max_items=max_items,
+                            max_string_length=max_string_length,
+                            max_depth=max_depth,
                             _depth=_depth + 1,
                             _seen=_seen,
                         )
                         for v in _flat_preview
                     ],
+                    "truncated_items": max(_numel - max_items, 0),
                 }
 
             if isinstance(value, dict):
-                _items = list(value.items())
-                _truncated = len(_items) > max_items
+                _items = sorted(value.items(), key=lambda item: str(item[0]))
+                _truncated = _depth > 0 and len(_items) > max_items
                 if _truncated:
                     _items = _items[:max_items]
                 _out = {
                     str(k): Lightcurve._sanitize_fit_configuration_value(
                         v,
                         max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
                         _depth=_depth + 1,
                         _seen=_seen,
                     )
                     for k, v in _items
                 }
                 if _truncated:
-                    _out["_truncated_items"] = int(len(value) - max_items)
+                    return Lightcurve._fit_configuration_make_truncation_marker(
+                        "dict",
+                        length=len(value),
+                        preview=_out,
+                        truncated_items=int(len(value) - max_items),
+                    )
                 return _out
 
             if isinstance(value, list | tuple | set):
                 _seq = list(value)
+                if isinstance(value, set):
+                    _seq = sorted(_seq, key=Lightcurve._fit_configuration_sort_key)
                 _truncated = len(_seq) > max_items
                 _seq = _seq[:max_items] if _truncated else _seq
                 _out = [
                     Lightcurve._sanitize_fit_configuration_value(
                         v,
                         max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
                         _depth=_depth + 1,
                         _seen=_seen,
                     )
                     for v in _seq
                 ]
                 if _truncated:
-                    return {
-                        "type": type(value).__name__,
-                        "length": len(value),
-                        "preview": _out,
-                    }
+                    return Lightcurve._fit_configuration_make_truncation_marker(
+                        type(value).__name__,
+                        length=len(value),
+                        preview=_out,
+                        truncated_items=int(len(value) - max_items),
+                    )
                 return _out
 
             if isinstance(value, type):
-                return getattr(value, "__name__", str(value))
-            if callable(value):
-                _name = getattr(value, "__qualname__", None) or getattr(
-                    value, "__name__", None
+                return Lightcurve._fit_configuration_make_unserializable_placeholder(
+                    value,
+                    type_name="type",
+                    module_name=getattr(value, "__module__", type(value).__module__),
+                    extra_fields={
+                        "qualname": getattr(value, "__qualname__", None),
+                    },
                 )
-                if _name is not None:
-                    return _name
+            if callable(value):
+                return Lightcurve._fit_configuration_make_unserializable_placeholder(
+                    value,
+                    type_name="callable",
+                    module_name=getattr(value, "__module__", type(value).__module__),
+                    extra_fields={
+                        "qualname": getattr(value, "__qualname__", None)
+                        or getattr(value, "__name__", None),
+                    },
+                )
         except Exception:
-            pass
+            return Lightcurve._fit_configuration_make_unserializable_placeholder(
+                value
+            )
+        finally:
+            if _added_to_seen:
+                _seen.discard(_obj_id)
 
-        try:
-            _text = repr(value)
-        except Exception:
-            try:
-                _text = str(value)
-            except Exception:
-                _text = f"<unserializable:{type(value).__name__}>"
-        return _text
+        return Lightcurve._fit_configuration_make_unserializable_placeholder(value)
 
     @staticmethod
     def _collect_fit_configuration_snapshot(
@@ -3654,12 +3834,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         try:
             _kwargs = fit_kwargs if isinstance(fit_kwargs, dict) else {}
             _context = context if isinstance(context, dict) else {}
-            _combined = {**_context, **_kwargs}
+            _resolved = {**_kwargs, **_context}
 
             def _pick(*keys):
                 for _k in keys:
-                    if _k in _combined and _combined[_k] is not None:
-                        return _combined[_k]
+                    if _k in _resolved and _resolved[_k] is not None:
+                        return _resolved[_k]
                 return None
 
             _model_value = _pick("model_class", "model")
@@ -3670,8 +3850,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     _snapshot["model_class"] = _model_value.__class__.__name__
 
             _backend = _pick("backend")
-            if _backend is None and "cuda" in _combined:
-                _backend = "cuda" if bool(_combined.get("cuda")) else "cpu"
+            if _backend is None and "cuda" in _resolved:
+                _backend = "cuda" if bool(_resolved.get("cuda")) else "cpu"
             _snapshot["backend"] = _backend
 
             _snapshot["fit_strategy"] = _pick("fit_strategy")
@@ -3728,7 +3908,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "use_gp_validation",
             ]
             _consensus_configuration = {
-                _k: _combined.get(_k) for _k in _consensus_config_keys
+                _k: _resolved.get(_k) for _k in _consensus_config_keys
             }
             if any(_v is not None for _v in _consensus_configuration.values()):
                 _snapshot["consensus_configuration"] = _consensus_configuration
@@ -3739,7 +3919,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "max_outlier_fraction",
             ]
             _outlier_thresholds = {
-                _k: _combined.get(_k) for _k in _outlier_threshold_keys
+                _k: _resolved.get(_k) for _k in _outlier_threshold_keys
             }
             if any(_v is not None for _v in _outlier_thresholds.values()):
                 _snapshot["outlier_thresholds"] = _outlier_thresholds
@@ -3751,7 +3931,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "use_random_init",
                 "randomize_initialization",
             ]
-            _random_flags = {_k: _combined.get(_k) for _k in _random_init_keys}
+            _random_flags = {_k: _resolved.get(_k) for _k in _random_init_keys}
             if any(_v is not None for _v in _random_flags.values()):
                 _snapshot["random_initialization_flags"] = _random_flags
 
@@ -3807,14 +3987,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ----------------
         1. The snapshot is a non-empty ``dict``.
         2. A minimum set of required top-level keys is present.
-        3. No top-level value is a raw ``torch.Tensor``.
-        4. No top-level value is a raw ``numpy.ndarray``.
-        5. No top-level value is a callable.
-        6. The snapshot is JSON-serializable via ``json.dumps``.
-
-        Only top-level values are inspected for tensor/array/callable
-        pollution because nested structures were already processed by
-        :meth:`_sanitize_fit_configuration_value`.
+        3. No raw tensors, ndarrays, non-finite floats, or callable objects
+           remain anywhere in the nested structure.
+        4. The snapshot is JSON-serializable via ``json.dumps(..., allow_nan=False)``.
+        5. Explicit warnings are emitted for placeholder objects, truncation
+           markers, non-finite replacements, and unusually deep nesting.
 
         Parameters
         ----------
@@ -3850,24 +4027,65 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"fit_configuration snapshot is missing required keys: "
                 f"{sorted(_missing)}"
             )
-        for _key, _val in snapshot.items():
-            if torch.is_tensor(_val):
+
+        def _warn(message):
+            warnings.warn(message, UserWarning, stacklevel=2)
+
+        def _walk(value, path="fit_configuration", depth=0):
+            if torch.is_tensor(value):
                 raise RuntimeError(
                     f"fit_configuration snapshot contains a raw tensor at "
-                    f"key {_key!r}; sanitize first"
+                    f"{path}; sanitize first"
                 )
-            if isinstance(_val, np.ndarray):
+            if isinstance(value, np.ndarray):
                 raise RuntimeError(
                     f"fit_configuration snapshot contains a raw ndarray at "
-                    f"key {_key!r}; sanitize first"
+                    f"{path}; sanitize first"
                 )
-            if callable(_val):
+            if callable(value):
                 raise RuntimeError(
                     f"fit_configuration snapshot contains a callable at "
-                    f"key {_key!r}; store the name string instead"
+                    f"{path}; store a structured placeholder instead"
                 )
+            if isinstance(value, float) and not math.isfinite(value):
+                raise RuntimeError(
+                    f"fit_configuration snapshot contains a non-finite float at "
+                    f"{path}; sanitize first"
+                )
+            if depth == 7 and isinstance(value, dict | list):
+                _warn(
+                    "fit_configuration snapshot is deeply nested at "
+                    f"{path}; review whether this structure is scientifically "
+                    "necessary for provenance."
+                )
+            if isinstance(value, dict):
+                if value.get("__unserializable__") is True:
+                    _warn(
+                        "fit_configuration snapshot contains an unsupported "
+                        f"object placeholder at {path} "
+                        f"({value.get('module')}.{value.get('type')})."
+                    )
+                if value.get("__truncated__") is True:
+                    _warn(
+                        "fit_configuration snapshot contains truncated data at "
+                        f"{path} ({value.get('type')})."
+                    )
+                if value.get("__non_finite__") is True:
+                    _warn(
+                        "fit_configuration snapshot replaced a non-finite value "
+                        f"at {path} ({value.get('value')})."
+                    )
+                for _key, _val in value.items():
+                    _child_path = f"{path}.{_key}"
+                    _walk(_val, path=_child_path, depth=depth + 1)
+                return
+            if isinstance(value, list):
+                for _idx, _val in enumerate(value):
+                    _walk(_val, path=f"{path}[{_idx}]", depth=depth + 1)
+
+        _walk(snapshot)
         try:
-            json.dumps(snapshot)
+            json.dumps(snapshot, allow_nan=False)
         except (TypeError, ValueError) as exc:
             raise RuntimeError(
                 f"fit_configuration snapshot is not JSON-serializable: {exc}"
@@ -4621,17 +4839,42 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if isinstance(value, int | str):
             return str(value)
         if isinstance(value, dict):
+            if value.get("__unserializable__") is True:
+                _module = value.get("module") or "unknown"
+                _type = value.get("type") or "object"
+                _qualname = value.get("qualname")
+                _repr = value.get("repr")
+                _head = f"[UNSERIALIZABLE] {_module}.{_type}"
+                if _qualname:
+                    _head += f" ({_qualname})"
+                if _repr:
+                    _head += f"\nrepr: {_repr}"
+                return _head
+            if value.get("__non_finite__") is True:
+                return f"[NON-FINITE] {value.get('value')}"
+            if value.get("__truncated__") is True:
+                _payload = {
+                    _k: _v
+                    for _k, _v in value.items()
+                    if _k != "__truncated__"
+                }
+                return "[TRUNCATED]\n" + json.dumps(
+                    _payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
             if "shape" in value and ("type" in value or "dtype" in value):
-                _shape = value.get("shape")
-                _vtype = value.get("type")
-                _dtype = value.get("dtype")
-                return f"{_vtype}(shape={_shape}, dtype={_dtype})"
-            if "length" in value and "type" in value and "preview" in value:
-                return f"{value['type']}(length={value['length']})"
-            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+                return json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
         if isinstance(value, list):
-            return json.dumps(value, ensure_ascii=False)
-        return str(value)
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        return Lightcurve._fit_configuration_safe_repr(value)
 
     def fit_configuration_to_text(self, fit_configuration=None):
         """Return a multi-section, human-readable fit-configuration summary.
@@ -4691,7 +4934,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         def _row(label, val, indent=4):
             if val is None:
                 return
-            _lines.append(f"{'':>{indent}}{label:<28}: {_fv(val)}")
+            _text = _fv(val)
+            if "\n" not in _text:
+                _lines.append(f"{'':>{indent}}{label:<28}: {_text}")
+                return
+            _lines.append(f"{'':>{indent}}{label:<28}:")
+            for _line in _text.splitlines():
+                _lines.append(f"{'':>{indent + 2}}{_line}")
 
         def _dict_rows(label, dct, indent=4):
             """Append a labelled sub-section for a nested dict."""
@@ -4702,7 +4951,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 return
             _lines.append(f"{'':>{indent}}{label}:")
             for _k, _v in sorted(_visible.items()):
-                _lines.append(f"{'':>{indent + 2}}{_k:<26}: {_fv(_v)}")
+                _text = _fv(_v)
+                if "\n" not in _text:
+                    _lines.append(
+                        f"{'':>{indent + 2}}{_k:<26}: {_text}"
+                    )
+                    continue
+                _lines.append(f"{'':>{indent + 2}}{_k:<26}:")
+                for _line in _text.splitlines():
+                    _lines.append(f"{'':>{indent + 4}}{_line}")
 
         # ---- USER INPUTS ---------------------------------------------------
         _section("USER INPUTS")
