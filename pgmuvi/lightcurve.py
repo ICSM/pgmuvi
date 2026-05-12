@@ -5028,6 +5028,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return ax
 
+    def _strip_sampling_snr_values(self, value):
+        """Return a copy of sampling diagnostics without per-point SNR arrays."""
+        if isinstance(value, dict):
+            return {
+                key: self._strip_sampling_snr_values(item)
+                for key, item in value.items()
+                if key != "snr_values"
+            }
+        if isinstance(value, list):
+            return [self._strip_sampling_snr_values(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._strip_sampling_snr_values(item) for item in value)
+        return value
+
     def compute_sampling_metrics(self) -> dict:
         """
         Compute temporal sampling quality metrics.
@@ -5059,7 +5073,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if hasattr(self, "_yerr_raw")
             else None
         )
-        return compute_sampling_metrics(t, y, yerr)
+        metrics = compute_sampling_metrics(t, y, yerr)
+        return self._strip_sampling_snr_values(metrics)
 
     def assess_sampling_quality(self, verbose: bool = True, **kwargs) -> tuple:
         """
@@ -5112,7 +5127,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         passes, diagnostics = assess_sampling_quality(
             t, y, yerr, verbose=verbose, **kwargs
         )
-        return passes, diagnostics
+        return passes, self._strip_sampling_snr_values(diagnostics)
 
     def compute_sampling_metrics_per_band(self) -> dict:
         """
@@ -5170,7 +5185,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ye = yerr[mask] if yerr is not None else None
 
             metrics = compute_sampling_metrics(t, y, ye)
-            results[float(wl)] = metrics
+            results[float(wl)] = self._strip_sampling_snr_values(metrics)
 
             if "n_points" in metrics:
                 min_points_list.append(metrics["n_points"])
@@ -5260,7 +5275,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 print(f"{'=' * 70}")
 
             passes, diag = assess_sampling_quality(t, y, ye, verbose=verbose, **kwargs)
-            results[float(wl)] = diag
+            results[float(wl)] = self._strip_sampling_snr_values(diag)
 
             if passes:
                 passing_bands.append(float(wl))

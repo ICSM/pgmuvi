@@ -1300,12 +1300,14 @@ class TestLightcurveSamplingMethods(unittest.TestCase):
         self.assertIn('n_points', metrics)
         self.assertEqual(metrics['n_points'], 100)
         self.assertIn('nyquist_period', metrics)
+        self.assertNotIn('snr_values', metrics)
 
     def test_assess_sampling_quality(self):
         """Lightcurve.assess_sampling_quality returns passes and diagnostics."""
         passes, diag = self.lc.assess_sampling_quality(verbose=False)
         self.assertTrue(passes)
         self.assertEqual(diag['recommendation'], 'PROCEED')
+        self.assertNotIn('snr_values', diag.get('metrics', {}))
 
     def test_init_check_sampling_raises(self):
         """Lightcurve(..., check_sampling=True) raises for poor sampling."""
@@ -1359,12 +1361,17 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         for metrics in [results[k] for k in band_keys]:
             self.assertIn('n_points', metrics)
             self.assertEqual(metrics['n_points'], 50)
+            self.assertNotIn('snr_values', metrics)
 
     def test_assess_sampling_quality_per_band(self):
         """All bands should pass quality checks."""
         results = self.lc2d.assess_sampling_quality_per_band(verbose=False)
         self.assertEqual(results['summary']['n_passing'], 3)
         self.assertEqual(len(results['summary']['failing_wavelengths']), 0)
+        for wl, diag in results.items():
+            if wl == 'summary':
+                continue
+            self.assertNotIn('snr_values', diag.get('metrics', {}))
 
     def test_filter_well_sampled_bands(self):
         """filter_well_sampled_bands returns Lightcurve with passing bands only."""
