@@ -1371,6 +1371,7 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
         for wl, diag in results.items():
             if wl == 'summary':
                 continue
+            self.assertNotIn('snr_values', diag)
             self.assertNotIn('snr_values', diag.get('metrics', {}))
 
     def test_filter_well_sampled_bands(self):

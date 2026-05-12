@@ -5029,7 +5029,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return ax
 
     def _strip_sampling_snr_values(self, value):
-        """Return a copy of sampling diagnostics without per-point SNR arrays."""
+        """Recursively copy sampling outputs while removing ``snr_values`` keys."""
         if isinstance(value, dict):
             return {
                 key: self._strip_sampling_snr_values(item)
