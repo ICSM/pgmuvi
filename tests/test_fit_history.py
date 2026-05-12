@@ -19,7 +19,12 @@ import torch
 from gpytorch.constraints import Interval
 from gpytorch.priors import NormalPrior
 
-from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
+from pgmuvi.lightcurve import (
+    ConsensusFitError,
+    Lightcurve,
+    _FIT_HISTORY_SCHEMA_VERSION,
+    _FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS,
+)
 
 
 def _make_multiband_lightcurve(
@@ -1466,6 +1471,200 @@ class TestFitConfigurationSnapshot(unittest.TestCase):
         )
         payload = json.dumps(lc.get_fit_history())
         self.assertIsInstance(payload, str)
+
+
+class TestFitHistoryImportExportAndReproducibility(unittest.TestCase):
+    """Tests for fit-history import/export and reproducibility reports."""
+
+    def _make_lc(self, seed=700):
+        return _make_multiband_lightcurve(
+            {"g": 30.0, "r": 30.0, "i": 30.0}, seed=seed
+        )
+
+    def test_schema_registry_constants(self):
+        self.assertEqual(_FIT_HISTORY_SCHEMA_VERSION, 2)
+        self.assertIn(_FIT_HISTORY_SCHEMA_VERSION, _FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS)
+
+    def test_export_import_round_trip_equality(self):
+        lc = self._make_lc(seed=701)
+        _run_consensus_fit(lc)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "history.json"
+            lc.export_fit_history_json(path)
+            loaded = self._make_lc(seed=702)
+            imported_count = loaded.load_fit_history_json(path)
+        self.assertEqual(imported_count, len(lc.get_fit_history()))
+        self.assertEqual(loaded.get_fit_history(), lc.get_fit_history())
+
+    def test_load_merge_false_replaces_history(self):
+        source = self._make_lc(seed=703)
+        _run_consensus_fit(source)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "history.json"
+            source.export_fit_history_json(path)
+            target = self._make_lc(seed=704)
+            _run_consensus_fit(target)
+            self.assertEqual(len(target.get_fit_history()), 1)
+            target.load_fit_history_json(path, merge=False)
+        self.assertEqual(target.get_fit_history(), source.get_fit_history())
+
+    def test_load_merge_true_appends_history(self):
+        source = self._make_lc(seed=705)
+        _run_consensus_fit(source)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "history.json"
+            source.export_fit_history_json(path)
+            target = self._make_lc(seed=706)
+            _run_consensus_fit(target)
+            pre_len = len(target.get_fit_history())
+            loaded = target.load_fit_history_json(path, merge=True)
+        self.assertEqual(loaded, len(source.get_fit_history()))
+        self.assertEqual(len(target.get_fit_history()), pre_len + loaded)
+
+    def test_import_older_schema_versions(self):
+        payload = {
+            "fit_history": [
+                {
+                    "fit_history_schema_version": 1,
+                    "timestamp_utc": "2020-01-01T00:00:00+00:00",
+                    "success": True,
+                    "failed": False,
+                    "model_class": "LegacyModel",
+                }
+            ]
+        }
+        lc = self._make_lc(seed=707)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "legacy.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            loaded = lc.load_fit_history_json(path)
+        self.assertEqual(loaded, 1)
+        self.assertEqual(lc.get_fit_history()[0]["fit_history_schema_version"], 1)
+
+    def test_import_malformed_structures_skips_bad_entries(self):
+        payload = {
+            "fit_history": [
+                {"timestamp_utc": "2020-01-01T00:00:00+00:00"},
+                "bad-entry",
+                123,
+                None,
+            ]
+        }
+        lc = self._make_lc(seed=708)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            loaded = lc.load_fit_history_json(path)
+        self.assertEqual(loaded, 1)
+        self.assertEqual(len(lc.get_fit_history()), 1)
+
+    def test_import_placeholder_and_truncation_survive(self):
+        payload = {
+            "fit_history": [
+                {
+                    "timestamp_utc": "2020-01-01T00:00:00+00:00",
+                    "fit_history_schema_version": 2,
+                    "success": True,
+                    "failed": False,
+                    "fit_configuration": {
+                        "user_kwargs": {
+                            "opaque": {
+                                "__unserializable__": True,
+                                "type": "callable",
+                                "module": "builtins",
+                                "repr": "<function x>",
+                            },
+                            "big": {
+                                "__truncated__": True,
+                                "type": "list",
+                                "length": 100,
+                                "preview": [1, 2, 3],
+                                "truncated_items": 97,
+                            },
+                        }
+                    },
+                }
+            ]
+        }
+        lc = self._make_lc(seed=709)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "placeholder.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            lc.load_fit_history_json(path)
+        cfg = lc.get_fit_history()[0]["fit_configuration"]
+        self.assertTrue(cfg["user_kwargs"]["opaque"]["__unserializable__"])
+        self.assertTrue(cfg["user_kwargs"]["big"]["__truncated__"])
+
+    def test_export_contains_timestamp_and_optional_text(self):
+        lc = self._make_lc(seed=710)
+        _run_consensus_fit(lc)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "export.json"
+            lc.export_fit_history_json(path, include_text_summary=True)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIn("exported_at_utc", payload)
+            self.assertIn("fit_history_text_summary", payload)
+            self.assertIn("latest_fit_configuration_text", payload)
+
+    def test_export_without_text_summary(self):
+        lc = self._make_lc(seed=711)
+        _run_consensus_fit(lc)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "export_min.json"
+            lc.export_fit_history_json(path, include_text_summary=False)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertNotIn("fit_history_text_summary", payload)
+
+    def test_generate_reproducibility_report_readable(self):
+        lc = self._make_lc(seed=712)
+        _run_consensus_fit(lc)
+        report = lc.generate_reproducibility_report()
+        for section in (
+            "PGMUVI Reproducibility Report",
+            "Environment",
+            "Fit Summary",
+            "Strategies",
+            "Models",
+            "Runtime Statistics",
+            "Bands",
+            "Latest Fit Configuration",
+            "Warnings / Truncations",
+        ):
+            self.assertIn(section, report)
+
+    def test_generate_reproducibility_report_empty_history(self):
+        lc = self._make_lc(seed=713)
+        lc.clear_fit_history()
+        report = lc.generate_reproducibility_report()
+        self.assertIn("Total fits: 0", report)
+        self.assertIn("(none)", report)
+
+    def test_generate_reproducibility_report_latest_only(self):
+        lc = self._make_lc(seed=714)
+        _run_consensus_fit(lc)
+        _run_consensus_fit(lc)
+        report = lc.generate_reproducibility_report(latest_only=True)
+        self.assertIn("Total fits: 1", report)
+
+    def test_generate_reproducibility_report_with_malformed_history(self):
+        lc = self._make_lc(seed=715)
+        lc.fit_history.append("malformed")
+        report = lc.generate_reproducibility_report()
+        self.assertIn("Warnings / Truncations", report)
+        self.assertIn("malformed", report.lower())
+
+    def test_generate_reproducibility_report_with_failed_fits(self):
+        lc = self._make_lc(seed=716)
+        lc._append_fit_history(
+            success=False,
+            failed=True,
+            exception_type="RuntimeError",
+            exception_message="Synthetic failure for report testing.",
+            fit_strategy="standard",
+            model_class="TestModel",
+        )
+        report = lc.generate_reproducibility_report()
+        self.assertIn("Failed fits: 1", report)
 
 
 if __name__ == "__main__":

@@ -237,6 +237,10 @@ _CONSENSUS_ALLOWED_REJECTION_REASON_PREFIXES = (
     _CONSENSUS_REJECTION_REASON_PREFIX_DUTY_CYCLE,
 )
 
+# Fit-history schema registry.
+_FIT_HISTORY_SCHEMA_VERSION = 2
+_FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
+
 # Allowed gp_validation_reason values for each gp_validation_status.  Used by
 # _consensus_validate_result_structure to enforce the reason/status invariant.
 _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS = {
@@ -4335,7 +4339,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
             _entry = {
-                "fit_history_schema_version": 2,
+                "fit_history_schema_version": _FIT_HISTORY_SCHEMA_VERSION,
                 "timestamp_utc": timestamp_utc,
                 "model_class": (
                     model_class
@@ -4497,6 +4501,202 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         except Exception:
             pass
         return entry
+
+    @staticmethod
+    def _normalize_imported_fit_history_entry(entry):
+        """Return a sanitized copy of an imported fit-history entry.
+
+        Parameters
+        ----------
+        entry : dict
+            Candidate imported history entry.
+
+        Returns
+        -------
+        dict or None
+            Sanitized entry dict, or ``None`` if the input is not a valid
+            entry-shaped mapping.
+        """
+        if not isinstance(entry, dict):
+            return None
+        _entry_copy = copy.deepcopy(entry)
+        _normalized = {
+            key: Lightcurve._sanitize_fit_history_value(value)
+            for key, value in _entry_copy.items()
+        }
+
+        _raw_version = _normalized.get("fit_history_schema_version")
+        _version = None
+        if _raw_version is not None:
+            try:
+                _candidate = int(_raw_version)
+                if _candidate > 0:
+                    _version = _candidate
+            except (TypeError, ValueError):
+                _version = None
+        if _version is None:
+            _version = 1
+        _normalized["fit_history_schema_version"] = _version
+
+        # Ensure common keys exist in legacy entries so downstream summary and
+        # reporting paths are stable.
+        _normalized.setdefault("timestamp_utc", None)
+        _normalized.setdefault("success", None)
+        _normalized.setdefault("failed", None)
+        _normalized.setdefault("fit_configuration", None)
+        _normalized.setdefault("environment", None)
+        _normalized.setdefault("notes", None)
+
+        Lightcurve._validate_fit_history_entry(_normalized)
+        return _normalized
+
+    def _validate_imported_fit_history(self, payload):
+        """Validate imported fit-history payload and return normalized entries.
+
+        Parameters
+        ----------
+        payload : dict or list
+            Parsed JSON payload produced by :meth:`export_fit_history_json`,
+            or a legacy raw list of fit-history entries.
+
+        Returns
+        -------
+        tuple
+            ``(entries, diagnostics)`` where ``entries`` is a normalized list
+            of fit-history dicts and ``diagnostics`` is a list of warning
+            strings collected during validation.
+        """
+        _diagnostics = []
+        _raw_entries = None
+
+        if isinstance(payload, dict):
+            _raw_entries = payload.get("fit_history", [])
+            _supported_versions = payload.get("fit_history_supported_schema_versions")
+            if _supported_versions is not None and not isinstance(
+                _supported_versions, list
+            ):
+                _diagnostics.append(
+                    "fit_history_supported_schema_versions is malformed; ignoring."
+                )
+        elif isinstance(payload, list):
+            _raw_entries = payload
+        else:
+            _diagnostics.append(
+                "Imported payload is neither a dict nor a list; nothing loaded."
+            )
+            return [], _diagnostics
+
+        if not isinstance(_raw_entries, list):
+            _diagnostics.append("fit_history is not a list; nothing loaded.")
+            return [], _diagnostics
+
+        _normalized_entries = []
+        for _idx, _entry in enumerate(_raw_entries):
+            _normalized = self._normalize_imported_fit_history_entry(_entry)
+            if _normalized is None:
+                _diagnostics.append(
+                    f"Skipping malformed entry at index {_idx}: not a mapping."
+                )
+                continue
+            _entry_version = _normalized.get("fit_history_schema_version")
+            if _entry_version not in _FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS:
+                _diagnostics.append(
+                    "Entry at index "
+                    f"{_idx} has schema version {_entry_version}; importing "
+                    "with best-effort normalization."
+                )
+            _normalized_entries.append(_normalized)
+
+        return _normalized_entries, _diagnostics
+
+    def export_fit_history_json(self, path, include_text_summary=True):
+        """Export fit-history provenance to a human-readable JSON file.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Destination file path.
+        include_text_summary : bool, optional
+            If ``True``, include plain-text summary blocks in the exported
+            payload.
+        """
+        _path = Path(path)
+        _history = self.get_fit_history()
+        _normalized_history = []
+        _diagnostics = []
+        for _idx, _entry in enumerate(_history):
+            _normalized = self._normalize_imported_fit_history_entry(_entry)
+            if _normalized is None:
+                _diagnostics.append(
+                    f"Skipped malformed in-memory history entry at index {_idx}."
+                )
+                continue
+            _normalized_history.append(_normalized)
+
+        _payload = {
+            "exported_at_utc": datetime.datetime.now(datetime.UTC).isoformat(),
+            "fit_history_schema_version": _FIT_HISTORY_SCHEMA_VERSION,
+            "fit_history_supported_schema_versions": sorted(
+                _FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS
+            ),
+            "fit_history_entry_count": len(_normalized_history),
+            "fit_history": _normalized_history,
+            "fit_history_summary": self._sanitize_fit_history_value(
+                self.get_fit_history_summary()
+            ),
+            "latest_fit_configuration": self._sanitize_fit_history_value(
+                self.get_last_fit_configuration()
+            ),
+        }
+        if _diagnostics:
+            _payload["export_warnings"] = _diagnostics
+        if include_text_summary:
+            _payload["fit_history_text_summary"] = self.fit_history_to_text()
+            _payload["fit_history_summary_text"] = self.print_fit_history_summary(
+                print_summary=False
+            )
+            _payload["latest_fit_configuration_text"] = self.fit_configuration_to_text(
+                fit_configuration=self.get_last_fit_configuration()
+            )
+
+        _payload = self._sanitize_fit_history_value(_payload)
+        _path.parent.mkdir(parents=True, exist_ok=True)
+        with _path.open("w", encoding="utf-8") as _f:
+            json.dump(_payload, _f, ensure_ascii=False, indent=2, sort_keys=True)
+
+    def load_fit_history_json(self, path, merge=False):
+        """Load fit-history provenance exported as JSON.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Source JSON file path.
+        merge : bool, optional
+            If ``False`` (default), replace current history with imported
+            entries. If ``True``, append imported entries.
+
+        Returns
+        -------
+        int
+            Number of imported entries accepted into history.
+        """
+        _path = Path(path)
+        with _path.open("r", encoding="utf-8") as _f:
+            _payload = json.load(_f)
+
+        _entries, _diagnostics = self._validate_imported_fit_history(_payload)
+        for _message in _diagnostics:
+            warnings.warn(_message, UserWarning, stacklevel=2)
+
+        if merge:
+            _current = self.get_fit_history()
+            _merged = [copy.deepcopy(_entry) for _entry in _current]
+            _merged.extend(copy.deepcopy(_entry) for _entry in _entries)
+            self.fit_history = _merged
+        else:
+            self.fit_history = [copy.deepcopy(_entry) for _entry in _entries]
+
+        return len(_entries)
 
     def get_fit_history(self):
         """Return a deep copy of fit-history entries."""
@@ -5145,6 +5345,251 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if print_summary:
             print(_text)
         return _text
+
+    def generate_reproducibility_report(
+        self,
+        latest_only=False,
+        include_history=True,
+        include_configurations=True,
+        include_environment=True,
+    ):
+        """Return a long-form human-readable reproducibility report."""
+        _sep = "-" * 50
+        _lines = [_sep, "PGMUVI Reproducibility Report", _sep, ""]
+
+        _history = self.get_fit_history()
+        _working_history = list(_history)
+        if latest_only:
+            _working_history = _working_history[-1:] if _working_history else []
+
+        _normalized_history = []
+        _normalization_warnings = []
+        for _idx, _entry in enumerate(_working_history):
+            _normalized = self._normalize_imported_fit_history_entry(_entry)
+            if _normalized is None:
+                _normalization_warnings.append(
+                    f"history[{_idx}] is malformed and was skipped."
+                )
+                continue
+            _normalized_history.append(_normalized)
+
+        try:
+            _summary = self.get_fit_history_summary()
+        except Exception:
+            _summary = {
+                "total_attempts": len(_normalized_history),
+                "successful_fits": sum(
+                    1 for _entry in _normalized_history if _entry.get("success") is True
+                ),
+                "failed_fits": sum(
+                    1 for _entry in _normalized_history if _entry.get("failed") is True
+                ),
+                "counts_by_fit_strategy": {},
+                "counts_by_model_class": {},
+                "counts_by_backend": {},
+                "total_runtime_seconds": 0.0,
+                "mean_runtime_seconds": None,
+                "unique_bands": [],
+            }
+            _normalization_warnings.append(
+                "Could not compute canonical fit-history summary; using "
+                "best-effort summary from normalized entries."
+            )
+            for _entry in _normalized_history:
+                _strategy = str(_entry.get("fit_strategy") or "unknown")
+                _summary["counts_by_fit_strategy"][_strategy] = (
+                    _summary["counts_by_fit_strategy"].get(_strategy, 0) + 1
+                )
+                _model = str(_entry.get("model_class") or "unknown")
+                _summary["counts_by_model_class"][_model] = (
+                    _summary["counts_by_model_class"].get(_model, 0) + 1
+                )
+                _backend = str(_entry.get("backend") or "unknown")
+                _summary["counts_by_backend"][_backend] = (
+                    _summary["counts_by_backend"].get(_backend, 0) + 1
+                )
+                _elapsed = _entry.get("elapsed_seconds")
+                if isinstance(_elapsed, int | float) and math.isfinite(float(_elapsed)):
+                    _summary["total_runtime_seconds"] += float(_elapsed)
+                _entry_bands = _entry.get("bands")
+                if isinstance(_entry_bands, list):
+                    for _band in _entry_bands:
+                        if _band is not None:
+                            _summary["unique_bands"].append(str(_band))
+            if _summary["total_attempts"] > 0:
+                _summary["mean_runtime_seconds"] = (
+                    _summary["total_runtime_seconds"] / _summary["total_attempts"]
+                )
+            _summary["unique_bands"] = sorted(set(_summary["unique_bands"]))
+        if latest_only:
+            _total = len(_normalized_history)
+            _successful = sum(
+                1 for _entry in _normalized_history if _entry.get("success") is True
+            )
+            _failed = sum(
+                1 for _entry in _normalized_history if _entry.get("failed") is True
+            )
+            _summary = dict(_summary)
+            _summary["total_attempts"] = _total
+            _summary["successful_fits"] = _successful
+            _summary["failed_fits"] = _failed
+
+            _counts_by_fit_strategy = {}
+            _counts_by_model = {}
+            _counts_by_backend = {}
+            _runtime = []
+            _bands = set()
+            for _entry in _normalized_history:
+                _strategy = str(_entry.get("fit_strategy") or "unknown")
+                _counts_by_fit_strategy[_strategy] = (
+                    _counts_by_fit_strategy.get(_strategy, 0) + 1
+                )
+                _model = str(_entry.get("model_class") or "unknown")
+                _counts_by_model[_model] = _counts_by_model.get(_model, 0) + 1
+                _backend = str(_entry.get("backend") or "unknown")
+                _counts_by_backend[_backend] = _counts_by_backend.get(_backend, 0) + 1
+                _elapsed = _entry.get("elapsed_seconds")
+                if isinstance(_elapsed, int | float) and math.isfinite(float(_elapsed)):
+                    _runtime.append(float(_elapsed))
+                _entry_bands = _entry.get("bands")
+                if isinstance(_entry_bands, list):
+                    for _band in _entry_bands:
+                        if _band is not None:
+                            _bands.add(str(_band))
+
+            _summary["counts_by_fit_strategy"] = _counts_by_fit_strategy
+            _summary["counts_by_model_class"] = _counts_by_model
+            _summary["counts_by_backend"] = _counts_by_backend
+            _summary["total_runtime_seconds"] = float(sum(_runtime))
+            _summary["mean_runtime_seconds"] = (
+                float(sum(_runtime)) / len(_runtime) if _runtime else None
+            )
+            _summary["unique_bands"] = sorted(_bands)
+
+        _latest_entry = _normalized_history[-1] if _normalized_history else None
+        _latest_cfg = None
+        if _latest_entry is not None:
+            _latest_cfg = self._sanitize_fit_history_value(
+                _latest_entry.get("fit_configuration")
+            )
+        if _latest_cfg is None:
+            try:
+                _latest_cfg = self.get_last_fit_configuration()
+            except Exception:
+                _latest_cfg = None
+
+        if include_environment:
+            _lines.append("Environment")
+            _lines.append("-----------")
+            _env = {}
+            if _latest_entry is not None and isinstance(
+                _latest_entry.get("environment"), dict
+            ):
+                _env = _latest_entry.get("environment", {})
+            _git = _env.get("git") if isinstance(_env, dict) else None
+            _python_version = (
+                _env.get("python_version") if isinstance(_env, dict) else None
+            )
+            _torch_version = (
+                _env.get("torch_version") if isinstance(_env, dict) else None
+            )
+            _git_commit = (
+                _git.get("git_commit_hash") if isinstance(_git, dict) else None
+            )
+            _git_dirty = (
+                _git.get("git_dirty_worktree") if isinstance(_git, dict) else None
+            )
+            _lines.append(f"Python version: {_python_version or 'N/A'}")
+            _lines.append(f"Torch version: {_torch_version or 'N/A'}")
+            _lines.append(f"Git commit: {_git_commit or 'N/A'}")
+            _lines.append(
+                "Git dirty tree: "
+                + ("N/A" if _git_dirty is None else str(bool(_git_dirty)))
+            )
+            _lines.append("")
+
+        _lines.append("Fit Summary")
+        _lines.append("-----------")
+        _lines.append(f"Total fits: {_summary.get('total_attempts', 0)}")
+        _lines.append(f"Successful fits: {_summary.get('successful_fits', 0)}")
+        _lines.append(f"Failed fits: {_summary.get('failed_fits', 0)}")
+        _lines.append("")
+
+        _lines.append("Strategies")
+        _lines.append("----------")
+        _strategy_counts = _summary.get("counts_by_fit_strategy", {}) or {}
+        if _strategy_counts:
+            for _key, _value in sorted(_strategy_counts.items()):
+                _lines.append(f"{_key}: {_value}")
+        else:
+            _lines.append("(none recorded)")
+        _lines.append("")
+
+        _lines.append("Models")
+        _lines.append("------")
+        _model_counts = _summary.get("counts_by_model_class", {}) or {}
+        if _model_counts:
+            for _key, _value in sorted(_model_counts.items()):
+                _lines.append(f"{_key}: {_value}")
+        else:
+            _lines.append("(none recorded)")
+        _lines.append("")
+
+        _lines.append("Runtime Statistics")
+        _lines.append("------------------")
+        _total_runtime = _summary.get("total_runtime_seconds")
+        _mean_runtime = _summary.get("mean_runtime_seconds")
+        if isinstance(_total_runtime, int | float):
+            _lines.append(f"Total runtime (s): {float(_total_runtime):.6g}")
+        else:
+            _lines.append("Total runtime (s): N/A")
+        if isinstance(_mean_runtime, int | float):
+            _lines.append(f"Mean runtime (s): {float(_mean_runtime):.6g}")
+        else:
+            _lines.append("Mean runtime (s): N/A")
+        _lines.append("")
+
+        _lines.append("Bands")
+        _lines.append("-----")
+        _bands = _summary.get("unique_bands", []) or []
+        if _bands:
+            _lines.append(", ".join(str(_b) for _b in _bands))
+        else:
+            _lines.append("(none recorded)")
+        _lines.append("")
+
+        if include_configurations:
+            _lines.append("Latest Fit Configuration")
+            _lines.append("------------------------")
+            if _latest_cfg is None:
+                _lines.append("No fit configuration available.")
+            else:
+                _lines.append(
+                    self.fit_configuration_to_text(fit_configuration=_latest_cfg)
+                )
+            _lines.append("")
+
+        if include_history:
+            _lines.append("History Summary")
+            _lines.append("---------------")
+            if _normalized_history:
+                _lines.append(
+                    self.fit_history_to_text(
+                        max_entries=1 if latest_only else None,
+                    )
+                )
+            else:
+                _lines.append("No fit-history entries.")
+            _lines.append("")
+
+        _lines.append("Warnings / Truncations")
+        _lines.append("----------------------")
+        if _normalization_warnings:
+            _lines.extend(_normalization_warnings)
+        else:
+            _lines.append("(none)")
+        _lines.append(_sep)
+        return "\n".join(_lines)
 
     def _fit_history_plot_annotation_text(self):
         """Return a compact provenance string for optional plot annotations."""
