@@ -3308,11 +3308,56 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         _depth=0,
         _seen=None,
     ):
-        """Return a compact JSON-safe fit-configuration value.
+        """Return a compact, JSON-safe representation of a fit-configuration value.
 
-        This sanitizer is stricter than generic fit-history sanitization because
-        fit-configuration snapshots are intended to remain compact. Large arrays
-        and tensors are summarized instead of expanded.
+        Fit-configuration snapshots are stored inside fit-history entries and
+        are intended to be serializable (via ``json.dumps``), portable across
+        processes, and compact enough to display in a notebook.  Raw Python
+        objects fail these requirements in several ways:
+
+        * **Tensors and arrays** hold large numerical payloads that should not
+          be stored verbatim; they also contain device/dtype metadata that is
+          not JSON-native.  Arrays up to ``max_items`` elements are expanded;
+          larger ones are replaced by a summary dict with a ``"preview"`` list.
+        * **Classes and callables** are environment-specific references that
+          cannot be round-tripped through JSON; only their qualified names are
+          stored.
+        * **Constraint / prior objects** from gpytorch / pyro carry internal
+          state that is non-serializable; they are reduced to a readable
+          description (``Interval`` objects) or their ``repr`` string.
+        * **Non-finite floats** (NaN, ±Inf) are not valid JSON values and are
+          converted to ``None``.
+        * **Circular references** would cause infinite recursion and are
+          detected via an identity set; they are replaced by a sentinel string.
+        * **Sets and tuples** are converted to JSON arrays (lists).
+
+        The output is deterministic for a given input type: the same Python
+        type always produces the same JSON-safe representation.
+
+        This sanitizer is intentionally stricter than the general
+        ``_sanitize_fit_history_value`` helper: fit-configuration snapshots
+        must remain compact and human-readable, not just technically safe.
+
+        Parameters
+        ----------
+        value : object
+            The value to sanitize.  Any Python object is accepted.
+        max_items : int, optional
+            Maximum number of elements to expand for sequences, dicts,
+            arrays, and tensors before switching to a summary representation.
+            Defaults to 20.
+        _depth : int, optional
+            Internal recursion-depth guard.  Do not pass from user code.
+        _seen : set or None, optional
+            Internal identity-set for circular-reference detection.
+            Do not pass from user code.
+
+        Returns
+        -------
+        bool | int | str | float | list | dict | None
+            A JSON-safe value.  Scalars are returned as scalars; sequences
+            as lists; large arrays and tensors as summary dicts containing
+            a ``"preview"`` list of the first ``max_items`` elements.
         """
         if _seen is None:
             _seen = set()
@@ -3482,11 +3527,100 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fit_kwargs=None,
         context=None,
     ):
-        """Return a compact reproducibility snapshot for fit configuration.
+        """Return a compact, JSON-safe reproducibility snapshot for a fit call.
 
-        This helper is best-effort and must never raise. Missing values are
-        represented as ``None``.
+        This helper is called once per outermost :meth:`fit` invocation,
+        before GP training begins, and the result is stored in the fit-history
+        entry under the ``"fit_configuration"`` key.  It is intentionally
+        best-effort: all exceptions are caught so that history recording is
+        never blocked by serialization failures.
+
+        Data sources
+        ------------
+        The snapshot draws from two sources:
+
+        * **fit_kwargs** — the raw keyword arguments passed by the user to
+          :meth:`fit`.  These capture what the user explicitly requested.
+        * **context** — normalized/resolved values computed by :meth:`fit`
+          before training begins.  These reflect what the code will actually
+          use (e.g. a resolved model class name rather than the raw ``"model"``
+          shorthand string the user passed).
+
+        When both sources contain a value for the same concept, ``context``
+        takes precedence because it holds the authoritative internal value.
+
+        The distinction matters for auditing: ``user_kwargs`` stores what the
+        caller wrote; all other fields store what the library understood.
+
+        Parameters
+        ----------
+        fit_kwargs : dict, optional
+            The raw ``**kwargs`` dict passed to :meth:`fit`.
+        context : dict, optional
+            Normalized / resolved values assembled by :meth:`fit` before
+            calling :meth:`_fit_core` (e.g. resolved model class name,
+            resolved training_iter, resolved backend string).
+
+        Returns
+        -------
+        dict or None
+            A JSON-safe snapshot dict (see schema below), or ``None`` if
+            all recovery paths fail.
         """
+        # ----------------------------------------------------------------
+        # Schema of the returned dictionary
+        # ----------------------------------------------------------------
+        # The snapshot is a flat dict.  All values are JSON-safe after the
+        # final _sanitize_fit_configuration_value pass.  Unresolvable values
+        # are None.
+        #
+        # {
+        #   "fit_strategy"    : str | None  — routing key ("standard", …)
+        #   "model_class"     : str | None  — resolved class name, NOT the
+        #                                     raw "model" kwarg the user passed
+        #   "backend"         : str | None  — "cpu" or "cuda"
+        #   "training_iter"   : int | None
+        #   "learning_rate"   : float | None
+        #   "optimizer"       : str | None  — callable reduced to its name
+        #   "num_mixtures"    : int | None
+        #   "use_best_band_init" : bool | None
+        #   "use_gp_validation"  : bool | None
+        #   "constraint_set"  : str | None  — human-readable label
+        #   "prior_set"       : str | None
+        #   "max_samples"     : int | None
+        #   "max_samples_per_band" : int | None
+        #   "min_period"      : float | None
+        #   "max_period"      : float | None
+        #   "frequency_bounds": [min, max] | None  — from explicit kwarg or
+        #                        assembled from min_frequency/max_frequency
+        #   "period_bounds"   : [min, max] | None
+        #   "wavelength_bounds": [min, max] | None
+        #   "xtransform"      : str | None
+        #   "ytransform"      : str | None
+        #   "normalize"       : bool | None
+        #   "detrend"         : bool | None
+        #   "consensus_configuration" : dict | None  (non-None only if any
+        #       consensus kwarg was set); contains: constrain_consensus,
+        #       consensus_method, consensus_sigma_clip, consensus_sigma,
+        #       consensus_tolerance, consensus_max_harmonic,
+        #       min_consensus_inliers, use_gp_validation
+        #   "min_consensus_inliers" : int | None
+        #   "outlier_thresholds" : dict | None  (non-None only if any outlier
+        #       kwarg was set); contains: outlier_sigma_threshold,
+        #       outlier_threshold, max_outlier_fraction
+        #   "random_initialization_flags" : dict | None  (non-None only if
+        #       any init-randomness kwarg was set); contains: use_mls_init,
+        #       use_best_band_init, random_init, use_random_init,
+        #       randomize_initialization
+        #   "user_kwargs"     : dict | None  — raw user kwargs that do not
+        #       map to any canonical key above; sanitized but otherwise
+        #       uninterpreted; MUST NOT be used for logic
+        # }
+        #
+        # MUST NOT appear here: raw tensors, ndarrays, callables, live GP
+        # objects, non-finite floats.  Enforced by the final sanitization
+        # pass below.
+        # ----------------------------------------------------------------
         _snapshot = {
             "fit_strategy": None,
             "model_class": None,
@@ -3654,6 +3788,90 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 }
             except Exception:
                 return None
+
+    @staticmethod
+    def _validate_fit_configuration_snapshot(snapshot):
+        """Raise if the fit-configuration snapshot is not safe to store.
+
+        This is a lightweight defensive check applied after
+        :meth:`_collect_fit_configuration_snapshot` produces a snapshot and
+        before it is embedded in a fit-history entry.  It is not a full schema
+        validator; its purpose is to catch gross serialization failures early
+        so that bugs surface as loud errors during development rather than
+        silent corruption of history records.
+
+        In production code the caller wraps this in a ``try/except`` so that
+        a validation failure never prevents history from being recorded.
+
+        Checks performed
+        ----------------
+        1. The snapshot is a non-empty ``dict``.
+        2. A minimum set of required top-level keys is present.
+        3. No top-level value is a raw ``torch.Tensor``.
+        4. No top-level value is a raw ``numpy.ndarray``.
+        5. No top-level value is a callable.
+        6. The snapshot is JSON-serializable via ``json.dumps``.
+
+        Only top-level values are inspected for tensor/array/callable
+        pollution because nested structures were already processed by
+        :meth:`_sanitize_fit_configuration_value`.
+
+        Parameters
+        ----------
+        snapshot : object
+            The value returned by
+            :meth:`_collect_fit_configuration_snapshot`.
+
+        Raises
+        ------
+        TypeError
+            If ``snapshot`` is not a dict.
+        RuntimeError
+            If required keys are absent, prohibited types are found, or the
+            snapshot is not JSON-serializable.
+        """
+        _REQUIRED_KEYS = frozenset(
+            {
+                "fit_strategy",
+                "model_class",
+                "training_iter",
+                "backend",
+                "user_kwargs",
+            }
+        )
+        if not isinstance(snapshot, dict):
+            raise TypeError(
+                f"fit_configuration snapshot must be a dict, "
+                f"got {type(snapshot).__name__!r}"
+            )
+        _missing = _REQUIRED_KEYS - snapshot.keys()
+        if _missing:
+            raise RuntimeError(
+                f"fit_configuration snapshot is missing required keys: "
+                f"{sorted(_missing)}"
+            )
+        for _key, _val in snapshot.items():
+            if torch.is_tensor(_val):
+                raise RuntimeError(
+                    f"fit_configuration snapshot contains a raw tensor at "
+                    f"key {_key!r}; sanitize first"
+                )
+            if isinstance(_val, np.ndarray):
+                raise RuntimeError(
+                    f"fit_configuration snapshot contains a raw ndarray at "
+                    f"key {_key!r}; sanitize first"
+                )
+            if callable(_val):
+                raise RuntimeError(
+                    f"fit_configuration snapshot contains a callable at "
+                    f"key {_key!r}; store the name string instead"
+                )
+        try:
+            json.dumps(snapshot)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"fit_configuration snapshot is not JSON-serializable: {exc}"
+            ) from exc
 
     @staticmethod
     def _fit_history_package_directory():
@@ -4043,11 +4261,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     entry["timestamp_utc"] = None
 
             # fit_configuration: ensure compact JSON-safe dict or None.
+            # _validate_fit_configuration_snapshot is called defensively;
+            # any validation failure is silenced here because history
+            # recording must never raise.
             _cfg = entry.get("fit_configuration")
             if _cfg is not None:
-                entry["fit_configuration"] = (
-                    Lightcurve._sanitize_fit_configuration_value(_cfg)
+                _cfg_sanitized = Lightcurve._sanitize_fit_configuration_value(
+                    _cfg
                 )
+                entry["fit_configuration"] = _cfg_sanitized
+                try:
+                    Lightcurve._validate_fit_configuration_snapshot(
+                        _cfg_sanitized
+                    )
+                except (TypeError, RuntimeError):
+                    pass
         except Exception:
             pass
         return entry
@@ -4348,7 +4576,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return "\n".join(lines)
 
     def get_last_fit_configuration(self):
-        """Return a deep copy of the latest fit-configuration snapshot."""
+        """Return a deep copy of the most recent fit-configuration snapshot.
+
+        The snapshot is the dict stored under the ``"fit_configuration"`` key
+        of the last fit-history entry.  It captures the fit strategy, model
+        class, training hyperparameters, and user-supplied kwargs as they
+        were resolved at the start of the last :meth:`fit` call.
+
+        See :meth:`_collect_fit_configuration_snapshot` for the full schema
+        of the returned dict.
+
+        A deep copy is returned so that callers cannot accidentally mutate
+        the stored history entry.
+
+        Returns
+        -------
+        dict or None
+            A deep copy of the most recent fit-configuration dict, or
+            ``None`` if no fit history exists or the last entry does not
+            contain a configuration record.
+
+        See Also
+        --------
+        fit_configuration_to_text : Human-readable rendering of the snapshot.
+        get_fit_history : Full raw history list.
+        """
         _history = self.get_fit_history()
         if not _history:
             return None
@@ -4382,7 +4634,42 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return str(value)
 
     def fit_configuration_to_text(self, fit_configuration=None):
-        """Return a concise notebook-readable fit-configuration summary."""
+        """Return a multi-section, human-readable fit-configuration summary.
+
+        Renders the fit-configuration snapshot as a formatted string split
+        into three clearly labelled sections that mirror the separation
+        maintained inside the snapshot:
+
+        * **USER INPUTS** — non-canonical kwargs the caller passed explicitly
+          to :meth:`fit` that do not map to any known internal key.
+        * **RESOLVED INTERNAL SETTINGS** — the canonical values the library
+          actually used: model class, fit strategy, training hyperparameters,
+          constraint/prior sets, bounds.
+        * **RUNTIME METADATA** — derived settings assembled internally:
+          backend, consensus configuration, outlier thresholds,
+          initialization flags.
+
+        Output is stable-ordered and consistently indented so that it can be
+        read comfortably in a Jupyter notebook or terminal session.  Long
+        arrays and large dicts are summarized rather than dumped verbatim.
+
+        Parameters
+        ----------
+        fit_configuration : dict, optional
+            A snapshot dict to render.  When not provided, the most recent
+            snapshot from fit history is used via
+            :meth:`get_last_fit_configuration`.
+
+        Returns
+        -------
+        str
+            The formatted summary string.  Returns a short message when no
+            configuration is available.
+
+        See Also
+        --------
+        get_last_fit_configuration : Retrieve the raw snapshot dict.
+        """
         _cfg = fit_configuration
         if _cfg is None:
             _cfg = self.get_last_fit_configuration()
@@ -4392,26 +4679,77 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         _cfg = self._sanitize_fit_configuration_value(_cfg)
         _sep = "-" * 50
         _lines = [_sep, "Fit Configuration", _sep]
-        _rows = [
-            ("Strategy", _cfg.get("fit_strategy")),
-            ("Backend", _cfg.get("backend")),
-            ("Model", _cfg.get("model_class")),
-            ("Training iterations", _cfg.get("training_iter")),
-            ("Num mixtures", _cfg.get("num_mixtures")),
-            ("Learning rate", _cfg.get("learning_rate")),
-            ("Optimizer", _cfg.get("optimizer")),
-            ("Constraint set", _cfg.get("constraint_set")),
-            ("Prior set", _cfg.get("prior_set")),
-            ("Best-band init", _cfg.get("use_best_band_init")),
-            ("GP validation", _cfg.get("use_gp_validation")),
-            ("Consensus inliers", _cfg.get("min_consensus_inliers")),
-        ]
-        _label_width = max(len(_label) for _label, _ in _rows)
-        for _label, _val in _rows:
-            _lines.append(
-                f"{_label:<{_label_width}} : "
-                f"{self._fit_configuration_display_value(_val)}"
-            )
+
+        def _fv(val):
+            return self._fit_configuration_display_value(val)
+
+        def _section(title):
+            _lines.append("")
+            _lines.append(f"  {title}")
+            _lines.append("  " + "-" * 48)
+
+        def _row(label, val, indent=4):
+            if val is None:
+                return
+            _lines.append(f"{'':>{indent}}{label:<28}: {_fv(val)}")
+
+        def _dict_rows(label, dct, indent=4):
+            """Append a labelled sub-section for a nested dict."""
+            if not isinstance(dct, dict):
+                return
+            _visible = {k: v for k, v in dct.items() if v is not None}
+            if not _visible:
+                return
+            _lines.append(f"{'':>{indent}}{label}:")
+            for _k, _v in sorted(_visible.items()):
+                _lines.append(f"{'':>{indent + 2}}{_k:<26}: {_fv(_v)}")
+
+        # ---- USER INPUTS ---------------------------------------------------
+        _section("USER INPUTS")
+        _user_kw = _cfg.get("user_kwargs")
+        if isinstance(_user_kw, dict) and _user_kw:
+            for _k, _v in sorted(_user_kw.items()):
+                _row(_k, _v)
+        else:
+            _lines.append("    (no non-canonical user kwargs recorded)")
+
+        # ---- RESOLVED INTERNAL SETTINGS ------------------------------------
+        _section("RESOLVED INTERNAL SETTINGS")
+        _row("fit_strategy", _cfg.get("fit_strategy"))
+        _row("model_class", _cfg.get("model_class"))
+        _row("training_iter", _cfg.get("training_iter"))
+        _row("num_mixtures", _cfg.get("num_mixtures"))
+        _row("learning_rate", _cfg.get("learning_rate"))
+        _row("optimizer", _cfg.get("optimizer"))
+        _row("constraint_set", _cfg.get("constraint_set"))
+        _row("prior_set", _cfg.get("prior_set"))
+        _row("use_best_band_init", _cfg.get("use_best_band_init"))
+        _row("use_gp_validation", _cfg.get("use_gp_validation"))
+        _row("min_period", _cfg.get("min_period"))
+        _row("max_period", _cfg.get("max_period"))
+        _row("frequency_bounds", _cfg.get("frequency_bounds"))
+        _row("period_bounds", _cfg.get("period_bounds"))
+        _row("wavelength_bounds", _cfg.get("wavelength_bounds"))
+        _row("min_consensus_inliers", _cfg.get("min_consensus_inliers"))
+        _row("normalize", _cfg.get("normalize"))
+        _row("detrend", _cfg.get("detrend"))
+        _row("xtransform", _cfg.get("xtransform"))
+        _row("ytransform", _cfg.get("ytransform"))
+        _row("max_samples", _cfg.get("max_samples"))
+        _row("max_samples_per_band", _cfg.get("max_samples_per_band"))
+
+        # ---- RUNTIME METADATA ----------------------------------------------
+        _section("RUNTIME METADATA")
+        _row("backend", _cfg.get("backend"))
+        _dict_rows(
+            "consensus_configuration",
+            _cfg.get("consensus_configuration"),
+        )
+        _dict_rows("outlier_thresholds", _cfg.get("outlier_thresholds"))
+        _rand_flags = _cfg.get("random_initialization_flags")
+        _dict_rows("random_initialization_flags", _rand_flags)
+
+        _lines.append("")
         _lines.append(_sep)
         return "\n".join(_lines)
 
