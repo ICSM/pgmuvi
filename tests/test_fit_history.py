@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import enum
 import json
 import math
 from pathlib import Path
@@ -8,11 +9,15 @@ import random
 import tempfile
 import unittest
 from unittest import mock
+import warnings
 
+import gpytorch
 import matplotlib.pyplot as plt
 import numpy as np
 import re
 import torch
+from gpytorch.constraints import Interval
+from gpytorch.priors import NormalPrior
 
 from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
 
@@ -76,6 +81,39 @@ class _BrokenValue:
 
     def __str__(self):
         raise RuntimeError("cannot stringify")
+
+
+class _OpaqueConfig:
+    pass
+
+
+class _ConfigEnum(enum.Enum):
+    FAST = "fast"
+
+
+def _walk_values(value):
+    """Yield all nested values in a fit-configuration structure."""
+    yield value
+    if isinstance(value, dict):
+        for nested in value.values():
+            yield from _walk_values(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _walk_values(nested)
+
+
+def _contains_non_finite(value):
+    """Return True if a structure still contains non-finite numeric values."""
+    for nested in _walk_values(value):
+        if isinstance(nested, float) and not math.isfinite(nested):
+            return True
+        if isinstance(nested, np.generic):
+            try:
+                if not math.isfinite(float(nested)):
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
 
 
 class TestFitHistory(unittest.TestCase):
@@ -1009,6 +1047,7 @@ class TestFitConfigurationSnapshot(unittest.TestCase):
         big_array = np.arange(50, dtype=float)
         result = Lightcurve._sanitize_fit_configuration_value(big_array)
         self.assertIsInstance(result, dict)
+        self.assertTrue(result.get("__truncated__"))
         self.assertEqual(result.get("type"), "ndarray")
         self.assertIn("shape", result)
         self.assertIn("preview", result)
@@ -1029,6 +1068,7 @@ class TestFitConfigurationSnapshot(unittest.TestCase):
         t = torch.randn(30)
         result = Lightcurve._sanitize_fit_configuration_value(t)
         self.assertIsInstance(result, dict)
+        self.assertTrue(result.get("__truncated__"))
         self.assertEqual(result.get("type"), "tensor")
         self.assertIn("shape", result)
         self.assertIn("preview", result)
@@ -1051,16 +1091,20 @@ class TestFitConfigurationSnapshot(unittest.TestCase):
     # Sanitizer: callables / classes
     # ------------------------------------------------------------------
 
-    def test_sanitize_class_returns_name_string(self):
-        """A class object must be reduced to its __name__ string."""
+    def test_sanitize_class_returns_placeholder_dict(self):
+        """A class object must become an explicit unsupported-object placeholder."""
         result = Lightcurve._sanitize_fit_configuration_value(Lightcurve)
-        self.assertIsInstance(result, str)
-        self.assertIn("Lightcurve", result)
+        self.assertIsInstance(result, dict)
+        self.assertTrue(result.get("__unserializable__"))
+        self.assertEqual(result.get("type"), "type")
+        self.assertIn("Lightcurve", result.get("repr", ""))
 
-    def test_sanitize_callable_returns_string(self):
-        """A callable must be reduced to a string (not raise)."""
+    def test_sanitize_callable_returns_placeholder_dict(self):
+        """A callable must become an explicit unsupported-object placeholder."""
         result = Lightcurve._sanitize_fit_configuration_value(lambda x: x)
-        self.assertIsInstance(result, str)
+        self.assertIsInstance(result, dict)
+        self.assertTrue(result.get("__unserializable__"))
+        self.assertEqual(result.get("type"), "callable")
 
     # ------------------------------------------------------------------
     # Sanitizer: malformed / unserializable values
@@ -1074,7 +1118,7 @@ class TestFitConfigurationSnapshot(unittest.TestCase):
             self.fail(
                 f"_sanitize_fit_configuration_value raised unexpectedly: {exc}"
             )
-        self.assertIsNotNone(result)
+        self.assertTrue(result.get("__unserializable__"))
 
     def test_collect_snapshot_never_raises_with_bad_inputs(self):
         """_collect_fit_configuration_snapshot must not raise for bad inputs."""
@@ -1224,6 +1268,179 @@ class TestFitConfigurationSnapshot(unittest.TestCase):
         )
         payload = json.dumps(result)
         self.assertIsInstance(payload, str)
+
+    def test_sanitize_unsupported_object_uses_placeholder(self):
+        """Unsupported opaque objects must become explicit placeholders."""
+        result = Lightcurve._sanitize_fit_configuration_value(_OpaqueConfig())
+        self.assertTrue(result["__unserializable__"])
+        self.assertEqual(result["type"], "_OpaqueConfig")
+        self.assertEqual(result["module"], __name__)
+        self.assertIn("_OpaqueConfig", result["repr"])
+
+    def test_sanitize_large_string_uses_truncation_marker(self):
+        """Very long strings must become explicit truncation markers."""
+        result = Lightcurve._sanitize_fit_configuration_value("x" * 400)
+        self.assertTrue(result["__truncated__"])
+        self.assertEqual(result["type"], "str")
+        self.assertEqual(result["length"], 400)
+        self.assertIn("preview", result)
+
+    def test_sanitize_large_list_uses_truncation_marker(self):
+        """Large lists must become explicit truncation markers."""
+        result = Lightcurve._sanitize_fit_configuration_value(list(range(100)))
+        self.assertTrue(result["__truncated__"])
+        self.assertEqual(result["type"], "list")
+        self.assertEqual(result["length"], 100)
+        self.assertEqual(len(result["preview"]), 20)
+
+    def test_sanitize_nested_structure_limits_recursion_depth(self):
+        """Recursion-depth protection must emit an explicit truncation marker."""
+        nested = {"level0": {"level1": {"level2": {"level3": {"level4": {}}}}}}
+        cursor = nested["level0"]["level1"]["level2"]["level3"]["level4"]
+        for idx in range(5, 12):
+            cursor[f"level{idx}"] = {}
+            cursor = cursor[f"level{idx}"]
+        result = Lightcurve._sanitize_fit_configuration_value(nested)
+        payload = json.dumps(result)
+        self.assertIn("__truncated__", payload)
+        self.assertIn("max_depth", payload)
+
+    def test_collect_snapshot_round_trips_with_realistic_objects(self):
+        """Realistic scientific config objects must survive JSON round-trips."""
+        snapshot = Lightcurve._collect_fit_configuration_snapshot(
+            fit_kwargs={
+                "fit_strategy": "consensus",
+                "training_iter": 0,
+                "constraint_set": Interval(0.1, 2.5),
+                "prior_set": NormalPrior(0.0, 1.0),
+                "optimizer": torch.optim.Adam,
+                "kernel_kwargs": {
+                    "dtype": torch.float64,
+                    "device": torch.device("cpu"),
+                    "mode": _ConfigEnum.FAST,
+                    "bands": {"g", "r", "i"},
+                    "weights": (
+                        np.float64(1.5),
+                        np.float64(2.5),
+                    ),
+                    "opaque": _OpaqueConfig(),
+                },
+                "long_string": "y" * 400,
+                "big_list": list(range(50)),
+                "non_finite": float("nan"),
+            },
+            context={
+                "model_class": "TwoDSpectralMixtureGPModel",
+                "backend": torch.device("cpu"),
+            },
+        )
+        round_trip = json.loads(json.dumps(snapshot, allow_nan=False))
+        self.assertEqual(round_trip, snapshot)
+        self.assertFalse(_contains_non_finite(snapshot))
+        for nested in _walk_values(snapshot):
+            self.assertFalse(torch.is_tensor(nested))
+            self.assertFalse(isinstance(nested, np.ndarray))
+        self.assertEqual(snapshot["constraint_set"]["type"], "Interval")
+        self.assertEqual(snapshot["prior_set"]["type"], "NormalPrior")
+        self.assertEqual(
+            snapshot["user_kwargs"]["kernel_kwargs"]["device"],
+            "cpu",
+        )
+        self.assertEqual(
+            snapshot["user_kwargs"]["kernel_kwargs"]["dtype"],
+            "torch.float64",
+        )
+        self.assertTrue(
+            snapshot["user_kwargs"]["kernel_kwargs"]["opaque"][
+                "__unserializable__"
+            ]
+        )
+        self.assertTrue(snapshot["user_kwargs"]["big_list"]["__truncated__"])
+        self.assertTrue(snapshot["user_kwargs"]["long_string"]["__truncated__"])
+        self.assertTrue(snapshot["user_kwargs"]["non_finite"]["__non_finite__"])
+
+    def test_real_fit_configuration_round_trip_is_stable(self):
+        """A real fit snapshot must survive a JSON round-trip unchanged."""
+        lc = self._make_lc(seed=531)
+        _run_consensus_fit(lc)
+        snapshot = lc.get_last_fit_configuration()
+        round_trip = json.loads(json.dumps(snapshot, allow_nan=False))
+        self.assertEqual(round_trip, snapshot)
+        self.assertFalse(_contains_non_finite(snapshot))
+
+    def test_validate_snapshot_warns_for_placeholders_and_truncation(self):
+        """Validation should warn about placeholders, truncations, and depth."""
+        snapshot = Lightcurve._sanitize_fit_configuration_value(
+            {
+                "fit_strategy": "consensus",
+                "model_class": "TwoDSpectralMixtureGPModel",
+                "training_iter": 0,
+                "backend": "cpu",
+                "user_kwargs": {
+                    "opaque": _OpaqueConfig(),
+                    "deep": {
+                        "l0": {"l1": {"l2": {"l3": {"l4": {"l5": {"l6": 1}}}}}}
+                    },
+                    "big_list": list(range(100)),
+                },
+            }
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            Lightcurve._validate_fit_configuration_snapshot(snapshot)
+        messages = [str(item.message) for item in caught]
+        self.assertTrue(
+            any("fit_configuration.user_kwargs.opaque" in msg for msg in messages)
+        )
+        self.assertTrue(
+            any("fit_configuration.user_kwargs.big_list" in msg for msg in messages)
+        )
+        self.assertTrue(any("deeply nested" in msg for msg in messages))
+
+    def test_validate_snapshot_raises_on_raw_tensor_leak(self):
+        """Validation must fail loudly if a raw tensor escapes sanitization."""
+        snapshot = {
+            "fit_strategy": "consensus",
+            "model_class": "TwoDSpectralMixtureGPModel",
+            "training_iter": 0,
+            "backend": "cpu",
+            "user_kwargs": {"bad_tensor": torch.tensor([1.0, 2.0])},
+        }
+        with self.assertRaises(RuntimeError):
+            Lightcurve._validate_fit_configuration_snapshot(snapshot)
+
+    def test_validate_snapshot_raises_on_callable_leak(self):
+        """Validation must fail loudly if a raw callable escapes sanitization."""
+        snapshot = {
+            "fit_strategy": "consensus",
+            "model_class": "TwoDSpectralMixtureGPModel",
+            "training_iter": 0,
+            "backend": "cpu",
+            "user_kwargs": {"bad_callable": lambda x: x},
+        }
+        with self.assertRaises(RuntimeError):
+            Lightcurve._validate_fit_configuration_snapshot(snapshot)
+
+    def test_fit_configuration_to_text_marks_placeholders_and_truncation(self):
+        """Text summaries should visibly flag placeholders and truncation markers."""
+        lc = self._make_lc(seed=532)
+        cfg = {
+            "fit_strategy": "consensus",
+            "model_class": "TwoDSpectralMixtureGPModel",
+            "training_iter": 0,
+            "backend": "cpu",
+            "user_kwargs": {
+                "opaque": Lightcurve._sanitize_fit_configuration_value(
+                    _OpaqueConfig()
+                ),
+                "big_list": Lightcurve._sanitize_fit_configuration_value(
+                    list(range(100))
+                ),
+            },
+        }
+        text = lc.fit_configuration_to_text(fit_configuration=cfg)
+        self.assertIn("[UNSERIALIZABLE]", text)
+        self.assertIn("[TRUNCATED]", text)
 
     # ------------------------------------------------------------------
     # JSON export integration
