@@ -7706,6 +7706,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _uses_frequency_space = None
             _uses_period_space = None
 
+        _fit_configuration = self._collect_fit_configuration_snapshot(
+            fit_kwargs=kwargs,
+            context={
+                "model_class": _model_class,
+                "fit_strategy": _fit_strategy,
+                "training_iter": _training_iter,
+                "num_mixtures": _num_mixtures,
+                "backend": _backend,
+                "constraint_set": (
+                    str(_constraint_set) if _constraint_set is not None else None
+                ),
+            },
+        )
+
         self._fit_history_context = {
             "model_class": _model_class,
             "fit_strategy": _fit_strategy,
@@ -7720,6 +7734,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "bands": _bands,
             "uses_frequency_space": _uses_frequency_space,
             "uses_period_space": _uses_period_space,
+            "fit_configuration": _fit_configuration,
             "environment": self._fit_history_environment_metadata(),
         }
         self._fit_history_recorded = False

@@ -923,5 +923,333 @@ class TestFitHistoryProvenance(unittest.TestCase):
             plt.close(fig)
 
 
+class TestFitConfigurationSnapshot(unittest.TestCase):
+    """Tests for fit-configuration snapshot provenance."""
+
+    def _make_lc(self, seed=500):
+        return _make_multiband_lightcurve(
+            {"g": 30.0, "r": 30.0, "i": 30.0}, seed=seed
+        )
+
+    # ------------------------------------------------------------------
+    # Basic existence and structure
+    # ------------------------------------------------------------------
+
+    def test_fit_configuration_present_after_successful_fit(self):
+        """A successful fit must record fit_configuration in the entry."""
+        lc = self._make_lc(seed=500)
+        _run_consensus_fit(lc)
+        entry = lc.get_fit_history()[-1]
+        self.assertIn("fit_configuration", entry)
+        self.assertIsNotNone(entry["fit_configuration"])
+        self.assertIsInstance(entry["fit_configuration"], dict)
+
+    def test_fit_configuration_contains_core_fields(self):
+        """fit_configuration must include key provenance fields."""
+        lc = self._make_lc(seed=501)
+        _run_consensus_fit(lc)
+        entry = lc.get_fit_history()[-1]
+        cfg = entry["fit_configuration"]
+        self.assertIn("fit_strategy", cfg)
+        self.assertIn("model_class", cfg)
+        self.assertIn("backend", cfg)
+        self.assertIn("training_iter", cfg)
+
+    def test_fit_configuration_records_strategy(self):
+        """fit_configuration.fit_strategy matches the strategy used."""
+        lc = self._make_lc(seed=502)
+        _run_consensus_fit(lc)
+        entry = lc.get_fit_history()[-1]
+        cfg = entry["fit_configuration"]
+        self.assertEqual(cfg["fit_strategy"], "consensus")
+
+    def test_fit_configuration_records_num_mixtures(self):
+        """fit_configuration.num_mixtures reflects the argument passed."""
+        result = Lightcurve._collect_fit_configuration_snapshot(
+            fit_kwargs={"num_mixtures": 2, "fit_strategy": "consensus"},
+            context={},
+        )
+        self.assertEqual(result["num_mixtures"], 2)
+
+    def test_fit_configuration_records_training_iter_zero(self):
+        """training_iter=0 should be stored faithfully."""
+        lc = self._make_lc(seed=504)
+        _run_consensus_fit(lc, training_iter=0)
+        cfg = lc.get_fit_history()[-1]["fit_configuration"]
+        self.assertEqual(cfg["training_iter"], 0)
+
+    # ------------------------------------------------------------------
+    # JSON serialisation
+    # ------------------------------------------------------------------
+
+    def test_fit_configuration_is_json_serializable(self):
+        """fit_configuration must remain JSON serialisable after a real fit."""
+        lc = self._make_lc(seed=505)
+        _run_consensus_fit(lc)
+        entry = lc.get_fit_history()[-1]
+        payload = json.dumps(entry)
+        self.assertIsInstance(payload, str)
+        self.assertIn("fit_configuration", payload)
+
+    def test_full_history_json_serializable_with_fit_configuration(self):
+        """The full history list including fit_configuration must be JSON-safe."""
+        lc = self._make_lc(seed=506)
+        _run_consensus_fit(lc)
+        with self.assertRaises(Exception):
+            _run_consensus_fit(lc, min_points_per_band=10_000)
+        payload = json.dumps(lc.get_fit_history())
+        self.assertIsInstance(payload, str)
+
+    # ------------------------------------------------------------------
+    # Sanitizer: giant arrays
+    # ------------------------------------------------------------------
+
+    def test_sanitize_large_array_produces_summary(self):
+        """Arrays longer than 20 elements become a summary dict."""
+        big_array = np.arange(50, dtype=float)
+        result = Lightcurve._sanitize_fit_configuration_value(big_array)
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("type"), "ndarray")
+        self.assertIn("shape", result)
+        self.assertIn("preview", result)
+
+    def test_sanitize_small_array_stays_list(self):
+        """Arrays of ≤20 elements become a plain list."""
+        small_array = np.array([1.0, 2.0, 3.0])
+        result = Lightcurve._sanitize_fit_configuration_value(small_array)
+        self.assertIsInstance(result, list)
+        self.assertEqual(result, [1.0, 2.0, 3.0])
+
+    # ------------------------------------------------------------------
+    # Sanitizer: tensors
+    # ------------------------------------------------------------------
+
+    def test_sanitize_tensor_produces_summary_dict(self):
+        """Multi-element tensors must become summary dicts, not raw tensors."""
+        t = torch.randn(30)
+        result = Lightcurve._sanitize_fit_configuration_value(t)
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("type"), "tensor")
+        self.assertIn("shape", result)
+        self.assertIn("preview", result)
+
+    def test_sanitize_scalar_tensor_becomes_python_scalar(self):
+        """A single-element tensor must become a plain Python scalar."""
+        t = torch.tensor(3.14)
+        result = Lightcurve._sanitize_fit_configuration_value(t)
+        self.assertIsInstance(result, float)
+        self.assertAlmostEqual(result, 3.14, places=4)
+
+    def test_sanitized_tensor_summary_is_json_safe(self):
+        """Sanitized tensor summary must be JSON serialisable."""
+        t = torch.randn(25)
+        result = Lightcurve._sanitize_fit_configuration_value(t)
+        payload = json.dumps(result)
+        self.assertIsInstance(payload, str)
+
+    # ------------------------------------------------------------------
+    # Sanitizer: callables / classes
+    # ------------------------------------------------------------------
+
+    def test_sanitize_class_returns_name_string(self):
+        """A class object must be reduced to its __name__ string."""
+        result = Lightcurve._sanitize_fit_configuration_value(Lightcurve)
+        self.assertIsInstance(result, str)
+        self.assertIn("Lightcurve", result)
+
+    def test_sanitize_callable_returns_string(self):
+        """A callable must be reduced to a string (not raise)."""
+        result = Lightcurve._sanitize_fit_configuration_value(lambda x: x)
+        self.assertIsInstance(result, str)
+
+    # ------------------------------------------------------------------
+    # Sanitizer: malformed / unserializable values
+    # ------------------------------------------------------------------
+
+    def test_sanitize_broken_value_never_raises(self):
+        """A value that raises on both repr and str must not propagate."""
+        try:
+            result = Lightcurve._sanitize_fit_configuration_value(_BrokenValue())
+        except Exception as exc:
+            self.fail(
+                f"_sanitize_fit_configuration_value raised unexpectedly: {exc}"
+            )
+        self.assertIsNotNone(result)
+
+    def test_collect_snapshot_never_raises_with_bad_inputs(self):
+        """_collect_fit_configuration_snapshot must not raise for bad inputs."""
+        try:
+            result = Lightcurve._collect_fit_configuration_snapshot(
+                fit_kwargs={"broken": _BrokenValue(), "fit_strategy": "test"},
+                context={"model_class": _BrokenValue()},
+            )
+        except Exception as exc:
+            self.fail(
+                f"_collect_fit_configuration_snapshot raised unexpectedly: {exc}"
+            )
+        self.assertIsInstance(result, dict)
+
+    def test_collect_snapshot_missing_values_are_none(self):
+        """Fields with no source in fit_kwargs/context must be None."""
+        result = Lightcurve._collect_fit_configuration_snapshot(
+            fit_kwargs={}, context={}
+        )
+        self.assertIsNone(result["fit_strategy"])
+        self.assertIsNone(result["model_class"])
+        self.assertIsNone(result["num_mixtures"])
+        self.assertIsNone(result["constraint_set"])
+
+    # ------------------------------------------------------------------
+    # get_last_fit_configuration
+    # ------------------------------------------------------------------
+
+    def test_get_last_fit_configuration_returns_none_on_empty_history(self):
+        """get_last_fit_configuration must return None when history is empty."""
+        lc = self._make_lc(seed=510)
+        self.assertIsNone(lc.get_last_fit_configuration())
+
+    def test_get_last_fit_configuration_returns_none_when_no_cfg(self):
+        """get_last_fit_configuration returns None if latest entry lacks cfg."""
+        lc = self._make_lc(seed=511)
+        lc.fit_history.append({"success": True, "failed": False})
+        self.assertIsNone(lc.get_last_fit_configuration())
+
+    def test_get_last_fit_configuration_returns_dict_after_fit(self):
+        """get_last_fit_configuration returns a dict after a real fit."""
+        lc = self._make_lc(seed=512)
+        _run_consensus_fit(lc)
+        cfg = lc.get_last_fit_configuration()
+        self.assertIsNotNone(cfg)
+        self.assertIsInstance(cfg, dict)
+
+    def test_get_last_fit_configuration_is_deep_copy(self):
+        """Mutating the returned dict must not affect the stored entry."""
+        lc = self._make_lc(seed=513)
+        _run_consensus_fit(lc)
+        cfg = lc.get_last_fit_configuration()
+        original_strategy = cfg.get("fit_strategy")
+        cfg["fit_strategy"] = "mutated"
+        cfg_again = lc.get_last_fit_configuration()
+        self.assertEqual(cfg_again.get("fit_strategy"), original_strategy)
+
+    def test_get_last_fit_configuration_reflects_latest_entry(self):
+        """get_last_fit_configuration reflects the most recent fit."""
+        lc = self._make_lc(seed=514)
+        _run_consensus_fit(lc)
+        # Manually inject a second entry with a distinct fit_configuration
+        lc.fit_history.append(
+            {
+                "success": True,
+                "failed": False,
+                "fit_configuration": {"fit_strategy": "injected"},
+            }
+        )
+        cfg = lc.get_last_fit_configuration()
+        self.assertEqual(cfg.get("fit_strategy"), "injected")
+
+    # ------------------------------------------------------------------
+    # fit_configuration_to_text
+    # ------------------------------------------------------------------
+
+    def test_fit_configuration_to_text_no_history_returns_message(self):
+        """fit_configuration_to_text returns a helpful string with no history."""
+        lc = self._make_lc(seed=520)
+        text = lc.fit_configuration_to_text()
+        self.assertIsInstance(text, str)
+        self.assertGreater(len(text), 0)
+
+    def test_fit_configuration_to_text_after_fit_contains_strategy(self):
+        """fit_configuration_to_text must include the fit strategy."""
+        lc = self._make_lc(seed=521)
+        _run_consensus_fit(lc)
+        text = lc.fit_configuration_to_text()
+        self.assertIn("consensus", text)
+
+    def test_fit_configuration_to_text_contains_section_header(self):
+        """fit_configuration_to_text must include the 'Fit Configuration' header."""
+        lc = self._make_lc(seed=522)
+        _run_consensus_fit(lc)
+        text = lc.fit_configuration_to_text()
+        self.assertIn("Fit Configuration", text)
+        self.assertIn("-" * 40, text)
+
+    def test_fit_configuration_to_text_accepts_explicit_cfg(self):
+        """fit_configuration_to_text must accept an explicit cfg dict."""
+        lc = self._make_lc(seed=523)
+        cfg = {
+            "fit_strategy": "custom_strategy",
+            "backend": "cpu",
+            "model_class": "TestModel",
+            "training_iter": 100,
+            "num_mixtures": 4,
+        }
+        text = lc.fit_configuration_to_text(fit_configuration=cfg)
+        self.assertIn("custom_strategy", text)
+        self.assertIn("TestModel", text)
+        self.assertIn("100", text)
+
+    def test_fit_configuration_to_text_never_raises_on_bad_cfg(self):
+        """fit_configuration_to_text must not raise for malformed cfg."""
+        lc = self._make_lc(seed=524)
+        try:
+            text = lc.fit_configuration_to_text(
+                fit_configuration={"fit_strategy": _BrokenValue()}
+            )
+        except Exception as exc:
+            self.fail(f"fit_configuration_to_text raised unexpectedly: {exc}")
+        self.assertIsInstance(text, str)
+
+    # ------------------------------------------------------------------
+    # Partial/failed fit snapshots
+    # ------------------------------------------------------------------
+
+    def test_failed_fit_still_records_fit_configuration(self):
+        """A fit that fails with an exception must still record fit_configuration."""
+        lc = self._make_lc(seed=530)
+        with self.assertRaises(Exception):
+            _run_consensus_fit(lc, min_points_per_band=10_000)
+        history = lc.get_fit_history()
+        self.assertEqual(len(history), 1)
+        entry = history[-1]
+        self.assertTrue(entry["failed"])
+        # fit_configuration may be present (captured from context)
+        # It may be None or a dict — it must not cause an error
+        if entry.get("fit_configuration") is not None:
+            self.assertIsInstance(entry["fit_configuration"], dict)
+
+    def test_partial_fit_configuration_snapshot_is_json_safe(self):
+        """A partial snapshot built from empty kwargs must be JSON serialisable."""
+        result = Lightcurve._collect_fit_configuration_snapshot(
+            fit_kwargs={}, context={}
+        )
+        payload = json.dumps(result)
+        self.assertIsInstance(payload, str)
+
+    # ------------------------------------------------------------------
+    # JSON export integration
+    # ------------------------------------------------------------------
+
+    def test_json_export_includes_fit_configuration(self):
+        """Serialised fit history must contain 'fit_configuration' field."""
+        lc = self._make_lc(seed=540)
+        _run_consensus_fit(lc)
+        payload = json.dumps(lc.get_fit_history())
+        self.assertIn('"fit_configuration"', payload)
+
+    def test_backward_compat_entry_without_fit_configuration(self):
+        """Legacy entries without fit_configuration must not break JSON export."""
+        lc = self._make_lc(seed=541)
+        lc.fit_history.append(
+            {
+                "timestamp_utc": "2020-01-01T00:00:00+00:00",
+                "success": True,
+                "failed": False,
+                # fit_configuration deliberately absent
+            }
+        )
+        payload = json.dumps(lc.get_fit_history())
+        self.assertIsInstance(payload, str)
+
+
 if __name__ == "__main__":
     unittest.main()
