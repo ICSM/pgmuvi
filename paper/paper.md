@@ -95,6 +95,11 @@ The package is designed to be easy to use, and provide a quick way to perform GP
 The package is designed to be flexible and allow the user to customize the GPR model to their needs.
 `pgmuvi` exploits multiple strategies to scale regression to large datasets, making it suitable for the current era of large-scale astronomical surveys.
 
+
+
+
+# State of the field
+
 <!-- Now something comparing to other GP packages -->
 A number of other software packages exist to perform GPR, some of which, such as `celerite` [@celerite1; @celerite2], `tinygp` [@tinygp] or `george` [@ambikasaran2015george] were developed within the astronomical community with astronomical time-series in mind.
 However, these each have their own limitations.
@@ -123,12 +128,7 @@ A simple comparison between different GP packages showing some cases where `pgmu
 )
 
 
-`pgmuvi` is already in use for projects in our group. 
-One of the authors' (DAVT) masters thesis served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood.
-The paper resulting from this work (Srinivasan et al., in prep) deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)).
-<!-- A different project related to dusty variable stars in M33 has also used `pgmuvi` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al., in prep.).-->
-
-# Method and Features
+# Software design
 
 `pgmuvi` builds on the popular GPyTorch library.
 GPyTorch [@gardner2018gpytorch] is a Gaussian process library for PyTorch [@pytorch], which is a popular machine learning library for Python.
@@ -164,7 +164,17 @@ To summarise, the key features of `pgmuvi` are:
 <!-- - Automated reporting of kernel hyperparameters and their uncertainties, and summary of MCMC chains.-->
 - Automated reporting and visualization of fitted kernel hyperparameters
 
+# Research impact statement
 
+`pgmuvi` is already in use for projects in our group. 
+One of the authors' (DAVT) masters thesis served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood.
+The paper resulting from this work (Srinivasan et al., in prep) deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)).
+<!-- A different project related to dusty variable stars in M33 has also used `pgmuvi` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al., in prep.).-->
+
+
+# AI usage disclosure
+
+Github Copilot, Claude Code and ChatGPT were used in the development of `pgmuvi`. They were used to generate and review code under human instruction and review, write unit tests, and assist in writing and editing documentation. 
 
 <!-- # Mathematics
 
