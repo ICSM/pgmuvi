@@ -12580,6 +12580,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "gp_frequency_tolerance_factor", 3.0
         )
         verbose = fit_kwargs.get("verbose", False)
+        _allow_existing = fit_kwargs.pop("_allow_existing_model_for_consensus", False)
         consensus_dedup_rtol = float(consensus_dedup_rtol)
         if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol <= 0:
             raise ValueError(
@@ -13025,11 +13026,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # this consensus fit.  Never reuse stale model state from a previous
         # fit: the user may have requested a different model, time_kernel_type,
         # or num_mixtures in this call.
-        # If model is None (not specified), preserve any existing model that
-        # was pre-set by the caller (internal use / test scaffolding).
+        # If model is None, require explicit internal opt-in via the private
+        # flag _allow_existing_model_for_consensus to reuse a pre-existing
+        # model; otherwise raise a clear error to prevent accidental stale-
+        # state reuse in public consensus fits.
         _requested_model = fit_kwargs.get("model")
         if _requested_model is not None:
             self._consensus_clear_model_state()
+        elif not _allow_existing:
+            raise ConsensusFitError(
+                "Consensus fit requires an explicit final model. "
+                "Pass model='2D' or another spectral-mixture-compatible "
+                "model. Pre-existing model reuse is disabled by default "
+                "to prevent stale consensus constraints."
+            )
         _set_model_excluded = {
             "model",
             "likelihood",
@@ -13066,6 +13076,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "lr",
             "stopavg",
             "fit_strategy",
+            "verbose",
+            "_allow_existing_model_for_consensus",
         }
         _model_needs_build = (
             _requested_model is not None
