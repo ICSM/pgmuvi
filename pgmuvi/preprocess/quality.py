@@ -215,7 +215,6 @@ def compute_sampling_metrics(
             metrics["mean_snr"] = float(np.mean(snr))
             metrics["fraction_snr_gt_3"] = float(np.mean(snr > 3))
             metrics["fraction_snr_gt_5"] = float(np.mean(snr > 5))
-            metrics["snr_values"] = snr
 
     return metrics
 
@@ -348,17 +347,7 @@ def assess_sampling_quality(
 
     # Gate 4: SNR check (if data provided)
     if "median_snr" in metrics:
-        snr_values = metrics.get("snr_values")
-        if snr_values is not None:
-            snr_arr = np.asarray(snr_values)
-            finite_mask = np.isfinite(snr_arr)
-            fraction_snr_gt_min = (
-                float(np.mean(snr_arr[finite_mask] >= min_snr))
-                if np.any(finite_mask)
-                else 0.0
-            )
-        else:
-            fraction_snr_gt_min = float(metrics.get("fraction_snr_gt_3", 0.0))
+        fraction_snr_gt_min = float(metrics.get("fraction_snr_gt_3", 0.0))
 
         gates["min_snr"] = (
             metrics["median_snr"] >= min_snr
