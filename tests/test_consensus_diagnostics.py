@@ -1949,6 +1949,7 @@ class TestStagedConsensusDebugCheckpoints(unittest.TestCase):
                     use_gp_validation=True,
                     constrain_consensus=False,
                     verbose=False,
+                    _allow_existing_model_for_consensus=True,
                 )
         finally:
             lc_mod._CONSENSUS_DEBUG_VALIDATE = original_flag
