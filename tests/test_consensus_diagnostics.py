@@ -173,6 +173,13 @@ def _make_valid_diagnostics(
         "final_constraint_bounds": None,
         "controls": {},
         "mode": None,
+        "consensus_constraints_applied": False,
+        "consensus_constraint_bounds": None,
+        "consensus_constraint_target_key": None,
+        "consensus_scale_constraint_bounds": None,
+        "consensus_scale_constraint_target_key": None,
+        "default_constraints_applied_before_consensus": False,
+        "constraints_marked_set_after_consensus": False,
     }
 
 

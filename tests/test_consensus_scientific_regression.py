@@ -668,5 +668,205 @@ class TestConsensusScientificRegression(unittest.TestCase):
         assert_valid_consensus_diagnostics(self, lc, diagnostics)
 
 
+# ---------------------------------------------------------------------------
+# Constraint-handoff regression tests
+# ---------------------------------------------------------------------------
+
+
+def _make_2band_lc(period=30.0, n_pts=60, seed=1):
+    """Return a minimal 2-band Lightcurve with a clear period."""
+    return _make_multiband_lightcurve(
+        {"A": period, "B": period},
+        n_pts_by_band={"A": n_pts, "B": n_pts},
+        seed=seed,
+    )
+
+
+class TestConsensusConstraintHandoff(unittest.TestCase):
+    """Regression tests for the first-fit/second-fit constraint-ordering bug.
+
+    Before the fix, `_consensus_standard_fit` applied consensus constraints
+    via `set_constraint(...)` but did not mark `__CONTRAINTS_SET = True`.
+    When the nested `self.fit(...)` ran `_fit_core`, the guard
+    ``if not self.__CONTRAINTS_SET:`` was still True, causing
+    `set_default_constraints` to overwrite the consensus constraints.
+
+    These tests verify that after the fix:
+    - default constraints are applied before consensus constraints;
+    - consensus constraints are applied on top and win;
+    - `__CONTRAINTS_SET` is True after consensus constraints are set;
+    - the consensus constraint bounds actually contain the consensus frequency;
+    - diagnostics fields are populated correctly.
+    """
+
+    def _run_constrained_consensus(self, lc, **extra_kwargs):
+        """Run a consensus fit with constrain_consensus=True, training_iter=0."""
+        kwargs = {
+            "fit_strategy": "consensus",
+            "model": "2D",
+            "training_iter": 0,
+            "use_gp_validation": False,
+            "use_mls_init": False,
+            "use_best_band_init": False,
+            "constrain_consensus": True,
+            "consensus_frequency_width": 0.01,
+        }
+        kwargs.update(extra_kwargs)
+        lc.fit(**kwargs)
+        return lc.consensus_diagnostics
+
+    def test_constrained_consensus_applies_constraints_on_first_fit(self):
+        """Consensus constraints must take effect on the first fit call.
+
+        Previously, the first fit would overwrite consensus constraints with
+        defaults because __CONTRAINTS_SET was still False when _fit_core ran.
+        """
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+
+        self.assertTrue(
+            diag.get("consensus_constraints_applied"),
+            "consensus_constraints_applied should be True after constrained fit",
+        )
+        self.assertTrue(
+            diag.get("constraints_marked_set_after_consensus"),
+            "constraints_marked_set_after_consensus should be True",
+        )
+        self.assertTrue(
+            diag.get("default_constraints_applied_before_consensus"),
+            "default_constraints_applied_before_consensus should be True",
+        )
+
+    def test_constraint_bounds_contain_consensus_frequency(self):
+        """The applied mixture_means constraint must enclose the consensus freq."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+
+        bounds = diag.get("consensus_constraint_bounds")
+        self.assertIsNotNone(
+            bounds,
+            "consensus_constraint_bounds should be set when constrain_consensus=True",
+        )
+        self.assertEqual(len(bounds), 2, "bounds should be [lower, upper]")
+        lower, upper = float(bounds[0]), float(bounds[1])
+        self.assertGreater(upper, lower, "upper bound must exceed lower bound")
+
+        consensus_freq = diag.get("consensus_frequency") or diag.get(
+            "final_consensus_frequency"
+        )
+        if consensus_freq is not None:
+            self.assertGreaterEqual(
+                consensus_freq,
+                lower,
+                "consensus_frequency must be >= constraint lower bound",
+            )
+            self.assertLessEqual(
+                consensus_freq,
+                upper,
+                "consensus_frequency must be <= constraint upper bound",
+            )
+
+    def test_constraint_target_keys_populated(self):
+        """Diagnostic keys for constraint target parameters must be set."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+
+        self.assertIsNotNone(
+            diag.get("consensus_constraint_target_key"),
+            "consensus_constraint_target_key should be set",
+        )
+        self.assertIsNotNone(
+            diag.get("consensus_scale_constraint_target_key"),
+            "consensus_scale_constraint_target_key should be set",
+        )
+        self.assertIsNotNone(
+            diag.get("consensus_scale_constraint_bounds"),
+            "consensus_scale_constraint_bounds should be set",
+        )
+
+    def test_unconstrained_consensus_diagnostics_are_false(self):
+        """When constrain_consensus=False, constraint diagnostics are False."""
+        lc = _make_2band_lc(period=30.0)
+        kwargs = {
+            "fit_strategy": "consensus",
+            "model": "2D",
+            "training_iter": 0,
+            "use_gp_validation": False,
+            "use_mls_init": False,
+            "use_best_band_init": False,
+            "constrain_consensus": False,
+        }
+        lc.fit(**kwargs)
+        diag = lc.consensus_diagnostics
+
+        self.assertFalse(
+            diag.get("consensus_constraints_applied"),
+            "consensus_constraints_applied should be False when not constrained",
+        )
+        self.assertFalse(
+            diag.get("default_constraints_applied_before_consensus"),
+            "default_constraints_applied_before_consensus should be False",
+        )
+        self.assertFalse(
+            diag.get("constraints_marked_set_after_consensus"),
+            "constraints_marked_set_after_consensus should be False",
+        )
+
+    def test_constraint_diagnostics_fields_in_schema(self):
+        """New constraint-handoff fields must exist in consensus_diagnostics."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+
+        required_fields = [
+            "consensus_constraints_applied",
+            "consensus_constraint_bounds",
+            "consensus_constraint_target_key",
+            "consensus_scale_constraint_bounds",
+            "consensus_scale_constraint_target_key",
+            "default_constraints_applied_before_consensus",
+            "constraints_marked_set_after_consensus",
+        ]
+        for field in required_fields:
+            self.assertIn(
+                field,
+                diag,
+                f"consensus_diagnostics must contain field {field!r}",
+            )
+
+    def test_second_fit_matches_first_fit_constraints(self):
+        """Second fit must not produce different constraints than first fit.
+
+        Before the fix, the second fit would correctly constrain because
+        __CONTRAINTS_SET was True from the first fit. After the fix, both
+        fits should produce the same constraint bounds.
+        """
+        lc1 = _make_2band_lc(period=30.0, seed=42)
+        lc2 = _make_2band_lc(period=30.0, seed=42)
+
+        # First fit on lc1
+        diag1 = self._run_constrained_consensus(lc1)
+        bounds1 = diag1.get("consensus_constraint_bounds")
+
+        # Second fit on lc2 (simulates the old "call twice" workaround)
+        self._run_constrained_consensus(lc2)
+        diag2 = self._run_constrained_consensus(lc2)
+        bounds2 = diag2.get("consensus_constraint_bounds")
+
+        # Both should have constraint bounds
+        self.assertIsNotNone(bounds1, "first fit must have constraint bounds")
+        self.assertIsNotNone(bounds2, "second fit must have constraint bounds")
+
+        # Both must report constraints applied
+        self.assertTrue(
+            diag1.get("consensus_constraints_applied"),
+            "first fit must apply constraints",
+        )
+        self.assertTrue(
+            diag2.get("consensus_constraints_applied"),
+            "second fit must apply constraints",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
+

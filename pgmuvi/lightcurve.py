@@ -447,6 +447,27 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
             default_factory="dict", nullable=False, container_type="dict"
         ),
         "mode": _consensus_schema_field(default=None, nullable=True),
+        "consensus_constraints_applied": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "consensus_constraint_bounds": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_constraint_target_key": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_scale_constraint_bounds": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_scale_constraint_target_key": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "default_constraints_applied_before_consensus": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "constraints_marked_set_after_consensus": _consensus_schema_field(
+            default=False, nullable=False
+        ),
     }
 )
 _CONSENSUS_TOP_LEVEL_SCHEMA = MappingProxyType(
@@ -9684,8 +9705,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Clear stale model-related state before a fresh consensus model build.
 
         Removes ``self.model``, ``self.likelihood``, and ``self._model_pars``
-        and resets the likelihood-set flag so that the subsequent
-        :meth:`set_model` call always starts from a clean slate.
+        and resets the likelihood-set flag and the constraints-set flag so
+        that the subsequent :meth:`set_model` call always starts from a clean
+        slate and default constraints are reapplied to the new model.
         Light-curve data and fit history are never touched.
         """
         for _attr in ("model", "likelihood", "_model_pars"):
@@ -9697,6 +9719,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # again for the new model build.
         try:
             self.__SET_LIKELIHOOD_CALLED = False
+        except Exception:
+            pass
+        # Reset the constraints-set flag so that the new model always has
+        # fresh constraints applied (either by set_default_constraints in the
+        # consensus path or by _fit_core).
+        try:
+            self.__CONTRAINTS_SET = False
         except Exception:
             pass
 
@@ -9738,6 +9767,108 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "detail": str(exc),
             }
             raise _exc from exc
+
+    def _consensus_validate_applied_sm_constraints(
+        self, keys, consensus_frequencies, frequency_bounds
+    ):
+        """Verify that consensus constraints were actually applied to the model.
+
+        Inspects the registered constraint on the ``mixture_means`` parameter
+        and confirms that an ``Interval`` constraint (with finite upper bound)
+        is registered.  Raises :exc:`ConsensusFitError` if the constraint is
+        missing or looks like a default ``GreaterThan``/``Positive`` (infinite
+        upper bound), which would indicate that default constraints overwrote
+        the consensus constraints.
+
+        Parameters
+        ----------
+        keys : dict
+            Resolved SM parameter keys as returned by
+            :meth:`_consensus_resolve_time_spectral_mixture_keys`.
+        consensus_frequencies : array-like
+            The consensus frequency or frequencies (used in error messages).
+        frequency_bounds : tuple of (float, float) or None
+            The ``(lower, upper)`` bounds that were passed to
+            :meth:`set_constraint`.  If ``None``, validation is skipped.
+
+        Raises
+        ------
+        ConsensusFitError
+            If the constraint is not found or its upper bound is infinite
+            (indicating the consensus Interval constraint was not applied).
+        """
+        if frequency_bounds is None:
+            return
+        _mm_key = keys.get("mixture_means")
+        if _mm_key is None or _mm_key not in self._model_pars:
+            raise ConsensusFitError(
+                "Consensus constraint validation failed: mixture_means key "
+                f"{_mm_key!r} not found in model parameters after applying "
+                "constraints. The consensus constraint may not have been "
+                "applied correctly."
+            )
+        _mm_meta = self._model_pars[_mm_key]
+        if not isinstance(_mm_meta, dict):
+            return
+        _module = _mm_meta.get("module")
+        if _module is None:
+            return
+        _raw_name = (
+            f"raw_{_mm_key.split('.')[-1]}"
+            if "raw_" not in _mm_key
+            else _mm_key.split(".")[-1]
+        )
+        # GPyTorch stores constraints with a "_constraint" suffix in
+        # named_constraints(), so the registered name is:
+        #   raw_mixture_means_constraint
+        _constraint_key = _raw_name + "_constraint"
+        try:
+            _registered = dict(_module.named_constraints())
+        except Exception:
+            return
+        _found = _registered.get(_constraint_key)
+        if _found is None:
+            raise ConsensusFitError(
+                "Consensus constraint validation failed: no constraint found "
+                f"for raw parameter {_constraint_key!r} on module "
+                f"{_module.__class__.__name__}. The consensus constraint was "
+                "not registered. This may indicate that default constraints "
+                "overwrote the consensus constraints."
+            )
+        # Verify the constraint is an Interval (finite upper bound), not just
+        # a GreaterThan or Positive (infinite upper bound). Default constraints
+        # set by set_default_constraints use GreaterThan; the consensus
+        # constraint sets an Interval with finite bounds. If the upper bound
+        # is infinite, the consensus constraint was overwritten.
+        try:
+            import math as _math
+            _upper = float(_found.upper_bound)
+            _lower = float(_found.lower_bound)
+            if _math.isinf(_upper):
+                _freqs_arr = np.asarray(
+                    consensus_frequencies, dtype=float
+                ).ravel()
+                _target_freq = float(np.median(_freqs_arr))
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: the registered "
+                    f"mixture_means constraint on module "
+                    f"{_module.__class__.__name__} has an infinite upper "
+                    "bound, indicating it is a GreaterThan or Positive "
+                    "constraint rather than the expected consensus Interval. "
+                    f"The consensus frequency was {_target_freq:.6g}. "
+                    "The consensus constraint may have been overwritten by "
+                    "default constraints. Check the constraint-setup order."
+                )
+            if not (_lower < _upper):
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: the registered "
+                    f"mixture_means constraint has invalid bounds "
+                    f"[{_lower:.6g}, {_upper:.6g}] (lower >= upper)."
+                )
+        except ConsensusFitError:
+            raise
+        except Exception:
+            pass
 
     def _consensus_build_spectral_mixture_initialization(
         self,
@@ -13112,6 +13243,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _constraint_dict = {}
             _keys = self._consensus_resolve_time_spectral_mixture_keys()
             _frequency_constraint_bounds = None
+            # --- Step 1: apply default/LPV constraints as a base first -------
+            # This ensures any constraint_set period bounds are registered
+            # before the consensus constraints override the mixture_means key.
+            # Calling set_default_constraints also sets __CONTRAINTS_SET=True
+            # which prevents _fit_core from re-applying defaults and
+            # overwriting the consensus constraints below.
+            _constraint_set_for_defaults = fit_kwargs.get("constraint_set")
+            self.set_default_constraints(
+                constraint_set=_constraint_set_for_defaults
+            )
+            result_diagnostics[
+                "default_constraints_applied_before_consensus"
+            ] = True
+            # --- Step 2: build consensus constraint dict ---------------------
             if consensus_frequency_width is not None:
                 _freqs = np.asarray(
                     consensus_frequencies, dtype=float
@@ -13162,11 +13307,49 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _constraint_dict[_keys["mixture_scales"]] = Interval(
                 _CONSENSUS_MIN_SCALE_BOUND, _scale_upper
             )
+            # --- Step 3: apply consensus constraints on top of defaults ------
+            # These must win over the defaults applied in step 1.
             if _constraint_dict:
                 self.set_constraint(_constraint_dict)
+            # --- Step 4: mark constraints as set so _fit_core skips defaults -
+            # set_default_constraints already set this flag in step 1, but we
+            # re-assert it here to make the intent explicit and guard against
+            # future refactors that might reorder the steps.
+            self.__CONTRAINTS_SET = True
+            result_diagnostics[
+                "constraints_marked_set_after_consensus"
+            ] = True
+            # --- Step 5: validate that the consensus constraint took effect --
+            self._consensus_validate_applied_sm_constraints(
+                keys=_keys,
+                consensus_frequencies=consensus_frequencies,
+                frequency_bounds=_frequency_constraint_bounds,
+            )
+            # --- Step 6: record constraint-handoff diagnostics ---------------
+            result_diagnostics["consensus_constraints_applied"] = True
+            result_diagnostics["consensus_constraint_bounds"] = (
+                list(_frequency_constraint_bounds)
+                if _frequency_constraint_bounds is not None
+                else None
+            )
+            result_diagnostics["consensus_constraint_target_key"] = (
+                _keys.get("mixture_means")
+            )
+            result_diagnostics["consensus_scale_constraint_bounds"] = [
+                float(_CONSENSUS_MIN_SCALE_BOUND), float(_scale_upper)
+            ]
+            result_diagnostics["consensus_scale_constraint_target_key"] = (
+                _keys.get("mixture_scales")
+            )
         else:
             _frequency_constraint_bounds = None
             _scale_upper = None
+            result_diagnostics["consensus_constraints_applied"] = False
+            result_diagnostics["default_constraints_applied_before_consensus"] = (
+                False
+            )
+            result_diagnostics["constraints_marked_set_after_consensus"] = False
+
 
         consensus_guess = self._consensus_build_guess(
             frequencies=consensus_frequencies,
