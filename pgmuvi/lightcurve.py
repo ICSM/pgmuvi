@@ -17365,6 +17365,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             self._eval()
 
+            target_dtype = self._xdata_transformed.dtype
+            target_device = self._xdata_transformed.device
+            self.model = self.model.to(dtype=target_dtype, device=target_device)
+            self.likelihood = self.likelihood.to(dtype=target_dtype, device=target_device)
+            self.model.prediction_strategy = None
+
             # Importing raw x and y training data from xdata and
             # ydata functions
             if self.ndim == 1:
@@ -17851,6 +17857,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Now we want the model predictions for the input times:
             if self.__FITTED_MAP:
                 self._eval()
+                
+                target_dtype = self._xdata_transformed.dtype
+                target_device = self._xdata_transformed.device
+                self.model = self.model.to(dtype=target_dtype, device=target_device)
+                self.likelihood = self.likelihood.to(dtype=target_dtype, device=target_device)
+                self.model.prediction_strategy = None
+                
                 with torch.no_grad():
                     observed_pred = self.likelihood(self.model(self._xdata_transformed))
                     t["y_pred_mean_obs"] = [np.asarray(observed_pred.mean.cpu())]
