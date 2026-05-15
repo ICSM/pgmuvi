@@ -7913,7 +7913,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._validate_n_lags(n_lags)
             if max_lag is None:
                 max_lag = self._default_max_lag(t)
-            edges = torch.linspace(0.0, max_lag, n_lags + 1, device=t.device)
+            edges = torch.linspace(0.0, max_lag, n_lags + 1, dtype=t.dtype, device=t.device)
             n_bins = n_lags
 
         mean = y.mean() if subtract_mean else 0.0
@@ -17374,7 +17374,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # y_raw = self.ydata
 
             # creating array of test points across the range of the data
-            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), n_pred)
+            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), n_pred, dtype=x_raw.dtype, device=x_raw.device)
 
             if self.ndim == 1:
                 fig = self._plot_1d(
@@ -17437,7 +17437,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # y_raw = self.ydata
 
         # creating array of 10000 test points across the range of the data
-        x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000).unsqueeze(-1)
+        x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000, dtype=x_raw.dtype, device=x_raw.device).unsqueeze(-1)
 
         # transforming the x_fine_raw data to the space that the GP was
         # trained in (so it can predict)
@@ -17868,7 +17868,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     # y_raw = self.ydata
 
                     # creating array of 10000 test points across the range of the data
-                    x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+                    x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000, dtype=x_raw.dtype, device=x_raw.device)
                     if self.xtransform is None:
                         x_fine_transformed = x_fine_raw
                     elif isinstance(self.xtransform, Transformer):
