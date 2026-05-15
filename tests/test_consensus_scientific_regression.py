@@ -715,6 +715,11 @@ class TestConsensusConstraintHandoff(unittest.TestCase):
         lc.fit(**kwargs)
         return lc.consensus_diagnostics
 
+    @staticmethod
+    def _diag_consensus_frequency(diag):
+        """Return a representative consensus frequency from diagnostics."""
+        return diag.get("consensus_frequency") or diag.get("final_consensus_frequency")
+
     def test_constrained_consensus_applies_constraints_on_first_fit(self):
         """Consensus constraints must take effect on the first fit call.
 
@@ -751,9 +756,7 @@ class TestConsensusConstraintHandoff(unittest.TestCase):
         lower, upper = float(bounds[0]), float(bounds[1])
         self.assertGreater(upper, lower, "upper bound must exceed lower bound")
 
-        consensus_freq = diag.get("consensus_frequency") or diag.get(
-            "final_consensus_frequency"
-        )
+        consensus_freq = self._diag_consensus_frequency(diag)
         if consensus_freq is not None:
             self.assertGreaterEqual(
                 consensus_freq,
@@ -765,6 +768,24 @@ class TestConsensusConstraintHandoff(unittest.TestCase):
                 upper,
                 "consensus_frequency must be <= constraint upper bound",
             )
+
+    def test_constraint_validation_helper_success(self):
+        """Strict helper validation should pass for valid constrained fits."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        bounds = diag.get("consensus_constraint_bounds")
+        self.assertIsNotNone(bounds, "consensus_constraint_bounds must be present")
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        consensus_freq = self._diag_consensus_frequency(diag)
+        self.assertIsNotNone(
+            consensus_freq,
+            "consensus frequency must be present for constrained validation",
+        )
+        lc._consensus_validate_applied_sm_constraints(
+            keys=keys,
+            consensus_frequencies=[consensus_freq],
+            frequency_bounds=tuple(bounds),
+        )
 
     def test_constraint_target_keys_populated(self):
         """Diagnostic keys for constraint target parameters must be set."""
@@ -866,7 +887,112 @@ class TestConsensusConstraintHandoff(unittest.TestCase):
             "second fit must apply constraints",
         )
 
+    def test_constraint_validation_fails_for_non_dict_metadata(self):
+        """Validation must fail when mixture_means metadata is not a dict."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        lc._model_pars[mm_key] = "not-a-dict"
+        with self.assertRaises(ConsensusFitError):
+            lc._consensus_validate_applied_sm_constraints(
+                keys=keys,
+                consensus_frequencies=[self._diag_consensus_frequency(diag)],
+                frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+            )
+
+    def test_constraint_validation_fails_for_missing_module_metadata(self):
+        """Validation must fail when mixture_means metadata has no module."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        meta = dict(lc._model_pars[mm_key])
+        meta.pop("module", None)
+        lc._model_pars[mm_key] = meta
+        with self.assertRaises(ConsensusFitError):
+            lc._consensus_validate_applied_sm_constraints(
+                keys=keys,
+                consensus_frequencies=[self._diag_consensus_frequency(diag)],
+                frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+            )
+
+    def test_constraint_validation_fails_for_missing_registered_constraint(self):
+        """Validation must fail if named_constraints has no expected key."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        module = lc._model_pars[mm_key]["module"]
+        with unittest.mock.patch.object(module, "named_constraints", return_value=[]):
+            with self.assertRaises(ConsensusFitError):
+                lc._consensus_validate_applied_sm_constraints(
+                    keys=keys,
+                    consensus_frequencies=[self._diag_consensus_frequency(diag)],
+                    frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+                )
+
+    def test_constraint_validation_fails_for_infinite_upper_bound(self):
+        """Validation must fail when upper bound is infinite."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        module = lc._model_pars[mm_key]["module"]
+        raw_name = (
+            f"raw_{mm_key.split('.')[-1]}"
+            if "raw_" not in mm_key
+            else mm_key.split(".")[-1]
+        )
+        constraint_key = raw_name + "_constraint"
+
+        class _InfiniteConstraint:
+            lower_bound = 0.0
+            upper_bound = float("inf")
+
+        with unittest.mock.patch.object(
+            module,
+            "named_constraints",
+            return_value=[(constraint_key, _InfiniteConstraint())],
+        ):
+            with self.assertRaises(ConsensusFitError):
+                lc._consensus_validate_applied_sm_constraints(
+                    keys=keys,
+                    consensus_frequencies=[self._diag_consensus_frequency(diag)],
+                    frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+                )
+
+    def test_constraint_validation_fails_for_consensus_frequency_outside_bounds(self):
+        """Validation must fail when registered bounds exclude consensus freq."""
+        lc = _make_2band_lc(period=30.0)
+        diag = self._run_constrained_consensus(lc)
+        keys = lc._consensus_resolve_time_spectral_mixture_keys()
+        mm_key = keys["mixture_means"]
+        module = lc._model_pars[mm_key]["module"]
+        raw_name = (
+            f"raw_{mm_key.split('.')[-1]}"
+            if "raw_" not in mm_key
+            else mm_key.split(".")[-1]
+        )
+        constraint_key = raw_name + "_constraint"
+        consensus_freq = float(self._diag_consensus_frequency(diag))
+
+        class _OutsideConstraint:
+            lower_bound = consensus_freq + 1.0
+            upper_bound = consensus_freq + 2.0
+
+        with unittest.mock.patch.object(
+            module,
+            "named_constraints",
+            return_value=[(constraint_key, _OutsideConstraint())],
+        ):
+            with self.assertRaises(ConsensusFitError):
+                lc._consensus_validate_applied_sm_constraints(
+                    keys=keys,
+                    consensus_frequencies=[consensus_freq],
+                    frequency_bounds=tuple(diag["consensus_constraint_bounds"]),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
-
