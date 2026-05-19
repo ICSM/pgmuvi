@@ -67,7 +67,7 @@ jobs:
         path: dist/
     - name: Validate latest uploaded dists
       run: >-
-        python .github/scripts/validate_uploaded_artifacts.py
+        python3 .github/scripts/validate_uploaded_artifacts.py
         --dist-dir dist
         --expected-version '${{ github.ref_name }}'
         --expected-sentinel "${UPLOAD_VALIDATION_SENTINEL}"
