@@ -84,7 +84,10 @@ class TestUploadValidation(unittest.TestCase):
             _record("report", "/tmp/report-v1.json", 1, 10),
             _record("report", "/tmp/report-v2.json", 2, 20),
         ]
-        assert_selected_files_are_latest(uploaded_files, {"report": "/tmp/report-v2.json"})
+        assert_selected_files_are_latest(
+            uploaded_files,
+            {"report": "/tmp/report-v2.json"}
+        )
 
     def test_assert_selected_files_are_latest_raises_for_stale_path(self):
         uploaded_files = [
@@ -138,7 +141,7 @@ class TestUploadValidation(unittest.TestCase):
         )
         self.assertEqual(latest["wheel"].file_path, "/tmp/pkg-2.whl")
 
-    def test_validate_uploaded_file_selection_rejects_stale_when_duplicates_allowed(self):
+    def test_rejects_stale_selection_when_duplicates_allowed(self):
         uploaded_files = [
             _record("wheel", "/tmp/pkg-1.whl", 1, 1),
             _record("wheel", "/tmp/pkg-2.whl", 2, 2),
