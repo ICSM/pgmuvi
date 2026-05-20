@@ -137,6 +137,7 @@ class ConsensusFitError(RuntimeError):
             if failure_diagnostics is not None
             else {"status": "failed"}
         )
+        self.failure_summary = None
 
 
 _CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
@@ -9704,8 +9705,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Clear stale model-related state before a fresh consensus model build.
 
         Removes ``self.model``, ``self.likelihood``, and ``self._model_pars``
-        and resets the likelihood-set flag so that the subsequent
-        :meth:`set_model` call always starts from a clean slate.
+        and resets the likelihood-set flag and the constraints-set flag so
+        that the subsequent :meth:`set_model` call always starts from a clean
+        slate and default constraints are reapplied to the new model.
         Light-curve data and fit history are never touched.
         """
         for _attr in ("model", "likelihood", "_model_pars"):
@@ -9717,6 +9719,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # again for the new model build.
         try:
             self.__SET_LIKELIHOOD_CALLED = False
+        except Exception:
+            pass
+        # Reset the constraints-set flag so that the new model always has
+        # fresh constraints applied (either by set_default_constraints in the
+        # consensus path or by _fit_core).
+        try:
+            self.__CONTRAINTS_SET = False
         except Exception:
             pass
 
@@ -9758,6 +9767,186 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "detail": str(exc),
             }
             raise _exc from exc
+
+    def _consensus_validate_applied_sm_constraints(
+        self, keys, consensus_frequencies, frequency_bounds
+    ):
+        """Verify that consensus constraints were actually applied to the model.
+
+        Inspects the registered constraint on the ``mixture_means`` parameter
+        and confirms that an ``Interval`` constraint (with finite upper bound)
+        is registered.  Raises :exc:`ConsensusFitError` if the constraint is
+        missing or looks like a default ``GreaterThan``/``Positive`` (infinite
+        upper bound), which would indicate that default constraints overwrote
+        the consensus constraints.
+
+        Parameters
+        ----------
+        keys : dict
+            Resolved SM parameter keys as returned by
+            :meth:`_consensus_resolve_time_spectral_mixture_keys`.
+        consensus_frequencies : array-like
+            The consensus frequency or frequencies (used in error messages).
+        frequency_bounds : tuple of (float, float) or None
+            The ``(lower, upper)`` bounds that were passed to
+            :meth:`set_constraint`.  If ``None``, validation is skipped.
+
+        Raises
+        ------
+        ConsensusFitError
+            If the constraint is not found or its upper bound is infinite
+            (indicating the consensus Interval constraint was not applied).
+        """
+        if frequency_bounds is None:
+            return
+        _model_pars = getattr(self, "_model_pars", None)
+        _available_keys = (
+            sorted(_model_pars.keys())
+            if isinstance(_model_pars, dict)
+            else f"<non-dict:{type(_model_pars).__name__}>"
+        )
+        _mm_key = keys.get("mixture_means")
+        if _mm_key is None:
+            _msg = (
+                "Consensus constraint validation failed: resolved keys do not "
+                "contain 'mixture_means' while frequency bounds were provided. "
+                f"resolved_keys={sorted(keys.keys())}, "
+                f"available_model_parameter_keys={_available_keys}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+            raise ConsensusFitError(_msg)
+        if not isinstance(_model_pars, dict) or _mm_key not in _model_pars:
+            _msg = (
+                "Consensus constraint validation failed: mixture_means key "
+                f"{_mm_key!r} is missing from model parameters. "
+                f"available_model_parameter_keys={_available_keys}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+            raise ConsensusFitError(_msg)
+        _mm_meta = _model_pars[_mm_key]
+        if not isinstance(_mm_meta, dict):
+            _msg = (
+                "Consensus constraint validation failed: metadata for "
+                f"{_mm_key!r} must be a dict, got "
+                f"{type(_mm_meta).__name__}. "
+                f"available_model_parameter_keys={_available_keys}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+            raise ConsensusFitError(_msg)
+        _module = _mm_meta.get("module")
+        if _module is None:
+            _msg = (
+                "Consensus constraint validation failed: no module found in "
+                f"metadata for { _mm_key!r}. metadata_keys={sorted(_mm_meta.keys())}, "
+                f"available_model_parameter_keys={_available_keys}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+            raise ConsensusFitError(_msg)
+        _module_name = _module.__class__.__name__
+        _raw_name = (
+            f"raw_{_mm_key.split('.')[-1]}"
+            if "raw_" not in _mm_key
+            else _mm_key.split(".")[-1]
+        )
+        # GPyTorch stores constraints with a "_constraint" suffix in
+        # named_constraints(), so the registered name is:
+        #   raw_mixture_means_constraint
+        _constraint_key = _raw_name + "_constraint"
+        try:
+            _registered = dict(_module.named_constraints())
+        except Exception as exc:
+            _msg = (
+                "Consensus constraint validation failed: unable to inspect "
+                "registered constraints via named_constraints(). "
+                f"mixture_means_key={_mm_key!r}, module_class={_module_name}, "
+                f"expected_raw_constraint={_constraint_key!r}, "
+                f"expected_frequency_bounds={frequency_bounds}, "
+                f"detail={exc!r}."
+            )
+            raise ConsensusFitError(_msg) from exc
+        _found = _registered.get(_constraint_key)
+        if _found is None:
+            _registered_names = sorted(_registered.keys())
+            raise ConsensusFitError(
+                "Consensus constraint validation failed: no constraint found "
+                f"for raw parameter {_constraint_key!r} on module "
+                f"{_module_name}. The consensus constraint was not registered. "
+                "This may indicate that default constraints overwrote the "
+                "consensus constraints. "
+                f"registered_constraint_names={_registered_names}, "
+                f"mixture_means_key={_mm_key!r}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+        # Verify the constraint is an Interval (finite upper bound), not just
+        # a GreaterThan or Positive (infinite upper bound). Default constraints
+        # set by set_default_constraints use GreaterThan; the consensus
+        # constraint sets an Interval with finite bounds. If the upper bound
+        # is infinite, the consensus constraint was overwritten.
+        _freqs_arr = np.asarray(consensus_frequencies, dtype=float).ravel()
+        if _freqs_arr.size == 0 or not np.all(np.isfinite(_freqs_arr)):
+            raise ConsensusFitError(
+                "Consensus constraint validation failed: consensus_frequencies "
+                "must be non-empty and finite for validation. "
+                f"got={_freqs_arr.tolist()}, mixture_means_key={_mm_key!r}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+        _target_freq = float(np.median(_freqs_arr))
+        try:
+            import math as _math
+            _lower_raw = getattr(_found, "lower_bound", None)
+            _upper_raw = getattr(_found, "upper_bound", None)
+            if _lower_raw is None or _upper_raw is None:
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: registered "
+                    "constraint does not expose usable lower/upper bounds. "
+                    f"constraint_type={type(_found).__name__}, "
+                    f"module_class={_module_name}, mixture_means_key={_mm_key!r}, "
+                    f"expected_frequency_bounds={frequency_bounds}, "
+                    f"consensus_frequency={_target_freq:.6g}."
+                )
+            _upper = float(_upper_raw)
+            _lower = float(_lower_raw)
+            if _math.isinf(_upper):
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: the registered "
+                    f"mixture_means constraint on module {_module_name} has "
+                    "an infinite upper bound, indicating it is not the expected "
+                    "finite consensus Interval constraint. "
+                    f"mixture_means_key={_mm_key!r}, "
+                    f"expected_frequency_bounds={frequency_bounds}, "
+                    f"registered_bounds=[{_lower:.6g}, {_upper:.6g}], "
+                    f"consensus_frequency={_target_freq:.6g}."
+                )
+            if not (_lower < _upper):
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: the registered "
+                    "mixture_means constraint has invalid bounds "
+                    f"[{_lower:.6g}, {_upper:.6g}] (lower >= upper). "
+                    f"mixture_means_key={_mm_key!r}, module_class={_module_name}, "
+                    f"expected_frequency_bounds={frequency_bounds}, "
+                    f"consensus_frequency={_target_freq:.6g}."
+                )
+            if not (_lower <= _target_freq <= _upper):
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: consensus "
+                    "frequency lies outside the registered mixture_means "
+                    "constraint bounds. "
+                    f"mixture_means_key={_mm_key!r}, module_class={_module_name}, "
+                    f"expected_frequency_bounds={frequency_bounds}, "
+                    f"registered_bounds=[{_lower:.6g}, {_upper:.6g}], "
+                    f"consensus_frequency={_target_freq:.6g}."
+                )
+        except ConsensusFitError:
+            raise
+        except Exception as exc:
+            raise ConsensusFitError(
+                "Consensus constraint validation failed: unable to parse "
+                "registered constraint bounds. "
+                f"mixture_means_key={_mm_key!r}, module_class={_module_name}, "
+                f"constraint_type={type(_found).__name__}, "
+                f"expected_frequency_bounds={frequency_bounds}, "
+                f"consensus_frequency={_target_freq:.6g}, detail={exc!r}."
+            ) from exc
 
     def _consensus_build_spectral_mixture_initialization(
         self,
@@ -12532,7 +12721,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               Minimum number of original (pre-deduplication) photometric bands
               that must lie within the inlier frequency window for the
               consensus to be accepted.  When fewer bands agree, the fit
-              raises ``RuntimeError`` and ``consensus_success`` is ``False``.
+              raises :class:`ConsensusFitError` and
+              ``consensus_success`` is ``False``.
               This guards against spurious consensus frequencies when all
               accepted bands have mutually inconsistent periods.
             - ``use_gp_validation`` : bool, default ``False``
@@ -12797,11 +12987,27 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self.consensus_diagnostics = (
                     self._consensus_finalize_result_structure(result_diagnostics)
                 )
-                raise RuntimeError(
-                    f"Consensus construction failed: insufficient number of "
-                    f"consistent inlier bands ({n_found} found, {n_req} "
-                    f"required). The accepted bands do not cluster around a "
-                    "common frequency."
+                _cand_periods = [
+                    (float(1.0 / f) if f and f > 0 else None)
+                    for f in consensus_diag.get("frequencies_all", [])
+                ]
+                raise ConsensusFitError(
+                    f"Consensus fit failed: the inferred periods are mutually "
+                    f"inconsistent across bands. Only {n_found} band(s) "
+                    f"clustered around a common frequency after outlier "
+                    f"rejection, but {n_req} are required. The bands do not "
+                    "support a coherent shared period — this is a data-quality "
+                    "issue, not a software error.",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "insufficient_consensus_inliers",
+                        "n_inlier_bands": n_found,
+                        "required_inliers": n_req,
+                        "n_candidate_bands": len(
+                            consensus_diag.get("frequencies_all", [])
+                        ),
+                        "candidate_periods": _cand_periods,
+                    },
                 )
 
             final_consensus_frequency = float(
@@ -13029,11 +13235,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # this consensus fit.  Never reuse stale model state from a previous
         # fit: the user may have requested a different model, time_kernel_type,
         # or num_mixtures in this call.
-        # If model is None (not specified), preserve any existing model that
-        # was pre-set by the caller (internal use / test scaffolding).
+        # If model is None, require explicit internal opt-in via the private
+        # flag _allow_existing_model_for_consensus to reuse a pre-existing
+        # model; otherwise raise a clear error to prevent accidental stale-
+        # state reuse in public consensus fits.
         _requested_model = fit_kwargs.get("model")
         if _requested_model is not None:
             self._consensus_clear_model_state()
+        elif not _allow_existing:
+            raise ConsensusFitError(
+                "Consensus fit requires an explicit final model. "
+                "Pass model='2D' or another spectral-mixture-compatible "
+                "model. Pre-existing model reuse is disabled by default "
+                "to prevent stale consensus constraints."
+            )
         _set_model_excluded = {
             "model",
             "likelihood",
@@ -13070,6 +13285,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "lr",
             "stopavg",
             "fit_strategy",
+            "verbose",
+            "_allow_existing_model_for_consensus",
         }
         _model_needs_build = (
             _requested_model is not None
