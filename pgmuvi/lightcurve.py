@@ -6448,8 +6448,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         -------
         dict
             Initialization dictionary containing ``mixture_means`` with shape
-            ``(1, n_mixtures, 1)``, ``mixture_scales`` (same shape when scales
-            are provided, otherwise ``None``), and ``num_mixtures``.
+            ``(n_mixtures,)``, ``mixture_scales`` (same shape when scales are
+            provided, otherwise ``None``), and ``num_mixtures``.
 
         Raises
         ------
@@ -6485,7 +6485,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise ValueError("frequencies must be strictly positive.")
 
         n_mixtures = freq_tensor.numel()
-        mixture_means = freq_tensor.reshape(1, n_mixtures, 1)
+        mixture_means = freq_tensor.reshape(n_mixtures)
         init = {
             "mixture_means": mixture_means,
             "mixture_scales": None,
@@ -6510,7 +6510,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "as frequencies."
                 )
 
-            init["mixture_scales"] = scales_tensor.reshape(1, n_mixtures, 1)
+            init["mixture_scales"] = scales_tensor.reshape(n_mixtures)
 
         return init
 
