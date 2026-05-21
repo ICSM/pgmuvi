@@ -6602,6 +6602,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 **set_model_kwargs,
             )
             fit_kwargs["model"] = None
+            fit_kwargs["likelihood"] = None
 
         consensus_guess = self._consensus_build_guess(
             frequencies=consensus_frequencies,
