@@ -6531,6 +6531,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
 
         expected_num_mixtures = getattr(self, "_fit_num_mixtures_effective", None)
+        if expected_num_mixtures is None:
+            expected_num_mixtures = self._infer_num_mixtures_from_model()
         if (
             expected_num_mixtures is not None
             and int(expected_num_mixtures) != init["num_mixtures"]
