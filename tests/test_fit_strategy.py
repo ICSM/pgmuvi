@@ -10,7 +10,7 @@ from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 _DUMMY_RESULTS = {"loss": [1.0], "delta_loss": [0.0]}
 
 
-def _make_1d_lc(seed=42):
+def _make_1d_lightcurve(seed=42):
     return make_simple_sinusoid_1d(
         n_obs=60,
         period=5.0,
@@ -20,7 +20,7 @@ def _make_1d_lc(seed=42):
     )
 
 
-def _make_2d_lc(seed=42):
+def _make_2d_lightcurve(seed=42):
     return make_chromatic_sinusoid_2d(
         n_per_band=25,
         period=5.0,
@@ -33,31 +33,51 @@ def _make_2d_lc(seed=42):
 
 
 def _fit_without_training(lc, **kwargs):
+    """Run fit() with training internals patched out for fast unit tests."""
     with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
         with patch.object(lc, "_train"):
             with patch.object(lc, "print_parameters"):
                 return lc.fit(**kwargs)
 
 
+def _resolve_attr_path(root, dotted_path):
+    current = root
+    for token in dotted_path.split("."):
+        if token.isdigit():
+            current = current[int(token)]
+        else:
+            current = getattr(current, token)
+    return current
+
+
+def _extract_flat_covar_param(lc, attr_name):
+    """Extract and flatten a covar_module parameter tensor from a model."""
+    return getattr(lc.model.covar_module, attr_name).detach().reshape(-1)
+
+
 class TestConsensusKeyResolution(unittest.TestCase):
-    """Tests for _consensus_resolve_time_sm_keys across model families."""
+    """Tests for _consensus_resolve_time_sm_keys across 1D/2D/SKI/separable."""
 
     def test_1d_model_keys(self):
-        lc = _make_1d_lc()
+        lc = _make_1d_lightcurve()
         lc.set_model("1D", num_mixtures=2)
         keys = lc._consensus_resolve_time_sm_keys()
         self.assertEqual(keys["mixture_means"], "covar_module.mixture_means")
         self.assertEqual(keys["mixture_scales"], "covar_module.mixture_scales")
+        self.assertIsNotNone(_resolve_attr_path(lc.model, keys["mixture_means"]))
+        self.assertIsNotNone(_resolve_attr_path(lc.model, keys["mixture_scales"]))
 
     def test_2d_model_keys(self):
-        lc = _make_2d_lc()
+        lc = _make_2d_lightcurve()
         lc.set_model("2D", num_mixtures=2)
         keys = lc._consensus_resolve_time_sm_keys()
         self.assertEqual(keys["mixture_means"], "covar_module.mixture_means")
         self.assertEqual(keys["mixture_scales"], "covar_module.mixture_scales")
+        self.assertIsNotNone(_resolve_attr_path(lc.model, keys["mixture_means"]))
+        self.assertIsNotNone(_resolve_attr_path(lc.model, keys["mixture_scales"]))
 
     def test_ski_model_keys(self):
-        lc = _make_1d_lc()
+        lc = _make_1d_lightcurve()
         lc.set_model("1DSKI", num_mixtures=2)
         keys = lc._consensus_resolve_time_sm_keys()
         self.assertEqual(
@@ -68,9 +88,11 @@ class TestConsensusKeyResolution(unittest.TestCase):
             keys["mixture_scales"],
             "covar_module.base_kernel.mixture_scales",
         )
+        self.assertIsNotNone(_resolve_attr_path(lc.model, keys["mixture_means"]))
+        self.assertIsNotNone(_resolve_attr_path(lc.model, keys["mixture_scales"]))
 
     def test_separable_model_raises(self):
-        lc = _make_2d_lc()
+        lc = _make_2d_lightcurve()
         lc.set_model("2DSeparable")
         with self.assertRaisesRegex(RuntimeError, "Could not resolve"):
             lc._consensus_resolve_time_sm_keys()
@@ -80,7 +102,7 @@ class TestConsensusInitAndGuessHelpers(unittest.TestCase):
     """Tests for consensus initialization tensor and guess helper behavior."""
 
     def setUp(self):
-        self.lc = _make_1d_lc()
+        self.lc = _make_1d_lightcurve()
         self.lc.set_model("1D", num_mixtures=2)
 
     def test_build_sm_initialization_shapes_and_scale_broadcast(self):
@@ -150,14 +172,14 @@ class TestConsensusInitAndGuessHelpers(unittest.TestCase):
         )
 
     def test_build_guess_uses_model_inferred_count_when_effective_unset(self):
-        lc = _make_1d_lc(seed=7)
+        lc = _make_1d_lightcurve(seed=7)
         lc.set_model("1D", num_mixtures=4)
         lc._fit_num_mixtures_effective = None
 
         inferred = lc._infer_num_mixtures_from_model()
         self.assertIsNotNone(inferred)
 
-        mismatch = [0.1] * (int(inferred) + 1)
+        mismatch = [0.1] * (inferred + 1)
         with self.assertRaisesRegex(ValueError, "does not match"):
             lc._consensus_build_guess(frequencies=mismatch)
 
@@ -166,7 +188,7 @@ class TestConsensusFitStrategyDispatch(unittest.TestCase):
     """Tests for fit_strategy='consensus' dispatch and unsupported combinations."""
 
     def test_fit_dispatches_to_consensus_strategy(self):
-        lc = _make_1d_lc()
+        lc = _make_1d_lightcurve()
         with patch.object(
             lc,
             "_consensus_standard_fit",
@@ -181,7 +203,7 @@ class TestConsensusFitStrategyDispatch(unittest.TestCase):
         mock_consensus.assert_called_once()
 
     def test_consensus_fit_end_to_end_applies_consensus_guess(self):
-        lc = _make_1d_lc(seed=1)
+        lc = _make_1d_lightcurve(seed=1)
         _fit_without_training(
             lc,
             fit_strategy="consensus",
@@ -193,8 +215,8 @@ class TestConsensusFitStrategyDispatch(unittest.TestCase):
             consensus_scales=[0.01, 0.02],
         )
 
-        means = lc.model.covar_module.mixture_means.detach().reshape(-1)
-        scales = lc.model.covar_module.mixture_scales.detach().reshape(-1)
+        means = _extract_flat_covar_param(lc, "mixture_means")
+        scales = _extract_flat_covar_param(lc, "mixture_scales")
 
         torch.testing.assert_close(
             means,
@@ -206,7 +228,7 @@ class TestConsensusFitStrategyDispatch(unittest.TestCase):
         )
 
     def test_consensus_without_frequencies_raises_not_implemented(self):
-        lc = _make_1d_lc()
+        lc = _make_1d_lightcurve()
         with self.assertRaisesRegex(NotImplementedError, "consensus_frequencies"):
             lc.fit(
                 fit_strategy="consensus",
@@ -215,7 +237,7 @@ class TestConsensusFitStrategyDispatch(unittest.TestCase):
             )
 
     def test_unsupported_strategy_variants_raise(self):
-        lc = _make_1d_lc(seed=3)
+        lc = _make_1d_lightcurve(seed=3)
         with self.assertRaisesRegex(NotImplementedError, "consensus_multicomp"):
             lc.fit(
                 fit_strategy="consensus_multicomp",
@@ -241,7 +263,7 @@ class TestConsensusFitStrategyDispatch(unittest.TestCase):
             )
 
     def test_consensus_with_unsupported_model_combination_raises(self):
-        lc = _make_2d_lc(seed=9)
+        lc = _make_2d_lightcurve(seed=9)
         with self.assertRaisesRegex(RuntimeError, "Could not resolve"):
             lc.fit(
                 fit_strategy="consensus",
