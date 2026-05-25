@@ -7835,12 +7835,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "consensus_scales": (
                 None
                 if consensus_scales is None
-                else np.asarray(consensus_scales, dtype=float).ravel().tolist()
+                else (
+                    np.asarray(consensus_scales, dtype=float)
+                    .ravel()
+                    .tolist()
+                )
             ),
             "consensus_frequency_width": (
                 None
                 if consensus_frequency_width is None
-                else np.asarray(consensus_frequency_width, dtype=float).ravel().tolist()
+                else (
+                    np.asarray(consensus_frequency_width, dtype=float)
+                    .ravel()
+                    .tolist()
+                )
             ),
             "apply_consensus_constraints": bool(apply_consensus_constraints),
             "consensus_frequency_bounds": (
