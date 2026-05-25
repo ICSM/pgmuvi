@@ -9,6 +9,9 @@ jobs:
   build:
     name: Build distribution 📦
     runs-on: ubuntu-latest
+    env:
+      UPLOAD_VALIDATION_SENTINEL: ${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:PGMUVI_UPLOAD_VALIDATION_V1
+      PYTHONPATH: ${{ github.workspace }}
 
     steps:
     - uses: actions/checkout@v4
@@ -29,6 +32,10 @@ jobs:
       run: python3 -m build
     - name: Check dist metadata
       run: python3 -m twine check dist/*
+    - name: Create upload-validation sentinel
+      run: >-
+        printf '%s\n' '${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:PGMUVI_UPLOAD_VALIDATION_V1'
+        > dist/.upload_validation_sentinel
     - name: Store the distribution packages
       uses: actions/upload-artifact@v4
       with:
@@ -47,13 +54,23 @@ jobs:
       url: https://pypi.org/project/pgmuvi/
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
+    env:
+      UPLOAD_VALIDATION_SENTINEL: ${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:PGMUVI_UPLOAD_VALIDATION_V1
+      PYTHONPATH: ${{ github.workspace }}
 
     steps:
+    - uses: actions/checkout@v4
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
+    - name: Validate latest uploaded dists
+      run: >-
+        python .github/scripts/validate_uploaded_artifacts.py
+        --dist-dir dist
+        --expected-version '${{ github.ref_name }}'
+        --expected-sentinel '${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:PGMUVI_UPLOAD_VALIDATION_V1'
     - name: Publish distribution 📦 to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
 
@@ -70,11 +87,18 @@ jobs:
       id-token: write  # IMPORTANT: mandatory for sigstore
 
     steps:
+    - uses: actions/checkout@v4
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
+    - name: Validate latest uploaded dists
+      run: >-
+        python .github/scripts/validate_uploaded_artifacts.py
+        --dist-dir dist
+        --expected-version '${{ github.ref_name }}'
+        --expected-sentinel '${{ github.sha }}:${{ github.run_id }}:${{ github.run_attempt }}:PGMUVI_UPLOAD_VALIDATION_V1'
     - name: Sign the dists with Sigstore
       uses: sigstore/gh-action-sigstore-python@v3.3.0
       with:
@@ -86,7 +110,7 @@ jobs:
         GITHUB_TOKEN: ${{ github.token }}
       # Only create the release when it doesn't already exist (e.g. it was
       # created manually via the GitHub UI before or after pushing the tag).
-      # --repo is required because this job does not check out the repository.
+      # --repo is passed explicitly even though this job checks out the repo.
       # Real failures (auth, network, etc.) in the create command still propagate.
       run: >-
         gh release view '${{ github.ref_name }}'
