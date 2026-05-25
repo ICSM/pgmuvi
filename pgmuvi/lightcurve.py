@@ -7553,11 +7553,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if requested_num_mixtures is None:
                 requested_num_mixtures = 1
                 fit_kwargs["num_mixtures"] = 1
+            else:
+                requested_num_mixtures = int(requested_num_mixtures)
 
-            # Automatic consensus strategy uses a single robust cross-band
-            # frequency (LS primary + optional ACF support checks).
-            consensus_frequencies = np.asarray(
-                [final_consensus_frequency], dtype=float
+            # Automatic consensus uses the single robust cross-band frequency
+            # broadcast to all requested mixture components so that the number
+            # of consensus frequencies always matches num_mixtures.
+            consensus_frequencies = np.full(
+                requested_num_mixtures,
+                final_consensus_frequency,
+                dtype=float,
             )
             if consensus_frequency_width is None:
                 width_value = robust_width
@@ -7566,7 +7571,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         0.01 * float(final_consensus_frequency),
                         float(np.finfo(float).eps),
                     )
-                consensus_frequency_width = np.asarray([width_value], dtype=float)
+                consensus_frequency_width = np.full(
+                    requested_num_mixtures,
+                    width_value,
+                    dtype=float,
+                )
             auto_constraint_bounds = None
 
             self.consensus_diagnostics = {
@@ -7772,6 +7781,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "positive and finite."
                     )
                 _k = float(consensus_frequency_k)
+                if not (np.isfinite(_k) and _k > 0):
+                    raise ValueError(
+                        "consensus_frequency_k must be finite and strictly "
+                        f"positive (got {_k!r})."
+                    )
                 # Practical lower bound - frequencies must be positive.
                 _lowers = np.maximum(
                     _freqs - _k * _widths, _CONSENSUS_MIN_FREQUENCY_BOUND
