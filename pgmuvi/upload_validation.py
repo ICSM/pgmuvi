@@ -80,9 +80,10 @@ def assert_no_duplicate_uploaded_files(uploaded_files):
         )
 
 
-def assert_selected_files_are_latest(uploaded_files, selected_files):
+def assert_selected_files_are_latest(uploaded_files, selected_files, *, latest=None):
     """Fail when selected files are not the deterministic latest versions."""
-    latest = resolve_latest_uploaded_files(uploaded_files)
+    if latest is None:
+        latest = resolve_latest_uploaded_files(uploaded_files)
     for logical_name, latest_record in latest.items():
         selected_path = selected_files.get(logical_name)
         if selected_path is None:
@@ -113,5 +114,5 @@ def validate_uploaded_file_selection(
     latest = resolve_latest_uploaded_files(uploaded_files)
     if not allow_duplicates:
         assert_no_duplicate_uploaded_files(uploaded_files)
-    assert_selected_files_are_latest(uploaded_files, selected_files)
+    assert_selected_files_are_latest(uploaded_files, selected_files, latest=latest)
     return latest
