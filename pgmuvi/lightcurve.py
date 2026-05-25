@@ -7551,8 +7551,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             requested_num_mixtures = fit_kwargs.get("num_mixtures")
             if requested_num_mixtures is None:
-                requested_num_mixtures = 1
                 fit_kwargs["num_mixtures"] = 1
+            elif int(requested_num_mixtures) != 1:
+                raise ValueError(
+                    "The automatic consensus strategy produces a single "
+                    "consensus frequency and therefore only supports "
+                    f"num_mixtures=1 (got num_mixtures={requested_num_mixtures}"
+                    "). To use more mixture components, pass "
+                    "consensus_frequencies explicitly."
+                )
 
             # Automatic consensus strategy uses a single robust cross-band
             # frequency (LS primary + optional ACF support checks).
