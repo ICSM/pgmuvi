@@ -7688,7 +7688,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "median_frequency": float(np.median(consensus_frequencies)),
                 "mad_frequency_scatter": float(
                     np.median(
-                        np.abs(consensus_frequencies - np.median(consensus_frequencies))
+                        np.abs(
+                            consensus_frequencies
+                            - np.median(consensus_frequencies)
+                        )
                     )
                 ),
                 "final_consensus_frequency": float(np.median(consensus_frequencies)),
