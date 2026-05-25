@@ -51,7 +51,8 @@ def main():
     sentinel_path = os.path.join(args.dist_dir, ".upload_validation_sentinel")
     if not os.path.exists(sentinel_path):
         raise RuntimeError("Missing upload-validation sentinel file in dist directory.")
-    sentinel_value = open(sentinel_path, encoding="utf-8").read().strip()
+    with open(sentinel_path, encoding="utf-8") as fh:
+        sentinel_value = fh.read().strip()
     if sentinel_value != args.expected_sentinel:
         raise RuntimeError(
             "Upload-validation sentinel mismatch; artifact may come from a stale "
