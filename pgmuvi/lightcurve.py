@@ -7231,6 +7231,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "use_gp_validation",
             "gp_validation_kwargs",
             "gp_frequency_tolerance_factor",
+            "gp_ls_tolerance_base_factor",
             "outlier_sigma",
             "consensus_width_factor",
             "consensus_dedup_rtol",
@@ -7266,6 +7267,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         candidate_diag,
         gp_validation_kwargs=None,
         gp_frequency_tolerance_factor=3.0,
+        gp_ls_tolerance_base_factor=DEFAULT_GP_LS_TOLERANCE_BASE_FACTOR,
         verbose=False,
     ):
         """Validate LS/ACF-vetted band candidates against per-band 1D GP PSD.
@@ -7289,6 +7291,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ):
             raise ValueError(
                 "gp_frequency_tolerance_factor must be a finite, strictly "
+                "positive float."
+            )
+
+        gp_ls_tolerance_base_factor = float(gp_ls_tolerance_base_factor)
+        if (
+            not np.isfinite(gp_ls_tolerance_base_factor)
+            or gp_ls_tolerance_base_factor <= 0
+        ):
+            raise ValueError(
+                "gp_ls_tolerance_base_factor must be a finite, strictly "
                 "positive float."
             )
 
@@ -7380,7 +7392,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
                 frequency_tolerance = max(
                     gp_frequency_tolerance_factor
-                    * DEFAULT_GP_LS_TOLERANCE_BASE_FACTOR
+                    * gp_ls_tolerance_base_factor
                     * min(candidate_frequency, gp_dominant_frequency),
                     _CONSENSUS_MIN_GP_FREQUENCY_TOLERANCE,
                 )
@@ -7847,6 +7859,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         gp_frequency_tolerance_factor = fit_kwargs.pop(
             "gp_frequency_tolerance_factor", 3.0
         )
+        gp_ls_tolerance_base_factor = fit_kwargs.pop(
+            "gp_ls_tolerance_base_factor",
+            DEFAULT_GP_LS_TOLERANCE_BASE_FACTOR,
+        )
         verbose = fit_kwargs.get("verbose", False)
         consensus_dedup_rtol = float(consensus_dedup_rtol)
         if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol <= 0:
@@ -7867,6 +7883,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ):
             raise ValueError(
                 "gp_frequency_tolerance_factor must be a finite, strictly "
+                "positive float."
+            )
+        gp_ls_tolerance_base_factor = float(gp_ls_tolerance_base_factor)
+        if (
+            not np.isfinite(gp_ls_tolerance_base_factor)
+            or gp_ls_tolerance_base_factor <= 0
+        ):
+            raise ValueError(
+                "gp_ls_tolerance_base_factor must be a finite, strictly "
                 "positive float."
             )
 
@@ -7890,6 +7915,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     candidate_diag=candidate_diag,
                     gp_validation_kwargs=gp_validation_kwargs,
                     gp_frequency_tolerance_factor=gp_frequency_tolerance_factor,
+                    gp_ls_tolerance_base_factor=gp_ls_tolerance_base_factor,
                     verbose=verbose,
                 )
                 candidate_diag = validated_diag
@@ -7992,6 +8018,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "gp_frequency_tolerance_factor": float(
                         gp_frequency_tolerance_factor
                     ),
+                    "gp_ls_tolerance_base_factor": float(
+                        gp_ls_tolerance_base_factor
+                    ),
                 },
             }
             if verbose:
@@ -8085,6 +8114,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "gp_frequency_tolerance_factor": float(
                         gp_frequency_tolerance_factor
                     ),
+                    "gp_ls_tolerance_base_factor": float(
+                        gp_ls_tolerance_base_factor
+                    ),
                 },
                 "mode": "manual_consensus_frequencies",
             }
@@ -8117,6 +8149,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "use_gp_validation",
                 "gp_validation_kwargs",
                 "gp_frequency_tolerance_factor",
+                "gp_ls_tolerance_base_factor",
                 "periods",
                 "use_mls_init",
                 "use_best_band_init",
