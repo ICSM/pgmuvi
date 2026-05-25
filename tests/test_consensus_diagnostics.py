@@ -111,14 +111,17 @@ def _make_valid_diagnostics(
     trusted_candidate_count=None,
     rejection_summary=None,
 ):
-    """Return a minimal valid finalized diagnostics dict."""
-    accepted = list(accepted_bands or [])
-    rejected = list(rejected_bands or [])
+    """Return a minimal diagnostics dict suitable for finalize/validate tests.
+
+    Band labels are normalized to strings to match the consensus schema.
+    """
+    accepted = [str(b) for b in (accepted_bands or [])]
+    rejected = [str(b) for b in (rejected_bands or [])]
+    accepted_set = set(accepted)
     per_band = dict(per_band_diagnostics or {})
-    for band in accepted + rejected:
-        band_key = str(band)
+    for band_key in accepted + rejected:
         default_band_status = (
-            BAND_STATUS_ACCEPTED if band_key in accepted else BAND_STATUS_REJECTED
+            BAND_STATUS_ACCEPTED if band_key in accepted_set else BAND_STATUS_REJECTED
         )
         default_reasons = (
             []
