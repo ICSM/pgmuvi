@@ -63,7 +63,7 @@ _ACF_STATUS_AGREEMENT = "agreement"
 _ACF_STATUS_HARMONIC = "harmonic"
 _ACF_STATUS_DISAGREEMENT = "disagreement"
 _ACF_STATUS_UNAVAILABLE = "unavailable"
-_CONSENSUS_GP_LS_TOLERANCE_BASE_FACTOR = 0.1
+DEFAULT_GP_LS_TOLERANCE_BASE_FACTOR = 0.1
 _CONSENSUS_MIN_GP_FREQUENCY_TOLERANCE = 1.0e-8
 
 
@@ -7380,7 +7380,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
                 frequency_tolerance = max(
                     gp_frequency_tolerance_factor
-                    * _CONSENSUS_GP_LS_TOLERANCE_BASE_FACTOR
+                    * DEFAULT_GP_LS_TOLERANCE_BASE_FACTOR
                     * min(candidate_frequency, gp_dominant_frequency),
                     _CONSENSUS_MIN_GP_FREQUENCY_TOLERANCE,
                 )
