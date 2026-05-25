@@ -45,11 +45,11 @@ class TestUploadValidation(unittest.TestCase):
 
     def test_resolve_latest_uses_input_order_final_tie_breaker(self):
         uploaded_files = [
+            _record("artifact", "/tmp/artifact-z.txt", 5, 200),
             _record("artifact", "/tmp/artifact-a.txt", 5, 200),
-            _record("artifact", "/tmp/artifact-b.txt", 5, 200),
         ]
         latest = resolve_latest_uploaded_files(uploaded_files)
-        self.assertEqual(latest["artifact"].file_path, "/tmp/artifact-b.txt")
+        self.assertEqual(latest["artifact"].file_path, "/tmp/artifact-a.txt")
 
     def test_resolve_latest_rejects_unexpected_sentinel(self):
         uploaded_files = [

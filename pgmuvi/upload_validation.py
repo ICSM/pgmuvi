@@ -57,9 +57,9 @@ def resolve_latest_uploaded_files(uploaded_files):
         if not records:
             continue
         latest[logical_name] = max(
-            records,
-            key=lambda rec: (rec.revision, rec.uploaded_at, rec.file_path),
-        )
+            enumerate(records),
+            key=lambda pair: (pair[1].revision, pair[1].uploaded_at, pair[0]),
+        )[1]
     return latest
 
 
