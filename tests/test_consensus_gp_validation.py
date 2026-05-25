@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from pgmuvi.lightcurve import Lightcurve
+from pgmuvi.lightcurve import DEFAULT_GP_LS_TOLERANCE_BASE_FACTOR, Lightcurve
 
 
 class _FakeBandLightcurve:
@@ -116,6 +116,49 @@ class TestConsensusGPValidationHelpers(unittest.TestCase):
         self.assertTrue(records["B"]["gp_validation_used"])
         self.assertTrue(records["C"]["gp_validation_used"])
         self.assertIn("RuntimeError", records["C"]["gp_validation_error"])
+
+    def test_gp_ls_tolerance_base_factor_default_and_override(self):
+        """Default matches historical tolerance and override changes tolerance."""
+
+        def _candidate_diag():
+            return {
+                "controls": {},
+                "band_records": {"A": {"band": "A", "dominant_frequency": 1.0}},
+                "accepted_bands": ["A"],
+                "rejected_bands": [],
+                "rejection_reasons": {},
+            }
+
+        band_lcs = {"A": _FakeBandLightcurve(dominant_frequency=1.15)}
+
+        def _fake_select_bands(labels):
+            return band_lcs[labels[0]]
+
+        self.lc.select_bands = _fake_select_bands
+
+        default_validated = self.lc._consensus_validate_candidates_with_1d_gp(
+            candidate_diag=_candidate_diag(),
+            gp_frequency_tolerance_factor=1.0,
+            verbose=False,
+        )
+        default_record = default_validated["band_records"]["A"]
+
+        self.assertAlmostEqual(
+            default_record["gp_frequency_tolerance"],
+            DEFAULT_GP_LS_TOLERANCE_BASE_FACTOR,
+        )
+        self.assertEqual(default_record["gp_validation_status"], "disagreement")
+
+        override_validated = self.lc._consensus_validate_candidates_with_1d_gp(
+            candidate_diag=_candidate_diag(),
+            gp_frequency_tolerance_factor=1.0,
+            gp_ls_tolerance_base_factor=0.2,
+            verbose=False,
+        )
+        override_record = override_validated["band_records"]["A"]
+
+        self.assertAlmostEqual(override_record["gp_frequency_tolerance"], 0.2)
+        self.assertEqual(override_record["gp_validation_status"], "agreement")
 
 
 if __name__ == "__main__":
