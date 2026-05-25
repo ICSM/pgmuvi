@@ -7299,7 +7299,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         inlier_bands = band_arr[inlier_mask].tolist()
 
         final_consensus_frequency = float(np.median(inlier_freqs))
-        mad_scatter = float(np.median(np.abs(inlier_freqs - final_consensus_frequency)))
+        mad_scatter = float(
+            np.median(np.abs(inlier_freqs - final_consensus_frequency))
+        )
 
         if verbose:
             if outlier_bands:
