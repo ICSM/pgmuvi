@@ -35,7 +35,7 @@ class TestConsensusGPValidationHelpers(unittest.TestCase):
         y = np.sin(x)
         self.lc = Lightcurve(x, y)
 
-    def test_prepare_gp_validation_fit_kwargs_strips_blocked_and_forces_strategy(self):
+    def test_prepare_gp_validation_fit_kwargs_strips_blocked_keys(self):
         """Blocked consensus keys are removed and fit_strategy is always None."""
         kwargs = Lightcurve._consensus_prepare_gp_validation_fit_kwargs(
             {
@@ -57,7 +57,7 @@ class TestConsensusGPValidationHelpers(unittest.TestCase):
         self.assertNotIn("use_gp_validation", kwargs)
         self.assertNotIn("period_summary_kwargs", kwargs)
 
-    def test_validate_candidates_with_1d_gp_updates_records_and_band_lists(self):
+    def test_validate_candidates_with_1d_gp_updates_diagnostics(self):
         """Agreement/disagreement/failure are reflected in diagnostics fields."""
         candidate_diag = {
             "controls": {},
