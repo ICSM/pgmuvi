@@ -110,7 +110,7 @@ jobs:
         GITHUB_TOKEN: ${{ github.token }}
       # Only create the release when it doesn't already exist (e.g. it was
       # created manually via the GitHub UI before or after pushing the tag).
-      # --repo is required because this job does not check out the repository.
+      # --repo is passed explicitly even though this job checks out the repo.
       # Real failures (auth, network, etc.) in the create command still propagate.
       run: >-
         gh release view '${{ github.ref_name }}'
