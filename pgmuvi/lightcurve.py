@@ -7784,7 +7784,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if not (np.isfinite(_k) and _k > 0):
                     raise ValueError(
                         "consensus_frequency_k must be finite and strictly "
-                        f"positive (got {_k!r})."
+                        f"positive (got {_k})."
                     )
                 # Practical lower bound - frequencies must be positive.
                 _lowers = np.maximum(
