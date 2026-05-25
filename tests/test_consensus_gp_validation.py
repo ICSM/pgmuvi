@@ -43,6 +43,7 @@ class TestConsensusGPValidationHelpers(unittest.TestCase):
                 "fit_strategy": "consensus",
                 "consensus_frequencies": [0.1],
                 "use_gp_validation": True,
+                "gp_ls_tolerance_base_factor": 0.2,
                 "period_summary_kwargs": {"backend": "gp"},
                 "training_iter": 7,
                 "lr": 0.05,
@@ -55,6 +56,7 @@ class TestConsensusGPValidationHelpers(unittest.TestCase):
         self.assertIsNone(kwargs["fit_strategy"])
         self.assertNotIn("consensus_frequencies", kwargs)
         self.assertNotIn("use_gp_validation", kwargs)
+        self.assertNotIn("gp_ls_tolerance_base_factor", kwargs)
         self.assertNotIn("period_summary_kwargs", kwargs)
 
     def test_validate_candidates_with_1d_gp_updates_diagnostics(self):
