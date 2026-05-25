@@ -99,7 +99,7 @@ def _run_consensus_fit(lc, **extra_kwargs):
 def _is_json_serializable(obj):
     """Return ``True`` if *obj* can be serialized with ``json.dumps``."""
     try:
-        json.dumps(obj)
+        json.dumps(obj, allow_nan=False)
         return True
     except (TypeError, ValueError):
         return False
