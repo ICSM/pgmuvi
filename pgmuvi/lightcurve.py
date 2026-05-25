@@ -7559,8 +7559,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             consensus_frequencies = np.asarray(
                 [final_consensus_frequency], dtype=float
             )
-            if consensus_frequency_width is None and robust_width is not None:
-                consensus_frequency_width = np.asarray([robust_width], dtype=float)
+            if consensus_frequency_width is None:
+                width_value = robust_width
+                if width_value is None:
+                    width_value = max(
+                        0.01 * float(final_consensus_frequency),
+                        float(np.finfo(float).eps),
+                    )
+                consensus_frequency_width = np.asarray([width_value], dtype=float)
             auto_constraint_bounds = None
 
             self.consensus_diagnostics = {
