@@ -63,6 +63,7 @@ _ACF_STATUS_AGREEMENT = "agreement"
 _ACF_STATUS_HARMONIC = "harmonic"
 _ACF_STATUS_DISAGREEMENT = "disagreement"
 _ACF_STATUS_UNAVAILABLE = "unavailable"
+_CONSENSUS_GP_LS_TOLERANCE_BASE_FACTOR = 0.1
 
 
 def _reraise_with_note(e, note):
@@ -7311,12 +7312,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             for band, reasons in candidate_diag.get("rejection_reasons", {}).items()
         }
 
-        for band, record in band_records.items():
-            _ = band
+        for record in band_records.values():
             record.setdefault("gp_validation_used", False)
             record.setdefault("gp_dominant_frequency", None)
             record.setdefault("gp_dominant_period", None)
             record.setdefault("gp_frequency_difference", None)
+            record.setdefault("gp_fractional_frequency_difference", None)
             record.setdefault("gp_frequency_tolerance", None)
             record.setdefault("gp_validation_status", None)
             record.setdefault("gp_validation_error", None)
@@ -7324,8 +7325,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         default_gp_fit_kwargs = (
             self._consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs)
         )
-        gp_ls_tolerance_base_factor = 0.1
-
         accepted_after_gp = []
         for band_label in accepted_bands:
             record = band_records.get(band_label, {"band": band_label})
@@ -7380,7 +7379,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
                 frequency_tolerance = max(
                     gp_frequency_tolerance_factor
-                    * gp_ls_tolerance_base_factor
+                    * _CONSENSUS_GP_LS_TOLERANCE_BASE_FACTOR
                     * min(candidate_frequency, gp_dominant_frequency),
                     1.0e-8,
                 )
@@ -7389,8 +7388,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
                 fractional_frequency_difference = (
                     self._consensus_fractional_frequency_difference(
-                    candidate_frequency, gp_dominant_frequency
-                )
+                        candidate_frequency, gp_dominant_frequency
+                    )
                 )
 
                 record["gp_dominant_frequency"] = gp_dominant_frequency
