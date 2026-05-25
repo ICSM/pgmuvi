@@ -26,7 +26,31 @@ def _make_2d_lc_with_bands(
     band_names=None,
     n_bands=2,
 ):
-    """Build a 2D Lightcurve with per-row band labels."""
+    """Build a 2D Lightcurve with per-row band labels for testing.
+
+    Parameters
+    ----------
+    true_period : float, optional
+        True sinusoidal period in the same units as ``t_span``.
+    n_per_band : int, optional
+        Number of observations per band.
+    t_span : float, optional
+        Total time span of the observations.
+    noise_level : float, optional
+        Standard deviation of Gaussian noise added to each band.
+    seed : int, optional
+        Random seed for reproducibility.
+    band_names : list of str or None, optional
+        Band label strings. If ``None``, labels are ``"band0"``, ``"band1"``,
+        etc.
+    n_bands : int, optional
+        Number of bands to generate. Ignored when ``band_names`` is provided.
+
+    Returns
+    -------
+    Lightcurve
+        A 2D :class:`pgmuvi.lightcurve.Lightcurve` with ``band`` labels set.
+    """
     rng = np.random.default_rng(seed)
     true_freq = 1.0 / true_period
     if band_names is None:
@@ -150,8 +174,24 @@ class TestConsensusNumMixturesBroadcast(unittest.TestCase):
         self.assertEqual(len(info["consensus_frequencies"]), 1)
 
     def _run_and_capture_num_mixtures(self, num_mixtures):
-        """Run auto-consensus, returning _last_consensus_fit_info even if the
-        downstream fit raises due to a pre-existing 2D shape mismatch."""
+        """Run auto-consensus and return ``_last_consensus_fit_info``.
+
+        The downstream initialisation may fail for ``num_mixtures > 1`` with
+        2D kernels due to a pre-existing shape mismatch. This helper catches
+        that error and still returns the fit-info dict so the broadcast result
+        can be verified independently of the downstream failure.
+
+        Parameters
+        ----------
+        num_mixtures : int
+            Number of mixture components to request.
+
+        Returns
+        -------
+        dict or None
+            The ``_last_consensus_fit_info`` dict set during the consensus
+            preparation step, or ``None`` if it was never set.
+        """
         try:
             self.lc.fit(
                 fit_strategy="consensus",

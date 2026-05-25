@@ -7476,10 +7476,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         consensus_dedup_rtol = fit_kwargs.pop("consensus_dedup_rtol", 0.01)
         verbose = fit_kwargs.get("verbose", False)
         consensus_dedup_rtol = float(consensus_dedup_rtol)
-        if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol <= 0:
+        if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol < 0:
             raise ValueError(
-                "consensus_dedup_rtol must be a finite, strictly positive "
-                "float."
+                "consensus_dedup_rtol must be a finite, non-negative float "
+                "(use 0 to disable deduplication)."
             )
 
         auto_constraint_bounds = None
