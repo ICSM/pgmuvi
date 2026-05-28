@@ -5646,6 +5646,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lr=0.1,
         stopavg=30,
         variance=False,
+        fit_strategy=None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -5792,6 +5793,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
+        fit_strategy : {"consensus", "consensus_multicomp",
+                        "consensus_relaxed"} or None, optional
+            Optional fitting-strategy selector.  The default ``None`` keeps the
+            existing general ``fit`` workflow unchanged.  When set to one of
+            the listed strategy names, ``fit`` dispatches to the corresponding
+            internal consensus-fit pathway.  The listed strategy names are
+            reserved for planned consensus-fit implementations and currently
+            raise ``NotImplementedError``.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -5817,6 +5826,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # mutation (MLS init / fallback default).  Used later to decide
         # whether to substitute the stored _model_num_mixtures.
         _num_mixtures_arg = num_mixtures
+
+        # Dispatch alternative fit strategies before any stateful setup from
+        # the default/general fit pathway mutates this Lightcurve instance.
+        if fit_strategy is not None:
+            return self._consensus_fit(
+                fit_strategy=fit_strategy,
+                model=model,
+                likelihood=likelihood,
+                num_mixtures=num_mixtures,
+                guess=guess,
+                periods=periods,
+                use_mls_init=use_mls_init,
+                use_best_band_init=use_best_band_init,
+                constraint_set=constraint_set,
+                grid_size=grid_size,
+                cuda=cuda,
+                training_iter=training_iter,
+                max_cg_iterations=max_cg_iterations,
+                optim=optim,
+                miniter=miniter,
+                stop=stop,
+                lr=lr,
+                stopavg=stopavg,
+                variance=variance,
+                **kwargs,
+            )
 
         if not hasattr(self, "likelihood"):
             self.set_likelihood(likelihood, variance=variance, **kwargs)
@@ -6298,6 +6333,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.__FITTED_MAP = True
 
         return self.results
+
+    def _consensus_fit(self, fit_strategy, **fit_kwargs):
+        """Dispatch consensus fit strategies to their internal handlers."""
+        if fit_strategy == "consensus":
+            return self._consensus_standard_fit(**fit_kwargs)
+        if fit_strategy == "consensus_multicomp":
+            return self._consensus_multicomp_fit(**fit_kwargs)
+        if fit_strategy == "consensus_relaxed":
+            return self._consensus_relaxed_fit(**fit_kwargs)
+        raise ValueError(
+            "Invalid fit_strategy. Expected None or one of: "
+            "'consensus', 'consensus_multicomp', 'consensus_relaxed'. "
+            f"Got {fit_strategy!r}."
+        )
+
+    def _consensus_standard_fit(self, **fit_kwargs):
+        """Consensus-fit stub; currently raises ``NotImplementedError``."""
+        raise NotImplementedError(
+            "fit_strategy='consensus' is not implemented yet."
+        )
+
+    def _consensus_multicomp_fit(self, **fit_kwargs):
+        """Consensus-fit stub; currently raises ``NotImplementedError``."""
+        raise NotImplementedError(
+            "fit_strategy='consensus_multicomp' is not implemented yet."
+        )
+
+    def _consensus_relaxed_fit(self, **fit_kwargs):
+        """Consensus-fit stub; currently raises ``NotImplementedError``."""
+        raise NotImplementedError(
+            "fit_strategy='consensus_relaxed' is not implemented yet."
+        )
 
     def mcmc(
         self,
