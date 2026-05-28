@@ -6342,17 +6342,280 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return self._consensus_multicomp_fit(**fit_kwargs)
         if fit_strategy == "consensus_relaxed":
             return self._consensus_relaxed_fit(**fit_kwargs)
-        raise ValueError(
+        msg = (
             "Invalid fit_strategy. Expected None or one of: "
             "'consensus', 'consensus_multicomp', 'consensus_relaxed'. "
             f"Got {fit_strategy!r}."
         )
+        raise ValueError(msg)
+
+    def _consensus_resolve_time_sm_keys(self):
+        """Resolve time-kernel spectral-mixture parameter keys for consensus fit."""
+        if (
+            not hasattr(self, "model")
+            or self.model is None
+            or not hasattr(self, "_model_pars")
+        ):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before resolving "
+                "consensus SM keys."
+            )
+
+        def _resolve_param_key(param_name):
+            candidates = set()
+            raw_token = "raw_"
+            for key, meta in self._model_pars.items():
+                if not isinstance(key, str):
+                    continue
+                if key.startswith(raw_token) or f".{raw_token}" in key:
+                    continue
+                if key.endswith(f".{param_name}"):
+                    candidates.add(key)
+                if key == param_name and isinstance(meta, dict):
+                    resolved = (
+                        meta.get("constrained_full_name")
+                        or meta.get("full_name")
+                    )
+                    if isinstance(resolved, str):
+                        candidates.add(resolved)
+                if isinstance(meta, dict):
+                    resolved = meta.get("constrained_full_name")
+                    if (
+                        isinstance(resolved, str)
+                        and resolved.endswith(f".{param_name}")
+                    ):
+                        candidates.add(resolved)
+
+            if not candidates:
+                raise RuntimeError(
+                    f"Could not resolve a time-kernel '{param_name}' key from "
+                    "_model_pars."
+                )
+
+            def _candidate_rank(candidate):
+                if candidate == f"covar_module.{param_name}":
+                    return (0, len(candidate), candidate)
+                if (
+                    candidate.startswith("covar_module.")
+                    and ".kernels.0." in candidate
+                ):
+                    return (1, len(candidate), candidate)
+                if candidate.startswith("covar_module."):
+                    return (2, len(candidate), candidate)
+                return (3, len(candidate), candidate)
+
+            ordered = sorted(
+                candidates,
+                key=_candidate_rank,
+            )
+            return ordered[0]
+
+        return {
+            "mixture_means": _resolve_param_key("mixture_means"),
+            "mixture_scales": _resolve_param_key("mixture_scales"),
+        }
+
+    def _consensus_build_sm_initialization(
+        self,
+        frequencies,
+        scales=None,
+        dtype=None,
+        device=None,
+    ):
+        """Convert consensus frequency estimates to SM init tensors.
+
+        Converts consensus frequency estimates into properly-shaped tensors for
+        spectral-mixture kernel initialization.
+
+        Parameters
+        ----------
+        frequencies : float or list or numpy.ndarray or torch.Tensor
+            Consensus frequency estimate(s). Values are converted to a 1-D
+            tensor and must be non-empty, finite, and strictly positive.
+        scales : float or list or numpy.ndarray or torch.Tensor or None, optional
+            Optional spectral-mixture scale value(s). If a scalar is provided,
+            it is broadcast to all mixtures. If array-like, it must have the
+            same number of elements as ``frequencies``.
+        dtype : torch.dtype or None, optional
+            Tensor dtype for returned initialization tensors. If ``None``,
+            inferred from ``self.xdata`` when available; otherwise uses
+            ``torch.float32``.
+        device : torch.device or str or None, optional
+            Device for returned initialization tensors. If ``None``, inferred
+            from ``self.xdata`` when available; otherwise uses CPU.
+
+        Returns
+        -------
+        dict
+            Initialization dictionary containing ``mixture_means`` with shape
+            ``(1, n_mixtures, 1)``, ``mixture_scales`` (same shape when scales
+            are provided, otherwise ``None``), and ``num_mixtures``.
+
+        Raises
+        ------
+        ValueError
+            If frequencies or scales fail validation checks.
+        """
+        xdata_tensor = (
+            self.xdata
+            if hasattr(self, "xdata") and isinstance(self.xdata, torch.Tensor)
+            else None
+        )
+        if dtype is None:
+            dtype = (
+                xdata_tensor.dtype
+                if xdata_tensor is not None
+                else torch.float32
+            )
+        if device is None:
+            device = (
+                xdata_tensor.device
+                if xdata_tensor is not None
+                else torch.device("cpu")
+            )
+
+        freq_tensor = torch.as_tensor(frequencies, dtype=dtype, device=device)
+        freq_tensor = freq_tensor.reshape(-1)
+
+        if freq_tensor.numel() == 0:
+            raise ValueError("frequencies must not be empty.")
+        if not torch.all(torch.isfinite(freq_tensor)):
+            raise ValueError("frequencies must contain only finite values.")
+        if not torch.all(freq_tensor > 0):
+            raise ValueError("frequencies must be strictly positive.")
+
+        n_mixtures = freq_tensor.numel()
+        mixture_means = freq_tensor.reshape(1, n_mixtures, 1)
+        init = {
+            "mixture_means": mixture_means,
+            "mixture_scales": None,
+            "num_mixtures": int(n_mixtures),
+        }
+
+        if scales is not None:
+            scales_tensor = torch.as_tensor(scales, dtype=dtype, device=device)
+            scales_tensor = scales_tensor.reshape(-1)
+            if scales_tensor.numel() == 0:
+                raise ValueError("scales must not be empty when provided.")
+            if not torch.all(torch.isfinite(scales_tensor)):
+                raise ValueError("scales must contain only finite values.")
+            if not torch.all(scales_tensor > 0):
+                raise ValueError("scales must be strictly positive.")
+
+            if scales_tensor.numel() == 1 and n_mixtures > 1:
+                scales_tensor = scales_tensor.expand(n_mixtures)
+            elif scales_tensor.numel() != n_mixtures:
+                raise ValueError(
+                    "scales must be a scalar or have the same number of elements "
+                    "as frequencies."
+                )
+
+            init["mixture_scales"] = scales_tensor.reshape(1, n_mixtures, 1)
+
+        return init
+
+    def _consensus_build_guess(
+        self,
+        frequencies,
+        scales=None,
+        dtype=None,
+        device=None,
+    ):
+        """Build a model-key-aware SM init dictionary for future consensus fits."""
+        keys = self._consensus_resolve_time_sm_keys()
+        init = self._consensus_build_sm_initialization(
+            frequencies=frequencies,
+            scales=scales,
+            dtype=dtype,
+            device=device,
+        )
+
+        expected_num_mixtures = getattr(self, "_fit_num_mixtures_effective", None)
+        if (
+            expected_num_mixtures is not None
+            and int(expected_num_mixtures) != init["num_mixtures"]
+        ):
+            raise ValueError(
+                "The number of consensus frequencies does not match the model's "
+                f"number of mixtures ({init['num_mixtures']} != "
+                f"{int(expected_num_mixtures)})."
+            )
+
+        guess = {
+            keys["mixture_means"]: init["mixture_means"],
+        }
+        if init["mixture_scales"] is not None:
+            guess[keys["mixture_scales"]] = init["mixture_scales"]
+
+        return guess
 
     def _consensus_standard_fit(self, **fit_kwargs):
-        """Consensus-fit stub; currently raises ``NotImplementedError``."""
-        raise NotImplementedError(
-            "fit_strategy='consensus' is not implemented yet."
+        """Minimal consensus wrapper using caller-provided consensus frequencies."""
+        consensus_frequencies = fit_kwargs.pop("consensus_frequencies", None)
+        if consensus_frequencies is None:
+            raise NotImplementedError(
+                "Automatic 1D consensus construction is not implemented yet. "
+                "Please provide `consensus_frequencies`."
+            )
+        consensus_scales = fit_kwargs.pop("consensus_scales", None)
+        user_guess = fit_kwargs.pop("guess", None)
+
+        model_is_ready = (
+            hasattr(self, "model")
+            and self.model is not None
+            and hasattr(self, "_model_pars")
         )
+        if not model_is_ready:
+            _set_model_excluded = {
+                "model",
+                "likelihood",
+                "num_mixtures",
+                "variance",
+                "guess",
+                "consensus_frequencies",
+                "consensus_scales",
+                "periods",
+                "use_mls_init",
+                "use_best_band_init",
+                "constraint_set",
+                "grid_size",
+                "cuda",
+                "training_iter",
+                "max_cg_iterations",
+                "optim",
+                "miniter",
+                "stop",
+                "lr",
+                "stopavg",
+                "fit_strategy",
+            }
+            set_model_kwargs = {
+                key: value
+                for key, value in fit_kwargs.items()
+                if key not in _set_model_excluded
+            }
+            self.set_model(
+                fit_kwargs.get("model"),
+                fit_kwargs.get("likelihood"),
+                num_mixtures=fit_kwargs.get("num_mixtures"),
+                variance=fit_kwargs.get("variance", False),
+                **set_model_kwargs,
+            )
+            fit_kwargs["model"] = None
+
+        consensus_guess = self._consensus_build_guess(
+            frequencies=consensus_frequencies,
+            scales=consensus_scales,
+        )
+
+        merged_guess = {}
+        if user_guess is not None:
+            merged_guess.update(user_guess)
+        merged_guess.update(consensus_guess)
+
+        fit_kwargs["guess"] = merged_guess
+        fit_kwargs["fit_strategy"] = None
+        return self.fit(**fit_kwargs)
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
         """Consensus-fit stub; currently raises ``NotImplementedError``."""
