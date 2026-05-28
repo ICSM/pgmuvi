@@ -6800,23 +6800,72 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         }
 
     @staticmethod
+    def _consensus_fractional_frequency_difference(f1, f2):
+        """Return the standard consensus fractional frequency difference.
+
+        Definition
+        ----------
+        ``abs(f1 - f2) / min(f1, f2)``
+        The smaller-frequency normalisation keeps agreement checks symmetric in
+        frequency space while measuring mismatch relative to the slower
+        timescale represented by the pair.
+
+        Parameters
+        ----------
+        f1 : float
+            First positive frequency [1/day].
+        f2 : float
+            Second positive frequency [1/day].
+
+        Returns
+        -------
+        float
+            Fractional frequency difference for consensus agreement tests.
+
+        Raises
+        ------
+        ValueError
+            If either frequency is not finite and strictly positive.
+        """
+        f1_val = float(f1)
+        f2_val = float(f2)
+        if not (
+            np.isfinite(f1_val)
+            and np.isfinite(f2_val)
+            and f1_val > 0
+            and f2_val > 0
+        ):
+            raise ValueError(
+                "fractional frequency difference requires finite, positive "
+                "frequencies."
+            )
+        return abs(f1_val - f2_val) / min(f1_val, f2_val)
+
+    @staticmethod
     def _consensus_compare_ls_acf(
-        ls_period,
-        acf_period,
+        ls_frequency,
+        acf_frequency,
         harmonic_tolerance=0.15,
     ):
-        """Compare LS and ACF dominant periods for deterministic consistency checks.
+        """Compare LS and ACF dominant frequencies for consistency checks.
 
+        All internal comparisons are performed in frequency space [1/day].
         ACF is treated as an independent periodicity diagnostic. Bands where
         LS and ACF strongly disagree are rejected because the dominant LS peak
         is less likely to reflect the shared physical timescale.
 
+        The ``ratio`` returned is ``larger_frequency / smaller_frequency``.
+        Because both inputs represent the same physical cycle rate, a harmonic
+        relationship in frequency space (f1 = n * f2) yields the same integer
+        ratio as the equivalent period-space check, so harmonic detection is
+        unaffected by the convention change.
+
         Parameters
         ----------
-        ls_period : float
-            Dominant period derived from Lomb-Scargle for a single band.
-        acf_period : float
-            Dominant period derived from ACF for the same band.
+        ls_frequency : float
+            Dominant frequency [1/day] derived from Lomb-Scargle for a band.
+        acf_frequency : float
+            Dominant frequency [1/day] derived from ACF for the same band.
         harmonic_tolerance : float, optional
             Relative tolerance used to classify direct or harmonic agreement.
 
@@ -6826,11 +6875,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Comparison summary with keys:
             ``status`` (``"agreement"``, ``"harmonic"``,
             ``"disagreement"``, or ``"unavailable"``),
-            ``ratio`` (larger/smaller period ratio), and
+            ``ratio`` (larger/smaller frequency ratio), and
             ``harmonic_order`` (integer harmonic when applicable).
         """
-        ls_val = float(ls_period) if ls_period is not None else np.nan
-        acf_val = float(acf_period) if acf_period is not None else np.nan
+        ls_val = float(ls_frequency) if ls_frequency is not None else np.nan
+        acf_val = float(acf_frequency) if acf_frequency is not None else np.nan
 
         if not (
             np.isfinite(ls_val)
@@ -6960,6 +7009,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "acf_harmonic_order": None,
                 "acf_error": None,
                 "selected_from": None,
+                "gp_validation_used": False,
+                "gp_dominant_frequency": None,
+                "gp_dominant_period": None,
+                "gp_frequency_difference": None,
+                "gp_fractional_frequency_difference": None,
+                "gp_frequency_tolerance": None,
+                "gp_validation_status": None,
+                "gp_validation_error": None,
             }
 
             if reasons:
@@ -6981,6 +7038,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             longest_period = float(metrics.get("longest_detectable_period", np.nan))
             if not (np.isfinite(longest_period) and longest_period > 0):
                 longest_period = baseline / 2.0 if np.isfinite(baseline) else np.nan
+            # Minimum physically plausible frequency (inverse of longest
+            # detectable period). All plausibility checks use frequency space.
+            min_detectable_frequency = (
+                float(1.0 / longest_period)
+                if (np.isfinite(longest_period) and longest_period > 0)
+                else 0.0
+            )
             nyquist_freq = float(metrics.get("nyquist_frequency", np.inf))
 
             plausible_idx = []
@@ -6989,8 +7053,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     continue
                 if np.isfinite(nyquist_freq) and fval > nyquist_freq:
                     continue
-                period = 1.0 / fval
-                if np.isfinite(longest_period) and period > longest_period:
+                # Frequency below the minimum detectable frequency means the
+                # corresponding period would exceed the longest detectable period.
+                if min_detectable_frequency > 0 and fval < min_detectable_frequency:
                     continue
                 plausible_idx.append(idx)
 
@@ -7009,12 +7074,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 best_idx = plausible_idx[0]
 
             dominant_freq = float(ls_freqs_np[best_idx])
-            dominant_period = float(1.0 / dominant_freq)
 
-            if np.isfinite(longest_period) and dominant_period > longest_period:
+            # Final plausibility guard: frequency must meet the minimum
+            # detectable frequency threshold.
+            if (
+                min_detectable_frequency > 0
+                and dominant_freq < min_detectable_frequency
+            ):
                 rejected_bands.append(band_label)
                 rejection_reasons[band_label] = [
-                    "baseline_too_short_for_candidate_period",
+                    "baseline_too_short_for_candidate_frequency",
                 ]
                 band_records[band_label] = record
                 continue
@@ -7039,9 +7108,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     record["acf_frequency"] = acf_candidate["frequency"]
                     record["acf_period"] = acf_candidate["period"]
 
+                # Consistency check is performed in frequency space; period
+                # fields in the record are presentation-only derivations.
                 acf_compare = self._consensus_compare_ls_acf(
-                    ls_period=dominant_period,
-                    acf_period=record["acf_period"],
+                    ls_frequency=dominant_freq,
+                    acf_frequency=record["acf_frequency"],
                 )
                 record["acf_comparison_status"] = acf_compare["status"]
                 record["acf_period_ratio"] = acf_compare["ratio"]
@@ -7056,6 +7127,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     band_records[band_label] = record
                     continue
 
+            # Consensus logic operates in frequency space internally. Period is
+            # derived only for user-facing diagnostics.
+            dominant_period = float(1.0 / dominant_freq)
             record["dominant_frequency"] = dominant_freq
             record["dominant_period"] = dominant_period
             record["ls_significant"] = bool(
@@ -7096,6 +7170,289 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "rejection_reasons": rejection_reasons,
         }
 
+    @staticmethod
+    def _consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs=None):
+        """Build a safe, isolated kwarg dict for nested 1D GP validation fits.
+
+        All consensus logic operates in frequency space [1/day]. Periods are
+        derived from frequencies only for user-facing diagnostics.
+
+        This helper:
+
+        1. Starts from conservative defaults (``model="1D"``,
+           ``num_mixtures=1``, ``use_mls_init=True``,
+           ``training_iter=100``).
+        2. Merges non-blocked user overrides from ``gp_validation_kwargs``.
+        3. Always forces ``fit_strategy=None`` after merging.
+
+        Why ``fit_strategy`` is forced to ``None``
+        ------------------------------------------
+        Nested validation fits run on 1D per-band ``Lightcurve`` objects
+        created by ``select_bands``. These objects have no multi-band
+        structure and cannot support ``fit_strategy="consensus"``.
+        Propagating the outer ``fit_strategy`` would cause infinite
+        recursion or a misleading error.
+
+        Why consensus-only kwargs are stripped
+        --------------------------------------
+        Keys like ``consensus_frequencies``, ``use_gp_validation``, and
+        ``outlier_sigma`` are meaningful only at the 2D consensus level.
+        Forwarding them into nested 1D fits would either be silently
+        ignored or cause unexpected errors.
+
+        Parameters
+        ----------
+        gp_validation_kwargs : dict or None, optional
+            User-supplied overrides. The reserved nested key
+            ``period_summary_kwargs`` is stripped here and must NOT be
+            forwarded to ``fit()``; callers must pass it separately to
+            ``get_period_summary``.
+
+        Returns
+        -------
+        dict
+            Sanitized kwargs safe for a nested 1D ``Lightcurve.fit()``
+            call. The ``fit_strategy`` key is always ``None``.
+        """
+        # Keys that must NOT propagate into nested GP validation fits.
+        # Consensus-only kwargs are meaningless or harmful for 1D band fits.
+        # period_summary_kwargs is forwarded separately to get_period_summary.
+        _BLOCKED_KEYS = frozenset({
+            "fit_strategy",
+            "consensus_frequencies",
+            "consensus_scales",
+            "consensus_frequency_width",
+            "consensus_frequency_k",
+            "consensus_scale_max_factor",
+            "apply_consensus_constraints",
+            "constrain_consensus",
+            "use_gp_validation",
+            "gp_validation_kwargs",
+            "gp_frequency_tolerance_factor",
+            "outlier_sigma",
+            "consensus_width_factor",
+            "consensus_dedup_rtol",
+            "min_points_per_band",
+            "max_gap_fraction",
+            "min_duty_cycle",
+            "use_acf",
+            "period_summary_kwargs",
+        })
+
+        # Conservative defaults: keep validation lightweight and reproducible.
+        # Users can override non-blocked keys via gp_validation_kwargs.
+        defaults = {
+            "model": "1D",
+            "num_mixtures": 1,
+            "use_mls_init": True,
+            "training_iter": 100,
+        }
+
+        merged = dict(defaults)
+        if gp_validation_kwargs:
+            for key, val in gp_validation_kwargs.items():
+                if key not in _BLOCKED_KEYS:
+                    merged[key] = val
+
+        # Force fit_strategy=None last, regardless of any user override.
+        # A recursive consensus fit on a 1D band lightcurve is always wrong.
+        merged["fit_strategy"] = None
+        return merged
+
+    def _consensus_validate_candidates_with_1d_gp(
+        self,
+        candidate_diag,
+        gp_validation_kwargs=None,
+        gp_frequency_tolerance_factor=3.0,
+        verbose=False,
+    ):
+        """Validate LS/ACF-vetted band candidates against per-band 1D GP PSD.
+
+        All comparison logic operates in frequency space [1/day].  Period
+        values stored in ``band_records`` (``gp_dominant_period`` etc.) are
+        derived from the validated GP frequency solely for user-facing display
+        and are not used in any acceptance/rejection decision.
+        """
+        if not isinstance(candidate_diag, dict):
+            raise ValueError("candidate_diag must be a dictionary.")
+        if gp_validation_kwargs is None:
+            gp_validation_kwargs = {}
+        elif not isinstance(gp_validation_kwargs, dict):
+            raise ValueError("gp_validation_kwargs must be None or a dictionary.")
+
+        gp_frequency_tolerance_factor = float(gp_frequency_tolerance_factor)
+        if (
+            not np.isfinite(gp_frequency_tolerance_factor)
+            or gp_frequency_tolerance_factor <= 0
+        ):
+            raise ValueError(
+                "gp_frequency_tolerance_factor must be a finite, strictly "
+                "positive float."
+            )
+
+        period_summary_kwargs = gp_validation_kwargs.get("period_summary_kwargs")
+        if period_summary_kwargs is None:
+            period_summary_kwargs = {}
+        elif not isinstance(period_summary_kwargs, dict):
+            raise ValueError(
+                "gp_validation_kwargs['period_summary_kwargs'] must be a "
+                "dictionary when provided."
+            )
+
+        controls = dict(candidate_diag.get("controls", {}))
+        band_records = {
+            band: dict(record)
+            for band, record in candidate_diag.get("band_records", {}).items()
+        }
+        accepted_bands = list(candidate_diag.get("accepted_bands", []))
+        rejected_bands = list(candidate_diag.get("rejected_bands", []))
+        rejection_reasons = {
+            band: list(reasons)
+            for band, reasons in candidate_diag.get("rejection_reasons", {}).items()
+        }
+
+        for band, record in band_records.items():
+            _ = band
+            record.setdefault("gp_validation_used", False)
+            record.setdefault("gp_dominant_frequency", None)
+            record.setdefault("gp_dominant_period", None)
+            record.setdefault("gp_frequency_difference", None)
+            record.setdefault("gp_frequency_tolerance", None)
+            record.setdefault("gp_validation_status", None)
+            record.setdefault("gp_validation_error", None)
+
+        default_gp_fit_kwargs = (
+            self._consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs)
+        )
+        gp_ls_tolerance_base_factor = 0.1
+
+        accepted_after_gp = []
+        for band_label in accepted_bands:
+            record = band_records.get(band_label, {"band": band_label})
+            band_records[band_label] = record
+
+            record["gp_validation_used"] = True
+            record["gp_validation_status"] = None
+            record["gp_validation_error"] = None
+
+            _candidate_frequency_raw = record.get("dominant_frequency", np.nan)
+            candidate_frequency = (
+                float(_candidate_frequency_raw)
+                if _candidate_frequency_raw is not None
+                else np.nan
+            )
+            # Period is derived for verbose display only; all GP validation
+            # decisions are made in frequency space.
+            gp_dominant_frequency = None
+            gp_dominant_period = None
+            reason = None
+
+            try:
+                if not (
+                    np.isfinite(candidate_frequency) and candidate_frequency > 0
+                ):
+                    raise ValueError(
+                        "dominant_frequency is missing or invalid for GP validation."
+                    )
+
+                # Validation is performed on a separate 1D Lightcurve returned
+                # by select_bands. The per-band fit mutates only lc_band —
+                # self.model, self.likelihood, self.guess, and
+                # self.consensus_diagnostics on this instance are unaffected.
+                lc_band = self.select_bands([str(band_label)])
+                lc_band.fit(**default_gp_fit_kwargs)
+                summary = lc_band.get_period_summary(**period_summary_kwargs)
+
+                gp_dominant_frequency = getattr(summary, "dominant_frequency", None)
+                if gp_dominant_frequency is None and hasattr(summary, "get"):
+                    gp_dominant_frequency = summary.get("dominant_frequency")
+
+                gp_dominant_frequency = float(gp_dominant_frequency)
+                if not (
+                    np.isfinite(gp_dominant_frequency)
+                    and gp_dominant_frequency > 0
+                ):
+                    raise ValueError("GP dominant frequency is not finite/positive.")
+
+                # Consensus logic operates in frequency space internally.
+                # Period is derived from frequency only for display/diagnostics.
+                gp_dominant_period = float(1.0 / gp_dominant_frequency)
+
+                frequency_tolerance = max(
+                    gp_frequency_tolerance_factor
+                    * gp_ls_tolerance_base_factor
+                    * min(candidate_frequency, gp_dominant_frequency),
+                    1.0e-8,
+                )
+                frequency_difference = abs(
+                    gp_dominant_frequency - candidate_frequency
+                )
+                fractional_frequency_difference = (
+                    self._consensus_fractional_frequency_difference(
+                    candidate_frequency, gp_dominant_frequency
+                )
+                )
+
+                record["gp_dominant_frequency"] = gp_dominant_frequency
+                record["gp_dominant_period"] = gp_dominant_period
+                record["gp_frequency_difference"] = float(frequency_difference)
+                record["gp_fractional_frequency_difference"] = float(
+                    fractional_frequency_difference
+                )
+                record["gp_frequency_tolerance"] = float(frequency_tolerance)
+
+                if frequency_difference <= frequency_tolerance:
+                    record["gp_validation_status"] = "agreement"
+                    accepted_after_gp.append(band_label)
+                else:
+                    record["gp_validation_status"] = "disagreement"
+                    reason = "gp_ls_frequency_disagreement"
+
+            except Exception as exc:
+                record["gp_validation_status"] = "failed"
+                record["gp_validation_error"] = (
+                    f"band={band_label}: {type(exc).__name__}: {exc}"
+                )
+                reason = "gp_validation_failed"
+
+            if reason is not None:
+                if band_label not in rejected_bands:
+                    rejected_bands.append(band_label)
+                reasons = rejection_reasons.setdefault(band_label, [])
+                if reason not in reasons:
+                    reasons.append(reason)
+
+            if verbose:
+                _status = record.get("gp_validation_status")
+                # Period shown here is derived from frequency for display only.
+                _ls_period_display = (
+                    float(1.0 / candidate_frequency)
+                    if (
+                        np.isfinite(candidate_frequency)
+                        and candidate_frequency > 0
+                    )
+                    else None
+                )
+                _msg = (
+                    f"[consensus][gp] band={band_label} "
+                    f"ls_period={_ls_period_display} "
+                    f"ls_frequency={record.get('dominant_frequency')} "
+                    f"gp_period={record.get('gp_dominant_period')} "
+                    f"gp_frequency={record.get('gp_dominant_frequency')} "
+                    f"status={_status}"
+                )
+                if reason is not None:
+                    _msg += f" rejection_reason={reason}"
+                print(_msg)
+
+        return {
+            "controls": controls,
+            "band_records": band_records,
+            "accepted_bands": accepted_after_gp,
+            "rejected_bands": rejected_bands,
+            "rejection_reasons": rejection_reasons,
+        }
+
     def _deduplicate_frequency_candidates(
         self,
         candidates,
@@ -7131,8 +7488,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 )
             freq = float(candidate["frequency"])
             score = float(candidate["score"])
-            if not np.isfinite(freq):
-                raise ValueError("Candidate frequencies must be finite.")
+            if not (np.isfinite(freq) and freq > 0):
+                raise ValueError(
+                    "Candidate frequencies must be finite and positive."
+                )
             if not np.isfinite(score):
                 raise ValueError("Candidate scores must be finite.")
             candidate_copy = dict(candidate)
@@ -7158,13 +7517,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if ri != rj:
                 parent[rj] = ri
 
-        epsilon_denom = np.finfo(float).tiny
         for i in range(len(normalized)):
             f1 = float(normalized[i]["frequency"])
             for j in range(i + 1, len(normalized)):
                 f2 = float(normalized[j]["frequency"])
-                denom = max(abs(f1), abs(f2), epsilon_denom)
-                rel_diff = abs(f1 - f2) / denom
+                rel_diff = self._consensus_fractional_frequency_difference(f1, f2)
                 if rel_diff < _rtol:
                     _union(i, j)
 
@@ -7408,8 +7765,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Manual ``consensus_frequencies`` can be supplied directly and bypass
         automatic candidate collection. Automatic LS/ACF consensus construction
-        currently requires a 2D light curve. 1D GP validation in this strategy
-        is planned but not implemented yet.
+        currently requires a 2D light curve.
 
         Parameters
         ----------
@@ -7417,7 +7773,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Standard :meth:`fit` kwargs plus consensus-specific controls:
             ``min_points_per_band``, ``max_gap_fraction``, ``min_duty_cycle``,
             ``outlier_sigma``, ``use_acf``, ``constrain_consensus``,
-            ``consensus_width_factor``, and ``consensus_dedup_rtol``.
+            ``consensus_width_factor``, ``consensus_dedup_rtol``,
+            ``use_gp_validation``, ``gp_validation_kwargs``, and
+            ``gp_frequency_tolerance_factor``.
 
             Manual overrides are also accepted via:
 
@@ -7438,6 +7796,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               Relative tolerance used to cluster near-identical frequency
               candidates before consensus ranking. Must be finite and strictly
               positive.
+            - ``use_gp_validation`` : bool, default ``False``
+              If ``True``, run optional per-band 1D GP frequency validation on
+              LS/ACF-vetted candidates before final consensus aggregation.
+            - ``gp_validation_kwargs`` : dict or None, default ``None``
+              Extra kwargs for per-band 1D GP validation fit and period summary.
+              Reserved nested key: ``period_summary_kwargs`` (dict), forwarded
+              only to :meth:`get_period_summary`.
+            - ``gp_frequency_tolerance_factor`` : float, default ``3.0``
+              Positive scale factor controlling the LS-vs-GP frequency
+              consistency tolerance.
 
         Returns
         -------
@@ -7474,12 +7842,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         use_acf = fit_kwargs.pop("use_acf", False)
         consensus_width_factor = fit_kwargs.pop("consensus_width_factor", None)
         consensus_dedup_rtol = fit_kwargs.pop("consensus_dedup_rtol", 0.01)
+        use_gp_validation = fit_kwargs.pop("use_gp_validation", False)
+        gp_validation_kwargs = fit_kwargs.pop("gp_validation_kwargs", None)
+        gp_frequency_tolerance_factor = fit_kwargs.pop(
+            "gp_frequency_tolerance_factor", 3.0
+        )
         verbose = fit_kwargs.get("verbose", False)
         consensus_dedup_rtol = float(consensus_dedup_rtol)
         if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol <= 0:
             raise ValueError(
                 "consensus_dedup_rtol must be a finite, strictly positive "
                 "float."
+            )
+        if not isinstance(use_gp_validation, bool):
+            raise ValueError("use_gp_validation must be a boolean.")
+        if gp_validation_kwargs is not None and not isinstance(
+            gp_validation_kwargs, dict
+        ):
+            raise ValueError("gp_validation_kwargs must be None or a dictionary.")
+        gp_frequency_tolerance_factor = float(gp_frequency_tolerance_factor)
+        if (
+            not np.isfinite(gp_frequency_tolerance_factor)
+            or gp_frequency_tolerance_factor <= 0
+        ):
+            raise ValueError(
+                "gp_frequency_tolerance_factor must be a finite, strictly "
+                "positive float."
             )
 
         auto_constraint_bounds = None
@@ -7488,8 +7876,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if self.ndim != 2:
                 raise ValueError(
                     "Automatic consensus frequency construction requires a 2D "
-                    "light curve. 1D validation in this strategy is planned "
-                    "but not implemented yet."
+                    "light curve."
                 )
             candidate_diag = self._consensus_collect_band_candidates(
                 min_points_per_band=min_points_per_band,
@@ -7498,6 +7885,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 use_acf=use_acf,
                 verbose=verbose,
             )
+            if use_gp_validation:
+                validated_diag = self._consensus_validate_candidates_with_1d_gp(
+                    candidate_diag=candidate_diag,
+                    gp_validation_kwargs=gp_validation_kwargs,
+                    gp_frequency_tolerance_factor=gp_frequency_tolerance_factor,
+                    verbose=verbose,
+                )
+                candidate_diag = validated_diag
             auto_controls = candidate_diag["controls"]
             accepted_bands = candidate_diag.get("accepted_bands", [])
             if not accepted_bands:
@@ -7593,6 +7988,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "constrain_consensus": bool(apply_consensus_constraints),
                     "consensus_width_factor": float(consensus_width_factor),
                     "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                    "use_gp_validation": bool(use_gp_validation),
+                    "gp_frequency_tolerance_factor": float(
+                        gp_frequency_tolerance_factor
+                    ),
                 },
             }
             if verbose:
@@ -7682,6 +8081,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "constrain_consensus": bool(apply_consensus_constraints),
                     "consensus_width_factor": consensus_width_factor,
                     "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                    "use_gp_validation": bool(use_gp_validation),
+                    "gp_frequency_tolerance_factor": float(
+                        gp_frequency_tolerance_factor
+                    ),
                 },
                 "mode": "manual_consensus_frequencies",
             }
@@ -7711,6 +8114,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "outlier_sigma",
                 "use_acf",
                 "consensus_width_factor",
+                "use_gp_validation",
+                "gp_validation_kwargs",
+                "gp_frequency_tolerance_factor",
                 "periods",
                 "use_mls_init",
                 "use_best_band_init",
@@ -7841,13 +8247,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return self.fit(**fit_kwargs)
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
-        """Consensus-fit stub for future multi-component consensus fitting."""
+        """Frequency-space consensus-fit stub for multi-component fitting."""
         raise NotImplementedError(
             "fit_strategy='consensus_multicomp' is not implemented yet."
         )
 
     def _consensus_relaxed_fit(self, **fit_kwargs):
-        """Consensus-fit stub for future relaxed-consensus fitting behavior."""
+        """Frequency-space consensus-fit stub for relaxed-consensus behavior."""
         raise NotImplementedError(
             "fit_strategy='consensus_relaxed' is not implemented yet."
         )
