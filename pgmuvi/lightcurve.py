@@ -14511,9 +14511,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
                 result_diagnostics
             )
-            raise RuntimeError(
+            raise ConsensusFitError(
                 "Consensus multi-component fit failed: no accepted bands produced "
-                "usable multi-component candidates."
+                "usable multi-component candidates. Every band was either rejected "
+                "during quality gating or did not yield detectable multi-component "
+                "frequency peaks. Check per-band sampling quality.",
+                failure_diagnostics={
+                    "status": "failed",
+                    "reason": "no_multicomp_candidates",
+                    "accepted_bands": result_diagnostics.get("accepted_bands", []),
+                },
             )
 
         component_clusters = self._consensus_cluster_component_candidates(
@@ -14529,9 +14536,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
                 result_diagnostics
             )
-            raise RuntimeError(
+            raise ConsensusFitError(
                 "Consensus multi-component fit failed: no component clusters "
-                "could be formed from the extracted band candidates."
+                "could be formed from the extracted band candidates. The "
+                "per-band frequency peaks may be too spread or too sparse to "
+                "group into coherent multi-component clusters.",
+                failure_diagnostics={
+                    "status": "failed",
+                    "reason": "no_component_clusters",
+                    "accepted_bands": result_diagnostics.get("accepted_bands", []),
+                },
             )
 
         multicomponent_consensus = self._consensus_build_multicomponent_frequency_consensus(
@@ -14545,9 +14559,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
                 result_diagnostics
             )
-            raise RuntimeError(
+            raise ConsensusFitError(
                 "Consensus multi-component fit failed: no component clusters "
-                "could be formed from the extracted band candidates."
+                "could be formed from the extracted band candidates.",
+                failure_diagnostics={
+                    "status": "failed",
+                    "reason": "no_component_clusters",
+                    "accepted_bands": result_diagnostics.get("accepted_bands", []),
+                },
             )
 
         accepted_clusters = [
@@ -14557,9 +14576,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
                 result_diagnostics
             )
-            raise RuntimeError(
+            raise ConsensusFitError(
                 "Consensus multi-component fit failed: no accepted "
-                "multicomponent consensus clusters were available."
+                "multicomponent consensus clusters were available. All "
+                "candidate component clusters were rejected during the "
+                "consensus quality evaluation.",
+                failure_diagnostics={
+                    "status": "failed",
+                    "reason": "no_accepted_multicomp_clusters",
+                    "n_clusters": len(component_clusters),
+                    "accepted_bands": result_diagnostics.get("accepted_bands", []),
+                },
             )
 
         initialization_payload = self._consensus_build_multicomponent_initialization(
