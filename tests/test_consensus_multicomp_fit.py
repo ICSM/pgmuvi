@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 import numpy as np
+import torch
 
 from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
 
@@ -154,6 +155,35 @@ def _multicomponent_consensus():
     }
 
 
+def _initialization_diagnostics():
+    return {
+        "requested_consensus_frequencies": [1.01, 2.99],
+        "requested_consensus_scales": [7.0, 3.8],
+        "initialized_mixture_means": [1.01, 2.99],
+        "initialized_mixture_scales": [7.0, 3.8],
+        "initialization_strategy": "per_component_consensus_initialization",
+    }
+
+
+class _DummyInitializationModel:
+    def __init__(self):
+        self.covar_module = mock.MagicMock()
+        self.covar_module.mixture_means = torch.tensor(
+            [[[0.0], [0.0]]],
+            dtype=torch.float32,
+        )
+        self.covar_module.mixture_scales = torch.tensor(
+            [[[0.0], [0.0]]],
+            dtype=torch.float32,
+        )
+
+    def initialize(self, **kwargs):
+        if "covar_module.mixture_means" in kwargs:
+            self.covar_module.mixture_means = kwargs["covar_module.mixture_means"]
+        if "covar_module.mixture_scales" in kwargs:
+            self.covar_module.mixture_scales = kwargs["covar_module.mixture_scales"]
+
+
 class TestConsensusMulticompFit(unittest.TestCase):
     def setUp(self):
         self.lc = _make_minimal_multiband_lightcurve()
@@ -180,6 +210,10 @@ class TestConsensusMulticompFit(unittest.TestCase):
             return_value={"dummy_guess": 1.0},
         ) as guess_mock, mock.patch.object(
             self.lc,
+            "_consensus_collect_initialization_diagnostics",
+            return_value=_initialization_diagnostics(),
+        ) as init_diag_mock, mock.patch.object(
+            self.lc,
             "fit",
             return_value=sentinel,
         ) as fit_mock:
@@ -195,6 +229,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         cluster_mock.assert_called_once()
         consensus_mock.assert_called_once()
         guess_mock.assert_called_once()
+        init_diag_mock.assert_called_once()
         fit_mock.assert_called_once()
 
     def test_multicomp_fit_infers_num_components_and_passes_frequencies_to_init(self):
@@ -215,6 +250,10 @@ class TestConsensusMulticompFit(unittest.TestCase):
             "_consensus_build_guess",
             return_value={"dummy_guess": 1.0},
         ) as guess_mock, mock.patch.object(
+            self.lc,
+            "_consensus_collect_initialization_diagnostics",
+            return_value=_initialization_diagnostics(),
+        ), mock.patch.object(
             self.lc,
             "fit",
             return_value={"status": "ok"},
@@ -288,6 +327,10 @@ class TestConsensusMulticompFit(unittest.TestCase):
             return_value={"dummy_guess": 1.0},
         ), mock.patch.object(
             self.lc,
+            "_consensus_collect_initialization_diagnostics",
+            return_value=_initialization_diagnostics(),
+        ), mock.patch.object(
+            self.lc,
             "fit",
             return_value={"status": "ok"},
         ):
@@ -312,6 +355,12 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertIsNone(diagnostics["final_consensus_period"])
         self.assertTrue(diagnostics["consensus_success"])
         self.assertEqual(diagnostics["constraint_strategy"], "constraints_disabled")
+        self.assertEqual(
+            diagnostics["initialization_strategy"],
+            "per_component_consensus_initialization",
+        )
+        self.assertEqual(diagnostics["requested_consensus_frequencies"], [1.01, 2.99])
+        self.assertEqual(diagnostics["initialized_mixture_means"], [1.01, 2.99])
 
     def test_constraint_strategy_records_global_interval_limitation(self):
         with mock.patch.object(
@@ -355,6 +404,10 @@ class TestConsensusMulticompFit(unittest.TestCase):
             return_value={"dummy_guess": 1.0},
         ), mock.patch.object(
             self.lc,
+            "_consensus_collect_initialization_diagnostics",
+            return_value=_initialization_diagnostics(),
+        ), mock.patch.object(
+            self.lc,
             "fit",
             return_value={"status": "ok"},
         ):
@@ -371,6 +424,86 @@ class TestConsensusMulticompFit(unittest.TestCase):
         )
         self.assertAlmostEqual(diagnostics["consensus_constraint_bounds"][0], 0.71)
         self.assertAlmostEqual(diagnostics["consensus_constraint_bounds"][1], 3.59)
+        self.assertEqual(
+            diagnostics["initialization_strategy"],
+            "per_component_consensus_initialization",
+        )
+
+    def test_collect_initialization_diagnostics_matches_requested_frequencies(self):
+        self.lc.model = _DummyInitializationModel()
+        self.lc._model_pars = {
+            "covar_module.mixture_means": {"module": self.lc.model.covar_module},
+            "covar_module.mixture_scales": {"module": self.lc.model.covar_module},
+        }
+        consensus_guess = {
+            "covar_module.mixture_means": torch.tensor(
+                [[[1.01], [2.99]]],
+                dtype=torch.float32,
+            ),
+            "covar_module.mixture_scales": torch.tensor(
+                [[[7.0], [3.8]]],
+                dtype=torch.float32,
+            ),
+        }
+        with mock.patch.object(
+            self.lc,
+            "_consensus_resolve_time_spectral_mixture_keys",
+            return_value={
+                "mixture_means": "covar_module.mixture_means",
+                "mixture_scales": "covar_module.mixture_scales",
+            },
+        ):
+            diagnostics = self.lc._consensus_collect_initialization_diagnostics(
+                requested_consensus_frequencies=np.array([1.01, 2.99], dtype=float),
+                requested_consensus_scales=np.array([7.0, 3.8], dtype=float),
+                consensus_guess=consensus_guess,
+            )
+
+        np.testing.assert_allclose(
+            diagnostics["initialized_mixture_means"],
+            [1.01, 2.99],
+            atol=1e-6,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            diagnostics["initialized_mixture_scales"],
+            [7.0, 3.8],
+            atol=1e-6,
+            rtol=0.0,
+        )
+        self.assertEqual(
+            diagnostics["initialization_strategy"],
+            "per_component_consensus_initialization",
+        )
+
+    def test_collect_initialization_diagnostics_raises_on_component_mismatch(self):
+        self.lc.model = _DummyInitializationModel()
+        self.lc._model_pars = {
+            "covar_module.mixture_means": {"module": self.lc.model.covar_module},
+            "covar_module.mixture_scales": {"module": self.lc.model.covar_module},
+        }
+        bad_guess = {
+            "covar_module.mixture_means": torch.tensor([[[1.01]]], dtype=torch.float32),
+            "covar_module.mixture_scales": torch.tensor([[[7.0]]], dtype=torch.float32),
+        }
+        with mock.patch.object(
+            self.lc,
+            "_consensus_resolve_time_spectral_mixture_keys",
+            return_value={
+                "mixture_means": "covar_module.mixture_means",
+                "mixture_scales": "covar_module.mixture_scales",
+            },
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "len\\(initialized_mixture_means\\)=1 does not match "
+                "len\\(consensus_frequencies\\)=2",
+            ):
+                self.lc._consensus_collect_initialization_diagnostics(
+                    requested_consensus_frequencies=np.array([1.01, 2.99], dtype=float),
+                    requested_consensus_scales=np.array([7.0, 3.8], dtype=float),
+                    consensus_guess=bad_guess,
+                )
 
     def test_existing_consensus_dispatch_is_unchanged(self):
         with mock.patch.object(
