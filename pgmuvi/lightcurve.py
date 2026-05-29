@@ -484,6 +484,34 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
         "initialized_mixture_scales": _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
+        "fitted_mixture_frequencies": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "fitted_mixture_periods": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "fitted_mixture_scales": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "fitted_mixture_period_widths": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "fitted_frequency_shift_from_initialization": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "fitted_period_shift_from_initialization": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        (
+            "fitted_fractional_frequency_shift_from_initialization"
+        ): _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        (
+            "fitted_fractional_period_shift_from_initialization"
+        ): _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
         "initialization_strategy": _consensus_schema_field(
             default=None, nullable=True
         ),
@@ -10303,6 +10331,123 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             }
         )
 
+    def _consensus_collect_fitted_mixture_diagnostics(
+        self,
+        *,
+        initialized_mixture_frequencies,
+        initialized_mixture_scales,
+    ):
+        """Collect post-fit multicomp mixture diagnostics.
+
+        Parameters
+        ----------
+        initialized_mixture_frequencies : array-like
+            Initialized per-component mixture frequencies used as the canonical
+            component ordering reference.
+        initialized_mixture_scales : array-like
+            Initialized per-component mixture scales aligned one-to-one with
+            ``initialized_mixture_frequencies``.
+
+        Returns
+        -------
+        dict
+            JSON-safe diagnostics aligned to initialization component order
+            containing:
+            ``fitted_mixture_frequencies``,
+            ``fitted_mixture_periods``,
+            ``fitted_mixture_scales``,
+            ``fitted_mixture_period_widths``,
+            ``fitted_frequency_shift_from_initialization``,
+            ``fitted_period_shift_from_initialization``,
+            ``fitted_fractional_frequency_shift_from_initialization``, and
+            ``fitted_fractional_period_shift_from_initialization``.
+        """
+        initialized_frequencies = np.asarray(
+            initialized_mixture_frequencies, dtype=float
+        ).ravel()
+        initialized_scales = np.asarray(initialized_mixture_scales, dtype=float).ravel()
+        if initialized_frequencies.shape != initialized_scales.shape:
+            raise RuntimeError(
+                "Consensus multi-component fitted diagnostics mismatch: "
+                "initialized mixture frequencies and scales must have identical "
+                "shapes "
+                f"(frequencies shape={initialized_frequencies.shape}, "
+                f"scales shape={initialized_scales.shape})."
+            )
+        if not np.all(
+            np.isfinite(initialized_frequencies) & (initialized_frequencies > 0.0)
+        ):
+            raise RuntimeError(
+                "Consensus multi-component fitted diagnostics mismatch: "
+                "initialized mixture frequencies must be finite and strictly "
+                "positive."
+            )
+        if not np.all(np.isfinite(initialized_scales) & (initialized_scales > 0.0)):
+            raise RuntimeError(
+                "Consensus multi-component fitted diagnostics mismatch: "
+                "initialized mixture scales must be finite and strictly positive."
+            )
+
+        keys = self._consensus_resolve_time_spectral_mixture_keys()
+        fitted_frequencies = self._consensus_extract_initialized_parameter_vector(
+            keys["mixture_means"]
+        )
+        fitted_scales = self._consensus_extract_initialized_parameter_vector(
+            keys["mixture_scales"]
+        )
+        if fitted_frequencies.size != initialized_frequencies.size:
+            raise RuntimeError(
+                "Consensus multi-component fitted diagnostics mismatch: "
+                f"len(fitted_mixture_frequencies)={int(fitted_frequencies.size)} "
+                "does not match "
+                "len(initialized_mixture_means)="
+                f"{int(initialized_frequencies.size)}."
+            )
+        if fitted_scales.size != initialized_scales.size:
+            raise RuntimeError(
+                "Consensus multi-component fitted diagnostics mismatch: "
+                f"len(fitted_mixture_scales)={int(fitted_scales.size)} "
+                "does not match "
+                f"len(initialized_mixture_scales)={int(initialized_scales.size)}."
+            )
+        if not np.all(
+            np.isfinite(fitted_frequencies) & (fitted_frequencies > 0.0)
+        ):
+            raise RuntimeError(
+                "Consensus multi-component fitted diagnostics mismatch: fitted "
+                "mixture frequencies must be finite and strictly positive."
+            )
+        if not np.all(np.isfinite(fitted_scales) & (fitted_scales > 0.0)):
+            raise RuntimeError(
+                "Consensus multi-component fitted diagnostics mismatch: fitted "
+                "mixture scales must be finite and strictly positive."
+            )
+
+        initialized_periods = 1.0 / initialized_frequencies
+        fitted_periods = 1.0 / fitted_frequencies
+        fitted_period_widths = fitted_scales / (fitted_frequencies**2)
+        frequency_shift = fitted_frequencies - initialized_frequencies
+        period_shift = fitted_periods - initialized_periods
+        fractional_frequency_shift = frequency_shift / initialized_frequencies
+        fractional_period_shift = period_shift / initialized_periods
+
+        return self._consensus_make_json_safe(
+            {
+                "fitted_mixture_frequencies": fitted_frequencies.tolist(),
+                "fitted_mixture_periods": fitted_periods.tolist(),
+                "fitted_mixture_scales": fitted_scales.tolist(),
+                "fitted_mixture_period_widths": fitted_period_widths.tolist(),
+                "fitted_frequency_shift_from_initialization": frequency_shift.tolist(),
+                "fitted_period_shift_from_initialization": period_shift.tolist(),
+                "fitted_fractional_frequency_shift_from_initialization": (
+                    fractional_frequency_shift.tolist()
+                ),
+                "fitted_fractional_period_shift_from_initialization": (
+                    fractional_period_shift.tolist()
+                ),
+            }
+        )
+
     def _consensus_iter_band_lightcurves(self):
         """Yield per-band 1D light curves using stored band-label metadata.
 
@@ -11949,6 +12094,88 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "consensus_success is True for 'consensus_multicomp' but "
                         "'consensus_frequencies' and 'consensus_periods' have "
                         "different lengths."
+                    )
+                fitted_frequencies_arr = np.asarray(
+                    diagnostics.get("fitted_mixture_frequencies", []), dtype=float
+                ).ravel()
+                fitted_periods_arr = np.asarray(
+                    diagnostics.get("fitted_mixture_periods", []), dtype=float
+                ).ravel()
+                fitted_scales_arr = np.asarray(
+                    diagnostics.get("fitted_mixture_scales", []), dtype=float
+                ).ravel()
+                fitted_period_widths_arr = np.asarray(
+                    diagnostics.get("fitted_mixture_period_widths", []), dtype=float
+                ).ravel()
+                if fitted_frequencies_arr.size == 0:
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'fitted_mixture_frequencies' is missing."
+                    )
+                if not np.all(
+                    np.isfinite(fitted_frequencies_arr) & (fitted_frequencies_arr > 0)
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'fitted_mixture_frequencies' is invalid."
+                    )
+                if not np.all(
+                    np.isfinite(fitted_periods_arr) & (fitted_periods_arr > 0)
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'fitted_mixture_periods' is missing or invalid."
+                    )
+                if not np.all(
+                    np.isfinite(fitted_scales_arr) & (fitted_scales_arr > 0)
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'fitted_mixture_scales' is missing or invalid."
+                    )
+                if not np.all(np.isfinite(fitted_period_widths_arr)):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'fitted_mixture_period_widths' is missing or invalid."
+                    )
+                fitted_vector_lengths = [
+                    fitted_frequencies_arr.size,
+                    fitted_periods_arr.size,
+                    fitted_scales_arr.size,
+                    fitted_period_widths_arr.size,
+                    np.asarray(
+                        diagnostics.get(
+                            "fitted_frequency_shift_from_initialization", []
+                        ),
+                        dtype=float,
+                    ).ravel().size,
+                    np.asarray(
+                        diagnostics.get(
+                            "fitted_period_shift_from_initialization", []
+                        ),
+                        dtype=float,
+                    ).ravel().size,
+                    np.asarray(
+                        diagnostics.get(
+                            "fitted_fractional_frequency_shift_from_initialization", []
+                        ),
+                        dtype=float,
+                    ).ravel().size,
+                    np.asarray(
+                        diagnostics.get(
+                            "fitted_fractional_period_shift_from_initialization", []
+                        ),
+                        dtype=float,
+                    ).ravel().size,
+                ]
+                if any(
+                    length != fitted_frequencies_arr.size
+                    for length in fitted_vector_lengths
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "fitted diagnostics vectors do not share one-to-one "
+                        "component lengths."
                     )
             elif not (
                 has_scalar_consensus_frequency or has_vector_consensus_frequencies
@@ -15118,6 +15345,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         if component_index < initialized_mixture_period_widths.size
                         else None
                     ),
+                    "fitted_mixture_frequency": None,
+                    "fitted_mixture_period": None,
+                    "fitted_mixture_scale": None,
+                    "fitted_mixture_period_width": None,
+                    "fitted_frequency_shift_from_initialization": None,
+                    "fitted_period_shift_from_initialization": None,
+                    "fitted_fractional_frequency_shift_from_initialization": None,
+                    "fitted_fractional_period_shift_from_initialization": None,
                     "member_bands": list(source_summary.get("member_bands") or []),
                     "n_member_bands": source_summary.get("n_member_bands"),
                 }
@@ -15159,6 +15394,108 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         try:
             fit_result = self.fit(**fit_kwargs)
+        except Exception:
+            result_diagnostics["consensus_success"] = False
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics, validate=False
+            )
+            raise
+
+        try:
+            fitted_diagnostics = self._consensus_collect_fitted_mixture_diagnostics(
+                initialized_mixture_frequencies=initialized_mixture_means,
+                initialized_mixture_scales=initialized_mixture_scales,
+            )
+            fitted_frequencies = np.asarray(
+                fitted_diagnostics.get("fitted_mixture_frequencies", []), dtype=float
+            ).ravel()
+            fitted_periods = np.asarray(
+                fitted_diagnostics.get("fitted_mixture_periods", []), dtype=float
+            ).ravel()
+            fitted_scales = np.asarray(
+                fitted_diagnostics.get("fitted_mixture_scales", []), dtype=float
+            ).ravel()
+            fitted_period_widths = np.asarray(
+                fitted_diagnostics.get("fitted_mixture_period_widths", []), dtype=float
+            ).ravel()
+            fitted_frequency_shift = np.asarray(
+                fitted_diagnostics.get(
+                    "fitted_frequency_shift_from_initialization", []
+                ),
+                dtype=float,
+            ).ravel()
+            fitted_period_shift = np.asarray(
+                fitted_diagnostics.get("fitted_period_shift_from_initialization", []),
+                dtype=float,
+            ).ravel()
+            fitted_fractional_frequency_shift = np.asarray(
+                fitted_diagnostics.get(
+                    "fitted_fractional_frequency_shift_from_initialization", []
+                ),
+                dtype=float,
+            ).ravel()
+            fitted_fractional_period_shift = np.asarray(
+                fitted_diagnostics.get(
+                    "fitted_fractional_period_shift_from_initialization", []
+                ),
+                dtype=float,
+            ).ravel()
+            expected_size = int(initialized_mixture_means.size)
+            diagnostics_vectors = {
+                "fitted_mixture_frequencies": fitted_frequencies,
+                "fitted_mixture_periods": fitted_periods,
+                "fitted_mixture_scales": fitted_scales,
+                "fitted_mixture_period_widths": fitted_period_widths,
+                "fitted_frequency_shift_from_initialization": fitted_frequency_shift,
+                "fitted_period_shift_from_initialization": fitted_period_shift,
+                "fitted_fractional_frequency_shift_from_initialization": (
+                    fitted_fractional_frequency_shift
+                ),
+                "fitted_fractional_period_shift_from_initialization": (
+                    fitted_fractional_period_shift
+                ),
+            }
+            for diagnostic_key, diagnostic_values in diagnostics_vectors.items():
+                if diagnostic_values.size != expected_size:
+                    raise RuntimeError(
+                        "Consensus multi-component fitted diagnostics mismatch: "
+                        f"len({diagnostic_key})={int(diagnostic_values.size)} does "
+                        "not match "
+                        "len(initialized_mixture_means)="
+                        f"{expected_size}."
+                    )
+
+            result_diagnostics.update(fitted_diagnostics)
+
+            for component_index in range(expected_size):
+                period_summaries[component_index]["fitted_mixture_frequency"] = float(
+                    fitted_frequencies[component_index]
+                )
+                period_summaries[component_index]["fitted_mixture_period"] = float(
+                    fitted_periods[component_index]
+                )
+                period_summaries[component_index]["fitted_mixture_scale"] = float(
+                    fitted_scales[component_index]
+                )
+                period_summaries[component_index][
+                    "fitted_mixture_period_width"
+                ] = float(fitted_period_widths[component_index])
+                period_summaries[component_index][
+                    "fitted_frequency_shift_from_initialization"
+                ] = float(fitted_frequency_shift[component_index])
+                period_summaries[component_index][
+                    "fitted_period_shift_from_initialization"
+                ] = float(fitted_period_shift[component_index])
+                period_summaries[component_index][
+                    "fitted_fractional_frequency_shift_from_initialization"
+                ] = float(fitted_fractional_frequency_shift[component_index])
+                period_summaries[component_index][
+                    "fitted_fractional_period_shift_from_initialization"
+                ] = float(fitted_fractional_period_shift[component_index])
+
+            result_diagnostics["multicomponent_period_summaries"] = (
+                self._consensus_make_json_safe(period_summaries)
+            )
         except Exception:
             result_diagnostics["consensus_success"] = False
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
