@@ -466,6 +466,21 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
         "consensus_scale_constraint_target_key": _consensus_schema_field(
             default=None, nullable=True
         ),
+        "requested_consensus_frequencies": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "requested_consensus_scales": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "initialized_mixture_means": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "initialized_mixture_scales": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "initialization_strategy": _consensus_schema_field(
+            default=None, nullable=True
+        ),
         "default_constraints_applied_before_consensus": _consensus_schema_field(
             default=False, nullable=False
         ),
@@ -10094,6 +10109,179 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return guess
 
+    def _consensus_extract_initialized_parameter_vector(
+        self,
+        param_key,
+        *,
+        source_guess=None,
+    ):
+        """Return per-mixture values from an initialized spectral-mixture parameter.
+
+        Parameters
+        ----------
+        param_key : str
+            Fully-qualified constrained parameter key resolved from
+            :meth:`_consensus_resolve_time_spectral_mixture_keys`.
+        source_guess : dict or None, optional
+            Initialization guess dictionary used as a fallback source when the
+            parameter cannot be read from the current model instance.
+
+        Returns
+        -------
+        numpy.ndarray
+            Flattened 1D float array with one value per mixture component.
+            For multidimensional tensors, the time dimension (index ``0`` of
+            the last axis) is returned to stay consistent with consensus-time
+            initialization semantics.
+        """
+        tensor_value = None
+        if (
+            hasattr(self, "_model_pars")
+            and isinstance(self._model_pars, dict)
+            and isinstance(param_key, str)
+        ):
+            meta = self._model_pars.get(param_key)
+            if isinstance(meta, dict):
+                module = meta.get("module")
+                attr_name = param_key.split(".")[-1]
+                if module is not None and hasattr(module, attr_name):
+                    tensor_value = getattr(module, attr_name)
+
+        if (
+            tensor_value is None
+            and hasattr(self, "model")
+            and self.model is not None
+            and isinstance(param_key, str)
+        ):
+            current = self.model
+            for component in param_key.split("."):
+                if current is None or not hasattr(current, component):
+                    current = None
+                    break
+                current = getattr(current, component)
+            tensor_value = current
+
+        if tensor_value is None and isinstance(source_guess, dict):
+            tensor_value = source_guess.get(param_key)
+
+        if tensor_value is None:
+            return np.asarray([], dtype=float)
+        if torch.is_tensor(tensor_value):
+            values = tensor_value.detach().cpu().numpy()
+        else:
+            values = np.asarray(tensor_value, dtype=float)
+
+        values = np.asarray(values, dtype=float)
+        if values.size == 0:
+            return np.asarray([], dtype=float)
+        if values.ndim == 0:
+            return np.asarray([float(values)], dtype=float)
+        if values.ndim == 1:
+            return values.astype(float).ravel()
+
+        flattened = values.reshape(-1, values.shape[-1])
+        return flattened[:, 0].astype(float).ravel()
+
+    def _consensus_collect_initialization_diagnostics(
+        self,
+        *,
+        requested_consensus_frequencies,
+        requested_consensus_scales,
+        consensus_guess,
+    ):
+        """Collect and validate multicomp initialization diagnostics.
+
+        Parameters
+        ----------
+        requested_consensus_frequencies : array-like
+            Consensus frequencies requested by the multicomp consensus
+            aggregator.
+        requested_consensus_scales : array-like
+            Consensus scales requested by the multicomp consensus aggregator.
+        consensus_guess : dict
+            Initialization guess dictionary produced by
+            :meth:`_consensus_build_guess`. This helper reapplies the guess via
+            :meth:`set_hypers` before reading initialized parameters so the
+            diagnostics reflect the exact post-initialization model state.
+
+        Returns
+        -------
+        dict
+            JSON-safe diagnostics containing requested and initialized mixture
+            means/scales plus the initialization strategy label.
+
+        Raises
+        ------
+        RuntimeError
+            If requested frequency/scale shapes are inconsistent, if requested
+            and initialized component counts are inconsistent, or if consensus
+            guesses cannot be applied to the model.
+        """
+        requested_frequencies = np.asarray(
+            requested_consensus_frequencies, dtype=float
+        ).ravel()
+        requested_scales = np.asarray(
+            requested_consensus_scales, dtype=float
+        ).ravel()
+        if requested_scales.shape != requested_frequencies.shape:
+            raise RuntimeError(
+                "Consensus multi-component initialization failed: requested "
+                "consensus scales must align one-to-one with requested "
+                "consensus frequencies "
+                f"(scales shape={requested_scales.shape}, "
+                f"frequencies shape={requested_frequencies.shape})."
+            )
+
+        if (
+            isinstance(consensus_guess, dict)
+            and consensus_guess
+            and hasattr(self, "model")
+            and self.model is not None
+            and callable(getattr(self.model, "initialize", None))
+        ):
+            try:
+                self.set_hypers(dict(consensus_guess))
+            except Exception as exc:
+                raise RuntimeError(
+                    "Consensus multi-component initialization failed while "
+                    "applying consensus guesses to the model."
+                ) from exc
+
+        keys = self._consensus_resolve_time_spectral_mixture_keys()
+        initialized_means = self._consensus_extract_initialized_parameter_vector(
+            keys["mixture_means"]
+        )
+        initialized_scales = self._consensus_extract_initialized_parameter_vector(
+            keys["mixture_scales"]
+        )
+        if initialized_means.size != requested_frequencies.size:
+            raise RuntimeError(
+                "Consensus multi-component initialization mismatch: "
+                f"len(initialized_mixture_means)={int(initialized_means.size)} "
+                "does not match "
+                "len(requested_consensus_frequencies)="
+                f"{int(requested_frequencies.size)}."
+            )
+        if initialized_scales.size != requested_scales.size:
+            raise RuntimeError(
+                "Consensus multi-component initialization mismatch: "
+                f"len(initialized_mixture_scales)={int(initialized_scales.size)} "
+                "does not match "
+                f"len(requested_consensus_scales)={int(requested_scales.size)}."
+            )
+
+        return self._consensus_make_json_safe(
+            {
+                "requested_consensus_frequencies": requested_frequencies.tolist(),
+                "requested_consensus_scales": requested_scales.tolist(),
+                "initialized_mixture_means": initialized_means.tolist(),
+                "initialized_mixture_scales": initialized_scales.tolist(),
+                "initialization_strategy": (
+                    "per_component_consensus_initialization"
+                ),
+            }
+        )
+
     def _consensus_iter_band_lightcurves(self):
         """Yield per-band 1D light curves using stored band-label metadata.
 
@@ -14772,6 +14960,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             frequencies=consensus_frequencies,
             scales=consensus_scales,
         )
+        initialization_diagnostics = self._consensus_collect_initialization_diagnostics(
+            requested_consensus_frequencies=consensus_frequencies,
+            requested_consensus_scales=consensus_scales,
+            consensus_guess=consensus_guess,
+        )
+        result_diagnostics.update(initialization_diagnostics)
         self._last_consensus_fit_info = {
             "fit_strategy": "consensus_multicomp",
             "consensus_frequencies": consensus_frequencies.ravel().tolist(),
@@ -14783,6 +14977,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 float(_scale_upper) if _scale_upper is not None else None
             ),
             "constraint_strategy": result_diagnostics.get("constraint_strategy"),
+            "initialization_strategy": result_diagnostics.get(
+                "initialization_strategy"
+            ),
         }
 
         merged_guess = {}
