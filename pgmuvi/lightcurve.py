@@ -1839,6 +1839,7 @@ class PeriodSummaryResult:
             "notes": self.notes,
             # Kernel-dispatch metadata
             "backend": self.backend,
+            "model_name": self.model_name,
             "kernel_family": self.kernel_family,
             "time_kernel_family": self.time_kernel_family,
             "has_stochastic_background": self.has_stochastic_background,
@@ -16609,6 +16610,50 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return type(kernel).__name__
 
     @staticmethod
+    def _resolve_time_kernel_family(kernel):
+        """Return the class name of the time-dimension sub-kernel.
+
+        For separable 2D models the ``sci_kernel`` is a
+        :class:`~gpytorch.kernels.ProductKernel` whose sub-kernels carry
+        ``active_dims`` attributes.  This helper locates the sub-kernel
+        acting on dimension 0 (time), unwraps any
+        :class:`~gpytorch.kernels.ScaleKernel` wrapper, and returns its
+        class name.
+
+        For 1-D models the supplied *kernel* IS the time kernel; its
+        ``base_kernel`` is unwrapped when present (e.g.
+        ``ScaleKernel(SpectralMixtureKernel)`` → ``SpectralMixtureKernel``).
+
+        Parameters
+        ----------
+        kernel : gpytorch.kernels.Kernel or None
+            The top-level ``sci_kernel`` from the fitted model.
+
+        Returns
+        -------
+        str
+            Class name of the resolved time kernel, or ``""`` if *kernel*
+            is ``None`` or no time sub-kernel can be identified.
+        """
+        if kernel is None:
+            return ""
+        from gpytorch.kernels import ProductKernel as _ProductKernel
+
+        # Separable 2D: ProductKernel whose sub-kernels carry active_dims.
+        if isinstance(kernel, _ProductKernel):
+            for k in kernel.kernels:
+                ad = getattr(k, "active_dims", None)
+                if ad is not None and 0 in ad.tolist():
+                    # Unwrap ScaleKernel / GridInterpolationKernel wrappers
+                    actual_tk = getattr(k, "base_kernel", k)
+                    return type(actual_tk).__name__
+            # ProductKernel without active_dims – fall through to 1-D path.
+
+        # 1-D (or non-separable): unwrap wrapper kernels one level.
+        actual_k = getattr(kernel, "base_kernel", kernel)
+        return type(actual_k).__name__
+
+    @staticmethod
     def _coerce_float_or_none(value):
         """Safely coerce scalar input to finite float.
 
@@ -16731,14 +16776,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             component_source_cluster_ids.append(component.get("source_cluster_id"))
             component_member_bands.append(list(component.get("member_bands") or []))
 
-        kernel = getattr(getattr(self, "model", None), "sci_kernel", None)
+        _model_obj = getattr(self, "model", None)
+        kernel = getattr(_model_obj, "sci_kernel", None)
         kernel_family = self._kernel_family_name(getattr(kernel, "base_kernel", kernel))
+        time_kernel_family = self._resolve_time_kernel_family(kernel)
+        _model_name = type(_model_obj).__name__ if _model_obj is not None else ""
 
         return PeriodSummaryResult(
             method="consensus_multicomp_period_summary",
             backend="consensus_multicomp",
+            model_name=_model_name,
             kernel_family=kernel_family,
-            time_kernel_family=kernel_family,
+            time_kernel_family=time_kernel_family,
             has_stochastic_background=False,
             dominant_period=None,
             dominant_frequency=None,
@@ -18055,7 +18104,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             kernel_family=_kf,
             time_kernel_family=_kf,
             has_stochastic_background=False,
-            model_name="",
+            model_name=type(self.model).__name__,
             n_peaks_detected=n_sig_peaks,
             n_peaks_analyzed=len(peak_objects),
             n_peaks_requested=n_peaks_requested,
