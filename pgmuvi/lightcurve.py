@@ -472,6 +472,12 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
         "requested_consensus_scales": _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
+        "consensus_component_strengths": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "consensus_mixture_init_scales": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
         "initialized_mixture_means": _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
