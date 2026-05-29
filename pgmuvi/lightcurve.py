@@ -10229,6 +10229,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         requested_scales = np.asarray(
             requested_consensus_scales, dtype=float
         ).ravel()
+        if not np.all(np.isfinite(requested_frequencies) & (requested_frequencies > 0.0)):
+            raise RuntimeError(
+                "Consensus multi-component initialization failed: requested "
+                "consensus frequencies must be finite and strictly positive."
+            )
         if requested_scales.shape != requested_frequencies.shape:
             raise RuntimeError(
                 "Consensus multi-component initialization failed: requested "
@@ -10275,13 +10280,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "does not match "
                 f"len(requested_consensus_scales)={int(requested_scales.size)}."
             )
+        if not np.all(np.isfinite(initialized_means) & (initialized_means > 0.0)):
+            raise RuntimeError(
+                "Consensus multi-component initialization mismatch: initialized "
+                "mixture means must be finite and strictly positive frequencies."
+            )
+
+        initialized_periods = 1.0 / initialized_means
+        initialized_period_widths = initialized_scales / (initialized_means**2)
 
         return self._consensus_make_json_safe(
             {
                 "requested_consensus_frequencies": requested_frequencies.tolist(),
                 "requested_consensus_scales": requested_scales.tolist(),
                 "initialized_mixture_means": initialized_means.tolist(),
+                "initialized_mixture_periods": initialized_periods.tolist(),
                 "initialized_mixture_scales": initialized_scales.tolist(),
+                "initialized_mixture_period_widths": initialized_period_widths.tolist(),
                 "initialization_strategy": (
                     "per_component_consensus_initialization"
                 ),
@@ -11885,11 +11900,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         consensus_success = diagnostics["consensus_success"]
         if consensus_success:
             consensus_frequency = diagnostics.get("consensus_frequency")
+            fit_strategy = str(diagnostics.get("fit_strategy") or "")
             consensus_frequencies = diagnostics.get("consensus_frequencies")
+            consensus_periods = diagnostics.get("consensus_periods")
             n_accepted_bands = diagnostics["n_accepted_bands"]
             trusted_candidate_count = diagnostics.get("trusted_candidate_count")
             has_scalar_consensus_frequency = consensus_frequency is not None
             has_vector_consensus_frequencies = False
+            has_vector_consensus_periods = False
+            consensus_frequencies_arr = np.asarray([], dtype=float)
+            consensus_periods_arr = np.asarray([], dtype=float)
             if consensus_frequencies is not None:
                 try:
                     consensus_frequencies_arr = np.asarray(
@@ -11904,9 +11924,34 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         & (consensus_frequencies_arr > 0)
                     )
                 )
-            if not (
-                has_scalar_consensus_frequency
-                or has_vector_consensus_frequencies
+            if consensus_periods is not None:
+                try:
+                    consensus_periods_arr = np.asarray(consensus_periods, dtype=float).ravel()
+                except Exception:
+                    consensus_periods_arr = np.asarray([], dtype=float)
+                has_vector_consensus_periods = bool(
+                    consensus_periods_arr.size > 0
+                    and np.all(np.isfinite(consensus_periods_arr) & (consensus_periods_arr > 0))
+                )
+            if fit_strategy == "consensus_multicomp":
+                if not has_vector_consensus_frequencies:
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'consensus_frequencies' is missing or invalid."
+                    )
+                if not has_vector_consensus_periods:
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'consensus_periods' is missing or invalid."
+                    )
+                if consensus_frequencies_arr.size != consensus_periods_arr.size:
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'consensus_frequencies' and 'consensus_periods' have "
+                        "different lengths."
+                    )
+            elif not (
+                has_scalar_consensus_frequency or has_vector_consensus_frequencies
             ):
                 raise RuntimeError(
                     "consensus_success is True but neither a scalar "
@@ -14781,6 +14826,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         consensus_scales = initialization_payload["consensus_scales"]
         consensus_frequency_width = initialization_payload["consensus_frequency_width"]
         n_components = initialization_payload["n_components"]
+        consensus_periods = 1.0 / consensus_frequencies
+        consensus_period_widths = consensus_frequency_width / (consensus_frequencies**2)
+        if (
+            consensus_frequencies.size < int(n_components)
+            or consensus_frequency_width.size < int(n_components)
+            or consensus_scales.size < int(n_components)
+            or consensus_periods.size < int(n_components)
+            or consensus_period_widths.size < int(n_components)
+        ):
+            raise RuntimeError(
+                "Consensus multi-component diagnostics failed: component vector "
+                "length mismatch in consensus initialization payload."
+            )
+        # Primary component is canonical component_index==0 by cluster order.
+        primary_component_index = 0 if int(n_components) > 0 else None
 
         fit_kwargs["num_mixtures"] = n_components
         mad_frequency_scatter = float(
@@ -14816,9 +14876,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "robust_frequency_width": None,
             "consensus_frequencies": consensus_frequencies.tolist(),
             "consensus_frequency_widths": consensus_frequency_width.tolist(),
+            "consensus_periods": consensus_periods.tolist(),
+            "consensus_period_widths": consensus_period_widths.tolist(),
             "consensus_scales": consensus_scales.tolist(),
             "consensus_component_strengths": consensus_scales.tolist(),
             "consensus_mixture_init_scales": consensus_frequency_width.tolist(),
+            "primary_component_index": primary_component_index,
+            "primary_consensus_frequency": (
+                float(consensus_frequencies[0]) if primary_component_index == 0 else None
+            ),
+            "primary_consensus_period": (
+                float(consensus_periods[0]) if primary_component_index == 0 else None
+            ),
         })
 
         _requested_model = fit_kwargs.get("model")
@@ -14980,14 +15049,91 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         initialization_diagnostics["requested_consensus_frequency_widths"] = (
             np.asarray(consensus_frequency_width, dtype=float).ravel().tolist()
         )
+        initialization_diagnostics["requested_consensus_periods"] = (
+            np.asarray(consensus_periods, dtype=float).ravel().tolist()
+        )
+        initialization_diagnostics["requested_consensus_period_widths"] = (
+            np.asarray(consensus_period_widths, dtype=float).ravel().tolist()
+        )
         result_diagnostics.update(initialization_diagnostics)
+        initialized_mixture_means = np.asarray(
+            initialization_diagnostics.get("initialized_mixture_means", []), dtype=float
+        ).ravel()
+        initialized_mixture_scales = np.asarray(
+            initialization_diagnostics.get("initialized_mixture_scales", []), dtype=float
+        ).ravel()
+        initialized_mixture_periods = np.asarray(
+            initialization_diagnostics.get("initialized_mixture_periods", []), dtype=float
+        ).ravel()
+        initialized_mixture_period_widths = np.asarray(
+            initialization_diagnostics.get("initialized_mixture_period_widths", []),
+            dtype=float,
+        ).ravel()
+        component_summaries = list(
+            multicomponent_consensus.get("component_summaries") or []
+        )
+        period_summaries = []
+        for component_index in range(int(n_components)):
+            source_summary = (
+                component_summaries[component_index]
+                if component_index < len(component_summaries)
+                and isinstance(component_summaries[component_index], dict)
+                else {}
+            )
+            period_summaries.append(
+                {
+                    "component_index": component_index,
+                    "source_cluster_id": source_summary.get("source_cluster_id"),
+                    "consensus_frequency": float(consensus_frequencies[component_index]),
+                    "consensus_period": float(consensus_periods[component_index]),
+                    "consensus_frequency_width": float(
+                        consensus_frequency_width[component_index]
+                    ),
+                    "consensus_period_width": float(
+                        consensus_period_widths[component_index]
+                    ),
+                    "consensus_component_strength": float(
+                        consensus_scales[component_index]
+                    ),
+                    "consensus_mixture_init_scale": float(
+                        consensus_frequency_width[component_index]
+                    ),
+                    "initialized_mixture_mean": (
+                        float(initialized_mixture_means[component_index])
+                        if component_index < initialized_mixture_means.size
+                        else None
+                    ),
+                    "initialized_mixture_period": (
+                        float(initialized_mixture_periods[component_index])
+                        if component_index < initialized_mixture_periods.size
+                        else None
+                    ),
+                    "initialized_mixture_scale": (
+                        float(initialized_mixture_scales[component_index])
+                        if component_index < initialized_mixture_scales.size
+                        else None
+                    ),
+                    "initialized_mixture_period_width": (
+                        float(initialized_mixture_period_widths[component_index])
+                        if component_index < initialized_mixture_period_widths.size
+                        else None
+                    ),
+                    "member_bands": list(source_summary.get("member_bands") or []),
+                    "n_member_bands": source_summary.get("n_member_bands"),
+                }
+            )
+        result_diagnostics["multicomponent_period_summaries"] = (
+            self._consensus_make_json_safe(period_summaries)
+        )
         self._last_consensus_fit_info = {
             "fit_strategy": "consensus_multicomp",
             "consensus_frequencies": consensus_frequencies.ravel().tolist(),
+            "consensus_periods": consensus_periods.ravel().tolist(),
             "consensus_scales": consensus_scales.ravel().tolist(),
             "consensus_component_strengths": consensus_scales.ravel().tolist(),
             "consensus_frequency_width": consensus_frequency_width.ravel().tolist(),
             "consensus_frequency_widths": consensus_frequency_width.ravel().tolist(),
+            "consensus_period_widths": consensus_period_widths.ravel().tolist(),
             "consensus_mixture_init_scales": consensus_frequency_width.ravel().tolist(),
             "apply_consensus_constraints": bool(apply_consensus_constraints),
             "consensus_frequency_bounds": _frequency_constraint_bounds,
