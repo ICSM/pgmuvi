@@ -7,7 +7,7 @@ from unittest import mock
 
 import numpy as np
 
-from pgmuvi.lightcurve import Lightcurve
+from pgmuvi.lightcurve import ConsensusFitError, Lightcurve
 
 
 def _make_minimal_multiband_lightcurve():
@@ -236,7 +236,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(fit_mock.call_args.kwargs["num_mixtures"], 2)
         self.assertEqual(self.lc.consensus_diagnostics["n_components"], 2)
 
-    def test_empty_consensus_results_raise_informative_runtimeerror(self):
+    def test_empty_consensus_results_raise_informative_consensus_fit_error(self):
         rejected_clusters = _component_clusters(accepted=False)
         empty_consensus = {
             "consensus_frequencies": [],
@@ -260,7 +260,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
             return_value=empty_consensus,
         ):
             with self.assertRaisesRegex(
-                RuntimeError,
+                ConsensusFitError,
                 "no accepted multicomponent consensus clusters were available",
             ):
                 self.lc._consensus_multicomp_fit(
