@@ -502,10 +502,14 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
         "fitted_period_shift_from_initialization": _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
-        "fitted_fractional_frequency_shift_from_initialization": _consensus_schema_field(
+        (
+            "fitted_fractional_frequency_shift_from_initialization"
+        ): _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
-        "fitted_fractional_period_shift_from_initialization": _consensus_schema_field(
+        (
+            "fitted_fractional_period_shift_from_initialization"
+        ): _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
         "initialization_strategy": _consensus_schema_field(
