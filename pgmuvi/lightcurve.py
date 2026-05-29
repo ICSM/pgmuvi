@@ -1618,12 +1618,12 @@ class PeriodSummaryResult:
             else []
         )
         self.component_member_bands = (
-            [list(member_bands or []) for member_bands in component_member_bands]
+            [list(bands or []) for bands in component_member_bands]
             if component_member_bands is not None
             else []
         )
         self.component_summaries = (
-            [dict(entry) for entry in component_summaries]
+            [dict(entry) for entry in component_summaries if isinstance(entry, dict)]
             if component_summaries is not None
             else []
         )
@@ -1812,21 +1812,12 @@ class PeriodSummaryResult:
             else float("nan")
         )
 
-        return {
+        payload = {
             "component_diagnostics": (
                 self.component_diagnostics.as_dict()
                 if self.component_diagnostics is not None
                 else None
             ),
-            "is_multicomponent": self.is_multicomponent,
-            "component_periods": self.component_periods,
-            "component_period_widths": self.component_period_widths,
-            "component_fitted_periods": self.component_fitted_periods,
-            "component_initialized_periods": self.component_initialized_periods,
-            "component_strengths": self.component_strengths,
-            "component_source_cluster_ids": self.component_source_cluster_ids,
-            "component_member_bands": self.component_member_bands,
-            "component_summaries": self.component_summaries,
             "freq_grid": self.freq_grid,
             "psd": self.psd,
             # self.dominant_frequency/dominant_period/q_factor are set in
@@ -1859,6 +1850,25 @@ class PeriodSummaryResult:
             "largest_area_frequency": _la_freq,
             "largest_area_fraction": _la_frac,
         }
+        if self.is_multicomponent:
+            payload.update(
+                {
+                    "is_multicomponent": self.is_multicomponent,
+                    "component_periods": self.component_periods,
+                    "component_period_widths": self.component_period_widths,
+                    "component_fitted_periods": self.component_fitted_periods,
+                    "component_initialized_periods": (
+                        self.component_initialized_periods
+                    ),
+                    "component_strengths": self.component_strengths,
+                    "component_source_cluster_ids": (
+                        self.component_source_cluster_ids
+                    ),
+                    "component_member_bands": self.component_member_bands,
+                    "component_summaries": self.component_summaries,
+                }
+            )
+        return payload
 
     def __getitem__(self, key):
         return self.as_dict()[key]
@@ -16600,7 +16610,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     @staticmethod
     def _coerce_float_or_none(value):
-        """Return finite float(value), otherwise None."""
+        """Safely coerce scalar input to finite float.
+
+        Parameters
+        ----------
+        value : any
+            Candidate scalar value.
+
+        Returns
+        -------
+        float or None
+            Finite float value, otherwise ``None``.
+        """
         if value is None:
             return None
         try:

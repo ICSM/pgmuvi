@@ -41,15 +41,6 @@ from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 
 _REQUIRED_KEYS = {
     "component_diagnostics",
-    "is_multicomponent",
-    "component_periods",
-    "component_period_widths",
-    "component_fitted_periods",
-    "component_initialized_periods",
-    "component_strengths",
-    "component_source_cluster_ids",
-    "component_member_bands",
-    "component_summaries",
     "freq_grid",
     "psd",
     "dominant_frequency",
@@ -79,8 +70,21 @@ _REQUIRED_KEYS = {
     "largest_area_fraction",
 }
 
+_MULTICOMPONENT_KEYS = {
+    "is_multicomponent",
+    "component_periods",
+    "component_period_widths",
+    "component_fitted_periods",
+    "component_initialized_periods",
+    "component_strengths",
+    "component_source_cluster_ids",
+    "component_member_bands",
+    "component_summaries",
+}
+
 
 def _make_multicomp_diagnostics():
+    """Return deterministic consensus_multicomp diagnostics for tests."""
     return {
         "fit_strategy": "consensus_multicomp",
         "consensus_success": True,
@@ -2320,6 +2324,7 @@ class TestConsensusMulticompPeriodSummary(unittest.TestCase):
 
     def test_summary_is_multicomponent(self):
         self.assertTrue(self.summary["is_multicomponent"])
+        self.assertTrue(_MULTICOMPONENT_KEYS.issubset(set(self.summary.keys())))
         self.assertEqual(
             self.summary["method"], "consensus_multicomp_period_summary"
         )
@@ -2379,7 +2384,8 @@ class TestConsensusMulticompPeriodSummary(unittest.TestCase):
 
     def test_existing_single_component_behavior_unchanged(self):
         single = _make_1d_lc_no_transform().get_period_summary()
-        self.assertFalse(single["is_multicomponent"])
+        self.assertNotIn("is_multicomponent", single)
+        self.assertFalse(_MULTICOMPONENT_KEYS.intersection(set(single.keys())))
         self.assertGreater(single["dominant_period"], 0.0)
 
 
