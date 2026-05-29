@@ -506,5 +506,271 @@ class TestPeriodSummaryResultAttributes(unittest.TestCase):
         self.assertEqual(r.as_dict()["notes"], "hello world")
 
 
+# ---------------------------------------------------------------------------
+# G. Kernel metadata correctness (PR10)
+# ---------------------------------------------------------------------------
+
+
+def _make_multicomp_diagnostics_for_lc(lc):
+    """Inject minimal multicomp diagnostics onto *lc* and return the lc."""
+    lc.consensus_diagnostics = {
+        "fit_strategy": "consensus_multicomp",
+        "consensus_success": True,
+        "consensus_periods": [100.0, 50.0],
+        "consensus_period_widths": [5.0, 2.0],
+        "initialized_mixture_periods": [99.0, 51.0],
+        "fitted_mixture_periods": [101.0, 49.5],
+        "consensus_component_strengths": [0.8, 0.6],
+        "multicomponent_period_summaries": [
+            {
+                "component_index": 0,
+                "source_cluster_id": 0,
+                "consensus_period": 100.0,
+                "consensus_period_width": 5.0,
+                "consensus_component_strength": 0.8,
+                "initialized_mixture_period": 99.0,
+                "fitted_mixture_period": 101.0,
+                "member_bands": ["g", "r"],
+            },
+            {
+                "component_index": 1,
+                "source_cluster_id": 1,
+                "consensus_period": 50.0,
+                "consensus_period_width": 2.0,
+                "consensus_component_strength": 0.6,
+                "initialized_mixture_period": 51.0,
+                "fitted_mixture_period": 49.5,
+                "member_bands": ["g", "i"],
+            },
+        ],
+    }
+    return lc
+
+
+class TestKernelMetadataCorrectness(unittest.TestCase):
+    """kernel_family and time_kernel_family reflect the actual fitted kernel.
+
+    Covers:
+      G1. 1-D spectral-mixture: kernel_family = SpectralMixtureKernel
+      G2. 1-D spectral-mixture: model_name is set to the model class name
+      G3. 2DWavelengthDependent + spectral_mixture (separable_2d):
+          time_kernel_family = SpectralMixtureKernel (not ProductKernel)
+      G4. 2DWavelengthDependent default Matern time kernel (separable_2d):
+          time_kernel_family != kernel_family
+    """
+
+    # ------------------------------------------------------------------
+    # G1 / G2  1-D spectral mixture
+    # ------------------------------------------------------------------
+
+    def test_1d_sm_kernel_family_is_spectral_mixture(self):
+        """1-D SM backend reports SpectralMixtureKernel as kernel_family."""
+        lc = _make_1d_lc("1D", num_mixtures=2)
+        s = lc.get_period_summary()
+        self.assertEqual(s.backend, "spectral_mixture")
+        self.assertEqual(s.kernel_family, "SpectralMixtureKernel")
+
+    def test_1d_sm_time_kernel_family_matches_kernel_family(self):
+        """For 1-D SM, time_kernel_family should equal kernel_family."""
+        lc = _make_1d_lc("1D", num_mixtures=2)
+        s = lc.get_period_summary()
+        self.assertEqual(s.time_kernel_family, s.kernel_family)
+
+    def test_1d_sm_model_name_is_set(self):
+        """_get_sm_period_summary populates model_name from model class."""
+        lc = _make_1d_lc("1D", num_mixtures=1)
+        s = lc.get_period_summary()
+        self.assertIsInstance(s.model_name, str)
+        self.assertGreater(len(s.model_name), 0)
+
+    def test_1d_sm_model_name_contains_gp_or_model(self):
+        """model_name for a 1-D SM model includes 'GP' or 'Model'."""
+        lc = _make_1d_lc("1D", num_mixtures=1)
+        s = lc.get_period_summary()
+        name = s.model_name
+        self.assertTrue(
+            "GP" in name or "Model" in name or "model" in name.lower(),
+            msg=f"Unexpected model_name: {name!r}",
+        )
+
+    # ------------------------------------------------------------------
+    # G3  2DWavelengthDependent + spectral_mixture  (separable_2d backend)
+    # ------------------------------------------------------------------
+
+    def test_2d_wl_sm_time_kernel_family_is_spectral_mixture(self):
+        """separable_2d with SM time kernel → time_kernel_family = SpectralMixtureKernel."""
+        lc = _make_2d_lc(
+            "2DWavelengthDependent",
+            time_kernel_type="spectral_mixture",
+            num_mixtures=2,
+        )
+        s = lc.get_period_summary()
+        self.assertEqual(s.backend, "separable_2d")
+        self.assertEqual(s.time_kernel_family, "SpectralMixtureKernel")
+
+    def test_2d_wl_sm_kernel_family_is_product(self):
+        """separable_2d: kernel_family should be ProductKernel (the top-level kernel)."""
+        lc = _make_2d_lc(
+            "2DWavelengthDependent",
+            time_kernel_type="spectral_mixture",
+            num_mixtures=2,
+        )
+        s = lc.get_period_summary()
+        self.assertEqual(s.backend, "separable_2d")
+        self.assertEqual(s.kernel_family, "ProductKernel")
+
+    def test_2d_wl_sm_time_kernel_family_not_product_kernel(self):
+        """time_kernel_family must NOT be ProductKernel for a SM time kernel."""
+        lc = _make_2d_lc(
+            "2DWavelengthDependent",
+            time_kernel_type="spectral_mixture",
+            num_mixtures=2,
+        )
+        s = lc.get_period_summary()
+        self.assertNotEqual(
+            s.time_kernel_family, "ProductKernel",
+            msg=(
+                "time_kernel_family should describe the time sub-kernel, "
+                "not the top-level ProductKernel."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # G4  2DWavelengthDependent default Matern time kernel
+    # ------------------------------------------------------------------
+
+    def test_2d_wl_default_time_kernel_family_differs_from_kernel_family(self):
+        """For separable_2d with Matern time kernel, time_kernel_family ≠ kernel_family."""
+        lc = _make_2d_lc("2DWavelengthDependent")
+        s = lc.get_period_summary()
+        self.assertEqual(s.backend, "separable_2d")
+        # Top-level is ProductKernel, time kernel is MaternKernel
+        self.assertNotEqual(s.time_kernel_family, s.kernel_family)
+
+    def test_2d_wl_default_time_kernel_family_is_matern(self):
+        """separable_2d with default Matern time kernel → time_kernel_family = MaternKernel."""
+        lc = _make_2d_lc("2DWavelengthDependent")
+        s = lc.get_period_summary()
+        self.assertEqual(s.time_kernel_family, "MaternKernel")
+
+
+class TestConsensusMulticompKernelMetadata(unittest.TestCase):
+    """Multicomp period summaries report correct kernel/model metadata.
+
+    Covers:
+      H1. kernel_family is populated and non-empty
+      H2. time_kernel_family is populated and non-empty
+      H3. model_name is populated and non-empty
+      H4. For 1-D SM model: kernel_family = time_kernel_family = SpectralMixtureKernel
+      H5. For 2D separable model: time_kernel_family ≠ kernel_family (= ProductKernel)
+      H6. Standard consensus (non-multicomp) is unaffected
+    """
+
+    def _make_1d_multicomp_summary(self):
+        lc = _make_1d_lc("1D", num_mixtures=2)
+        _make_multicomp_diagnostics_for_lc(lc)
+        return lc.get_period_summary()
+
+    def _make_2d_multicomp_summary(self):
+        lc = _make_2d_lc(
+            "2DWavelengthDependent",
+            time_kernel_type="spectral_mixture",
+            num_mixtures=2,
+        )
+        _make_multicomp_diagnostics_for_lc(lc)
+        return lc.get_period_summary()
+
+    # H1
+    def test_multicomp_kernel_family_populated(self):
+        s = self._make_1d_multicomp_summary()
+        self.assertIsInstance(s.kernel_family, str)
+        self.assertGreater(len(s.kernel_family), 0)
+
+    # H2
+    def test_multicomp_time_kernel_family_populated(self):
+        s = self._make_1d_multicomp_summary()
+        self.assertIsInstance(s.time_kernel_family, str)
+        self.assertGreater(len(s.time_kernel_family), 0)
+
+    # H3
+    def test_multicomp_model_name_populated(self):
+        s = self._make_1d_multicomp_summary()
+        self.assertIsInstance(s.model_name, str)
+        self.assertGreater(len(s.model_name), 0)
+
+    # H4  1-D SM multicomp: kernel_family = time_kernel_family = SpectralMixtureKernel
+    def test_1d_sm_multicomp_kernel_family_is_spectral_mixture(self):
+        s = self._make_1d_multicomp_summary()
+        self.assertEqual(s.kernel_family, "SpectralMixtureKernel")
+
+    def test_1d_sm_multicomp_time_kernel_family_is_spectral_mixture(self):
+        s = self._make_1d_multicomp_summary()
+        self.assertEqual(s.time_kernel_family, "SpectralMixtureKernel")
+
+    def test_1d_sm_multicomp_kernel_and_time_kernel_equal(self):
+        s = self._make_1d_multicomp_summary()
+        self.assertEqual(s.kernel_family, s.time_kernel_family)
+
+    # H5  2-D WavelengthDependent + SM multicomp
+    def test_2d_wl_sm_multicomp_kernel_family_is_product(self):
+        s = self._make_2d_multicomp_summary()
+        self.assertEqual(s.kernel_family, "ProductKernel")
+
+    def test_2d_wl_sm_multicomp_time_kernel_family_is_spectral_mixture(self):
+        s = self._make_2d_multicomp_summary()
+        self.assertEqual(s.time_kernel_family, "SpectralMixtureKernel")
+
+    def test_2d_wl_sm_multicomp_time_kernel_family_not_product(self):
+        """time_kernel_family must NOT be ProductKernel for a SM time kernel."""
+        s = self._make_2d_multicomp_summary()
+        self.assertNotEqual(s.time_kernel_family, "ProductKernel")
+
+    def test_2d_wl_sm_multicomp_model_name_set(self):
+        s = self._make_2d_multicomp_summary()
+        self.assertIn("WavelengthDependent", s.model_name)
+
+    # H6  metadata in as_dict() and to_text()
+    def test_multicomp_as_dict_kernel_family(self):
+        d = self._make_1d_multicomp_summary().as_dict()
+        self.assertIn("kernel_family", d)
+        self.assertIsInstance(d["kernel_family"], str)
+        self.assertGreater(len(d["kernel_family"]), 0)
+
+    def test_multicomp_as_dict_time_kernel_family(self):
+        d = self._make_1d_multicomp_summary().as_dict()
+        self.assertIn("time_kernel_family", d)
+        self.assertIsInstance(d["time_kernel_family"], str)
+        self.assertGreater(len(d["time_kernel_family"]), 0)
+
+    def test_multicomp_as_dict_model_name(self):
+        d = self._make_1d_multicomp_summary().as_dict()
+        self.assertIn("model_name", d)
+        self.assertIsInstance(d["model_name"], str)
+        self.assertGreater(len(d["model_name"]), 0)
+
+    def test_multicomp_to_text_contains_kernel_family(self):
+        text = self._make_1d_multicomp_summary().to_text()
+        self.assertIn("Kernel family", text)
+        self.assertIn("SpectralMixtureKernel", text)
+
+    def test_multicomp_to_text_contains_time_kernel_family(self):
+        text = self._make_1d_multicomp_summary().to_text()
+        self.assertIn("Time-kernel family", text)
+        self.assertIn("SpectralMixtureKernel", text)
+
+    def test_multicomp_to_text_contains_model_name(self):
+        text = self._make_1d_multicomp_summary().to_text()
+        self.assertIn("Model name", text)
+
+    # H7  standard consensus path unchanged
+    def test_standard_1d_sm_backend_unchanged(self):
+        """Standard (non-multicomp) 1-D SM summary is unaffected."""
+        lc = _make_1d_lc("1D", num_mixtures=1)
+        s = lc.get_period_summary()
+        self.assertEqual(s.backend, "spectral_mixture")
+        # kernel_family must still be set
+        self.assertGreater(len(s.kernel_family), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -59,6 +59,7 @@ _REQUIRED_KEYS = {
     "notes",
     # Kernel-dispatch metadata (added in kernel-aware period-summary patch)
     "backend",
+    "model_name",
     "kernel_family",
     "time_kernel_family",
     "has_stochastic_background",
