@@ -10333,7 +10333,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         initialized_mixture_frequencies,
         initialized_mixture_scales,
     ):
-        """Collect post-fit mixture diagnostics aligned to initialization order."""
+        """Collect post-fit multicomp mixture diagnostics.
+
+        Parameters
+        ----------
+        initialized_mixture_frequencies : array-like
+            Initialized per-component mixture frequencies used as the canonical
+            component ordering reference.
+        initialized_mixture_scales : array-like
+            Initialized per-component mixture scales aligned one-to-one with
+            ``initialized_mixture_frequencies``.
+
+        Returns
+        -------
+        dict
+            JSON-safe diagnostics aligned to initialization component order
+            containing:
+            ``fitted_mixture_frequencies``,
+            ``fitted_mixture_periods``,
+            ``fitted_mixture_scales``,
+            ``fitted_mixture_period_widths``,
+            ``fitted_frequency_shift_from_initialization``,
+            ``fitted_period_shift_from_initialization``,
+            ``fitted_fractional_frequency_shift_from_initialization``, and
+            ``fitted_fractional_period_shift_from_initialization``.
+        """
         initialized_frequencies = np.asarray(
             initialized_mixture_frequencies, dtype=float
         ).ravel()
@@ -10391,12 +10415,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "mixture scales must be finite and strictly positive."
             )
 
+        initialized_periods = 1.0 / initialized_frequencies
         fitted_periods = 1.0 / fitted_frequencies
         fitted_period_widths = fitted_scales / (fitted_frequencies**2)
         frequency_shift = fitted_frequencies - initialized_frequencies
-        period_shift = fitted_periods - (1.0 / initialized_frequencies)
+        period_shift = fitted_periods - initialized_periods
         fractional_frequency_shift = frequency_shift / initialized_frequencies
-        fractional_period_shift = period_shift / (1.0 / initialized_frequencies)
+        fractional_period_shift = period_shift / initialized_periods
 
         return self._consensus_make_json_safe(
             {
@@ -12135,7 +12160,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         dtype=float,
                     ).ravel().size,
                 ]
-                if any(length != fitted_frequencies_arr.size for length in fitted_vector_lengths):
+                if any(
+                    length != fitted_frequencies_arr.size
+                    for length in fitted_vector_lengths
+                ):
                     raise RuntimeError(
                         "consensus_success is True for 'consensus_multicomp' but "
                         "fitted diagnostics vectors do not share one-to-one "

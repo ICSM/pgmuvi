@@ -180,7 +180,7 @@ def _initialization_diagnostics():
     }
 
 
-def _fitted_diagnostics():
+def _mock_fitted_diagnostics():
     fitted_frequencies = np.array([1.02, 2.98], dtype=float)
     fitted_scales = np.array([0.11, 0.21], dtype=float)
     initialized_frequencies = np.array([1.01, 2.99], dtype=float)
@@ -249,7 +249,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         ) as init_diag_mock, mock.patch.object(
             self.lc,
             "_consensus_collect_fitted_mixture_diagnostics",
-            return_value=_fitted_diagnostics(),
+            return_value=_mock_fitted_diagnostics(),
         ) as fitted_diag_mock, mock.patch.object(
             self.lc,
             "fit",
@@ -295,7 +295,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         ), mock.patch.object(
             self.lc,
             "_consensus_collect_fitted_mixture_diagnostics",
-            return_value=_fitted_diagnostics(),
+            return_value=_mock_fitted_diagnostics(),
         ), mock.patch.object(
             self.lc,
             "fit",
@@ -375,7 +375,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         ), mock.patch.object(
             self.lc,
             "_consensus_collect_fitted_mixture_diagnostics",
-            return_value=_fitted_diagnostics(),
+            return_value=_mock_fitted_diagnostics(),
         ), mock.patch.object(
             self.lc,
             "fit",
@@ -526,7 +526,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         ), mock.patch.object(
             self.lc,
             "_consensus_collect_fitted_mixture_diagnostics",
-            return_value=_fitted_diagnostics(),
+            return_value=_mock_fitted_diagnostics(),
         ), mock.patch.object(
             self.lc,
             "fit",
