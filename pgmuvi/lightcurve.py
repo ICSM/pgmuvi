@@ -9053,13 +9053,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (iii) aggregates frequencies with median/MAD outlier rejection,
             and (iv) uses the resulting consensus to seed and optionally
             constrain the spectral-mixture fit.
-            ``"consensus_multicomp"`` and ``"consensus_relaxed"`` are currently
-            placeholders and still raise ``NotImplementedError``.
-            The future ``"consensus_multicomp"`` path is intended to:
-            (i) extract per-band multi-component frequency candidates,
-            (ii) match components across bands in frequency space,
-            (iii) aggregate matched components into a multi-component consensus,
-            and (iv) initialize/constrain the final 2D spectral-mixture fit.
+            ``"consensus_multicomp"`` runs a staged multi-component workflow
+            that: (i) extracts per-band multi-component frequency candidates,
+            (ii) clusters components across bands in frequency space,
+            (iii) aggregates accepted clusters into a multi-component
+            consensus, and (iv) initializes the final 2D spectral-mixture fit.
+            It currently reuses the existing global constraint system, so all
+            accepted components share one broad frequency interval; component-
+            specific mixture constraints remain future work.
+            ``"consensus_relaxed"`` remains a placeholder and still raises
+            ``NotImplementedError``.
             Additional ``"consensus"`` controls accepted via ``**kwargs``:
             ``min_points_per_band``, ``max_gap_fraction``,
             ``min_duty_cycle``, ``outlier_sigma``, ``use_acf``,
@@ -13411,6 +13414,76 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "consensus_constraint_bounds": (float(lower), float(upper)),
         }
 
+    def _consensus_build_multicomponent_initialization(
+        self,
+        multicomponent_consensus,
+    ):
+        """Convert multicomponent consensus outputs into fit-init arrays.
+
+        This helper supports ``fit_strategy='consensus_multicomp'`` by turning
+        the accepted-cluster consensus payload into the frequency, width, and
+        scale arrays expected by the existing spectral-mixture initialization
+        machinery.  The final fit still uses the current global constraint
+        system; component-specific constraint intervals remain future work.
+        """
+        if not isinstance(multicomponent_consensus, dict):
+            raise ValueError("multicomponent_consensus must be a dictionary.")
+
+        consensus_frequencies = np.asarray(
+            multicomponent_consensus.get("consensus_frequencies", []),
+            dtype=float,
+        ).ravel()
+        if consensus_frequencies.size == 0:
+            raise RuntimeError(
+                "Consensus multi-component fit failed: no accepted "
+                "multicomponent consensus clusters were available."
+            )
+        if not np.all(
+            np.isfinite(consensus_frequencies) & (consensus_frequencies > 0)
+        ):
+            raise ValueError(
+                "consensus_frequencies must contain finite, strictly positive "
+                "values."
+            )
+
+        consensus_frequency_width = np.asarray(
+            multicomponent_consensus.get("consensus_frequency_widths", []),
+            dtype=float,
+        ).ravel()
+        if consensus_frequency_width.shape != consensus_frequencies.shape:
+            raise ValueError(
+                "consensus_frequency_widths must contain one finite positive "
+                "entry per consensus frequency."
+            )
+        if not np.all(
+            np.isfinite(consensus_frequency_width) & (consensus_frequency_width > 0)
+        ):
+            raise ValueError(
+                "consensus_frequency_widths must contain finite, strictly "
+                "positive values."
+            )
+
+        consensus_scales = np.asarray(
+            multicomponent_consensus.get("consensus_scales", []),
+            dtype=float,
+        ).ravel()
+        if consensus_scales.shape != consensus_frequencies.shape:
+            raise ValueError(
+                "consensus_scales must contain one finite positive entry per "
+                "consensus frequency."
+            )
+        if not np.all(np.isfinite(consensus_scales) & (consensus_scales > 0)):
+            raise ValueError(
+                "consensus_scales must contain finite, strictly positive values."
+            )
+
+        return {
+            "n_components": int(consensus_frequencies.size),
+            "consensus_frequencies": consensus_frequencies,
+            "consensus_scales": consensus_scales,
+            "consensus_frequency_width": consensus_frequency_width,
+        }
+
     def _consensus_standard_fit(self, **fit_kwargs):
         """Run the conservative consensus fit workflow.
 
@@ -14254,20 +14327,427 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return fit_result
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
-        """Stub for future cross-band multi-component consensus fitting.
+        """Run the staged multi-component consensus fit workflow.
 
-        This path is reserved for a future workflow that combines:
-        (i) per-band multi-component candidate extraction,
-        (ii) cross-band component matching in frequency space,
-        (iii) multi-component consensus aggregation, and
-        (iv) final 2D GP initialization/constraint plumbing.
+        For ``fit_strategy="consensus_multicomp"``, this method now performs:
+        1) per-band multi-component LS candidate extraction,
+        2) cross-band clustering in frequency space,
+        3) accepted-cluster multi-component consensus aggregation,
+        4) initialization of a multi-component 2D spectral-mixture fit, and
+        5) dispatch to the existing fit backend.
+
+        The final fit currently reuses the existing global constraint system,
+        so all accepted components share one broad frequency interval.
+        Component-specific mixture constraints remain future work.
         """
-        raise NotImplementedError(
-            "fit_strategy='consensus_multicomp' is not implemented yet. Planned "
-            "workflow: per-band multi-component candidate extraction, cross-band "
-            "component matching in frequency space, multi-component consensus "
-            "aggregation, then 2D GP initialization/constraint plumbing."
+        user_guess = fit_kwargs.pop("guess", None)
+        consensus_frequency_k = fit_kwargs.pop("consensus_frequency_k", 3.0)
+        consensus_scale_max_factor = fit_kwargs.pop("consensus_scale_max_factor", 0.2)
+        legacy_apply_constraints = fit_kwargs.pop("apply_consensus_constraints", None)
+        constrain_consensus = fit_kwargs.pop("constrain_consensus", None)
+        if constrain_consensus is None:
+            apply_consensus_constraints = (
+                True
+                if legacy_apply_constraints is None
+                else bool(legacy_apply_constraints)
+            )
+        else:
+            apply_consensus_constraints = bool(constrain_consensus)
+
+        min_points_per_band = fit_kwargs.pop("min_points_per_band", None)
+        max_gap_fraction = fit_kwargs.pop("max_gap_fraction", None)
+        min_duty_cycle = fit_kwargs.pop("min_duty_cycle", None)
+        max_components_per_band = int(fit_kwargs.pop("max_components_per_band", 3))
+        cluster_frequency_rtol = float(fit_kwargs.pop("cluster_frequency_rtol", 0.10))
+        min_bands_per_component = int(fit_kwargs.pop("min_bands_per_component", 2))
+        min_width_fraction = float(fit_kwargs.pop("min_width_fraction", 0.05))
+        verbose = fit_kwargs.get("verbose", False)
+        _allow_existing = fit_kwargs.pop("_allow_existing_model_for_consensus", False)
+
+        if self.ndim != 2:
+            raise ValueError(
+                "Automatic multi-component consensus construction requires a 2D "
+                "light curve."
+            )
+        if max_components_per_band < 1:
+            raise ValueError("max_components_per_band must be >= 1.")
+        if not np.isfinite(cluster_frequency_rtol) or cluster_frequency_rtol < 0:
+            raise ValueError(
+                "cluster_frequency_rtol must be a finite, non-negative float."
+            )
+        if min_bands_per_component < 1:
+            raise ValueError("min_bands_per_component must be >= 1.")
+        if not np.isfinite(min_width_fraction) or min_width_fraction <= 0:
+            raise ValueError("min_width_fraction must be a finite, positive float.")
+
+        result_diagnostics = self._consensus_initialize_result_structure(
+            fit_strategy="consensus_multicomp"
         )
+        result_diagnostics.update({
+            "use_acf_validation": False,
+            "use_gp_validation": False,
+            "gp_validation_requested": False,
+            "gp_validation_performed": False,
+            "consensus_generation_method": "auto_multicomponent_consensus",
+            "controls": {
+                "min_points_per_band": min_points_per_band,
+                "max_gap_fraction": max_gap_fraction,
+                "min_duty_cycle": min_duty_cycle,
+                "max_components_per_band": max_components_per_band,
+                "cluster_frequency_rtol": float(cluster_frequency_rtol),
+                "min_bands_per_component": min_bands_per_component,
+                "min_width_fraction": float(min_width_fraction),
+                "constrain_consensus": bool(apply_consensus_constraints),
+            },
+            "constraint_strategy": (
+                "global_frequency_interval"
+                if apply_consensus_constraints
+                else "constraints_disabled"
+            ),
+        })
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
+
+        band_component_candidates = self._consensus_collect_band_component_candidates(
+            max_components_per_band=max_components_per_band,
+            min_points_per_band=min_points_per_band,
+            max_gap_fraction=max_gap_fraction,
+            min_duty_cycle=min_duty_cycle,
+            verbose=verbose,
+        )
+        accepted_bands = sorted(
+            {
+                str(entry.get("band_name"))
+                for entry in band_component_candidates
+                if isinstance(entry, dict) and entry.get("band_name") is not None
+            }
+        )
+        per_band_diagnostics = {}
+        for entry in band_component_candidates:
+            if not isinstance(entry, dict):
+                continue
+            band_name = entry.get("band_name")
+            if band_name is None:
+                continue
+            record = self._consensus_initialize_band_record(band_name)
+            self._consensus_set_band_status(
+                record,
+                _CONSENSUS_BAND_STATUS_ACCEPTED,
+                [],
+            )
+            component_candidates = list(entry.get("component_candidates") or [])
+            record["component_candidates"] = component_candidates
+            if component_candidates:
+                dominant_candidate = component_candidates[0]
+                if isinstance(dominant_candidate, dict):
+                    record["dominant_frequency"] = dominant_candidate.get("frequency")
+                    record["dominant_period"] = dominant_candidate.get("period")
+                    record["ls_significant"] = dominant_candidate.get("significant")
+                    record["ls_peak_power"] = dominant_candidate.get("peak_power")
+                    record["ls_peak_prominence"] = dominant_candidate.get(
+                        "peak_prominence"
+                    )
+                    record["selected_from"] = "multicomponent_candidates"
+            per_band_diagnostics[str(band_name)] = self._consensus_make_json_safe(
+                record
+            )
+
+        result_diagnostics.update({
+            "accepted_bands": accepted_bands,
+            "rejected_bands": [],
+            "rejection_reasons": {},
+            "per_band_diagnostics": per_band_diagnostics,
+            "band_component_candidates": self._consensus_make_json_safe(
+                band_component_candidates
+            ),
+        })
+
+        if not band_component_candidates:
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
+            raise RuntimeError(
+                "Consensus multi-component fit failed: no accepted bands produced "
+                "usable multi-component candidates."
+            )
+
+        component_clusters = self._consensus_cluster_component_candidates(
+            band_component_candidates,
+            cluster_frequency_rtol=cluster_frequency_rtol,
+            min_bands_per_component=min_bands_per_component,
+        )
+        result_diagnostics["component_clusters"] = self._consensus_make_json_safe(
+            component_clusters
+        )
+
+        multicomponent_consensus = (
+            self._consensus_build_multicomponent_frequency_consensus(
+                component_clusters,
+                min_width_fraction=min_width_fraction,
+            )
+        )
+        result_diagnostics["multicomponent_consensus"] = (
+            self._consensus_make_json_safe(multicomponent_consensus)
+        )
+
+        if not component_clusters:
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
+            raise RuntimeError(
+                "Consensus multi-component fit failed: no component clusters "
+                "could be formed from the extracted band candidates."
+            )
+
+        accepted_clusters = [
+            cluster for cluster in component_clusters if bool(cluster.get("accepted"))
+        ]
+        if not accepted_clusters:
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
+            raise RuntimeError(
+                "Consensus multi-component fit failed: no accepted "
+                "multicomponent consensus clusters were available."
+            )
+
+        initialization_payload = self._consensus_build_multicomponent_initialization(
+            multicomponent_consensus
+        )
+        consensus_frequencies = initialization_payload["consensus_frequencies"]
+        consensus_scales = initialization_payload["consensus_scales"]
+        consensus_frequency_width = initialization_payload["consensus_frequency_width"]
+        n_components = initialization_payload["n_components"]
+
+        if n_components == 0:
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
+            raise RuntimeError(
+                "Consensus multi-component fit failed: no accepted "
+                "multicomponent consensus clusters were available."
+            )
+
+        fit_kwargs["num_mixtures"] = n_components
+        median_frequency = float(np.median(consensus_frequencies))
+        median_width = float(np.median(consensus_frequency_width))
+        mad_frequency_scatter = float(
+            np.median(np.abs(consensus_frequencies - median_frequency))
+        )
+        result_diagnostics.update({
+            "n_components": int(n_components),
+            "candidate_count": int(
+                sum(
+                    len(entry.get("component_candidates") or [])
+                    for entry in band_component_candidates
+                    if isinstance(entry, dict)
+                )
+            ),
+            "trusted_candidate_count": int(n_components),
+            "consensus_frequency": median_frequency,
+            "consensus_period": float(1.0 / median_frequency),
+            "consensus_frequency_width": median_width,
+            "consensus_frequency_scatter": mad_frequency_scatter,
+            "median_frequency": median_frequency,
+            "mad_frequency_scatter": mad_frequency_scatter,
+            "final_consensus_frequency": median_frequency,
+            "final_consensus_period": float(1.0 / median_frequency),
+            "robust_frequency_width": median_width,
+            "consensus_frequencies": consensus_frequencies.tolist(),
+            "consensus_frequency_widths": consensus_frequency_width.tolist(),
+            "consensus_scales": consensus_scales.tolist(),
+        })
+
+        _requested_model = fit_kwargs.get("model")
+        if _requested_model is not None:
+            self._consensus_clear_model_state()
+        elif not _allow_existing:
+            raise ConsensusFitError(
+                "Consensus fit requires an explicit final model. "
+                "Pass model='2D' or another spectral-mixture-compatible "
+                "model. Pre-existing model reuse is disabled by default "
+                "to prevent stale consensus constraints."
+            )
+
+        _set_model_excluded = {
+            "model",
+            "likelihood",
+            "num_mixtures",
+            "variance",
+            "guess",
+            "consensus_frequency_k",
+            "consensus_scale_max_factor",
+            "apply_consensus_constraints",
+            "constrain_consensus",
+            "min_points_per_band",
+            "max_gap_fraction",
+            "min_duty_cycle",
+            "max_components_per_band",
+            "cluster_frequency_rtol",
+            "min_bands_per_component",
+            "min_width_fraction",
+            "periods",
+            "use_mls_init",
+            "use_best_band_init",
+            "constraint_set",
+            "grid_size",
+            "cuda",
+            "training_iter",
+            "max_cg_iterations",
+            "optim",
+            "miniter",
+            "stop",
+            "lr",
+            "stopavg",
+            "fit_strategy",
+            "verbose",
+            "_allow_existing_model_for_consensus",
+        }
+        _model_needs_build = (
+            _requested_model is not None
+            or not (
+                hasattr(self, "model")
+                and self.model is not None
+                and hasattr(self, "_model_pars")
+            )
+        )
+        if _model_needs_build:
+            set_model_kwargs = {
+                key: value
+                for key, value in fit_kwargs.items()
+                if key not in _set_model_excluded
+            }
+            self.set_model(
+                _requested_model,
+                fit_kwargs.get("likelihood"),
+                num_mixtures=fit_kwargs.get("num_mixtures"),
+                variance=fit_kwargs.get("variance", False),
+                **set_model_kwargs,
+            )
+        fit_kwargs["model"] = None
+
+        if apply_consensus_constraints:
+            self._consensus_validate_final_model_supports_sm_time_kernel(
+                model_name=_requested_model,
+                time_kernel_type=fit_kwargs.get("time_kernel_type"),
+            )
+            _constraint_dict = {}
+            _keys = self._consensus_resolve_time_spectral_mixture_keys()
+            _constraint_set_for_defaults = fit_kwargs.get("constraint_set")
+            self.set_default_constraints(
+                constraint_set=_constraint_set_for_defaults
+            )
+            result_diagnostics[
+                "default_constraints_applied_before_consensus"
+            ] = True
+
+            _freqs = np.asarray(consensus_frequencies, dtype=float).ravel()
+            _widths = np.asarray(consensus_frequency_width, dtype=float).ravel()
+            _k = float(consensus_frequency_k)
+            _lowers = np.maximum(
+                _freqs - _k * _widths,
+                _CONSENSUS_MIN_FREQUENCY_BOUND,
+            )
+            _uppers = _freqs + _k * _widths
+            _global_lower = float(_lowers.min())
+            _global_upper = float(_uppers.max())
+            _frequency_constraint_bounds = (_global_lower, _global_upper)
+            _constraint_dict[_keys["mixture_means"]] = Interval(
+                _global_lower,
+                _global_upper,
+            )
+
+            _scale_upper = (
+                float(consensus_scale_max_factor) * float(np.median(_freqs))
+            )
+            if not (np.isfinite(_scale_upper) and _scale_upper > 0):
+                raise ValueError(
+                    "consensus_scale_max_factor * median(consensus_frequencies) "
+                    f"must be positive and finite (got {_scale_upper})."
+                )
+            _constraint_dict[_keys["mixture_scales"]] = Interval(
+                _CONSENSUS_MIN_SCALE_BOUND,
+                _scale_upper,
+            )
+            self.set_constraint(_constraint_dict)
+            self.__CONTRAINTS_SET = True
+            result_diagnostics[
+                "constraints_marked_set_after_consensus"
+            ] = True
+            self._consensus_validate_applied_sm_constraints(
+                keys=_keys,
+                consensus_frequencies=consensus_frequencies,
+                frequency_bounds=_frequency_constraint_bounds,
+            )
+            result_diagnostics["consensus_constraints_applied"] = True
+            result_diagnostics["consensus_constraint_bounds"] = list(
+                _frequency_constraint_bounds
+            )
+            result_diagnostics["consensus_constraint_target_key"] = (
+                _keys.get("mixture_means")
+            )
+            result_diagnostics["consensus_scale_constraint_bounds"] = [
+                float(_CONSENSUS_MIN_SCALE_BOUND),
+                float(_scale_upper),
+            ]
+            result_diagnostics["consensus_scale_constraint_target_key"] = (
+                _keys.get("mixture_scales")
+            )
+            result_diagnostics["final_constraint_bounds"] = list(
+                _frequency_constraint_bounds
+            )
+        else:
+            _frequency_constraint_bounds = None
+            _scale_upper = None
+            result_diagnostics["consensus_constraints_applied"] = False
+            result_diagnostics["default_constraints_applied_before_consensus"] = (
+                False
+            )
+            result_diagnostics["constraints_marked_set_after_consensus"] = False
+
+        consensus_guess = self._consensus_build_guess(
+            frequencies=consensus_frequencies,
+            scales=consensus_scales,
+        )
+        self._last_consensus_fit_info = {
+            "fit_strategy": "consensus_multicomp",
+            "consensus_frequencies": consensus_frequencies.ravel().tolist(),
+            "consensus_scales": consensus_scales.ravel().tolist(),
+            "consensus_frequency_width": consensus_frequency_width.ravel().tolist(),
+            "apply_consensus_constraints": bool(apply_consensus_constraints),
+            "consensus_frequency_bounds": _frequency_constraint_bounds,
+            "consensus_scale_upper": (
+                float(_scale_upper) if _scale_upper is not None else None
+            ),
+            "constraint_strategy": result_diagnostics.get("constraint_strategy"),
+        }
+
+        merged_guess = {}
+        if user_guess is not None:
+            merged_guess.update(user_guess)
+        merged_guess.update(consensus_guess)
+
+        fit_kwargs["guess"] = merged_guess
+        fit_kwargs["fit_strategy"] = None
+
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
+        try:
+            fit_result = self.fit(**fit_kwargs)
+        except Exception:
+            result_diagnostics["consensus_success"] = False
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics, validate=False
+            )
+            raise
+
+        result_diagnostics["consensus_success"] = True
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
+        return fit_result
 
     def _consensus_relaxed_fit(self, **fit_kwargs):
         """Frequency-space consensus-fit stub for relaxed-consensus behavior."""
