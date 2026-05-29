@@ -10249,12 +10249,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         keys = self._consensus_resolve_time_spectral_mixture_keys()
         initialized_means = self._consensus_extract_initialized_parameter_vector(
-            keys["mixture_means"],
-            source_guess=consensus_guess,
+            keys["mixture_means"]
         )
         initialized_scales = self._consensus_extract_initialized_parameter_vector(
-            keys["mixture_scales"],
-            source_guess=consensus_guess,
+            keys["mixture_scales"]
         )
         if initialized_means.size != requested_frequencies.size:
             raise RuntimeError(
