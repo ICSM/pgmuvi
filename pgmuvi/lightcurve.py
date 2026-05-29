@@ -12246,6 +12246,231 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return results
 
+    def _consensus_cluster_component_candidates(
+        self,
+        band_component_candidates,
+        *,
+        cluster_frequency_rtol=0.10,
+        min_bands_per_component=2,
+    ):
+        """Cluster per-band component candidates in log-frequency space.
+
+        This helper performs cross-band association for the staged
+        ``fit_strategy='consensus_multicomp'`` implementation. It does not
+        perform final consensus aggregation or GP fitting.
+
+        Parameters
+        ----------
+        band_component_candidates : list of dict
+            Per-band candidate structure returned by
+            :meth:`_consensus_collect_band_component_candidates`.
+        cluster_frequency_rtol : float, optional
+            Relative frequency tolerance used in log-frequency space.
+            Candidates with ``abs(log(f1) - log(f2)) <= log1p(rtol)`` are
+            considered nearby for greedy clustering.
+        min_bands_per_component : int, optional
+            Minimum number of unique bands required for a cluster to be marked
+            as accepted.
+
+        Returns
+        -------
+        list of dict
+            Cluster diagnostics (both accepted and rejected) with fields:
+            ``cluster_id``, ``accepted``, ``rejection_reasons``,
+            ``member_bands``, ``n_member_bands``, ``center_frequency``,
+            ``center_period``, ``log_center_frequency``,
+            ``frequency_scatter``, ``log_frequency_scatter``, ``members``, and
+            ``duplicate_band_candidates``.
+        """
+
+        def _as_float_or_none(value):
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(numeric):
+                return None
+            return numeric
+
+        def _as_int_or_default(value, default):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _candidate_priority_key(member):
+            peak_power = _as_float_or_none(member.get("peak_power"))
+            if peak_power is None:
+                peak_power = float("-inf")
+            ls_rank = _as_int_or_default(member.get("ls_rank"), sys.maxsize)
+            return (
+                0 if bool(member.get("significant")) else 1,
+                -peak_power,
+                ls_rank,
+                float(member["frequency"]),
+                str(member["band_name"]),
+            )
+
+        def _build_member(band_name, wavelength, candidate):
+            frequency = _as_float_or_none(candidate.get("frequency"))
+            if frequency is None or frequency <= 0.0:
+                return None
+            return {
+                "band_name": str(band_name),
+                "wavelength": wavelength,
+                "frequency": frequency,
+                "period": candidate.get("period"),
+                "ls_rank": candidate.get("ls_rank"),
+                "peak_power": candidate.get("peak_power"),
+                "peak_prominence": candidate.get("peak_prominence"),
+                "significant": bool(candidate.get("significant")),
+            }
+
+        cluster_frequency_rtol = _as_float_or_none(cluster_frequency_rtol)
+        if cluster_frequency_rtol is None or cluster_frequency_rtol < 0.0:
+            cluster_frequency_rtol = 0.10
+        min_bands_per_component = _as_int_or_default(min_bands_per_component, 2)
+        if min_bands_per_component < 1:
+            min_bands_per_component = 1
+
+        # log1p computes log(1 + rtol) with better stability than log(1 + x)
+        # when rtol is very small (avoids cancellation near zero).
+        log_tol = float(np.log1p(cluster_frequency_rtol))
+        flattened_members = []
+
+        for band_entry in band_component_candidates or []:
+            if not isinstance(band_entry, dict):
+                continue
+            band_name = band_entry.get("band_name")
+            if band_name is None:
+                continue
+            wavelength = band_entry.get("wavelength")
+            candidates = band_entry.get("component_candidates") or []
+            if not isinstance(candidates, (list, tuple)):
+                continue
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                member = _build_member(band_name, wavelength, candidate)
+                if member is not None:
+                    flattened_members.append(member)
+
+        if not flattened_members:
+            return []
+
+        log_frequencies = np.array(
+            [np.log(member["frequency"]) for member in flattened_members],
+            dtype=float,
+        )
+        seed_order = sorted(
+            range(len(flattened_members)),
+            key=lambda idx: _candidate_priority_key(flattened_members[idx]),
+        )
+        unused = set(range(len(flattened_members)))
+        tentative_clusters = []
+
+        while unused:
+            seed_idx = next(idx for idx in seed_order if idx in unused)
+            cluster_members = {seed_idx}
+            center_log_frequency = float(log_frequencies[seed_idx])
+
+            while True:
+                addable = {
+                    idx
+                    for idx in unused
+                    if idx not in cluster_members
+                    and abs(log_frequencies[idx] - center_log_frequency) <= log_tol
+                }
+                if not addable:
+                    break
+                updated_members = cluster_members | addable
+                updated_center = float(
+                    np.median([log_frequencies[idx] for idx in updated_members])
+                )
+                cluster_members = updated_members
+                center_log_frequency = updated_center
+
+            tentative_clusters.append(sorted(cluster_members))
+            unused.difference_update(cluster_members)
+
+        clusters = []
+        for candidate_indices in tentative_clusters:
+            tentative_members = [flattened_members[idx] for idx in candidate_indices]
+            members_by_band = {}
+            duplicate_members = []
+
+            for member in sorted(tentative_members, key=_candidate_priority_key):
+                band_name = member["band_name"]
+                if band_name not in members_by_band:
+                    members_by_band[band_name] = member
+                else:
+                    duplicate_members.append(member)
+
+            retained_members = sorted(
+                members_by_band.values(),
+                key=lambda m: (float(m["frequency"]), str(m["band_name"])),
+            )
+            retained_log_freqs = np.array(
+                [np.log(member["frequency"]) for member in retained_members],
+                dtype=float,
+            )
+            retained_freqs = np.array(
+                [member["frequency"] for member in retained_members],
+                dtype=float,
+            )
+            center_log_frequency = float(np.median(retained_log_freqs))
+            center_frequency = float(np.exp(center_log_frequency))
+            center_period = float(1.0 / center_frequency)
+            log_frequency_scatter = (
+                float(np.std(retained_log_freqs, ddof=0))
+                if retained_log_freqs.size > 1
+                else 0.0
+            )
+            frequency_scatter = (
+                float(np.std(retained_freqs, ddof=0))
+                if retained_freqs.size > 1
+                else 0.0
+            )
+            member_bands = sorted({member["band_name"] for member in retained_members})
+            n_member_bands = len(member_bands)
+            accepted = bool(n_member_bands >= min_bands_per_component)
+            rejection_reasons = []
+            if not accepted:
+                rejection_reasons.append(
+                    f"insufficient_bands ({n_member_bands} < {min_bands_per_component})"
+                )
+
+            clusters.append(
+                {
+                    "cluster_id": None,
+                    "accepted": accepted,
+                    "rejection_reasons": rejection_reasons,
+                    "member_bands": member_bands,
+                    "n_member_bands": n_member_bands,
+                    "center_frequency": center_frequency,
+                    "center_period": center_period,
+                    "log_center_frequency": center_log_frequency,
+                    "frequency_scatter": frequency_scatter,
+                    "log_frequency_scatter": log_frequency_scatter,
+                    "members": retained_members,
+                    "duplicate_band_candidates": sorted(
+                        duplicate_members,
+                        key=_candidate_priority_key,
+                    ),
+                }
+            )
+
+        clusters.sort(
+            key=lambda cluster: (
+                float(cluster["center_frequency"]),
+                float(cluster["log_center_frequency"]),
+            )
+        )
+        for cluster_id, cluster in enumerate(clusters):
+            cluster["cluster_id"] = cluster_id
+
+        return clusters
+
     @staticmethod
     def _consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs=None):
         """Build a safe, isolated kwarg dict for nested 1D GP validation fits.
