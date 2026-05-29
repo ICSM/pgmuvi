@@ -14312,6 +14312,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fit_kwargs["guess"] = merged_guess
         fit_kwargs["fit_strategy"] = None
 
+        _consensus_frequency_scalar = result_diagnostics.get("consensus_frequency")
+        if _consensus_frequency_scalar is None:
+            _consensus_frequency_scalar = result_diagnostics.get(
+                "final_consensus_frequency"
+            )
+        _consensus_frequency_scalar_ready = _consensus_frequency_scalar is not None
+
         _consensus_frequencies_raw = result_diagnostics.get("consensus_frequencies")
         _consensus_frequencies_input = (
             _consensus_frequencies_raw
@@ -14336,7 +14343,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         _consensus_init_ready = bool(consensus_guess)
         _consensus_ready_for_success = bool(
-            _consensus_frequency_ready
+            (_consensus_frequency_scalar_ready or _consensus_frequency_ready)
             and _trusted_candidate_ready
             and _consensus_init_ready
         )
