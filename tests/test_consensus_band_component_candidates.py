@@ -492,6 +492,36 @@ class TestExistingConsensusPathUnchanged(unittest.TestCase):
                 "Old helper must not populate component_candidates",
             )
 
+    def test_single_path_matches_multicomp_primary_selection(self):
+        """Single-candidate path must select the same primary LS peak."""
+        single_result = self.lc._consensus_collect_band_candidates()
+        multicomp_result = {
+            entry["band_name"]: entry
+            for entry in self.lc._consensus_collect_band_component_candidates(
+                max_components_per_band=10
+            )
+        }
+
+        for band in single_result["accepted_bands"]:
+            with self.subTest(band=band):
+                record = single_result["band_records"][band]
+                candidates = multicomp_result[band]["component_candidates"]
+                chosen = next(
+                    (candidate for candidate in candidates if candidate["significant"]),
+                    candidates[0],
+                )
+                self.assertAlmostEqual(
+                    record["dominant_frequency"],
+                    chosen["frequency"],
+                    places=10,
+                )
+                self.assertAlmostEqual(
+                    record["dominant_period"],
+                    chosen["period"],
+                    places=10,
+                )
+                self.assertEqual(record["ls_significant"], chosen["significant"])
+
     def test_public_consensus_fit_succeeds(self):
         """Full public consensus fit must complete without error."""
         self.lc.fit(
