@@ -142,6 +142,10 @@ class ConsensusFitError(RuntimeError):
 
 _CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
 _CONSENSUS_MIN_SCALE_BOUND = 1.0e-6
+# Extra LS peaks requested beyond max_components_per_band to ensure
+# above-Nyquist alias peaks (which often dominate by raw power) are
+# absorbed before the plausibility filter selects physical candidates.
+_CONSENSUS_MULTICOMP_ALIAS_PEAK_BUFFER = 8
 _ACF_STATUS_AGREEMENT = "agreement"
 _ACF_STATUS_HARMONIC = "harmonic"
 _ACF_STATUS_DISAGREEMENT = "disagreement"
@@ -10260,6 +10264,208 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return reasons
 
+    def _consensus_prepare_band_consensus_inputs(
+        self,
+        *,
+        min_points_per_band=None,
+        max_gap_fraction=None,
+        min_duty_cycle=None,
+        include_wavelengths=False,
+    ):
+        """Prepare shared per-band consensus inputs.
+
+        This helper centralizes the common setup shared by the single-candidate
+        and multi-component candidate extraction paths: per-band splitting,
+        sampling-metric computation, conservative control resolution, and
+        optional wavelength lookup from ``xdata[:, 1]``.
+        """
+        per_band_lc = dict(self._consensus_iter_band_lightcurves())
+        metrics_by_band = {
+            band: lc_band.compute_sampling_metrics()
+            for band, lc_band in per_band_lc.items()
+        }
+        controls = self._consensus_resolve_controls(
+            metrics_by_band=metrics_by_band,
+            min_points_per_band=min_points_per_band,
+            max_gap_fraction=max_gap_fraction,
+            min_duty_cycle=min_duty_cycle,
+        )
+
+        prepared = {
+            "per_band_lc": per_band_lc,
+            "metrics_by_band": metrics_by_band,
+            "controls": controls,
+        }
+
+        if include_wavelengths:
+            prepared["band_to_wavelength"] = (
+                self._consensus_build_band_wavelength_map(per_band_lc.keys())
+            )
+
+        return prepared
+
+    def _consensus_build_band_wavelength_map(self, band_labels):
+        """Map each band label to a representative wavelength value.
+
+        Returns ``None`` for bands that cannot be mapped safely (missing rows,
+        missing wavelength column, or non-numeric values).
+        """
+        band_to_wavelength = {str(label): None for label in band_labels}
+        band_arr = np.asarray(self.band, dtype=str)
+
+        try:
+            xdata_np = self._xdata_raw.detach().cpu().numpy()
+        except Exception:
+            return band_to_wavelength
+
+        if xdata_np.ndim != 2 or xdata_np.shape[1] < 2:
+            return band_to_wavelength
+
+        for band_label in band_to_wavelength:
+            mask_np = band_arr == band_label
+            if not np.any(mask_np):
+                continue
+            try:
+                band_wavelengths = xdata_np[mask_np, 1]
+            except Exception:
+                continue
+            if np.size(band_wavelengths) == 0:
+                continue
+            try:
+                band_to_wavelength[band_label] = float(
+                    np.ravel(band_wavelengths)[0]
+                )
+            except (TypeError, ValueError):
+                band_to_wavelength[band_label] = None
+
+        return band_to_wavelength
+
+    @staticmethod
+    def _consensus_lookup_ls_peak_metadata(
+        *,
+        ls_frequency,
+        freq_grid,
+        power_grid,
+        peak_idx_to_prominence,
+        rtol=1e-7,
+        atol=1e-12,
+    ):
+        """Resolve LS peak metadata only when the frequency is grid-aligned."""
+        peak_power = np.nan
+        peak_prominence = np.nan
+
+        ls_freq = float(ls_frequency)
+        if not np.isfinite(ls_freq):
+            return peak_power, peak_prominence
+
+        freq_np = np.asarray(freq_grid, dtype=float)
+        power_np = np.asarray(power_grid, dtype=float)
+        if freq_np.size == 0 or power_np.size == 0:
+            return peak_power, peak_prominence
+
+        closest_idx = int(np.argmin(np.abs(freq_np - ls_freq)))
+        if closest_idx < 0 or closest_idx >= power_np.size:
+            return peak_power, peak_prominence
+        if not np.isclose(freq_np[closest_idx], ls_freq, rtol=rtol, atol=atol):
+            return peak_power, peak_prominence
+
+        peak_power = float(power_np[closest_idx])
+        peak_prominence = float(peak_idx_to_prominence.get(closest_idx, np.nan))
+        return peak_power, peak_prominence
+
+    @staticmethod
+    def _consensus_extract_band_ls_candidates(
+        lc_band,
+        *,
+        metrics,
+        num_requested_peaks,
+        max_candidates=None,
+        include_peak_metadata=False,
+    ):
+        """Run per-band LS and return plausible candidates in raw LS order."""
+        if include_peak_metadata:
+            from scipy.signal import find_peaks, peak_prominences
+
+        ls_kwargs = {"num_peaks": int(num_requested_peaks)}
+        if include_peak_metadata:
+            ls_kwargs["return_full"] = True
+
+        ls_result = lc_band.fit_LS(**ls_kwargs)
+        if include_peak_metadata:
+            ls_freqs, ls_sig, freq_grid, power_grid = ls_result
+            freq_np = np.asarray(freq_grid.detach().cpu().numpy(), dtype=float)
+            power_np = np.asarray(power_grid.detach().cpu().numpy(), dtype=float)
+        else:
+            ls_freqs, ls_sig = ls_result
+            freq_np = np.asarray([], dtype=float)
+            power_np = np.asarray([], dtype=float)
+
+        ls_freqs_np = np.asarray(ls_freqs.detach().cpu().numpy(), dtype=float)
+        ls_sig_np = np.asarray(ls_sig.detach().cpu().numpy(), dtype=bool)
+
+        baseline = float(metrics.get("baseline", np.nan))
+        longest_period = float(metrics.get("longest_detectable_period", np.nan))
+        if not (np.isfinite(longest_period) and longest_period > 0):
+            longest_period = baseline / 2.0 if np.isfinite(baseline) else np.nan
+        min_detectable_frequency = (
+            float(1.0 / longest_period)
+            if (np.isfinite(longest_period) and longest_period > 0)
+            else 0.0
+        )
+        nyquist_freq = float(metrics.get("nyquist_frequency", np.inf))
+
+        if include_peak_metadata and len(power_np) > 0:
+            all_peak_idx, _ = find_peaks(power_np, distance=5)
+            if len(all_peak_idx) > 0:
+                prom_values, _, _ = peak_prominences(power_np, all_peak_idx)
+                peak_idx_to_prominence = dict(
+                    zip(all_peak_idx.tolist(), prom_values.tolist(), strict=True)
+                )
+            else:
+                peak_idx_to_prominence = {}
+        else:
+            peak_idx_to_prominence = {}
+
+        candidates = []
+        for rank, ls_freq in enumerate(ls_freqs_np):
+            if max_candidates is not None and len(candidates) >= max_candidates:
+                break
+            if not (np.isfinite(ls_freq) and ls_freq > 0):
+                continue
+            if np.isfinite(nyquist_freq) and ls_freq > nyquist_freq:
+                continue
+            if min_detectable_frequency > 0 and ls_freq < min_detectable_frequency:
+                continue
+
+            candidate = {
+                "frequency": float(ls_freq),
+                "period": float(1.0 / ls_freq),
+                "ls_rank": rank,
+                "significant": bool(rank < ls_sig_np.size and ls_sig_np[rank]),
+            }
+
+            if include_peak_metadata:
+                peak_power, peak_prominence = (
+                    Lightcurve._consensus_lookup_ls_peak_metadata(
+                        ls_frequency=ls_freq,
+                        freq_grid=freq_np,
+                        power_grid=power_np,
+                        peak_idx_to_prominence=peak_idx_to_prominence,
+                    )
+                )
+                candidate["peak_power"] = peak_power
+                candidate["peak_prominence"] = peak_prominence
+
+            candidates.append(candidate)
+
+        return {
+            "ls_frequencies": ls_freqs_np,
+            "ls_significant": ls_sig_np,
+            "candidates": candidates,
+            "min_detectable_frequency": min_detectable_frequency,
+            "nyquist_frequency": nyquist_freq,
+        }
+
     @staticmethod
     def _consensus_extract_acf_candidate(acf_result):
         """Extract the strongest non-zero-lag ACF peak as a frequency candidate.
@@ -11626,18 +11832,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Dictionary with control values, per-band records, accepted and
             rejected bands, and rejection reasons.
         """
-        per_band_lc = dict(self._consensus_iter_band_lightcurves())
-        metrics_by_band = {
-            band: lc_band.compute_sampling_metrics()
-            for band, lc_band in per_band_lc.items()
-        }
-
-        controls = self._consensus_resolve_controls(
-            metrics_by_band=metrics_by_band,
+        prepared = self._consensus_prepare_band_consensus_inputs(
             min_points_per_band=min_points_per_band,
             max_gap_fraction=max_gap_fraction,
             min_duty_cycle=min_duty_cycle,
         )
+        per_band_lc = prepared["per_band_lc"]
+        metrics_by_band = prepared["metrics_by_band"]
+        controls = prepared["controls"]
 
         band_records = {}
         accepted_bands = []
@@ -11672,61 +11874,39 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 band_records[band_label] = record
                 continue
 
-            ls_freqs, ls_sig = lc_band.fit_LS(num_peaks=5)
-            ls_freqs_np = np.asarray(ls_freqs.detach().cpu().numpy(), dtype=float)
-            ls_sig_np = np.asarray(ls_sig.detach().cpu().numpy(), dtype=bool)
-            if ls_freqs_np.size == 0:
+            ls_candidates = self._consensus_extract_band_ls_candidates(
+                lc_band,
+                metrics=metrics,
+                num_requested_peaks=5,
+            )
+            if ls_candidates["ls_frequencies"].size == 0:
                 _reject_band(record, [_CONSENSUS_REJECTION_REASON_NO_LS_PEAKS])
                 band_records[band_label] = record
                 continue
 
-            baseline = float(metrics.get("baseline", np.nan))
-            longest_period = float(metrics.get("longest_detectable_period", np.nan))
-            if not (np.isfinite(longest_period) and longest_period > 0):
-                longest_period = baseline / 2.0 if np.isfinite(baseline) else np.nan
-            # Minimum physically plausible frequency (inverse of longest
-            # detectable period). All plausibility checks use frequency space.
-            min_detectable_frequency = (
-                float(1.0 / longest_period)
-                if (np.isfinite(longest_period) and longest_period > 0)
-                else 0.0
-            )
-            nyquist_freq = float(metrics.get("nyquist_frequency", np.inf))
-
-            plausible_idx = []
-            for idx, fval in enumerate(ls_freqs_np):
-                if not (np.isfinite(fval) and fval > 0):
-                    continue
-                if np.isfinite(nyquist_freq) and fval > nyquist_freq:
-                    continue
-                # Frequency below the minimum detectable frequency means the
-                # corresponding period would exceed the longest detectable period.
-                if min_detectable_frequency > 0 and fval < min_detectable_frequency:
-                    continue
-                plausible_idx.append(idx)
-
-            if not plausible_idx:
+            plausible_candidates = ls_candidates["candidates"]
+            if not plausible_candidates:
                 _reject_band(
                     record, [_CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK]
                 )
                 band_records[band_label] = record
                 continue
 
-            best_idx = None
-            for idx in plausible_idx:
-                if idx < ls_sig_np.size and ls_sig_np[idx]:
-                    best_idx = idx
-                    break
-            if best_idx is None:
-                best_idx = plausible_idx[0]
-
-            dominant_freq = float(ls_freqs_np[best_idx])
+            best_candidate = next(
+                (
+                    candidate
+                    for candidate in plausible_candidates
+                    if candidate["significant"]
+                ),
+                plausible_candidates[0],
+            )
+            dominant_freq = float(best_candidate["frequency"])
 
             # Final plausibility guard: frequency must meet the minimum
             # detectable frequency threshold.
             if (
-                min_detectable_frequency > 0
-                and dominant_freq < min_detectable_frequency
+                ls_candidates["min_detectable_frequency"] > 0
+                and dominant_freq < ls_candidates["min_detectable_frequency"]
             ):
                 _reject_band(
                     record,
@@ -11790,9 +11970,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             dominant_period = float(1.0 / dominant_freq)
             record["dominant_frequency"] = dominant_freq
             record["dominant_period"] = dominant_period
-            record["ls_significant"] = bool(
-                best_idx < ls_sig_np.size and ls_sig_np[best_idx]
-            )
+            record["ls_significant"] = bool(best_candidate["significant"])
             record["selected_from"] = "ls_primary_peak"
             self._consensus_set_band_status(
                 record,
@@ -11901,6 +12079,172 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "rejected_bands": rejected_bands,
             "rejection_reasons": self._consensus_make_json_safe(rejection_reasons),
         }
+
+    def _consensus_collect_band_component_candidates(
+        self,
+        *,
+        max_components_per_band=3,
+        min_points_per_band=None,
+        max_gap_fraction=None,
+        min_duty_cycle=None,
+        verbose=False,
+    ):
+        """Collect multiple LS frequency candidates per accepted band.
+
+        Per-band multi-component candidate extraction for future
+        ``fit_strategy='consensus_multicomp'`` support.  This helper runs the
+        same Lomb-Scargle machinery as
+        :meth:`_consensus_collect_band_candidates` but retains up to
+        ``max_components_per_band`` plausible peaks per band rather than only
+        the single dominant peak.
+
+        .. note::
+           This helper is **not** called by the existing
+           ``fit_strategy='consensus'`` path.  It is a dedicated building
+           block for future per-band multi-component candidate extraction.
+           Cross-band association and consensus aggregation of matched
+           components are **not** implemented here; they will be added in
+           subsequent PRs.
+
+        Parameters
+        ----------
+        max_components_per_band : int, optional
+            Maximum number of candidate components to collect per accepted
+            band.  Only physically plausible peaks (finite positive frequency,
+            within Nyquist and above the minimum detectable frequency) are
+            included.  Default is 3.
+        min_points_per_band : int or None, optional
+            Minimum number of points required to accept a band prior to LS.
+            If ``None``, derived from per-band sampling metrics.
+        max_gap_fraction : float or None, optional
+            Maximum allowed largest-gap fraction per band.  If ``None``,
+            derived from per-band sampling metrics.
+        min_duty_cycle : float or None, optional
+            Minimum allowed duty-cycle estimate per band.  If ``None``,
+            derived from per-band sampling metrics.
+        verbose : bool, optional
+            If ``True``, print per-band acceptance/rejection summaries and
+            candidate details.
+
+        Returns
+        -------
+        list of dict
+            One entry per accepted band.  Each entry contains:
+
+            ``band_name`` (str)
+                Band label.
+            ``wavelength`` (float or None)
+                Numeric wavelength value from ``xdata[:, 1]``, or ``None``
+                when the band mask resolves to no rows.
+            ``component_candidates`` (list of dict)
+                Up to ``max_components_per_band`` candidates in LS-rank
+                order (highest power first).  Preservation of this order is
+                critical — cross-band matching and canonical ordering are
+                deferred to future PRs.  Each candidate dict contains:
+
+                ``frequency`` (float)
+                    LS peak frequency in the same units as ``xdata``.
+                ``period`` (float)
+                    ``1 / frequency``.
+                ``ls_rank`` (int)
+                    Zero-based rank by descending LS peak power
+                    (0 = highest power).
+                ``peak_power`` (float)
+                    LS power at this peak.
+                ``peak_prominence`` (float)
+                    Prominence of this peak in the LS power spectrum
+                    (``scipy.signal.peak_prominences``).  ``nan`` when
+                    the peak index cannot be resolved.
+                ``significant`` (bool)
+                    ``True`` when the peak passes Benjamini-Hochberg FDR
+                    correction (from :meth:`fit_LS`).
+        """
+        prepared = self._consensus_prepare_band_consensus_inputs(
+            min_points_per_band=min_points_per_band,
+            max_gap_fraction=max_gap_fraction,
+            min_duty_cycle=min_duty_cycle,
+            include_wavelengths=True,
+        )
+        per_band_lc = prepared["per_band_lc"]
+        metrics_by_band = prepared["metrics_by_band"]
+        controls = prepared["controls"]
+        band_to_wavelength = prepared["band_to_wavelength"]
+
+        results = []
+
+        for band_label, lc_band in per_band_lc.items():
+            metrics = metrics_by_band[band_label]
+            reasons = self._consensus_reject_bad_bands(
+                metrics=metrics,
+                min_points_per_band=controls["min_points_per_band"],
+                max_gap_fraction=controls["max_gap_fraction"],
+                min_duty_cycle=controls["min_duty_cycle"],
+            )
+            if reasons:
+                if verbose:
+                    print(
+                        f"[multicomp] band={band_label} rejected (quality): "
+                        f"{', '.join(reasons)}"
+                    )
+                continue
+
+            # Request more peaks than max_components_per_band to account
+            # for implausible alias peaks (above Nyquist) that will be
+            # filtered out.  See _CONSENSUS_MULTICOMP_ALIAS_PEAK_BUFFER
+            # for rationale; mirrors the existing
+            # _consensus_collect_band_candidates which requests num_peaks=5
+            # to reliably find 1 plausible candidate when several aliases
+            # dominate the periodogram at above-Nyquist frequencies.
+            ls_candidates = self._consensus_extract_band_ls_candidates(
+                lc_band,
+                metrics=metrics,
+                num_requested_peaks=(
+                    max_components_per_band
+                    + _CONSENSUS_MULTICOMP_ALIAS_PEAK_BUFFER
+                ),
+                max_candidates=max_components_per_band,
+                include_peak_metadata=True,
+            )
+            if ls_candidates["ls_frequencies"].size == 0:
+                if verbose:
+                    print(f"[multicomp] band={band_label} rejected (no LS peaks)")
+                continue
+
+            component_candidates = ls_candidates["candidates"]
+            if not component_candidates:
+                if verbose:
+                    print(
+                        f"[multicomp] band={band_label} rejected "
+                        "(no plausible candidates after filtering)"
+                    )
+                continue
+
+            wavelength = band_to_wavelength.get(band_label)
+            results.append(
+                {
+                    "band_name": str(band_label),
+                    "wavelength": wavelength,
+                    "component_candidates": component_candidates,
+                }
+            )
+
+            if verbose:
+                print(
+                    f"[multicomp] band={band_label} "
+                    f"wavelength={wavelength} "
+                    f"n_candidates={len(component_candidates)}"
+                )
+                for cand in component_candidates:
+                    print(
+                        f"  rank={cand['ls_rank']} "
+                        f"freq={cand['frequency']:.6g} "
+                        f"period={cand['period']:.6g} "
+                        f"power={cand['peak_power']:.4g} "
+                        f"prom={cand['peak_prominence']:.4g} "
+                        f"sig={cand['significant']}"
+                    )
+
+        return results
 
     @staticmethod
     def _consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs=None):
