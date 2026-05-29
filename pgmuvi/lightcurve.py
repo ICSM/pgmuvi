@@ -14307,8 +14307,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fit_kwargs["fit_strategy"] = None
 
         _consensus_frequencies_raw = result_diagnostics.get("consensus_frequencies")
+        _consensus_frequencies_input = (
+            _consensus_frequencies_raw
+            if _consensus_frequencies_raw is not None
+            else []
+        )
         _consensus_frequencies_arr = np.asarray(
-            _consensus_frequencies_raw if _consensus_frequencies_raw is not None else [],
+            _consensus_frequencies_input,
             dtype=float,
         ).ravel()
         _consensus_frequency_ready = bool(
