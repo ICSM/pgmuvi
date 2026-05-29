@@ -13631,7 +13631,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         This helper supports ``fit_strategy='consensus_multicomp'`` by turning
         the accepted-cluster consensus payload into the frequency, width, and
-        arrays expected by the existing spectral-mixture initialization
+        scale arrays expected by the existing spectral-mixture initialization
         machinery. ``consensus_scales`` from the consensus stage are retained
         as component-strength diagnostics, while
         ``consensus_frequency_widths`` are used to initialize spectral-mixture
