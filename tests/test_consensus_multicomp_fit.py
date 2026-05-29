@@ -160,7 +160,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.lc.model = object()
         self.lc._model_pars = {}
 
-    def test_consensus_multicomp_dispatch_no_longer_raises_notimplementederror(self):
+    def test_consensus_multicomp_chains_all_helpers(self):
         sentinel = {"status": "ok"}
         with mock.patch.object(
             self.lc,

@@ -14367,7 +14367,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if self.ndim != 2:
             raise ValueError(
                 "Automatic multi-component consensus construction requires a 2D "
-                "light curve."
+                "light curve (multiband time+wavelength data)."
             )
         if max_components_per_band < 1:
             raise ValueError("max_components_per_band must be >= 1.")
@@ -14519,15 +14519,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         consensus_scales = initialization_payload["consensus_scales"]
         consensus_frequency_width = initialization_payload["consensus_frequency_width"]
         n_components = initialization_payload["n_components"]
-
-        if n_components == 0:
-            self.consensus_diagnostics = self._consensus_finalize_result_structure(
-                result_diagnostics
-            )
-            raise RuntimeError(
-                "Consensus multi-component fit failed: no accepted "
-                "multicomponent consensus clusters were available."
-            )
 
         fit_kwargs["num_mixtures"] = n_components
         median_frequency = float(np.median(consensus_frequencies))
