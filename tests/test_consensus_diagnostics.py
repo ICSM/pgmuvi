@@ -859,9 +859,24 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
         )
         diag["fit_strategy"] = "consensus_multicomp"
         diag["consensus_frequencies"] = [0.5, 1.0]
+        diag["consensus_periods"] = [2.0, 1.0]
         diag["final_consensus_frequency"] = None
         diag["final_consensus_period"] = None
         self._lc()._consensus_validate_result_structure(diag)
+
+    def test_multicomponent_success_without_period_vector_raises(self):
+        diag = _make_valid_diagnostics(
+            accepted_bands=["A"],
+            rejected_bands=[],
+            consensus_success=True,
+            consensus_frequency=None,
+            trusted_candidate_count=2,
+        )
+        diag["fit_strategy"] = "consensus_multicomp"
+        diag["consensus_frequencies"] = [0.5, 1.0]
+        diag["final_consensus_frequency"] = None
+        diag["final_consensus_period"] = None
+        self._assert_structural_raises(diag)
 
 
 # ---------------------------------------------------------------------------

@@ -143,6 +143,8 @@ def _multicomponent_consensus():
                 "consensus_frequency": 1.01,
                 "consensus_frequency_width": 0.1,
                 "consensus_scale": 7.0,
+                "member_bands": ["A", "B"],
+                "n_member_bands": 2,
             },
             {
                 "component_index": 1,
@@ -150,18 +152,30 @@ def _multicomponent_consensus():
                 "consensus_frequency": 2.99,
                 "consensus_frequency_width": 0.2,
                 "consensus_scale": 3.8,
+                "member_bands": ["A", "B"],
+                "n_member_bands": 2,
             },
         ],
     }
 
 
 def _initialization_diagnostics():
+    initialized_means = np.array([1.01, 2.99], dtype=float)
+    initialized_scales = np.array([0.1, 0.2], dtype=float)
     return {
         "requested_consensus_frequencies": [1.01, 2.99],
         "requested_consensus_scales": [0.1, 0.2],
         "requested_consensus_frequency_widths": [0.1, 0.2],
+        "requested_consensus_periods": (1.0 / initialized_means).tolist(),
+        "requested_consensus_period_widths": (
+            initialized_scales / (initialized_means**2)
+        ).tolist(),
         "initialized_mixture_means": [1.01, 2.99],
+        "initialized_mixture_periods": (1.0 / initialized_means).tolist(),
         "initialized_mixture_scales": [0.1, 0.2],
+        "initialized_mixture_period_widths": (
+            initialized_scales / (initialized_means**2)
+        ).tolist(),
         "initialization_strategy": "per_component_consensus_initialization",
     }
 
@@ -342,9 +356,24 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertIn("multicomponent_consensus", diagnostics)
         self.assertEqual(diagnostics["consensus_frequencies"], [1.01, 2.99])
         self.assertEqual(diagnostics["consensus_frequency_widths"], [0.1, 0.2])
+        np.testing.assert_allclose(
+            diagnostics["consensus_periods"],
+            [1.0 / 1.01, 1.0 / 2.99],
+            rtol=0.0,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            diagnostics["consensus_period_widths"],
+            [0.1 / (1.01**2), 0.2 / (2.99**2)],
+            rtol=0.0,
+            atol=1e-12,
+        )
         self.assertEqual(diagnostics["consensus_scales"], [7.0, 3.8])
         self.assertEqual(diagnostics["consensus_component_strengths"], [7.0, 3.8])
         self.assertEqual(diagnostics["consensus_mixture_init_scales"], [0.1, 0.2])
+        self.assertEqual(diagnostics["primary_component_index"], 0)
+        self.assertAlmostEqual(diagnostics["primary_consensus_frequency"], 1.01)
+        self.assertAlmostEqual(diagnostics["primary_consensus_period"], 1.0 / 1.01)
         self.assertEqual(diagnostics["trusted_candidate_count"], 4)
         self.assertIsNone(diagnostics["median_frequency"])
         self.assertIsNone(diagnostics["consensus_frequency"])
@@ -361,6 +390,31 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(diagnostics["requested_consensus_frequency_widths"], [0.1, 0.2])
         self.assertEqual(diagnostics["initialized_mixture_means"], [1.01, 2.99])
         self.assertEqual(diagnostics["initialized_mixture_scales"], [0.1, 0.2])
+        np.testing.assert_allclose(
+            diagnostics["initialized_mixture_periods"],
+            [1.0 / 1.01, 1.0 / 2.99],
+            rtol=0.0,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            diagnostics["initialized_mixture_period_widths"],
+            [0.1 / (1.01**2), 0.2 / (2.99**2)],
+            rtol=0.0,
+            atol=1e-12,
+        )
+        summaries = diagnostics["multicomponent_period_summaries"]
+        self.assertEqual(len(summaries), 2)
+        self.assertEqual(
+            [entry["component_index"] for entry in summaries],
+            [0, 1],
+        )
+        self.assertEqual(
+            [entry["source_cluster_id"] for entry in summaries],
+            [0, 1],
+        )
+        self.assertEqual(summaries[0]["member_bands"], ["A", "B"])
+        self.assertEqual(summaries[1]["member_bands"], ["A", "B"])
+        self.assertEqual([entry["n_member_bands"] for entry in summaries], [2, 2])
 
     def test_constraint_strategy_records_global_interval_limitation(self):
         with mock.patch.object(
@@ -468,6 +522,18 @@ class TestConsensusMulticompFit(unittest.TestCase):
         np.testing.assert_allclose(
             diagnostics["initialized_mixture_scales"],
             [0.1, 0.2],
+            atol=1e-6,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            diagnostics["initialized_mixture_periods"],
+            [1.0 / 1.01, 1.0 / 2.99],
+            atol=1e-6,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            diagnostics["initialized_mixture_period_widths"],
+            [0.1 / (1.01**2), 0.2 / (2.99**2)],
             atol=1e-6,
             rtol=0.0,
         )
