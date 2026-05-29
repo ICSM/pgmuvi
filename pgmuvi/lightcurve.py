@@ -15477,9 +15477,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 period_summaries[component_index]["fitted_mixture_scale"] = float(
                     fitted_scales[component_index]
                 )
-                period_summaries[component_index]["fitted_mixture_period_width"] = float(
-                    fitted_period_widths[component_index]
-                )
+                period_summaries[component_index][
+                    "fitted_mixture_period_width"
+                ] = float(fitted_period_widths[component_index])
                 period_summaries[component_index][
                     "fitted_frequency_shift_from_initialization"
                 ] = float(fitted_frequency_shift[component_index])
