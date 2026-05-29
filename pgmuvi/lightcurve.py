@@ -14512,16 +14512,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             component_clusters
         )
 
-        multicomponent_consensus = (
-            self._consensus_build_multicomponent_frequency_consensus(
-                component_clusters,
-                min_width_fraction=min_width_fraction,
+        if not component_clusters:
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
             )
-        )
-        result_diagnostics["multicomponent_consensus"] = (
-            self._consensus_make_json_safe(multicomponent_consensus)
-        )
+            raise RuntimeError(
+                "Consensus multi-component fit failed: no component clusters "
+                "could be formed from the extracted band candidates."
+            )
 
+        multicomponent_consensus = self._consensus_build_multicomponent_frequency_consensus(
+            component_clusters,
+            min_width_fraction=min_width_fraction,
+        )
+        result_diagnostics["multicomponent_consensus"] = self._consensus_make_json_safe(
+            multicomponent_consensus
+        )
         if not component_clusters:
             self.consensus_diagnostics = self._consensus_finalize_result_structure(
                 result_diagnostics
