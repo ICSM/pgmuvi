@@ -13631,9 +13631,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         This helper supports ``fit_strategy='consensus_multicomp'`` by turning
         the accepted-cluster consensus payload into the frequency, width, and
-        scale arrays expected by the existing spectral-mixture initialization
-        machinery.  The final fit still uses the current global constraint
-        system; component-specific constraint intervals remain future work.
+        arrays expected by the existing spectral-mixture initialization
+        machinery. ``consensus_scales`` from the consensus stage are retained
+        as component-strength diagnostics, while
+        ``consensus_frequency_widths`` are used to initialize spectral-mixture
+        ``mixture_scales``. The final fit still uses the current global
+        constraint system; component-specific constraint intervals remain
+        future work.
         """
         if not isinstance(multicomponent_consensus, dict):
             raise ValueError("multicomponent_consensus must be a dictionary.")
@@ -14807,6 +14811,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "consensus_frequencies": consensus_frequencies.tolist(),
             "consensus_frequency_widths": consensus_frequency_width.tolist(),
             "consensus_scales": consensus_scales.tolist(),
+            "consensus_component_strengths": consensus_scales.tolist(),
+            "consensus_mixture_init_scales": consensus_frequency_width.tolist(),
         })
 
         _requested_model = fit_kwargs.get("model")
@@ -14958,19 +14964,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         consensus_guess = self._consensus_build_guess(
             frequencies=consensus_frequencies,
-            scales=consensus_scales,
+            scales=consensus_frequency_width,
         )
         initialization_diagnostics = self._consensus_collect_initialization_diagnostics(
             requested_consensus_frequencies=consensus_frequencies,
-            requested_consensus_scales=consensus_scales,
+            requested_consensus_scales=consensus_frequency_width,
             consensus_guess=consensus_guess,
+        )
+        initialization_diagnostics["requested_consensus_frequency_widths"] = list(
+            np.asarray(consensus_frequency_width, dtype=float).ravel()
         )
         result_diagnostics.update(initialization_diagnostics)
         self._last_consensus_fit_info = {
             "fit_strategy": "consensus_multicomp",
             "consensus_frequencies": consensus_frequencies.ravel().tolist(),
             "consensus_scales": consensus_scales.ravel().tolist(),
+            "consensus_component_strengths": consensus_scales.ravel().tolist(),
             "consensus_frequency_width": consensus_frequency_width.ravel().tolist(),
+            "consensus_frequency_widths": consensus_frequency_width.ravel().tolist(),
+            "consensus_mixture_init_scales": consensus_frequency_width.ravel().tolist(),
             "apply_consensus_constraints": bool(apply_consensus_constraints),
             "consensus_frequency_bounds": _frequency_constraint_bounds,
             "consensus_scale_upper": (
