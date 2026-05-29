@@ -142,6 +142,10 @@ class ConsensusFitError(RuntimeError):
 
 _CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
 _CONSENSUS_MIN_SCALE_BOUND = 1.0e-6
+# Extra LS peaks requested beyond max_components_per_band to ensure
+# above-Nyquist alias peaks (which often dominate by raw power) are
+# absorbed before the plausibility filter selects physical candidates.
+_CONSENSUS_MULTICOMP_ALIAS_PEAK_BUFFER = 8
 _ACF_STATUS_AGREEMENT = "agreement"
 _ACF_STATUS_HARMONIC = "harmonic"
 _ACF_STATUS_DISAGREEMENT = "disagreement"
@@ -12028,11 +12032,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             # Request more peaks than max_components_per_band to account
             # for implausible alias peaks (above Nyquist) that will be
-            # filtered out.  The buffer of 8 mirrors the existing
+            # filtered out.  See _CONSENSUS_MULTICOMP_ALIAS_PEAK_BUFFER
+            # for rationale; mirrors the existing
             # _consensus_collect_band_candidates which requests num_peaks=5
             # to reliably find 1 plausible candidate when several aliases
             # dominate the periodogram at above-Nyquist frequencies.
-            _num_request = max_components_per_band + 8
+            _num_request = max_components_per_band + _CONSENSUS_MULTICOMP_ALIAS_PEAK_BUFFER
             ls_result = lc_band.fit_LS(
                 num_peaks=_num_request, return_full=True
             )
