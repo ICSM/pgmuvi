@@ -142,6 +142,7 @@ class ConsensusFitError(RuntimeError):
 
 _CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
 _CONSENSUS_MIN_SCALE_BOUND = 1.0e-6
+_CONSENSUS_MULTICOMP_DRIFT_WARNING_FRACTION = 0.10
 # Extra LS peaks requested beyond max_components_per_band to ensure
 # above-Nyquist alias peaks (which often dominate by raw power) are
 # absorbed before the plausibility filter selects physical candidates.
@@ -511,6 +512,25 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
             "fitted_fractional_period_shift_from_initialization"
         ): _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
+        ),
+        "max_abs_fractional_period_shift_from_initialization": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "max_abs_fractional_frequency_shift_from_initialization": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "component_fit_drift_flags": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "components_with_large_period_drift": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "components_with_large_frequency_drift": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "drift_warning_fraction": _consensus_schema_field(
+            default=float(_CONSENSUS_MULTICOMP_DRIFT_WARNING_FRACTION),
+            nullable=False,
         ),
         "initialization_strategy": _consensus_schema_field(
             default=None, nullable=True
@@ -1579,6 +1599,7 @@ class PeriodSummaryResult:
         component_source_cluster_ids=None,
         component_member_bands=None,
         component_summaries=None,
+        drift_warning_fraction=None,
     ):
         self.method = method
         self.model_name = model_name
@@ -1627,6 +1648,7 @@ class PeriodSummaryResult:
             if component_summaries is not None
             else []
         )
+        self.drift_warning_fraction = drift_warning_fraction
         if self.is_multicomponent and not self.component_summaries:
             n_components = len(self.component_periods)
             for idx in range(n_components):
@@ -1867,6 +1889,7 @@ class PeriodSummaryResult:
                     ),
                     "component_member_bands": self.component_member_bands,
                     "component_summaries": self.component_summaries,
+                    "drift_warning_fraction": self.drift_warning_fraction,
                 }
             )
         return payload
@@ -2079,6 +2102,10 @@ class PeriodSummaryResult:
         lines.append("")
 
         if self.is_multicomponent:
+            drift_threshold = self.drift_warning_fraction
+            if drift_threshold is None:
+                drift_threshold = _CONSENSUS_MULTICOMP_DRIFT_WARNING_FRACTION
+            large_period_drift_count = 0
             lines.append("MULTI-COMPONENT PERIOD SUMMARY")
             lines.append("==============================")
             for idx, component in enumerate(self.component_summaries):
@@ -2114,6 +2141,39 @@ class PeriodSummaryResult:
                 lines.append(
                     f"      Consensus frequency: "
                     f"{_fmt(component.get('consensus_frequency'))}"
+                )
+                fractional_period_shift = component.get(
+                    "fitted_fractional_period_shift_from_initialization"
+                )
+                drift_flag = bool(component.get("fitted_period_drift_flag"))
+                drift_line = "      Drift from initialization: N/A"
+                if fractional_period_shift is not None:
+                    try:
+                        fractional_period_shift = float(fractional_period_shift)
+                    except (TypeError, ValueError):
+                        fractional_period_shift = None
+                if (
+                    fractional_period_shift is not None
+                    and np.isfinite(fractional_period_shift)
+                ):
+                    drift_line = (
+                        "      Drift from initialization: "
+                        f"{fractional_period_shift * 100.0:+.3g}%"
+                    )
+                    if drift_flag:
+                        drift_line += "  [warning: large drift]"
+                lines.append(drift_line)
+                if drift_flag:
+                    large_period_drift_count += 1
+                lines.append("")
+            if large_period_drift_count > 0:
+                lines.append(
+                    "Warning: "
+                    f"{large_period_drift_count} "
+                    f"{'component' if large_period_drift_count == 1 else 'components'} "
+                    "shifted by "
+                    f"more than {drift_threshold * 100.0:g}% from consensus "
+                    "initialization."
                 )
                 lines.append("")
 
@@ -12329,6 +12389,153 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "fitted diagnostics vectors do not share one-to-one "
                         "component lengths."
                     )
+                drift_warning_fraction = diagnostics.get("drift_warning_fraction")
+                if drift_warning_fraction is None:
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'drift_warning_fraction' is missing or invalid."
+                    )
+                drift_warning_fraction = float(drift_warning_fraction)
+                if not (
+                    np.isfinite(drift_warning_fraction)
+                    and drift_warning_fraction >= 0
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'drift_warning_fraction' is missing or invalid."
+                    )
+                abs_period_shift = np.abs(
+                    np.asarray(
+                        diagnostics.get(
+                            "fitted_fractional_period_shift_from_initialization", []
+                        ),
+                        dtype=float,
+                    ).ravel()
+                )
+                abs_frequency_shift = np.abs(
+                    np.asarray(
+                        diagnostics.get(
+                            "fitted_fractional_frequency_shift_from_initialization", []
+                        ),
+                        dtype=float,
+                    ).ravel()
+                )
+                max_abs_period_shift = diagnostics.get(
+                    "max_abs_fractional_period_shift_from_initialization"
+                )
+                max_abs_frequency_shift = diagnostics.get(
+                    "max_abs_fractional_frequency_shift_from_initialization"
+                )
+                if not (
+                    max_abs_period_shift is not None
+                    and np.isfinite(float(max_abs_period_shift))
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'max_abs_fractional_period_shift_from_initialization' "
+                        "is missing or invalid."
+                    )
+                if not (
+                    max_abs_frequency_shift is not None
+                    and np.isfinite(float(max_abs_frequency_shift))
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'max_abs_fractional_frequency_shift_from_initialization' "
+                        "is missing or invalid."
+                    )
+                if not np.isclose(
+                    float(max_abs_period_shift),
+                    float(np.max(abs_period_shift)),
+                    rtol=1e-8,
+                    atol=1e-12,
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'max_abs_fractional_period_shift_from_initialization' "
+                        "does not match fitted period drift diagnostics."
+                    )
+                if not np.isclose(
+                    float(max_abs_frequency_shift),
+                    float(np.max(abs_frequency_shift)),
+                    rtol=1e-8,
+                    atol=1e-12,
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'max_abs_fractional_frequency_shift_from_initialization' "
+                        "does not match fitted frequency drift diagnostics."
+                    )
+                expected_period_flags = (
+                    abs_period_shift >= drift_warning_fraction
+                ).tolist()
+                expected_frequency_flags = (
+                    abs_frequency_shift >= drift_warning_fraction
+                ).tolist()
+                component_fit_drift_flags = diagnostics.get("component_fit_drift_flags")
+                if not (
+                    isinstance(component_fit_drift_flags, list)
+                    and len(component_fit_drift_flags) == fitted_frequencies_arr.size
+                    and all(
+                        isinstance(flag, (bool, np.bool_))
+                        for flag in component_fit_drift_flags
+                    )
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'component_fit_drift_flags' is missing or invalid."
+                    )
+                observed_period_flags = [
+                    bool(flag) for flag in component_fit_drift_flags
+                ]
+                if observed_period_flags != expected_period_flags:
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'component_fit_drift_flags' does not match fitted period "
+                        "drift diagnostics."
+                    )
+
+                def _validate_component_index_list(key, expected_indices):
+                    observed = diagnostics.get(key)
+                    if not isinstance(observed, list):
+                        raise RuntimeError(
+                            "consensus_success is True for 'consensus_multicomp' but "
+                            f"'{key}' is missing or invalid."
+                        )
+                    coerced = []
+                    for value in observed:
+                        if isinstance(value, (bool, np.bool_)):
+                            raise RuntimeError(
+                                "consensus_success is True for 'consensus_multicomp' "
+                                f"but '{key}' contains invalid component indices."
+                            )
+                        if isinstance(value, (int, np.integer)):
+                            idx = int(value)
+                        else:
+                            raise RuntimeError(
+                                "consensus_success is True for 'consensus_multicomp' "
+                                f"but '{key}' contains invalid component indices."
+                            )
+                        if idx < 0 or idx >= int(fitted_frequencies_arr.size):
+                            raise RuntimeError(
+                                "consensus_success is True for 'consensus_multicomp' "
+                                f"but '{key}' contains out-of-range indices."
+                            )
+                        coerced.append(idx)
+                    if coerced != list(expected_indices):
+                        raise RuntimeError(
+                            "consensus_success is True for 'consensus_multicomp' but "
+                            f"'{key}' does not match fitted drift diagnostics."
+                        )
+
+                _validate_component_index_list(
+                    "components_with_large_period_drift",
+                    np.flatnonzero(expected_period_flags).tolist(),
+                )
+                _validate_component_index_list(
+                    "components_with_large_frequency_drift",
+                    np.flatnonzero(expected_frequency_flags).tolist(),
+                )
             elif not (
                 has_scalar_consensus_frequency or has_vector_consensus_frequencies
             ):
@@ -15027,6 +15234,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         cluster_frequency_rtol = float(fit_kwargs.pop("cluster_frequency_rtol", 0.10))
         min_bands_per_component = int(fit_kwargs.pop("min_bands_per_component", 2))
         min_width_fraction = float(fit_kwargs.pop("min_width_fraction", 0.05))
+        drift_warning_fraction = float(
+            fit_kwargs.pop(
+                "drift_warning_fraction",
+                _CONSENSUS_MULTICOMP_DRIFT_WARNING_FRACTION,
+            )
+        )
         verbose = fit_kwargs.get("verbose", False)
         _allow_existing = fit_kwargs.pop("_allow_existing_model_for_consensus", False)
 
@@ -15045,6 +15258,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise ValueError("min_bands_per_component must be >= 1.")
         if not np.isfinite(min_width_fraction) or min_width_fraction <= 0:
             raise ValueError("min_width_fraction must be a finite, positive float.")
+        if not np.isfinite(drift_warning_fraction) or drift_warning_fraction < 0:
+            raise ValueError(
+                "drift_warning_fraction must be a finite, non-negative float."
+            )
 
         result_diagnostics = self._consensus_initialize_result_structure(
             fit_strategy="consensus_multicomp"
@@ -15063,6 +15280,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "cluster_frequency_rtol": float(cluster_frequency_rtol),
                 "min_bands_per_component": min_bands_per_component,
                 "min_width_fraction": float(min_width_fraction),
+                "drift_warning_fraction": float(drift_warning_fraction),
                 "constrain_consensus": bool(apply_consensus_constraints),
             },
             "constraint_strategy": (
@@ -15070,6 +15288,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if apply_consensus_constraints
                 else "constraints_disabled"
             ),
+            "drift_warning_fraction": float(drift_warning_fraction),
         })
         self.consensus_diagnostics = self._consensus_finalize_result_structure(
             result_diagnostics
@@ -15505,6 +15724,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "fitted_period_shift_from_initialization": None,
                     "fitted_fractional_frequency_shift_from_initialization": None,
                     "fitted_fractional_period_shift_from_initialization": None,
+                    "fitted_abs_fractional_period_shift_from_initialization": None,
+                    "fitted_abs_fractional_frequency_shift_from_initialization": None,
+                    "fitted_period_drift_flag": None,
+                    "fitted_frequency_drift_flag": None,
                     "member_bands": list(source_summary.get("member_bands") or []),
                     "n_member_bands": source_summary.get("n_member_bands"),
                 }
@@ -15618,6 +15841,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     )
 
             result_diagnostics.update(fitted_diagnostics)
+            fitted_abs_fractional_period_shift = np.abs(fitted_fractional_period_shift)
+            fitted_abs_fractional_frequency_shift = np.abs(
+                fitted_fractional_frequency_shift
+            )
+            period_drift_flags = (
+                fitted_abs_fractional_period_shift >= float(drift_warning_fraction)
+            )
+            frequency_drift_flags = (
+                fitted_abs_fractional_frequency_shift >= float(drift_warning_fraction)
+            )
+            result_diagnostics[
+                "max_abs_fractional_period_shift_from_initialization"
+            ] = float(np.max(fitted_abs_fractional_period_shift))
+            result_diagnostics[
+                "max_abs_fractional_frequency_shift_from_initialization"
+            ] = float(np.max(fitted_abs_fractional_frequency_shift))
+            result_diagnostics["component_fit_drift_flags"] = [
+                bool(v) for v in period_drift_flags.tolist()
+            ]
+            result_diagnostics["components_with_large_period_drift"] = [
+                int(idx) for idx in np.flatnonzero(period_drift_flags).tolist()
+            ]
+            result_diagnostics["components_with_large_frequency_drift"] = [
+                int(idx) for idx in np.flatnonzero(frequency_drift_flags).tolist()
+            ]
+            result_diagnostics["drift_warning_fraction"] = float(drift_warning_fraction)
 
             for component_index in range(expected_size):
                 period_summaries[component_index]["fitted_mixture_frequency"] = float(
@@ -15644,6 +15893,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 period_summaries[component_index][
                     "fitted_fractional_period_shift_from_initialization"
                 ] = float(fitted_fractional_period_shift[component_index])
+                period_summaries[component_index][
+                    "fitted_abs_fractional_period_shift_from_initialization"
+                ] = float(fitted_abs_fractional_period_shift[component_index])
+                period_summaries[component_index][
+                    "fitted_abs_fractional_frequency_shift_from_initialization"
+                ] = float(fitted_abs_fractional_frequency_shift[component_index])
+                period_summaries[component_index]["fitted_period_drift_flag"] = bool(
+                    period_drift_flags[component_index]
+                )
+                period_summaries[component_index][
+                    "fitted_frequency_drift_flag"
+                ] = bool(frequency_drift_flags[component_index])
 
             result_diagnostics["multicomponent_period_summaries"] = (
                 self._consensus_make_json_safe(period_summaries)
@@ -16808,6 +17069,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             component_source_cluster_ids=component_source_cluster_ids,
             component_member_bands=component_member_bands,
             component_summaries=component_summaries,
+            drift_warning_fraction=self._coerce_float_or_none(
+                diagnostics.get("drift_warning_fraction")
+            ),
         )
 
     def _get_non_periodic_summary(self, kernel=None):
