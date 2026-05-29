@@ -184,6 +184,14 @@ def _make_valid_diagnostics(
         "consensus_mixture_init_scales": [],
         "initialized_mixture_means": [],
         "initialized_mixture_scales": [],
+        "fitted_mixture_frequencies": [],
+        "fitted_mixture_periods": [],
+        "fitted_mixture_scales": [],
+        "fitted_mixture_period_widths": [],
+        "fitted_frequency_shift_from_initialization": [],
+        "fitted_period_shift_from_initialization": [],
+        "fitted_fractional_frequency_shift_from_initialization": [],
+        "fitted_fractional_period_shift_from_initialization": [],
         "initialization_strategy": None,
         "default_constraints_applied_before_consensus": False,
         "constraints_marked_set_after_consensus": False,
@@ -862,6 +870,14 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
         diag["fit_strategy"] = "consensus_multicomp"
         diag["consensus_frequencies"] = [0.5, 1.0]
         diag["consensus_periods"] = [2.0, 1.0]
+        diag["fitted_mixture_frequencies"] = [0.5, 1.0]
+        diag["fitted_mixture_periods"] = [2.0, 1.0]
+        diag["fitted_mixture_scales"] = [0.1, 0.2]
+        diag["fitted_mixture_period_widths"] = [0.4, 0.2]
+        diag["fitted_frequency_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_period_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_fractional_frequency_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_fractional_period_shift_from_initialization"] = [0.0, 0.0]
         diag["final_consensus_frequency"] = None
         diag["final_consensus_period"] = None
         self._lc()._consensus_validate_result_structure(diag)
@@ -876,6 +892,29 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
         )
         diag["fit_strategy"] = "consensus_multicomp"
         diag["consensus_frequencies"] = [0.5, 1.0]
+        diag["fitted_mixture_frequencies"] = [0.5, 1.0]
+        diag["fitted_mixture_periods"] = [2.0, 1.0]
+        diag["fitted_mixture_scales"] = [0.1, 0.2]
+        diag["fitted_mixture_period_widths"] = [0.4, 0.2]
+        diag["fitted_frequency_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_period_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_fractional_frequency_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_fractional_period_shift_from_initialization"] = [0.0, 0.0]
+        diag["final_consensus_frequency"] = None
+        diag["final_consensus_period"] = None
+        self._assert_structural_raises(diag)
+
+    def test_multicomponent_success_without_fitted_vector_raises(self):
+        diag = _make_valid_diagnostics(
+            accepted_bands=["A"],
+            rejected_bands=[],
+            consensus_success=True,
+            consensus_frequency=None,
+            trusted_candidate_count=2,
+        )
+        diag["fit_strategy"] = "consensus_multicomp"
+        diag["consensus_frequencies"] = [0.5, 1.0]
+        diag["consensus_periods"] = [2.0, 1.0]
         diag["final_consensus_frequency"] = None
         diag["final_consensus_period"] = None
         self._assert_structural_raises(diag)

@@ -180,6 +180,30 @@ def _initialization_diagnostics():
     }
 
 
+def _fitted_diagnostics():
+    fitted_frequencies = np.array([1.02, 2.98], dtype=float)
+    fitted_scales = np.array([0.11, 0.21], dtype=float)
+    initialized_frequencies = np.array([1.01, 2.99], dtype=float)
+    initialized_periods = 1.0 / initialized_frequencies
+    fitted_periods = 1.0 / fitted_frequencies
+    frequency_shift = fitted_frequencies - initialized_frequencies
+    period_shift = fitted_periods - initialized_periods
+    return {
+        "fitted_mixture_frequencies": fitted_frequencies.tolist(),
+        "fitted_mixture_periods": fitted_periods.tolist(),
+        "fitted_mixture_scales": fitted_scales.tolist(),
+        "fitted_mixture_period_widths": (fitted_scales / (fitted_frequencies**2)).tolist(),
+        "fitted_frequency_shift_from_initialization": frequency_shift.tolist(),
+        "fitted_period_shift_from_initialization": period_shift.tolist(),
+        "fitted_fractional_frequency_shift_from_initialization": (
+            frequency_shift / initialized_frequencies
+        ).tolist(),
+        "fitted_fractional_period_shift_from_initialization": (
+            period_shift / initialized_periods
+        ).tolist(),
+    }
+
+
 class _MockInitializableSpectralMixtureModel:
     def __init__(self, n_components=2):
         self.covar_module = mock.MagicMock()
@@ -224,6 +248,10 @@ class TestConsensusMulticompFit(unittest.TestCase):
             return_value=_initialization_diagnostics(),
         ) as init_diag_mock, mock.patch.object(
             self.lc,
+            "_consensus_collect_fitted_mixture_diagnostics",
+            return_value=_fitted_diagnostics(),
+        ) as fitted_diag_mock, mock.patch.object(
+            self.lc,
             "fit",
             return_value=sentinel,
         ) as fit_mock:
@@ -240,6 +268,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         consensus_mock.assert_called_once()
         guess_mock.assert_called_once()
         init_diag_mock.assert_called_once()
+        fitted_diag_mock.assert_called_once()
         fit_mock.assert_called_once()
 
     def test_multicomp_fit_infers_num_components_and_passes_frequencies_to_init(self):
@@ -263,6 +292,10 @@ class TestConsensusMulticompFit(unittest.TestCase):
             self.lc,
             "_consensus_collect_initialization_diagnostics",
             return_value=_initialization_diagnostics(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_collect_fitted_mixture_diagnostics",
+            return_value=_fitted_diagnostics(),
         ), mock.patch.object(
             self.lc,
             "fit",
@@ -341,6 +374,10 @@ class TestConsensusMulticompFit(unittest.TestCase):
             return_value=_initialization_diagnostics(),
         ), mock.patch.object(
             self.lc,
+            "_consensus_collect_fitted_mixture_diagnostics",
+            return_value=_fitted_diagnostics(),
+        ), mock.patch.object(
+            self.lc,
             "fit",
             return_value={"status": "ok"},
         ):
@@ -390,6 +427,26 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(diagnostics["requested_consensus_frequency_widths"], [0.1, 0.2])
         self.assertEqual(diagnostics["initialized_mixture_means"], [1.01, 2.99])
         self.assertEqual(diagnostics["initialized_mixture_scales"], [0.1, 0.2])
+        self.assertEqual(diagnostics["fitted_mixture_frequencies"], [1.02, 2.98])
+        self.assertEqual(diagnostics["fitted_mixture_scales"], [0.11, 0.21])
+        np.testing.assert_allclose(
+            diagnostics["fitted_mixture_periods"],
+            [1.0 / 1.02, 1.0 / 2.98],
+            rtol=0.0,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            diagnostics["fitted_mixture_period_widths"],
+            [0.11 / (1.02**2), 0.21 / (2.98**2)],
+            rtol=0.0,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            diagnostics["fitted_frequency_shift_from_initialization"],
+            [0.01, -0.01],
+            rtol=0.0,
+            atol=1e-12,
+        )
         np.testing.assert_allclose(
             diagnostics["initialized_mixture_periods"],
             [1.0 / 1.01, 1.0 / 2.99],
@@ -415,6 +472,12 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(summaries[0]["member_bands"], ["A", "B"])
         self.assertEqual(summaries[1]["member_bands"], ["A", "B"])
         self.assertEqual([entry["n_member_bands"] for entry in summaries], [2, 2])
+        self.assertIsNotNone(summaries[0]["fitted_mixture_frequency"])
+        self.assertIsNotNone(summaries[1]["fitted_mixture_frequency"])
+        self.assertIn(
+            "fitted_fractional_period_shift_from_initialization",
+            summaries[0],
+        )
 
     def test_constraint_strategy_records_global_interval_limitation(self):
         with mock.patch.object(
@@ -460,6 +523,10 @@ class TestConsensusMulticompFit(unittest.TestCase):
             self.lc,
             "_consensus_collect_initialization_diagnostics",
             return_value=_initialization_diagnostics(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_collect_fitted_mixture_diagnostics",
+            return_value=_fitted_diagnostics(),
         ), mock.patch.object(
             self.lc,
             "fit",
@@ -570,6 +637,136 @@ class TestConsensusMulticompFit(unittest.TestCase):
                     requested_consensus_scales=np.array([0.1, 0.2], dtype=float),
                     consensus_guess=bad_guess,
                 )
+
+    def test_collect_fitted_mixture_diagnostics_computes_expected_values(self):
+        self.lc.model = _MockInitializableSpectralMixtureModel()
+        self.lc._model_pars = {
+            "covar_module.mixture_means": {"module": self.lc.model.covar_module},
+            "covar_module.mixture_scales": {"module": self.lc.model.covar_module},
+        }
+        with mock.patch.object(
+            self.lc,
+            "_consensus_resolve_time_spectral_mixture_keys",
+            return_value={
+                "mixture_means": "covar_module.mixture_means",
+                "mixture_scales": "covar_module.mixture_scales",
+            },
+        ):
+            self.lc.model.initialize(
+                **{
+                    "covar_module.mixture_means": torch.tensor(
+                        [[[1.02], [2.98]]], dtype=torch.float32
+                    ),
+                    "covar_module.mixture_scales": torch.tensor(
+                        [[[0.11], [0.21]]], dtype=torch.float32
+                    ),
+                }
+            )
+            diagnostics = self.lc._consensus_collect_fitted_mixture_diagnostics(
+                initialized_mixture_frequencies=np.array([1.01, 2.99], dtype=float),
+                initialized_mixture_scales=np.array([0.1, 0.2], dtype=float),
+            )
+
+        np.testing.assert_allclose(
+            diagnostics["fitted_mixture_frequencies"], [1.02, 2.98], atol=1e-6, rtol=0.0
+        )
+        np.testing.assert_allclose(
+            diagnostics["fitted_mixture_periods"],
+            [1.0 / 1.02, 1.0 / 2.98],
+            atol=1e-6,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            diagnostics["fitted_mixture_period_widths"],
+            [0.11 / (1.02**2), 0.21 / (2.98**2)],
+            atol=1e-6,
+            rtol=0.0,
+        )
+        self.assertEqual(
+            len(diagnostics["fitted_fractional_period_shift_from_initialization"]),
+            2,
+        )
+
+    def test_collect_fitted_mixture_diagnostics_raises_on_component_mismatch(self):
+        self.lc.model = _MockInitializableSpectralMixtureModel(n_components=1)
+        self.lc._model_pars = {
+            "covar_module.mixture_means": {"module": self.lc.model.covar_module},
+            "covar_module.mixture_scales": {"module": self.lc.model.covar_module},
+        }
+        with mock.patch.object(
+            self.lc,
+            "_consensus_resolve_time_spectral_mixture_keys",
+            return_value={
+                "mixture_means": "covar_module.mixture_means",
+                "mixture_scales": "covar_module.mixture_scales",
+            },
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "len\\(fitted_mixture_frequencies\\)=1 does not match "
+                "len\\(initialized_mixture_means\\)=2",
+            ):
+                self.lc._consensus_collect_fitted_mixture_diagnostics(
+                    initialized_mixture_frequencies=np.array([1.01, 2.99], dtype=float),
+                    initialized_mixture_scales=np.array([0.1, 0.2], dtype=float),
+                )
+
+    def test_training_iter_zero_keeps_fitted_close_to_initialized(self):
+        self.lc.model = _MockInitializableSpectralMixtureModel(n_components=2)
+        self.lc._model_pars = {
+            "covar_module.mixture_means": {"module": self.lc.model.covar_module},
+            "covar_module.mixture_scales": {"module": self.lc.model.covar_module},
+        }
+        with mock.patch.object(
+            self.lc,
+            "_consensus_collect_band_component_candidates",
+            return_value=_band_component_candidates(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_cluster_component_candidates",
+            return_value=_component_clusters(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_build_multicomponent_frequency_consensus",
+            return_value=_multicomponent_consensus(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_resolve_time_spectral_mixture_keys",
+            return_value={
+                "mixture_means": "covar_module.mixture_means",
+                "mixture_scales": "covar_module.mixture_scales",
+            },
+        ), mock.patch.object(
+            self.lc,
+            "fit",
+            return_value={"status": "ok"},
+        ):
+            self.lc._consensus_multicomp_fit(
+                model=None,
+                constrain_consensus=False,
+                training_iter=0,
+                _allow_existing_model_for_consensus=True,
+            )
+
+        diagnostics = self.lc.consensus_diagnostics
+        np.testing.assert_allclose(
+            diagnostics["fitted_mixture_frequencies"],
+            diagnostics["initialized_mixture_means"],
+            atol=1e-8,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            diagnostics["fitted_mixture_scales"],
+            diagnostics["initialized_mixture_scales"],
+            atol=1e-8,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            diagnostics["fitted_frequency_shift_from_initialization"],
+            [0.0, 0.0],
+            atol=1e-8,
+            rtol=0.0,
+        )
 
     def test_existing_consensus_dispatch_is_unchanged(self):
         with mock.patch.object(
