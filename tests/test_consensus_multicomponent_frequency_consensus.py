@@ -152,8 +152,13 @@ class TestConsensusMulticomponentFrequencyConsensus(unittest.TestCase):
             [summary["source_cluster_id"] for summary in result["component_summaries"]],
             [0, 1],
         )
-        self.assertEqual([summary["component_index"] for summary in result["component_summaries"]], [0, 1])
+        self.assertEqual(
+            [summary["component_index"] for summary in result["component_summaries"]],
+            [0, 1],
+        )
         self.assertEqual(result["consensus_frequencies"], [4.0, 1.0])
+        self.assertEqual(result["consensus_frequency_widths"], [0.2, 0.05])
+        self.assertEqual(result["consensus_scales"], [2.0, 2.0])
 
     def test_weighted_log_frequency_center_matches_expected_value(self):
         clusters = [
