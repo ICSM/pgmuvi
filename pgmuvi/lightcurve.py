@@ -12543,7 +12543,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             log_freqs = np.asarray(valid_log_frequencies, dtype=float)
             candidate_weights = np.asarray(raw_weights, dtype=float)
-            usable_weight_mask = np.isfinite(candidate_weights) & (candidate_weights > 0.0)
+            usable_weight_mask = np.isfinite(candidate_weights) & (
+                candidate_weights > 0.0
+            )
 
             if np.any(usable_weight_mask):
                 used_weights = candidate_weights[usable_weight_mask]
@@ -12557,7 +12559,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     if used_log_freqs.size > 1:
                         centered = used_log_freqs - consensus_log_frequency
                         measured_log_scatter = float(
-                            np.sqrt(np.sum(used_weights * centered * centered) / weight_sum)
+                            np.sqrt(
+                                np.sum(used_weights * centered * centered) / weight_sum
+                            )
                         )
                     else:
                         measured_log_scatter = 0.0
