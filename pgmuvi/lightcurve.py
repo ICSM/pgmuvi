@@ -10298,19 +10298,80 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         }
 
         if include_wavelengths:
-            band_arr = np.asarray(self.band, dtype=str)
-            band_to_wavelength = {}
-            for band_label in per_band_lc:
-                mask_np = band_arr == band_label
-                if np.any(mask_np):
-                    band_to_wavelength[band_label] = float(
-                        self._xdata_raw[mask_np, 1][0].item()
-                    )
-                else:
-                    band_to_wavelength[band_label] = None
-            prepared["band_to_wavelength"] = band_to_wavelength
+            prepared["band_to_wavelength"] = (
+                self._consensus_build_band_wavelength_map(per_band_lc.keys())
+            )
 
         return prepared
+
+    def _consensus_build_band_wavelength_map(self, band_labels):
+        """Map each band label to a representative wavelength value.
+
+        Returns ``None`` for bands that cannot be mapped safely (missing rows,
+        missing wavelength column, or non-numeric values).
+        """
+        band_to_wavelength = {str(label): None for label in band_labels}
+        band_arr = np.asarray(self.band, dtype=str)
+
+        try:
+            xdata_np = np.asarray(self._xdata_raw)
+        except Exception:
+            return band_to_wavelength
+
+        if xdata_np.ndim != 2 or xdata_np.shape[1] < 2:
+            return band_to_wavelength
+
+        for band_label in band_to_wavelength:
+            mask_np = band_arr == band_label
+            if not np.any(mask_np):
+                continue
+            try:
+                band_wavelengths = xdata_np[mask_np, 1]
+            except Exception:
+                continue
+            if np.size(band_wavelengths) == 0:
+                continue
+            try:
+                band_to_wavelength[band_label] = float(
+                    np.ravel(band_wavelengths)[0]
+                )
+            except (TypeError, ValueError):
+                band_to_wavelength[band_label] = None
+
+        return band_to_wavelength
+
+    @staticmethod
+    def _consensus_lookup_ls_peak_metadata(
+        *,
+        ls_frequency,
+        freq_grid,
+        power_grid,
+        peak_idx_to_prominence,
+        rtol=1e-7,
+        atol=1e-12,
+    ):
+        """Resolve LS peak metadata only when the frequency is grid-aligned."""
+        peak_power = np.nan
+        peak_prominence = np.nan
+
+        ls_freq = float(ls_frequency)
+        if not np.isfinite(ls_freq):
+            return peak_power, peak_prominence
+
+        freq_np = np.asarray(freq_grid, dtype=float)
+        power_np = np.asarray(power_grid, dtype=float)
+        if freq_np.size == 0 or power_np.size == 0:
+            return peak_power, peak_prominence
+
+        closest_idx = int(np.argmin(np.abs(freq_np - ls_freq)))
+        if closest_idx < 0 or closest_idx >= power_np.size:
+            return peak_power, peak_prominence
+        if not np.isclose(freq_np[closest_idx], ls_freq, rtol=rtol, atol=atol):
+            return peak_power, peak_prominence
+
+        peak_power = float(power_np[closest_idx])
+        peak_prominence = float(peak_idx_to_prominence.get(closest_idx, np.nan))
+        return peak_power, peak_prominence
 
     @staticmethod
     def _consensus_extract_band_ls_candidates(
@@ -10384,15 +10445,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             }
 
             if include_peak_metadata:
-                if freq_np.size > 0:
-                    closest_idx = int(np.argmin(np.abs(freq_np - ls_freq)))
-                    candidate["peak_power"] = float(power_np[closest_idx])
-                    candidate["peak_prominence"] = float(
-                        peak_idx_to_prominence.get(closest_idx, np.nan)
+                peak_power, peak_prominence = (
+                    Lightcurve._consensus_lookup_ls_peak_metadata(
+                        ls_frequency=ls_freq,
+                        freq_grid=freq_np,
+                        power_grid=power_np,
+                        peak_idx_to_prominence=peak_idx_to_prominence,
                     )
-                else:
-                    candidate["peak_power"] = np.nan
-                    candidate["peak_prominence"] = np.nan
+                )
+                candidate["peak_power"] = peak_power
+                candidate["peak_prominence"] = peak_prominence
 
             candidates.append(candidate)
 
