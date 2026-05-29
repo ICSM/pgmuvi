@@ -478,6 +478,46 @@ class TestConsensusMulticompFit(unittest.TestCase):
             "fitted_fractional_period_shift_from_initialization",
             summaries[0],
         )
+        expected_abs_period_shift = np.abs(
+            np.asarray(
+                diagnostics["fitted_fractional_period_shift_from_initialization"],
+                dtype=float,
+            )
+        )
+        expected_abs_frequency_shift = np.abs(
+            np.asarray(
+                diagnostics["fitted_fractional_frequency_shift_from_initialization"],
+                dtype=float,
+            )
+        )
+        np.testing.assert_allclose(
+            diagnostics["max_abs_fractional_period_shift_from_initialization"],
+            float(np.max(expected_abs_period_shift)),
+            rtol=0.0,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            diagnostics["max_abs_fractional_frequency_shift_from_initialization"],
+            float(np.max(expected_abs_frequency_shift)),
+            rtol=0.0,
+            atol=1e-12,
+        )
+        self.assertEqual(diagnostics["component_fit_drift_flags"], [False, False])
+        self.assertEqual(diagnostics["components_with_large_period_drift"], [])
+        self.assertEqual(diagnostics["components_with_large_frequency_drift"], [])
+        self.assertEqual(diagnostics["drift_warning_fraction"], 0.10)
+        for entry in summaries:
+            self.assertIn(
+                "fitted_abs_fractional_period_shift_from_initialization",
+                entry,
+            )
+            self.assertIn(
+                "fitted_abs_fractional_frequency_shift_from_initialization",
+                entry,
+            )
+            self.assertIn("fitted_period_drift_flag", entry)
+            self.assertIn("fitted_frequency_drift_flag", entry)
+            self.assertFalse(entry["fitted_period_drift_flag"])
 
     def test_constraint_strategy_records_global_interval_limitation(self):
         with mock.patch.object(
@@ -548,6 +588,58 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(
             diagnostics["initialization_strategy"],
             "per_component_consensus_initialization",
+        )
+
+    def test_large_period_drift_is_flagged(self):
+        fitted_diag = _mock_fitted_diagnostics()
+        fitted_diag["fitted_fractional_period_shift_from_initialization"] = [0.0403, -0.124]
+        fitted_diag["fitted_fractional_frequency_shift_from_initialization"] = [
+            -0.0387,
+            0.1415,
+        ]
+        with mock.patch.object(
+            self.lc,
+            "_consensus_collect_band_component_candidates",
+            return_value=_band_component_candidates(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_cluster_component_candidates",
+            return_value=_component_clusters(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_build_multicomponent_frequency_consensus",
+            return_value=_multicomponent_consensus(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_build_guess",
+            return_value={"dummy_guess": 1.0},
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_collect_initialization_diagnostics",
+            return_value=_initialization_diagnostics(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_collect_fitted_mixture_diagnostics",
+            return_value=fitted_diag,
+        ), mock.patch.object(
+            self.lc,
+            "fit",
+            return_value={"status": "ok"},
+        ):
+            self.lc._consensus_multicomp_fit(
+                model=None,
+                constrain_consensus=False,
+                _allow_existing_model_for_consensus=True,
+            )
+
+        diagnostics = self.lc.consensus_diagnostics
+        self.assertEqual(diagnostics["component_fit_drift_flags"], [False, True])
+        self.assertEqual(diagnostics["components_with_large_period_drift"], [1])
+        self.assertEqual(diagnostics["components_with_large_frequency_drift"], [1])
+        self.assertAlmostEqual(
+            diagnostics["max_abs_fractional_period_shift_from_initialization"],
+            0.124,
+            places=12,
         )
 
     def test_collect_initialization_diagnostics_matches_requested_parameters(self):

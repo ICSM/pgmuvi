@@ -93,6 +93,22 @@ def _make_multicomp_diagnostics():
         "consensus_period_widths": [5.0, 2.0],
         "initialized_mixture_periods": [99.0, 51.0],
         "fitted_mixture_periods": [101.0, 49.5],
+        "fitted_fractional_period_shift_from_initialization": [
+            (101.0 - 99.0) / 99.0,
+            (49.5 - 51.0) / 51.0,
+        ],
+        "fitted_fractional_frequency_shift_from_initialization": [
+            (1.0 / 101.0 - 1.0 / 99.0) / (1.0 / 99.0),
+            (1.0 / 49.5 - 1.0 / 51.0) / (1.0 / 51.0),
+        ],
+        "max_abs_fractional_period_shift_from_initialization": abs((49.5 - 51.0) / 51.0),
+        "max_abs_fractional_frequency_shift_from_initialization": abs(
+            (1.0 / 49.5 - 1.0 / 51.0) / (1.0 / 51.0)
+        ),
+        "component_fit_drift_flags": [False, False],
+        "components_with_large_period_drift": [],
+        "components_with_large_frequency_drift": [],
+        "drift_warning_fraction": 0.10,
         "consensus_component_strengths": [0.8, 0.6],
         "multicomponent_period_summaries": [
             {
@@ -104,6 +120,20 @@ def _make_multicomp_diagnostics():
                 "consensus_component_strength": 0.8,
                 "initialized_mixture_period": 99.0,
                 "fitted_mixture_period": 101.0,
+                "fitted_fractional_period_shift_from_initialization": (
+                    (101.0 - 99.0) / 99.0
+                ),
+                "fitted_fractional_frequency_shift_from_initialization": (
+                    (1.0 / 101.0 - 1.0 / 99.0) / (1.0 / 99.0)
+                ),
+                "fitted_abs_fractional_period_shift_from_initialization": abs(
+                    (101.0 - 99.0) / 99.0
+                ),
+                "fitted_abs_fractional_frequency_shift_from_initialization": abs(
+                    (1.0 / 101.0 - 1.0 / 99.0) / (1.0 / 99.0)
+                ),
+                "fitted_period_drift_flag": False,
+                "fitted_frequency_drift_flag": False,
                 "member_bands": ["g", "r"],
             },
             {
@@ -115,6 +145,20 @@ def _make_multicomp_diagnostics():
                 "consensus_component_strength": 0.6,
                 "initialized_mixture_period": 51.0,
                 "fitted_mixture_period": 49.5,
+                "fitted_fractional_period_shift_from_initialization": (
+                    (49.5 - 51.0) / 51.0
+                ),
+                "fitted_fractional_frequency_shift_from_initialization": (
+                    (1.0 / 49.5 - 1.0 / 51.0) / (1.0 / 51.0)
+                ),
+                "fitted_abs_fractional_period_shift_from_initialization": abs(
+                    (49.5 - 51.0) / 51.0
+                ),
+                "fitted_abs_fractional_frequency_shift_from_initialization": abs(
+                    (1.0 / 49.5 - 1.0 / 51.0) / (1.0 / 51.0)
+                ),
+                "fitted_period_drift_flag": False,
+                "fitted_frequency_drift_flag": False,
                 "member_bands": ["g", "i"],
             },
         ],
@@ -2359,8 +2403,35 @@ class TestConsensusMulticompPeriodSummary(unittest.TestCase):
         self.assertIn("Consensus period: 100", text)
         self.assertIn("Fitted period: 101", text)
         self.assertIn("Initialized period: 99", text)
+        self.assertIn("Drift from initialization:", text)
         self.assertIn("Component 1", text)
         self.assertIn("Consensus period: 50", text)
+
+    def test_to_text_does_not_warn_when_all_drifts_below_threshold(self):
+        text = self.summary.to_text()
+        self.assertNotIn("[warning: large drift]", text)
+        self.assertNotIn("shifted by more than", text)
+
+    def test_to_text_warns_when_component_exceeds_drift_threshold(self):
+        diag = _make_multicomp_diagnostics()
+        diag["drift_warning_fraction"] = 0.10
+        diag["component_fit_drift_flags"] = [False, True]
+        diag["components_with_large_period_drift"] = [1]
+        diag["multicomponent_period_summaries"][1][
+            "fitted_fractional_period_shift_from_initialization"
+        ] = -0.124
+        diag["multicomponent_period_summaries"][1][
+            "fitted_abs_fractional_period_shift_from_initialization"
+        ] = 0.124
+        diag["multicomponent_period_summaries"][1]["fitted_period_drift_flag"] = True
+        self.lc.consensus_diagnostics = diag
+        summary = self.lc.get_period_summary()
+        text = summary.to_text()
+        self.assertIn("[warning: large drift]", text)
+        self.assertIn(
+            "Warning: 1 component shifted by more than 10% from consensus initialization.",
+            text,
+        )
 
     def test_write_json_multicomp_fields_json_safe(self):
         import json
