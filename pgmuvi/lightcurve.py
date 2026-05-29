@@ -14971,8 +14971,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             requested_consensus_scales=consensus_frequency_width,
             consensus_guess=consensus_guess,
         )
-        initialization_diagnostics["requested_consensus_frequency_widths"] = list(
-            np.asarray(consensus_frequency_width, dtype=float).ravel()
+        initialization_diagnostics["requested_consensus_frequency_widths"] = (
+            np.asarray(consensus_frequency_width, dtype=float).ravel().tolist()
         )
         result_diagnostics.update(initialization_diagnostics)
         self._last_consensus_fit_info = {
