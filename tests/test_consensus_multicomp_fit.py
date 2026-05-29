@@ -505,6 +505,16 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(diagnostics["component_fit_drift_flags"], [False, False])
         self.assertEqual(diagnostics["components_with_large_period_drift"], [])
         self.assertEqual(diagnostics["components_with_large_frequency_drift"], [])
+        self.assertEqual(diagnostics["nearest_initialized_component_index"], [0, 1])
+        np.testing.assert_allclose(
+            diagnostics["nearest_initialized_component_fractional_period_distance"],
+            [abs((1.0 / 1.02 - 1.0 / 1.01) / (1.0 / 1.01)), abs((1.0 / 2.98 - 1.0 / 2.99) / (1.0 / 2.99))],
+            rtol=0.0,
+            atol=1e-12,
+        )
+        self.assertEqual(diagnostics["component_identity_preserved"], [True, True])
+        self.assertTrue(diagnostics["all_component_identities_preserved"])
+        self.assertEqual(diagnostics["possible_component_swaps"], [])
         self.assertEqual(diagnostics["drift_warning_fraction"], 0.10)
         for entry in summaries:
             self.assertIn(
@@ -517,6 +527,12 @@ class TestConsensusMulticompFit(unittest.TestCase):
             )
             self.assertIn("fitted_period_drift_flag", entry)
             self.assertIn("fitted_frequency_drift_flag", entry)
+            self.assertIn("nearest_initialized_component_index", entry)
+            self.assertIn(
+                "nearest_initialized_component_fractional_period_distance",
+                entry,
+            )
+            self.assertIn("component_identity_preserved", entry)
             self.assertFalse(entry["fitted_period_drift_flag"])
 
     def test_constraint_strategy_records_global_interval_limitation(self):
@@ -640,6 +656,79 @@ class TestConsensusMulticompFit(unittest.TestCase):
             diagnostics["max_abs_fractional_period_shift_from_initialization"],
             0.124,
             places=12,
+        )
+
+    def test_component_identity_swap_is_detected(self):
+        fitted_diag = _mock_fitted_diagnostics()
+        fitted_diag["fitted_mixture_frequencies"] = [2.98, 1.02]
+        fitted_diag["fitted_mixture_periods"] = [1.0 / 2.98, 1.0 / 1.02]
+        fitted_diag["fitted_frequency_shift_from_initialization"] = [1.97, -1.97]
+        fitted_diag["fitted_period_shift_from_initialization"] = [
+            (1.0 / 2.98) - (1.0 / 1.01),
+            (1.0 / 1.02) - (1.0 / 2.99),
+        ]
+        fitted_diag["fitted_fractional_frequency_shift_from_initialization"] = [
+            1.97 / 1.01,
+            -1.97 / 2.99,
+        ]
+        fitted_diag["fitted_fractional_period_shift_from_initialization"] = [
+            ((1.0 / 2.98) - (1.0 / 1.01)) / (1.0 / 1.01),
+            ((1.0 / 1.02) - (1.0 / 2.99)) / (1.0 / 2.99),
+        ]
+        with mock.patch.object(
+            self.lc,
+            "_consensus_collect_band_component_candidates",
+            return_value=_band_component_candidates(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_cluster_component_candidates",
+            return_value=_component_clusters(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_build_multicomponent_frequency_consensus",
+            return_value=_multicomponent_consensus(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_build_guess",
+            return_value={"dummy_guess": 1.0},
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_collect_initialization_diagnostics",
+            return_value=_initialization_diagnostics(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_collect_fitted_mixture_diagnostics",
+            return_value=fitted_diag,
+        ), mock.patch.object(
+            self.lc,
+            "fit",
+            return_value={"status": "ok"},
+        ):
+            self.lc._consensus_multicomp_fit(
+                model=None,
+                constrain_consensus=False,
+                _allow_existing_model_for_consensus=True,
+            )
+        diagnostics = self.lc.consensus_diagnostics
+        self.assertEqual(diagnostics["nearest_initialized_component_index"], [1, 0])
+        self.assertEqual(diagnostics["component_identity_preserved"], [False, False])
+        self.assertFalse(diagnostics["all_component_identities_preserved"])
+        self.assertEqual(diagnostics["possible_component_swaps"], [0, 1])
+
+    def test_component_identity_tie_uses_lower_index(self):
+        identity = Lightcurve._consensus_compute_component_identity_diagnostics(
+            initialized_periods=[1.0, 3.0],
+            fitted_periods=[1.5, 3.0],
+            initialized_frequencies=[1.0, 1.0 / 3.0],
+            fitted_frequencies=[2.0 / 3.0, 1.0 / 3.0],
+        )
+        self.assertEqual(identity["nearest_initialized_component_index"], [0, 1])
+        self.assertEqual(identity["component_identity_preserved"], [True, True])
+        np.testing.assert_allclose(
+            identity["nearest_initialized_component_fractional_period_distance"],
+            [0.5, 0.0],
+            rtol=0.0,
+            atol=1e-12,
         )
 
     def test_collect_initialization_diagnostics_matches_requested_parameters(self):
