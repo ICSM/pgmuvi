@@ -158,9 +158,10 @@ def _multicomponent_consensus():
 def _initialization_diagnostics():
     return {
         "requested_consensus_frequencies": [1.01, 2.99],
-        "requested_consensus_scales": [7.0, 3.8],
+        "requested_consensus_scales": [0.1, 0.2],
+        "requested_consensus_frequency_widths": [0.1, 0.2],
         "initialized_mixture_means": [1.01, 2.99],
-        "initialized_mixture_scales": [7.0, 3.8],
+        "initialized_mixture_scales": [0.1, 0.2],
         "initialization_strategy": "per_component_consensus_initialization",
     }
 
@@ -265,7 +266,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         )
         np.testing.assert_allclose(
             guess_mock.call_args.kwargs["scales"],
-            np.array([7.0, 3.8]),
+            np.array([0.1, 0.2]),
         )
         self.assertEqual(fit_mock.call_args.kwargs["num_mixtures"], 2)
         self.assertEqual(self.lc.consensus_diagnostics["n_components"], 2)
@@ -342,6 +343,8 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(diagnostics["consensus_frequencies"], [1.01, 2.99])
         self.assertEqual(diagnostics["consensus_frequency_widths"], [0.1, 0.2])
         self.assertEqual(diagnostics["consensus_scales"], [7.0, 3.8])
+        self.assertEqual(diagnostics["consensus_component_strengths"], [7.0, 3.8])
+        self.assertEqual(diagnostics["consensus_mixture_init_scales"], [0.1, 0.2])
         self.assertEqual(diagnostics["trusted_candidate_count"], 4)
         self.assertIsNone(diagnostics["median_frequency"])
         self.assertIsNone(diagnostics["consensus_frequency"])
@@ -355,7 +358,9 @@ class TestConsensusMulticompFit(unittest.TestCase):
             "per_component_consensus_initialization",
         )
         self.assertEqual(diagnostics["requested_consensus_frequencies"], [1.01, 2.99])
+        self.assertEqual(diagnostics["requested_consensus_frequency_widths"], [0.1, 0.2])
         self.assertEqual(diagnostics["initialized_mixture_means"], [1.01, 2.99])
+        self.assertEqual(diagnostics["initialized_mixture_scales"], [0.1, 0.2])
 
     def test_constraint_strategy_records_global_interval_limitation(self):
         with mock.patch.object(
@@ -436,7 +441,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
                 dtype=torch.float32,
             ),
             "covar_module.mixture_scales": torch.tensor(
-                [[[7.0], [3.8]]],
+                [[[0.1], [0.2]]],
                 dtype=torch.float32,
             ),
         }
@@ -450,7 +455,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         ):
             diagnostics = self.lc._consensus_collect_initialization_diagnostics(
                 requested_consensus_frequencies=np.array([1.01, 2.99], dtype=float),
-                requested_consensus_scales=np.array([7.0, 3.8], dtype=float),
+                requested_consensus_scales=np.array([0.1, 0.2], dtype=float),
                 consensus_guess=consensus_guess,
             )
 
@@ -462,7 +467,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         )
         np.testing.assert_allclose(
             diagnostics["initialized_mixture_scales"],
-            [7.0, 3.8],
+            [0.1, 0.2],
             atol=1e-6,
             rtol=0.0,
         )
@@ -496,7 +501,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
             ):
                 self.lc._consensus_collect_initialization_diagnostics(
                     requested_consensus_frequencies=np.array([1.01, 2.99], dtype=float),
-                    requested_consensus_scales=np.array([7.0, 3.8], dtype=float),
+                    requested_consensus_scales=np.array([0.1, 0.2], dtype=float),
                     consensus_guess=bad_guess,
                 )
 
