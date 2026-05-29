@@ -10374,7 +10374,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"(frequencies shape={initialized_frequencies.shape}, "
                 f"scales shape={initialized_scales.shape})."
             )
-        if not np.all(np.isfinite(initialized_frequencies) & (initialized_frequencies > 0.0)):
+        if not np.all(
+            np.isfinite(initialized_frequencies) & (initialized_frequencies > 0.0)
+        ):
             raise RuntimeError(
                 "Consensus multi-component fitted diagnostics mismatch: "
                 "initialized mixture frequencies must be finite and strictly "
