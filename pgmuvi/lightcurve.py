@@ -2169,8 +2169,9 @@ class PeriodSummaryResult:
             if large_period_drift_count > 0:
                 lines.append(
                     "Warning: "
-                    f"{large_period_drift_count} component"
-                    f"{'' if large_period_drift_count == 1 else 's'} shifted by "
+                    f"{large_period_drift_count} "
+                    f"{'component' if large_period_drift_count == 1 else 'components'} "
+                    "shifted by "
                     f"more than {drift_threshold * 100.0:g}% from consensus "
                     "initialization."
                 )
@@ -12389,16 +12390,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "component lengths."
                     )
                 drift_warning_fraction = diagnostics.get("drift_warning_fraction")
-                if not (
-                    drift_warning_fraction is not None
-                    and np.isfinite(float(drift_warning_fraction))
-                    and float(drift_warning_fraction) >= 0
-                ):
+                if drift_warning_fraction is None:
                     raise RuntimeError(
                         "consensus_success is True for 'consensus_multicomp' but "
                         "'drift_warning_fraction' is missing or invalid."
                     )
                 drift_warning_fraction = float(drift_warning_fraction)
+                if not (
+                    np.isfinite(drift_warning_fraction)
+                    and drift_warning_fraction >= 0
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'drift_warning_fraction' is missing or invalid."
+                    )
                 abs_period_shift = np.abs(
                     np.asarray(
                         diagnostics.get(
@@ -12483,7 +12488,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 observed_period_flags = [
                     bool(flag) for flag in component_fit_drift_flags
                 ]
-                if observed_period_flags != [bool(flag) for flag in expected_period_flags]:
+                if observed_period_flags != expected_period_flags:
                     raise RuntimeError(
                         "consensus_success is True for 'consensus_multicomp' but "
                         "'component_fit_drift_flags' does not match fitted period "
