@@ -9051,6 +9051,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             constrain the spectral-mixture fit.
             ``"consensus_multicomp"`` and ``"consensus_relaxed"`` are currently
             placeholders and still raise ``NotImplementedError``.
+            The future ``"consensus_multicomp"`` path is intended to:
+            (i) extract per-band multi-component frequency candidates,
+            (ii) match components across bands in frequency space,
+            (iii) aggregate matched components into a multi-component consensus,
+            and (iv) initialize/constrain the final 2D spectral-mixture fit.
             Additional ``"consensus"`` controls accepted via ``**kwargs``:
             ``min_points_per_band``, ``max_gap_fraction``,
             ``min_duty_cycle``, ``outlier_sigma``, ``use_acf``,
@@ -13509,9 +13514,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return fit_result
 
     def _consensus_multicomp_fit(self, **fit_kwargs):
-        """Frequency-space consensus-fit stub for multi-component fitting."""
+        """Stub for future cross-band multi-component consensus fitting.
+
+        This path is reserved for a future workflow that combines:
+        (i) per-band multi-component candidate extraction,
+        (ii) cross-band component matching in frequency space,
+        (iii) multi-component consensus aggregation, and
+        (iv) final 2D GP initialization/constraint plumbing.
+        """
         raise NotImplementedError(
-            "fit_strategy='consensus_multicomp' is not implemented yet."
+            "fit_strategy='consensus_multicomp' is not implemented yet. Planned "
+            "workflow: per-band multi-component candidate extraction, cross-band "
+            "component matching in frequency space, multi-component consensus "
+            "aggregation, then 2D GP initialization/constraint plumbing."
         )
 
     def _consensus_relaxed_fit(self, **fit_kwargs):
