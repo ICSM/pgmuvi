@@ -11691,12 +11691,33 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         consensus_success = diagnostics["consensus_success"]
         if consensus_success:
             consensus_frequency = diagnostics.get("consensus_frequency")
+            consensus_frequencies = diagnostics.get("consensus_frequencies")
             n_accepted_bands = diagnostics["n_accepted_bands"]
             trusted_candidate_count = diagnostics.get("trusted_candidate_count")
-            if consensus_frequency is None:
+            has_scalar_consensus_frequency = consensus_frequency is not None
+            has_vector_consensus_frequencies = False
+            if consensus_frequencies is not None:
+                try:
+                    consensus_frequencies_arr = np.asarray(
+                        consensus_frequencies, dtype=float
+                    ).ravel()
+                except Exception:
+                    consensus_frequencies_arr = np.asarray([], dtype=float)
+                has_vector_consensus_frequencies = bool(
+                    consensus_frequencies_arr.size > 0
+                    and np.all(
+                        np.isfinite(consensus_frequencies_arr)
+                        & (consensus_frequencies_arr > 0)
+                    )
+                )
+            if not (
+                has_scalar_consensus_frequency
+                or has_vector_consensus_frequencies
+            ):
                 raise RuntimeError(
-                    "consensus_success is True but 'consensus_frequency' "
-                    "is None."
+                    "consensus_success is True but neither a scalar "
+                    "'consensus_frequency' nor valid positive "
+                    "'consensus_frequencies' were provided."
                 )
             if n_accepted_bands <= 0:
                 raise RuntimeError(
@@ -14004,7 +14025,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if consensus_frequency_width is None:
                 floor_width = np.maximum(consensus_frequencies * 0.01, 1.0e-8)
                 consensus_frequency_width = floor_width
-            _median_frequency = float(np.median(consensus_frequencies))
             _mad_frequency_scatter = float(
                 np.median(
                     np.abs(consensus_frequencies - np.median(consensus_frequencies))
@@ -14019,15 +14039,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "per_band_dominant_frequencies": {},
                 "candidate_count": int(consensus_frequencies.size),
                 "trusted_candidate_count": int(consensus_frequencies.size),
-                "consensus_frequency": _median_frequency,
-                "consensus_period": float(1.0 / _median_frequency),
-                "consensus_frequency_width": float(
-                    np.median(consensus_frequency_width)
-                ),
+                "consensus_frequency": None,
+                "consensus_period": None,
+                "consensus_frequency_width": None,
                 "consensus_frequency_scatter": _mad_frequency_scatter,
-                "median_frequency": _median_frequency,
+                "median_frequency": None,
                 "mad_frequency_scatter": _mad_frequency_scatter,
-                "final_consensus_frequency": _median_frequency,
+                "final_consensus_frequency": None,
+                "final_consensus_period": None,
+                "robust_frequency_width": None,
                 "final_constraint_bounds": None,
                 "controls": {
                     "outlier_sigma": outlier_sigma,
@@ -14286,11 +14306,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fit_kwargs["guess"] = merged_guess
         fit_kwargs["fit_strategy"] = None
 
-        _consensus_frequency_raw = result_diagnostics.get("consensus_frequency")
+        _consensus_frequencies_raw = result_diagnostics.get("consensus_frequencies")
+        _consensus_frequencies_arr = np.asarray(
+            _consensus_frequencies_raw if _consensus_frequencies_raw is not None else [],
+            dtype=float,
+        ).ravel()
         _consensus_frequency_ready = bool(
-            _consensus_frequency_raw is not None
-            and np.isfinite(float(_consensus_frequency_raw))
-            and float(_consensus_frequency_raw) > 0
+            _consensus_frequencies_arr.size > 0
+            and np.all(
+                np.isfinite(_consensus_frequencies_arr)
+                & (_consensus_frequencies_arr > 0)
+            )
         )
         _trusted_candidate_count = result_diagnostics.get("trusted_candidate_count")
         _trusted_candidate_ready = bool(
@@ -14521,10 +14547,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         n_components = initialization_payload["n_components"]
 
         fit_kwargs["num_mixtures"] = n_components
-        median_frequency = float(np.median(consensus_frequencies))
-        median_width = float(np.median(consensus_frequency_width))
         mad_frequency_scatter = float(
-            np.median(np.abs(consensus_frequencies - median_frequency))
+            np.median(
+                np.abs(consensus_frequencies - np.median(consensus_frequencies))
+            )
+        )
+        trusted_candidate_count = int(
+            sum(
+                len(cluster.get("members") or [])
+                for cluster in accepted_clusters
+                if isinstance(cluster, dict)
+            )
         )
         result_diagnostics.update({
             "n_components": int(n_components),
@@ -14535,16 +14568,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     if isinstance(entry, dict)
                 )
             ),
-            "trusted_candidate_count": int(n_components),
-            "consensus_frequency": median_frequency,
-            "consensus_period": float(1.0 / median_frequency),
-            "consensus_frequency_width": median_width,
+            "trusted_candidate_count": trusted_candidate_count,
+            "consensus_frequency": None,
+            "consensus_period": None,
+            "consensus_frequency_width": None,
             "consensus_frequency_scatter": mad_frequency_scatter,
-            "median_frequency": median_frequency,
+            "median_frequency": None,
             "mad_frequency_scatter": mad_frequency_scatter,
-            "final_consensus_frequency": median_frequency,
-            "final_consensus_period": float(1.0 / median_frequency),
-            "robust_frequency_width": median_width,
+            "final_consensus_frequency": None,
+            "final_consensus_period": None,
+            "robust_frequency_width": None,
             "consensus_frequencies": consensus_frequencies.tolist(),
             "consensus_frequency_widths": consensus_frequency_width.tolist(),
             "consensus_scales": consensus_scales.tolist(),

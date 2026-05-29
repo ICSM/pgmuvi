@@ -304,6 +304,13 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(diagnostics["consensus_frequencies"], [1.01, 2.99])
         self.assertEqual(diagnostics["consensus_frequency_widths"], [0.1, 0.2])
         self.assertEqual(diagnostics["consensus_scales"], [7.0, 3.8])
+        self.assertEqual(diagnostics["trusted_candidate_count"], 4)
+        self.assertIsNone(diagnostics["median_frequency"])
+        self.assertIsNone(diagnostics["consensus_frequency"])
+        self.assertIsNone(diagnostics["consensus_period"])
+        self.assertIsNone(diagnostics["final_consensus_frequency"])
+        self.assertIsNone(diagnostics["final_consensus_period"])
+        self.assertTrue(diagnostics["consensus_success"])
         self.assertEqual(diagnostics["constraint_strategy"], "constraints_disabled")
 
     def test_constraint_strategy_records_global_interval_limitation(self):
