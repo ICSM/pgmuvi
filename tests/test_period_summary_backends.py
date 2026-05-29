@@ -667,11 +667,13 @@ class TestConsensusMulticompKernelMetadata(unittest.TestCase):
     """
 
     def _make_1d_multicomp_summary(self):
+        """Return a multicomp PeriodSummaryResult for a 1-D SM model."""
         lc = _make_1d_lc("1D", num_mixtures=2)
         _make_multicomp_diagnostics_for_lc(lc)
         return lc.get_period_summary()
 
     def _make_2d_multicomp_summary(self):
+        """Return a multicomp PeriodSummaryResult for a 2D WL+SM model."""
         lc = _make_2d_lc(
             "2DWavelengthDependent",
             time_kernel_type="spectral_mixture",

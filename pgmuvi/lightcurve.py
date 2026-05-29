@@ -16778,14 +16778,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         _model_obj = getattr(self, "model", None)
         kernel = getattr(_model_obj, "sci_kernel", None)
-        # Top-level kernel family: unwrap one level of ScaleKernel/SKI wrapper
-        # so that e.g. ScaleKernel(SM) → SpectralMixtureKernel for 1-D models,
-        # while ProductKernel (2-D separable) stays as ProductKernel.
         kernel_family = self._kernel_family_name(getattr(kernel, "base_kernel", kernel))
-        # Time-kernel family: for separable 2-D models find the sub-kernel on
-        # dimension 0; for 1-D models this equals kernel_family.
         time_kernel_family = self._resolve_time_kernel_family(kernel)
-        # Model name from the fitted model class.
         _model_name = type(_model_obj).__name__ if _model_obj is not None else ""
 
         return PeriodSummaryResult(
