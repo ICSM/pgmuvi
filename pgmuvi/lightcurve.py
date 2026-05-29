@@ -12516,6 +12516,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else:
                 rejected_clusters.append(cluster)
 
+        def _cluster_id_sort_key(cluster):
+            cluster_id = cluster.get("cluster_id")
+            try:
+                cluster_id = int(cluster_id)
+            except (TypeError, ValueError):
+                return (1, float("inf"))
+            return (0, cluster_id)
+
+        accepted_clusters.sort(key=_cluster_id_sort_key)
+
         component_payloads = []
         for cluster in accepted_clusters:
             members = cluster.get("members") or []
@@ -12608,13 +12618,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "members": list(cluster.get("members") or []),
                 }
             )
-
-        component_payloads.sort(
-            key=lambda payload: (
-                float(payload["consensus_frequency"]),
-                float(payload["consensus_log_frequency"]),
-            )
-        )
 
         component_summaries = []
         consensus_frequencies = []

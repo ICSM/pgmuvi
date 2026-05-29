@@ -106,30 +106,13 @@ class TestConsensusMulticomponentFrequencyConsensus(unittest.TestCase):
         self.assertEqual(len(result["rejected_clusters"]), 1)
         self.assertEqual(result["rejected_clusters"][0]["cluster_id"], 99)
 
-    def test_consensus_arrays_are_sorted_by_increasing_frequency(self):
+    def test_cluster_id_ordering_is_preserved_in_consensus_outputs(self):
         clusters = [
-            {
-                "cluster_id": 2,
-                "accepted": True,
-                "rejection_reasons": [],
-                "member_bands": ["B", "C"],
-                "n_member_bands": 2,
-                "center_frequency": 4.0,
-                "center_period": 0.25,
-                "log_center_frequency": math.log(4.0),
-                "frequency_scatter": 0.0,
-                "log_frequency_scatter": 0.0,
-                "members": [
-                    {"band_name": "B", "frequency": 4.0, "peak_power": 1.0, "significant": True},
-                    {"band_name": "C", "frequency": 4.0, "peak_power": 1.0, "significant": True},
-                ],
-                "duplicate_band_candidates": [],
-            },
             {
                 "cluster_id": 1,
                 "accepted": True,
                 "rejection_reasons": [],
-                "member_bands": ["A", "D"],
+                "member_bands": ["B", "C"],
                 "n_member_bands": 2,
                 "center_frequency": 1.0,
                 "center_period": 1.0,
@@ -137,18 +120,40 @@ class TestConsensusMulticomponentFrequencyConsensus(unittest.TestCase):
                 "frequency_scatter": 0.0,
                 "log_frequency_scatter": 0.0,
                 "members": [
-                    {"band_name": "A", "frequency": 1.0, "peak_power": 1.0, "significant": True},
-                    {"band_name": "D", "frequency": 1.0, "peak_power": 1.0, "significant": True},
+                    {"band_name": "B", "frequency": 1.0, "peak_power": 1.0, "significant": True},
+                    {"band_name": "C", "frequency": 1.0, "peak_power": 1.0, "significant": True},
+                ],
+                "duplicate_band_candidates": [],
+            },
+            {
+                "cluster_id": 0,
+                "accepted": True,
+                "rejection_reasons": [],
+                "member_bands": ["A", "D"],
+                "n_member_bands": 2,
+                "center_frequency": 4.0,
+                "center_period": 0.25,
+                "log_center_frequency": math.log(4.0),
+                "frequency_scatter": 0.0,
+                "log_frequency_scatter": 0.0,
+                "members": [
+                    {"band_name": "A", "frequency": 4.0, "peak_power": 1.0, "significant": True},
+                    {"band_name": "D", "frequency": 4.0, "peak_power": 1.0, "significant": True},
                 ],
                 "duplicate_band_candidates": [],
             },
         ]
         result = self.lc._consensus_build_multicomponent_frequency_consensus(clusters)
-        self.assertEqual(sorted(result["consensus_frequencies"]), result["consensus_frequencies"])
+        self.assertEqual(
+            [cluster["cluster_id"] for cluster in result["accepted_clusters"]],
+            [0, 1],
+        )
         self.assertEqual(
             [summary["source_cluster_id"] for summary in result["component_summaries"]],
-            [1, 2],
+            [0, 1],
         )
+        self.assertEqual([summary["component_index"] for summary in result["component_summaries"]], [0, 1])
+        self.assertEqual(result["consensus_frequencies"], [4.0, 1.0])
 
     def test_weighted_log_frequency_center_matches_expected_value(self):
         clusters = [
