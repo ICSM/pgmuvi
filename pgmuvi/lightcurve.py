@@ -12471,6 +12471,177 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return clusters
 
+    def _consensus_build_multicomponent_frequency_consensus(
+        self,
+        component_clusters,
+        *,
+        min_width_fraction=0.05,
+    ):
+        """Build per-component frequency consensus from cross-band clusters.
+
+        This helper is the aggregation stage for future
+        ``fit_strategy='consensus_multicomp'`` support.  It consumes cluster
+        diagnostics from :meth:`_consensus_cluster_component_candidates` and
+        computes one consensus frequency/width/scale triplet per accepted
+        cluster.
+        """
+
+        def _as_positive_float_or_none(value):
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(numeric) or numeric <= 0.0:
+                return None
+            return numeric
+
+        def _member_base_weight(member):
+            peak_power = _as_positive_float_or_none(member.get("peak_power"))
+            if peak_power is None:
+                peak_power = 1.0
+            significance_factor = 1.0 if bool(member.get("significant")) else 0.5
+            return peak_power * significance_factor
+
+        min_width_fraction = _as_positive_float_or_none(min_width_fraction)
+        if min_width_fraction is None:
+            min_width_fraction = 0.05
+
+        accepted_clusters = []
+        rejected_clusters = []
+        for cluster in component_clusters or []:
+            if not isinstance(cluster, dict):
+                continue
+            if bool(cluster.get("accepted")):
+                accepted_clusters.append(cluster)
+            else:
+                rejected_clusters.append(cluster)
+
+        def _cluster_id_sort_key(cluster):
+            cluster_id = cluster.get("cluster_id")
+            try:
+                cluster_id = int(cluster_id)
+            except (TypeError, ValueError):
+                return (1, float("inf"))
+            return (0, cluster_id)
+
+        accepted_clusters.sort(key=_cluster_id_sort_key)
+
+        component_payloads = []
+        for cluster in accepted_clusters:
+            members = cluster.get("members") or []
+            valid_members = []
+            valid_log_frequencies = []
+            raw_weights = []
+            fallback_weights = []
+
+            for member in members:
+                if not isinstance(member, dict):
+                    continue
+                frequency = _as_positive_float_or_none(member.get("frequency"))
+                if frequency is None:
+                    continue
+                valid_members.append(member)
+                valid_log_frequencies.append(float(np.log(frequency)))
+                raw_weight = _member_base_weight(member)
+                raw_weights.append(raw_weight)
+                fallback_weights.append(
+                    1.0 if bool(member.get("significant")) else 0.5
+                )
+
+            if not valid_members:
+                continue
+
+            log_freqs = np.asarray(valid_log_frequencies, dtype=float)
+            candidate_weights = np.asarray(raw_weights, dtype=float)
+            usable_weight_mask = np.isfinite(candidate_weights) & (
+                candidate_weights > 0.0
+            )
+
+            if np.any(usable_weight_mask):
+                used_weights = candidate_weights[usable_weight_mask]
+                used_log_freqs = log_freqs[usable_weight_mask]
+                weight_sum = float(np.sum(used_weights))
+                if np.isfinite(weight_sum) and weight_sum > 0.0:
+                    consensus_method = "weighted_log_frequency_center"
+                    consensus_log_frequency = float(
+                        np.sum(used_weights * used_log_freqs) / weight_sum
+                    )
+                    if used_log_freqs.size > 1:
+                        centered = used_log_freqs - consensus_log_frequency
+                        measured_log_scatter = float(
+                            np.sqrt(
+                                np.sum(used_weights * centered * centered) / weight_sum
+                            )
+                        )
+                    else:
+                        measured_log_scatter = 0.0
+                    consensus_scale = weight_sum
+                else:
+                    usable_weight_mask[:] = False
+
+            if not np.any(usable_weight_mask):
+                consensus_method = "median_log_frequency_fallback"
+                consensus_log_frequency = float(np.median(log_freqs))
+                measured_log_scatter = (
+                    float(np.std(log_freqs, ddof=0)) if log_freqs.size > 1 else 0.0
+                )
+                fallback_weight_values = np.asarray(fallback_weights, dtype=float)
+                fallback_weight_values = fallback_weight_values[
+                    np.isfinite(fallback_weight_values) & (fallback_weight_values > 0.0)
+                ]
+                if fallback_weight_values.size == 0:
+                    consensus_scale = float(log_freqs.size)
+                else:
+                    consensus_scale = float(np.sum(fallback_weight_values))
+
+            consensus_frequency = float(np.exp(consensus_log_frequency))
+            consensus_period = float(1.0 / consensus_frequency)
+            measured_frequency_width = float(consensus_frequency * measured_log_scatter)
+            minimum_frequency_width = float(min_width_fraction * consensus_frequency)
+            consensus_frequency_width = float(
+                max(measured_frequency_width, minimum_frequency_width)
+            )
+
+            component_payloads.append(
+                {
+                    "source_cluster_id": cluster.get("cluster_id"),
+                    "consensus_frequency": consensus_frequency,
+                    "consensus_period": consensus_period,
+                    "consensus_log_frequency": consensus_log_frequency,
+                    "consensus_frequency_width": consensus_frequency_width,
+                    "consensus_scale": consensus_scale,
+                    "consensus_method": consensus_method,
+                    "member_bands": cluster.get("member_bands"),
+                    "n_member_bands": cluster.get("n_member_bands"),
+                    "frequency_scatter": cluster.get("frequency_scatter"),
+                    "log_frequency_scatter": cluster.get("log_frequency_scatter"),
+                    "members": list(cluster.get("members") or []),
+                }
+            )
+
+        component_summaries = []
+        consensus_frequencies = []
+        consensus_frequency_widths = []
+        consensus_scales = []
+        for component_index, payload in enumerate(component_payloads):
+            summary = dict(payload)
+            summary["component_index"] = component_index
+            component_summaries.append(summary)
+            consensus_frequencies.append(float(summary["consensus_frequency"]))
+            consensus_frequency_widths.append(float(summary["consensus_frequency_width"]))
+            consensus_scales.append(float(summary["consensus_scale"]))
+
+        return self._consensus_make_json_safe(
+            {
+                "consensus_frequencies": consensus_frequencies,
+                "consensus_frequency_widths": consensus_frequency_widths,
+                "consensus_scales": consensus_scales,
+                "accepted_clusters": accepted_clusters,
+                "rejected_clusters": rejected_clusters,
+                "component_summaries": component_summaries,
+            }
+        )
+
     @staticmethod
     def _consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs=None):
         """Build a safe, isolated kwarg dict for nested 1D GP validation fits.
