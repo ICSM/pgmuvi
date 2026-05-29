@@ -82,8 +82,18 @@ def _component_clusters(accepted=True):
             "frequency_scatter": 0.01,
             "log_frequency_scatter": 0.01,
             "members": [
-                {"band_name": "A", "frequency": 1.0, "peak_power": 4.0, "significant": True},
-                {"band_name": "B", "frequency": 1.02, "peak_power": 3.0, "significant": True},
+                {
+                    "band_name": "A",
+                    "frequency": 1.0,
+                    "peak_power": 4.0,
+                    "significant": True,
+                },
+                {
+                    "band_name": "B",
+                    "frequency": 1.02,
+                    "peak_power": 3.0,
+                    "significant": True,
+                },
             ],
             "duplicate_band_candidates": [],
         },
@@ -99,8 +109,18 @@ def _component_clusters(accepted=True):
             "frequency_scatter": 0.02,
             "log_frequency_scatter": 0.01,
             "members": [
-                {"band_name": "A", "frequency": 3.0, "peak_power": 2.0, "significant": True},
-                {"band_name": "B", "frequency": 2.98, "peak_power": 1.8, "significant": True},
+                {
+                    "band_name": "A",
+                    "frequency": 3.0,
+                    "peak_power": 2.0,
+                    "significant": True,
+                },
+                {
+                    "band_name": "B",
+                    "frequency": 2.98,
+                    "peak_power": 1.8,
+                    "significant": True,
+                },
             ],
             "duplicate_band_candidates": [],
         },
@@ -338,8 +358,12 @@ class TestConsensusMulticompFit(unittest.TestCase):
             )
 
         diagnostics = self.lc.consensus_diagnostics
-        self.assertEqual(diagnostics["constraint_strategy"], "global_frequency_interval")
-        self.assertEqual(diagnostics["consensus_constraint_bounds"], [0.71, 3.59])
+        self.assertEqual(
+            diagnostics["constraint_strategy"],
+            "global_frequency_interval",
+        )
+        self.assertAlmostEqual(diagnostics["consensus_constraint_bounds"][0], 0.71)
+        self.assertAlmostEqual(diagnostics["consensus_constraint_bounds"][1], 3.59)
 
     def test_existing_consensus_dispatch_is_unchanged(self):
         with mock.patch.object(
