@@ -10,8 +10,14 @@ import numpy as np
 from pgmuvi.lightcurve import Lightcurve
 
 
-def _make_dummy_lc():
-    """Create a minimal multiband lightcurve instance for helper tests."""
+def _make_minimal_multiband_lightcurve():
+    """Create a minimal multiband lightcurve instance for helper tests.
+
+    Returns
+    -------
+    Lightcurve
+        Two-band synthetic lightcurve with two points per band.
+    """
     t = np.array([0.0, 1.0, 0.0, 1.0], dtype=float)
     wl = np.array([1.0, 1.0, 2.0, 2.0], dtype=float)
     x = np.column_stack([t, wl])
@@ -22,7 +28,7 @@ def _make_dummy_lc():
 
 class TestConsensusComponentClustering(unittest.TestCase):
     def setUp(self):
-        self.lc = _make_dummy_lc()
+        self.lc = _make_minimal_multiband_lightcurve()
 
     def test_nearby_cross_band_candidates_cluster_together(self):
         candidates = [
@@ -271,7 +277,7 @@ class TestConsensusComponentClustering(unittest.TestCase):
         self.assertEqual(len(clusters), 2)
         self.assertTrue(all(cluster["accepted"] is False for cluster in clusters))
         self.assertTrue(
-            all(cluster["rejection_reasons"] for cluster in clusters),
+            all(len(cluster["rejection_reasons"]) > 0 for cluster in clusters),
             "Rejected clusters must include rejection reasons",
         )
 
@@ -283,7 +289,7 @@ class TestConsensusComponentClustering(unittest.TestCase):
                 "component_candidates": [
                     {
                         "frequency": -1.0,
-                        "period": -1.0,
+                        "period": 1.0,
                         "ls_rank": 0,
                         "peak_power": 1.0,
                         "peak_prominence": 1.0,

@@ -12258,6 +12258,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         This helper performs cross-band association for the staged
         ``fit_strategy='consensus_multicomp'`` implementation. It does not
         perform final consensus aggregation or GP fitting.
+
+        Parameters
+        ----------
+        band_component_candidates : list of dict
+            Per-band candidate structure returned by
+            :meth:`_consensus_collect_band_component_candidates`.
+        cluster_frequency_rtol : float, optional
+            Relative frequency tolerance used in log-frequency space.
+            Candidates with ``abs(log(f1) - log(f2)) <= log1p(rtol)`` are
+            considered nearby for greedy clustering.
+        min_bands_per_component : int, optional
+            Minimum number of unique bands required for a cluster to be marked
+            as accepted.
+
+        Returns
+        -------
+        list of dict
+            Cluster diagnostics (both accepted and rejected) with fields:
+            ``cluster_id``, ``accepted``, ``rejection_reasons``,
+            ``member_bands``, ``n_member_bands``, ``center_frequency``,
+            ``center_period``, ``log_center_frequency``,
+            ``frequency_scatter``, ``log_frequency_scatter``, ``members``, and
+            ``duplicate_band_candidates``.
         """
 
         def _as_float_or_none(value):
@@ -12310,6 +12333,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if min_bands_per_component < 1:
             min_bands_per_component = 1
 
+        # log1p computes log(1 + rtol) with better stability than log(1 + x)
+        # when rtol is very small (avoids cancellation near zero).
         log_tol = float(np.log1p(cluster_frequency_rtol))
         flattened_members = []
 
@@ -12362,8 +12387,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 updated_center = float(
                     np.median([log_frequencies[idx] for idx in updated_members])
                 )
-                if updated_members == cluster_members:
-                    break
                 cluster_members = updated_members
                 center_log_frequency = updated_center
 
@@ -12404,7 +12427,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 else 0.0
             )
             frequency_scatter = (
-                float(np.std(retained_freqs, ddof=0)) if retained_freqs.size > 1 else 0.0
+                float(np.std(retained_freqs, ddof=0))
+                if retained_freqs.size > 1
+                else 0.0
             )
             member_bands = sorted({member["band_name"] for member in retained_members})
             n_member_bands = len(member_bands)
