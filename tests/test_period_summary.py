@@ -70,6 +70,55 @@ _REQUIRED_KEYS = {
     "largest_area_fraction",
 }
 
+_MULTICOMPONENT_KEYS = {
+    "is_multicomponent",
+    "component_periods",
+    "component_period_widths",
+    "component_fitted_periods",
+    "component_initialized_periods",
+    "component_strengths",
+    "component_source_cluster_ids",
+    "component_member_bands",
+    "component_summaries",
+}
+
+
+def _make_multicomp_diagnostics():
+    """Return deterministic consensus_multicomp diagnostics for tests."""
+    return {
+        "fit_strategy": "consensus_multicomp",
+        "consensus_success": True,
+        "consensus_periods": [100.0, 50.0],
+        "consensus_period_widths": [5.0, 2.0],
+        "initialized_mixture_periods": [99.0, 51.0],
+        "fitted_mixture_periods": [101.0, 49.5],
+        "consensus_component_strengths": [0.8, 0.6],
+        "multicomponent_period_summaries": [
+            {
+                "component_index": 0,
+                "source_cluster_id": 7,
+                "consensus_frequency": 0.01,
+                "consensus_period": 100.0,
+                "consensus_period_width": 5.0,
+                "consensus_component_strength": 0.8,
+                "initialized_mixture_period": 99.0,
+                "fitted_mixture_period": 101.0,
+                "member_bands": ["g", "r"],
+            },
+            {
+                "component_index": 1,
+                "source_cluster_id": 8,
+                "consensus_frequency": 0.02,
+                "consensus_period": 50.0,
+                "consensus_period_width": 2.0,
+                "consensus_component_strength": 0.6,
+                "initialized_mixture_period": 51.0,
+                "fitted_mixture_period": 49.5,
+                "member_bands": ["g", "i"],
+            },
+        ],
+    }
+
 
 # ---------------------------------------------------------------------------
 # Shared factory helpers
@@ -2263,6 +2312,81 @@ class TestWritePeriodSummaryOutputs(unittest.TestCase):
         finally:
             txt_path.unlink(missing_ok=True)
             png_path.unlink(missing_ok=True)
+
+
+class TestConsensusMulticompPeriodSummary(unittest.TestCase):
+    """Multicomponent period-summary integration tests."""
+
+    def setUp(self):
+        self.lc = _make_1d_lc_no_transform()
+        self.lc.consensus_diagnostics = _make_multicomp_diagnostics()
+        self.summary = self.lc.get_period_summary()
+
+    def test_summary_is_multicomponent(self):
+        self.assertTrue(self.summary["is_multicomponent"])
+        self.assertTrue(_MULTICOMPONENT_KEYS.issubset(set(self.summary.keys())))
+        self.assertEqual(
+            self.summary["method"], "consensus_multicomp_period_summary"
+        )
+
+    def test_component_periods_match_diagnostics(self):
+        diagnostics = self.lc.consensus_diagnostics
+        self.assertEqual(
+            self.summary["component_periods"], diagnostics["consensus_periods"]
+        )
+        self.assertEqual(
+            self.summary["component_fitted_periods"],
+            diagnostics["fitted_mixture_periods"],
+        )
+        self.assertEqual(
+            self.summary["component_initialized_periods"],
+            diagnostics["initialized_mixture_periods"],
+        )
+        self.assertEqual(
+            self.summary["component_summaries"],
+            diagnostics["multicomponent_period_summaries"],
+        )
+
+    def test_no_bogus_scalar_dominant_period(self):
+        self.assertIsNone(self.summary["dominant_period"])
+        self.assertIsNone(self.summary["dominant_frequency"])
+
+    def test_to_text_lists_multiple_components_with_periods(self):
+        text = self.summary.to_text()
+        self.assertIn("MULTI-COMPONENT PERIOD SUMMARY", text)
+        self.assertIn("Component 0", text)
+        self.assertIn("Consensus period: 100", text)
+        self.assertIn("Fitted period: 101", text)
+        self.assertIn("Initialized period: 99", text)
+        self.assertIn("Component 1", text)
+        self.assertIn("Consensus period: 50", text)
+
+    def test_write_json_multicomp_fields_json_safe(self):
+        import json
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
+            path = tmp.name
+        try:
+            self.summary.write_json(path)
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertTrue(data["is_multicomponent"])
+            self.assertEqual(data["component_periods"], [100.0, 50.0])
+            self.assertIsInstance(data["component_summaries"], list)
+            self.assertIsInstance(data["component_summaries"][0], dict)
+            self.assertIsNone(data["dominant_period"])
+        finally:
+            os.remove(path)
+
+    def test_existing_single_component_behavior_unchanged(self):
+        single = _make_1d_lc_no_transform().get_period_summary()
+        self.assertNotIn("is_multicomponent", single)
+        self.assertFalse(_MULTICOMPONENT_KEYS.intersection(set(single.keys())))
+        self.assertGreater(single["dominant_period"], 0.0)
 
 
 
