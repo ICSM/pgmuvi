@@ -1570,6 +1570,15 @@ class PeriodSummaryResult:
         time_kernel_family="",
         has_stochastic_background=False,
         q_factor=None,
+        is_multicomponent=False,
+        component_periods=None,
+        component_period_widths=None,
+        component_fitted_periods=None,
+        component_initialized_periods=None,
+        component_strengths=None,
+        component_source_cluster_ids=None,
+        component_member_bands=None,
+        component_summaries=None,
     ):
         self.method = method
         self.model_name = model_name
@@ -1577,6 +1586,90 @@ class PeriodSummaryResult:
         self.kernel_family = kernel_family
         self.time_kernel_family = time_kernel_family
         self.has_stochastic_background = has_stochastic_background
+        self.is_multicomponent = bool(is_multicomponent)
+        self.component_periods = (
+            np.asarray(component_periods, dtype=float).ravel().tolist()
+            if component_periods is not None
+            else []
+        )
+        self.component_period_widths = (
+            np.asarray(component_period_widths, dtype=float).ravel().tolist()
+            if component_period_widths is not None
+            else []
+        )
+        self.component_fitted_periods = (
+            np.asarray(component_fitted_periods, dtype=float).ravel().tolist()
+            if component_fitted_periods is not None
+            else []
+        )
+        self.component_initialized_periods = (
+            np.asarray(component_initialized_periods, dtype=float).ravel().tolist()
+            if component_initialized_periods is not None
+            else []
+        )
+        self.component_strengths = (
+            np.asarray(component_strengths, dtype=float).ravel().tolist()
+            if component_strengths is not None
+            else []
+        )
+        self.component_source_cluster_ids = (
+            list(component_source_cluster_ids)
+            if component_source_cluster_ids is not None
+            else []
+        )
+        self.component_member_bands = (
+            [list(member_bands or []) for member_bands in component_member_bands]
+            if component_member_bands is not None
+            else []
+        )
+        self.component_summaries = (
+            [dict(entry) for entry in component_summaries]
+            if component_summaries is not None
+            else []
+        )
+        if self.is_multicomponent and not self.component_summaries:
+            n_components = len(self.component_periods)
+            for idx in range(n_components):
+                self.component_summaries.append(
+                    {
+                        "component_index": idx,
+                        "consensus_period": (
+                            self.component_periods[idx]
+                            if idx < len(self.component_periods)
+                            else None
+                        ),
+                        "consensus_period_width": (
+                            self.component_period_widths[idx]
+                            if idx < len(self.component_period_widths)
+                            else None
+                        ),
+                        "fitted_mixture_period": (
+                            self.component_fitted_periods[idx]
+                            if idx < len(self.component_fitted_periods)
+                            else None
+                        ),
+                        "initialized_mixture_period": (
+                            self.component_initialized_periods[idx]
+                            if idx < len(self.component_initialized_periods)
+                            else None
+                        ),
+                        "consensus_component_strength": (
+                            self.component_strengths[idx]
+                            if idx < len(self.component_strengths)
+                            else None
+                        ),
+                        "source_cluster_id": (
+                            self.component_source_cluster_ids[idx]
+                            if idx < len(self.component_source_cluster_ids)
+                            else None
+                        ),
+                        "member_bands": (
+                            self.component_member_bands[idx]
+                            if idx < len(self.component_member_bands)
+                            else []
+                        ),
+                    }
+                )
         self.n_peaks_detected = n_peaks_detected
         self.n_peaks_analyzed = n_peaks_analyzed
         self.n_peaks_requested = n_peaks_requested
@@ -1725,6 +1818,15 @@ class PeriodSummaryResult:
                 if self.component_diagnostics is not None
                 else None
             ),
+            "is_multicomponent": self.is_multicomponent,
+            "component_periods": self.component_periods,
+            "component_period_widths": self.component_period_widths,
+            "component_fitted_periods": self.component_fitted_periods,
+            "component_initialized_periods": self.component_initialized_periods,
+            "component_strengths": self.component_strengths,
+            "component_source_cluster_ids": self.component_source_cluster_ids,
+            "component_member_bands": self.component_member_bands,
+            "component_summaries": self.component_summaries,
             "freq_grid": self.freq_grid,
             "psd": self.psd,
             # self.dominant_frequency/dominant_period/q_factor are set in
@@ -1964,6 +2066,45 @@ class PeriodSummaryResult:
         if self.notes:
             lines.append(f"  Notes               : {self.notes}")
         lines.append("")
+
+        if self.is_multicomponent:
+            lines.append("MULTI-COMPONENT PERIOD SUMMARY")
+            lines.append("==============================")
+            for idx, component in enumerate(self.component_summaries):
+                if not isinstance(component, dict):
+                    continue
+                component_idx = component.get("component_index", idx)
+                member_bands = list(component.get("member_bands") or [])
+                lines.append(f"  Component {component_idx}")
+                lines.append(
+                    f"      Consensus period: "
+                    f"{_fmt(component.get('consensus_period'))}"
+                )
+                lines.append(
+                    f"      Fitted period: "
+                    f"{_fmt(component.get('fitted_mixture_period'))}"
+                )
+                lines.append(
+                    f"      Initialized period: "
+                    f"{_fmt(component.get('initialized_mixture_period'))}"
+                )
+                lines.append(
+                    f"      Period width: "
+                    f"{_fmt(component.get('consensus_period_width'))}"
+                )
+                lines.append(
+                    f"      Supported by: "
+                    f"{', '.join(member_bands) if member_bands else 'N/A'}"
+                )
+                lines.append(
+                    f"      Strength: "
+                    f"{_fmt(component.get('consensus_component_strength'))}"
+                )
+                lines.append(
+                    f"      Consensus frequency: "
+                    f"{_fmt(component.get('consensus_frequency'))}"
+                )
+                lines.append("")
 
         # ------------------------------------------------------------------
         # Analyzed peaks (literature-comparable outputs)
@@ -16457,6 +16598,148 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return ""
         return type(kernel).__name__
 
+    @staticmethod
+    def _coerce_float_or_none(value):
+        """Return finite float(value), otherwise None."""
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if np.isfinite(parsed) else None
+
+    def _get_consensus_multicomp_period_summary(self):
+        """Return a multicomp period summary from consensus diagnostics."""
+        diagnostics = getattr(self, "consensus_diagnostics", None)
+        if not isinstance(diagnostics, dict):
+            return None
+        if diagnostics.get("fit_strategy") != "consensus_multicomp":
+            return None
+        if not bool(diagnostics.get("consensus_success")):
+            return None
+
+        raw_component_summaries = diagnostics.get("multicomponent_period_summaries")
+        if not isinstance(raw_component_summaries, list):
+            return None
+        component_summaries = [
+            dict(entry)
+            for entry in raw_component_summaries
+            if isinstance(entry, dict)
+        ]
+        if not component_summaries:
+            return None
+
+        consensus_periods = list(diagnostics.get("consensus_periods") or [])
+        consensus_period_widths = list(
+            diagnostics.get("consensus_period_widths") or []
+        )
+        fitted_periods = list(diagnostics.get("fitted_mixture_periods") or [])
+        initialized_periods = list(
+            diagnostics.get("initialized_mixture_periods") or []
+        )
+        consensus_strengths = list(
+            diagnostics.get("consensus_component_strengths") or []
+        )
+
+        component_periods = []
+        component_period_widths = []
+        component_fitted_periods = []
+        component_initialized_periods = []
+        component_strengths = []
+        component_source_cluster_ids = []
+        component_member_bands = []
+
+        for idx, component in enumerate(component_summaries):
+            component_periods.append(
+                self._coerce_float_or_none(
+                    component.get(
+                        "consensus_period",
+                        (
+                            consensus_periods[idx]
+                            if idx < len(consensus_periods)
+                            else None
+                        ),
+                    )
+                )
+            )
+            component_period_widths.append(
+                self._coerce_float_or_none(
+                    component.get(
+                        "consensus_period_width",
+                        (
+                            consensus_period_widths[idx]
+                            if idx < len(consensus_period_widths)
+                            else None
+                        ),
+                    )
+                )
+            )
+            component_fitted_periods.append(
+                self._coerce_float_or_none(
+                    component.get(
+                        "fitted_mixture_period",
+                        fitted_periods[idx] if idx < len(fitted_periods) else None,
+                    )
+                )
+            )
+            component_initialized_periods.append(
+                self._coerce_float_or_none(
+                    component.get(
+                        "initialized_mixture_period",
+                        (
+                            initialized_periods[idx]
+                            if idx < len(initialized_periods)
+                            else None
+                        ),
+                    )
+                )
+            )
+            component_strengths.append(
+                self._coerce_float_or_none(
+                    component.get(
+                        "consensus_component_strength",
+                        (
+                            consensus_strengths[idx]
+                            if idx < len(consensus_strengths)
+                            else None
+                        ),
+                    )
+                )
+            )
+            component_source_cluster_ids.append(component.get("source_cluster_id"))
+            component_member_bands.append(list(component.get("member_bands") or []))
+
+        kernel = getattr(getattr(self, "model", None), "sci_kernel", None)
+        kernel_family = self._kernel_family_name(getattr(kernel, "base_kernel", kernel))
+
+        return PeriodSummaryResult(
+            method="consensus_multicomp_period_summary",
+            backend="consensus_multicomp",
+            kernel_family=kernel_family,
+            time_kernel_family=kernel_family,
+            has_stochastic_background=False,
+            dominant_period=None,
+            dominant_frequency=None,
+            peaks=[],
+            freq_grid=None,
+            psd=None,
+            notes=(
+                "Multi-component consensus fit summary. "
+                "No single dominant period is defined."
+            ),
+            interval_definition="none",
+            is_multicomponent=True,
+            component_periods=component_periods,
+            component_period_widths=component_period_widths,
+            component_fitted_periods=component_fitted_periods,
+            component_initialized_periods=component_initialized_periods,
+            component_strengths=component_strengths,
+            component_source_cluster_ids=component_source_cluster_ids,
+            component_member_bands=component_member_bands,
+            component_summaries=component_summaries,
+        )
+
     def _get_non_periodic_summary(self, kernel=None):
         """Return a graceful period summary for a non-periodic kernel.
 
@@ -17903,6 +18186,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise RuntimeError(
                 "Model not initialised.  Call set_model() first."
             )
+
+        multicomp_summary = self._get_consensus_multicomp_period_summary()
+        if multicomp_summary is not None:
+            return multicomp_summary
 
         backend = self._detect_period_summary_backend()
 
