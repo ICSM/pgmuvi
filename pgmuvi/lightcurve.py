@@ -10314,7 +10314,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         band_arr = np.asarray(self.band, dtype=str)
 
         try:
-            xdata_np = np.asarray(self._xdata_raw)
+            xdata_np = self._xdata_raw.detach().cpu().numpy()
         except Exception:
             return band_to_wavelength
 
