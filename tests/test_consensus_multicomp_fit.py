@@ -165,17 +165,12 @@ def _initialization_diagnostics():
     }
 
 
-class _DummyInitializationModel:
-    def __init__(self):
+class _MockInitializableSpectralMixtureModel:
+    def __init__(self, n_components=2):
         self.covar_module = mock.MagicMock()
-        self.covar_module.mixture_means = torch.tensor(
-            [[[0.0], [0.0]]],
-            dtype=torch.float32,
-        )
-        self.covar_module.mixture_scales = torch.tensor(
-            [[[0.0], [0.0]]],
-            dtype=torch.float32,
-        )
+        zeros = torch.zeros((1, n_components, 1), dtype=torch.float32)
+        self.covar_module.mixture_means = zeros.clone()
+        self.covar_module.mixture_scales = zeros.clone()
 
     def initialize(self, **kwargs):
         if "covar_module.mixture_means" in kwargs:
@@ -429,8 +424,8 @@ class TestConsensusMulticompFit(unittest.TestCase):
             "per_component_consensus_initialization",
         )
 
-    def test_collect_initialization_diagnostics_matches_requested_frequencies(self):
-        self.lc.model = _DummyInitializationModel()
+    def test_collect_initialization_diagnostics_matches_requested_parameters(self):
+        self.lc.model = _MockInitializableSpectralMixtureModel()
         self.lc._model_pars = {
             "covar_module.mixture_means": {"module": self.lc.model.covar_module},
             "covar_module.mixture_scales": {"module": self.lc.model.covar_module},
@@ -477,7 +472,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
         )
 
     def test_collect_initialization_diagnostics_raises_on_component_mismatch(self):
-        self.lc.model = _DummyInitializationModel()
+        self.lc.model = _MockInitializableSpectralMixtureModel()
         self.lc._model_pars = {
             "covar_module.mixture_means": {"module": self.lc.model.covar_module},
             "covar_module.mixture_scales": {"module": self.lc.model.covar_module},
@@ -497,7 +492,7 @@ class TestConsensusMulticompFit(unittest.TestCase):
             with self.assertRaisesRegex(
                 RuntimeError,
                 "len\\(initialized_mixture_means\\)=1 does not match "
-                "len\\(consensus_frequencies\\)=2",
+                "len\\(requested_consensus_frequencies\\)=2",
             ):
                 self.lc._consensus_collect_initialization_diagnostics(
                     requested_consensus_frequencies=np.array([1.01, 2.99], dtype=float),

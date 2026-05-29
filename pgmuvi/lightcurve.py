@@ -10115,7 +10115,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         *,
         source_guess=None,
     ):
-        """Return a flattened per-mixture vector for a model parameter key."""
+        """Return per-mixture values from an initialized spectral-mixture parameter.
+
+        Parameters
+        ----------
+        param_key : str
+            Fully-qualified constrained parameter key resolved from
+            :meth:`_consensus_resolve_time_spectral_mixture_keys`.
+        source_guess : dict or None, optional
+            Initialization guess dictionary used as a fallback source when the
+            parameter cannot be read from the current model instance.
+
+        Returns
+        -------
+        numpy.ndarray
+            Flattened 1D float array with one value per mixture component.
+            For multidimensional tensors, the time dimension (index ``0`` of
+            the last axis) is returned to stay consistent with consensus-time
+            initialization semantics.
+        """
         tensor_value = None
         if (
             hasattr(self, "_model_pars")
@@ -10171,7 +10189,34 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         requested_consensus_scales,
         consensus_guess,
     ):
-        """Collect and validate multicomp initialization diagnostics."""
+        """Collect and validate multicomp initialization diagnostics.
+
+        Parameters
+        ----------
+        requested_consensus_frequencies : array-like
+            Consensus frequencies requested by the multicomp consensus
+            aggregator.
+        requested_consensus_scales : array-like
+            Consensus scales requested by the multicomp consensus aggregator.
+        consensus_guess : dict
+            Initialization guess dictionary produced by
+            :meth:`_consensus_build_guess`. This helper reapplies the guess via
+            :meth:`set_hypers` before reading initialized parameters so the
+            diagnostics reflect the exact post-initialization model state.
+
+        Returns
+        -------
+        dict
+            JSON-safe diagnostics containing requested and initialized mixture
+            means/scales plus the initialization strategy label.
+
+        Raises
+        ------
+        RuntimeError
+            If requested frequency/scale shapes are inconsistent, if requested
+            and initialized component counts are inconsistent, or if consensus
+            guesses cannot be applied to the model.
+        """
         requested_frequencies = np.asarray(
             requested_consensus_frequencies, dtype=float
         ).ravel()
@@ -10182,7 +10227,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise RuntimeError(
                 "Consensus multi-component initialization failed: requested "
                 "consensus scales must align one-to-one with requested "
-                "consensus frequencies."
+                "consensus frequencies "
+                f"(scales shape={requested_scales.shape}, "
+                f"frequencies shape={requested_frequencies.shape})."
             )
 
         if (
@@ -10214,7 +10261,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "Consensus multi-component initialization mismatch: "
                 f"len(initialized_mixture_means)={int(initialized_means.size)} "
                 "does not match "
-                f"len(consensus_frequencies)={int(requested_frequencies.size)}."
+                "len(requested_consensus_frequencies)="
+                f"{int(requested_frequencies.size)}."
+            )
+        if initialized_scales.size != requested_scales.size:
+            raise RuntimeError(
+                "Consensus multi-component initialization mismatch: "
+                f"len(initialized_mixture_scales)={int(initialized_scales.size)} "
+                "does not match "
+                f"len(requested_consensus_scales)={int(requested_scales.size)}."
             )
 
         return self._consensus_make_json_safe(
