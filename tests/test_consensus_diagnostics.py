@@ -180,6 +180,8 @@ def _make_valid_diagnostics(
         "consensus_scale_constraint_target_key": None,
         "requested_consensus_frequencies": [],
         "requested_consensus_scales": [],
+        "consensus_component_strengths": [],
+        "consensus_mixture_init_scales": [],
         "initialized_mixture_means": [],
         "initialized_mixture_scales": [],
         "initialization_strategy": None,

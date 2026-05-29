@@ -14828,6 +14828,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         n_components = initialization_payload["n_components"]
         consensus_periods = 1.0 / consensus_frequencies
         consensus_period_widths = consensus_frequency_width / (consensus_frequencies**2)
+        if (
+            consensus_frequencies.size < int(n_components)
+            or consensus_frequency_width.size < int(n_components)
+            or consensus_scales.size < int(n_components)
+            or consensus_periods.size < int(n_components)
+            or consensus_period_widths.size < int(n_components)
+        ):
+            raise RuntimeError(
+                "Consensus multi-component diagnostics failed: component vector "
+                "length mismatch in consensus initialization payload."
+            )
+        # Primary component is canonical component_index==0 by cluster order.
         primary_component_index = 0 if int(n_components) > 0 else None
 
         fit_kwargs["num_mixtures"] = n_components
