@@ -14039,6 +14039,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "per_band_dominant_frequencies": {},
                 "candidate_count": int(consensus_frequencies.size),
                 "trusted_candidate_count": int(consensus_frequencies.size),
+                "consensus_frequencies": consensus_frequencies.tolist(),
+                "consensus_frequency_widths": (
+                    consensus_frequency_width.tolist()
+                    if hasattr(consensus_frequency_width, "tolist")
+                    else list(consensus_frequency_width)
+                ),
                 "consensus_frequency": None,
                 "consensus_period": None,
                 "consensus_frequency_width": None,
