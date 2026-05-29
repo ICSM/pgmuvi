@@ -30,6 +30,7 @@ import math
 import unittest
 
 import numpy as np
+import torch
 
 from pgmuvi.lightcurve import Lightcurve
 
@@ -419,6 +420,66 @@ class TestBandComponentCandidatesDefaultMax(unittest.TestCase):
                 f"Default max should be 3, got {len(entry['component_candidates'])} "
                 f"for band {entry['band_name']}",
             )
+
+
+class TestBandComponentCandidateMetadataLookup(unittest.TestCase):
+    """Focused tests for LS peak metadata lookup safety."""
+
+    def test_off_grid_ls_frequency_sets_metadata_to_nan(self):
+        class _MockBand:
+            def fit_LS(self, *, num_peaks, return_full=False):
+                self.assert_equal_num_peaks = num_peaks
+                ls_freqs = torch.tensor([1.75], dtype=torch.float64)
+                ls_sig = torch.tensor([True], dtype=torch.bool)
+                if return_full:
+                    freq_grid = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
+                    power_grid = torch.tensor([10.0, 9.0, 8.0], dtype=torch.float64)
+                    return ls_freqs, ls_sig, freq_grid, power_grid
+                return ls_freqs, ls_sig
+
+        result = Lightcurve._consensus_extract_band_ls_candidates(
+            _MockBand(),
+            metrics={
+                "baseline": 100.0,
+                "longest_detectable_period": 100.0,
+                "nyquist_frequency": 10.0,
+            },
+            num_requested_peaks=1,
+            max_candidates=1,
+            include_peak_metadata=True,
+        )
+
+        self.assertEqual(len(result["candidates"]), 1)
+        candidate = result["candidates"][0]
+        self.assertAlmostEqual(candidate["frequency"], 1.75, places=12)
+        self.assertTrue(math.isnan(candidate["peak_power"]))
+        self.assertTrue(math.isnan(candidate["peak_prominence"]))
+
+
+class TestBandWavelengthMapHelper(unittest.TestCase):
+    """Focused tests for centralized band-to-wavelength mapping."""
+
+    def test_returns_expected_wavelengths_for_2d_multiband(self):
+        lc = _make_multiband_lc(
+            {"J": 30.0, "K": 45.0},
+            n_pts=20,
+            time_span=220.0,
+        )
+        mapping = lc._consensus_build_band_wavelength_map(["J", "K"])
+        self.assertAlmostEqual(mapping["J"], 1.0, places=12)
+        self.assertAlmostEqual(mapping["K"], 2.0, places=12)
+
+    def test_returns_none_when_no_wavelength_column_or_no_rows(self):
+        lc = _make_multiband_lc(
+            {"J": 30.0, "K": 45.0},
+            n_pts=20,
+            time_span=220.0,
+        )
+        lc._xdata_raw = lc._xdata_raw[:, :1]
+        mapping = lc._consensus_build_band_wavelength_map(["J", "K", "missing"])
+        self.assertIsNone(mapping["J"])
+        self.assertIsNone(mapping["K"])
+        self.assertIsNone(mapping["missing"])
 
 
 class TestBandComponentCandidatesQualityGating(unittest.TestCase):
