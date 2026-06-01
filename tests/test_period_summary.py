@@ -108,6 +108,18 @@ def _make_multicomp_diagnostics():
         "component_fit_drift_flags": [False, False],
         "components_with_large_period_drift": [],
         "components_with_large_frequency_drift": [],
+        "nearest_initialized_component_index": [0, 1],
+        "nearest_initialized_component_fractional_period_distance": [
+            abs((101.0 - 99.0) / 99.0),
+            abs((49.5 - 51.0) / 51.0),
+        ],
+        "nearest_initialized_component_fractional_frequency_distance": [
+            abs((1.0 / 101.0 - 1.0 / 99.0) / (1.0 / 99.0)),
+            abs((1.0 / 49.5 - 1.0 / 51.0) / (1.0 / 51.0)),
+        ],
+        "component_identity_preserved": [True, True],
+        "all_component_identities_preserved": True,
+        "possible_component_swaps": [],
         "drift_warning_fraction": 0.10,
         "consensus_component_strengths": [0.8, 0.6],
         "multicomponent_period_summaries": [
@@ -134,6 +146,14 @@ def _make_multicomp_diagnostics():
                 ),
                 "fitted_period_drift_flag": False,
                 "fitted_frequency_drift_flag": False,
+                "nearest_initialized_component_index": 0,
+                "nearest_initialized_component_fractional_period_distance": abs(
+                    (101.0 - 99.0) / 99.0
+                ),
+                "nearest_initialized_component_fractional_frequency_distance": abs(
+                    (1.0 / 101.0 - 1.0 / 99.0) / (1.0 / 99.0)
+                ),
+                "component_identity_preserved": True,
                 "member_bands": ["g", "r"],
             },
             {
@@ -159,6 +179,14 @@ def _make_multicomp_diagnostics():
                 ),
                 "fitted_period_drift_flag": False,
                 "fitted_frequency_drift_flag": False,
+                "nearest_initialized_component_index": 1,
+                "nearest_initialized_component_fractional_period_distance": abs(
+                    (49.5 - 51.0) / 51.0
+                ),
+                "nearest_initialized_component_fractional_frequency_distance": abs(
+                    (1.0 / 49.5 - 1.0 / 51.0) / (1.0 / 51.0)
+                ),
+                "component_identity_preserved": True,
                 "member_bands": ["g", "i"],
             },
         ],
@@ -2404,6 +2432,7 @@ class TestConsensusMulticompPeriodSummary(unittest.TestCase):
         self.assertIn("Fitted period: 101", text)
         self.assertIn("Initialized period: 99", text)
         self.assertIn("Drift from initialization:", text)
+        self.assertIn("Identity preserved: yes", text)
         self.assertIn("Component 1", text)
         self.assertIn("Consensus period: 50", text)
 
@@ -2430,6 +2459,30 @@ class TestConsensusMulticompPeriodSummary(unittest.TestCase):
         self.assertIn("[warning: large drift]", text)
         self.assertIn(
             "Warning: 1 component shifted by more than 10% from consensus initialization.",
+            text,
+        )
+
+    def test_to_text_warns_when_identity_not_preserved(self):
+        diag = _make_multicomp_diagnostics()
+        diag["all_component_identities_preserved"] = False
+        diag["possible_component_swaps"] = [1]
+        diag["nearest_initialized_component_index"] = [0, 0]
+        diag["component_identity_preserved"] = [True, False]
+        diag["multicomponent_period_summaries"][1][
+            "nearest_initialized_component_index"
+        ] = 0
+        diag["multicomponent_period_summaries"][1][
+            "component_identity_preserved"
+        ] = False
+        self.lc.consensus_diagnostics = diag
+        summary = self.lc.get_period_summary()
+        text = summary.to_text()
+        self.assertIn(
+            "Identity preserved: no; nearest initialized component: 0",
+            text,
+        )
+        self.assertIn(
+            "Warning: fitted component identity may have changed during optimization.",
             text,
         )
 

@@ -528,6 +528,28 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
         "components_with_large_frequency_drift": _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
+        "nearest_initialized_component_index": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "nearest_initialized_component_fractional_period_distance": (
+            _consensus_schema_field(
+                default_factory="list", nullable=False, container_type="list"
+            )
+        ),
+        "nearest_initialized_component_fractional_frequency_distance": (
+            _consensus_schema_field(
+                default_factory="list", nullable=False, container_type="list"
+            )
+        ),
+        "component_identity_preserved": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "all_component_identities_preserved": _consensus_schema_field(
+            default=True, nullable=False
+        ),
+        "possible_component_swaps": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
         "drift_warning_fraction": _consensus_schema_field(
             default=float(_CONSENSUS_MULTICOMP_DRIFT_WARNING_FRACTION),
             nullable=False,
@@ -2106,6 +2128,7 @@ class PeriodSummaryResult:
             if drift_threshold is None:
                 drift_threshold = _CONSENSUS_MULTICOMP_DRIFT_WARNING_FRACTION
             large_period_drift_count = 0
+            possible_identity_swap_count = 0
             lines.append("MULTI-COMPONENT PERIOD SUMMARY")
             lines.append("==============================")
             for idx, component in enumerate(self.component_summaries):
@@ -2165,6 +2188,21 @@ class PeriodSummaryResult:
                 lines.append(drift_line)
                 if drift_flag:
                     large_period_drift_count += 1
+                identity_preserved = component.get("component_identity_preserved")
+                if isinstance(identity_preserved, (bool, np.bool_)):
+                    if bool(identity_preserved):
+                        lines.append("      Identity preserved: yes")
+                    else:
+                        nearest_idx = component.get(
+                            "nearest_initialized_component_index"
+                        )
+                        lines.append(
+                            "      Identity preserved: no; nearest initialized "
+                            f"component: {_fmt(nearest_idx)}"
+                        )
+                        possible_identity_swap_count += 1
+                else:
+                    lines.append("      Identity preserved: N/A")
                 lines.append("")
             if large_period_drift_count > 0:
                 lines.append(
@@ -2174,6 +2212,12 @@ class PeriodSummaryResult:
                     "shifted by "
                     f"more than {drift_threshold * 100.0:g}% from consensus "
                     "initialization."
+                )
+                lines.append("")
+            if possible_identity_swap_count > 0:
+                lines.append(
+                    "Warning: fitted component identity may have changed during "
+                    "optimization."
                 )
                 lines.append("")
 
@@ -10660,6 +10704,119 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             }
         )
 
+    @staticmethod
+    def _consensus_compute_component_identity_diagnostics(
+        *,
+        initialized_periods,
+        fitted_periods,
+        initialized_frequencies=None,
+        fitted_frequencies=None,
+    ):
+        """Compute per-component identity diagnostics for multicomp fits.
+
+        Period-space fractional distance is the primary identity metric.
+        Ties are resolved deterministically via ``np.argmin`` which returns
+        the lowest index among equal minima.
+        """
+        initialized_periods = np.asarray(initialized_periods, dtype=float).ravel()
+        fitted_periods = np.asarray(fitted_periods, dtype=float).ravel()
+        if initialized_periods.shape != fitted_periods.shape:
+            raise RuntimeError(
+                "Consensus multi-component identity diagnostics mismatch: "
+                "initialized and fitted period vectors must share identical shapes."
+            )
+        if initialized_periods.size == 0:
+            raise RuntimeError(
+                "Consensus multi-component identity diagnostics mismatch: "
+                "component vectors must be non-empty."
+            )
+        if not np.all(np.isfinite(initialized_periods) & (initialized_periods > 0.0)):
+            raise RuntimeError(
+                "Consensus multi-component identity diagnostics mismatch: "
+                "initialized periods must be finite and strictly positive."
+            )
+        if not np.all(np.isfinite(fitted_periods) & (fitted_periods > 0.0)):
+            raise RuntimeError(
+                "Consensus multi-component identity diagnostics mismatch: "
+                "fitted periods must be finite and strictly positive."
+            )
+
+        period_distance_matrix = (
+            np.abs(fitted_periods[:, None] - initialized_periods[None, :])
+            / initialized_periods[None, :]
+        )
+        if not np.all(np.isfinite(period_distance_matrix)):
+            raise RuntimeError(
+                "Consensus multi-component identity diagnostics mismatch: "
+                "period distance matrix contains non-finite values."
+            )
+        nearest_index = np.argmin(period_distance_matrix, axis=1).astype(int)
+        nearest_period_distance = period_distance_matrix[
+            np.arange(initialized_periods.size), nearest_index
+        ]
+        component_indices = np.arange(initialized_periods.size, dtype=int)
+        identity_preserved = nearest_index == component_indices
+        possible_swaps = np.flatnonzero(~identity_preserved).astype(int)
+
+        diagnostics = {
+            "nearest_initialized_component_index": nearest_index.tolist(),
+            "nearest_initialized_component_fractional_period_distance": (
+                nearest_period_distance.tolist()
+            ),
+            "component_identity_preserved": identity_preserved.tolist(),
+            "all_component_identities_preserved": bool(np.all(identity_preserved)),
+            "possible_component_swaps": possible_swaps.tolist(),
+            "nearest_initialized_component_fractional_frequency_distance": [],
+        }
+
+        if initialized_frequencies is not None and fitted_frequencies is not None:
+            initialized_frequencies = np.asarray(
+                initialized_frequencies, dtype=float
+            ).ravel()
+            fitted_frequencies = np.asarray(fitted_frequencies, dtype=float).ravel()
+            if initialized_frequencies.shape != initialized_periods.shape:
+                raise RuntimeError(
+                    "Consensus multi-component identity diagnostics mismatch: "
+                    "initialized frequency and period vectors must align."
+                )
+            if fitted_frequencies.shape != fitted_periods.shape:
+                raise RuntimeError(
+                    "Consensus multi-component identity diagnostics mismatch: "
+                    "fitted frequency and period vectors must align."
+                )
+            if not np.all(
+                np.isfinite(initialized_frequencies) & (initialized_frequencies > 0.0)
+            ):
+                raise RuntimeError(
+                    "Consensus multi-component identity diagnostics mismatch: "
+                    "initialized frequencies must be finite and strictly positive."
+                )
+            if not np.all(
+                np.isfinite(fitted_frequencies) & (fitted_frequencies > 0.0)
+            ):
+                raise RuntimeError(
+                    "Consensus multi-component identity diagnostics mismatch: "
+                    "fitted frequencies must be finite and strictly positive."
+                )
+            frequency_distance_matrix = (
+                np.abs(
+                    fitted_frequencies[:, None] - initialized_frequencies[None, :]
+                )
+                / initialized_frequencies[None, :]
+            )
+            if not np.all(np.isfinite(frequency_distance_matrix)):
+                raise RuntimeError(
+                    "Consensus multi-component identity diagnostics mismatch: "
+                    "frequency distance matrix contains non-finite values."
+                )
+            diagnostics[
+                "nearest_initialized_component_fractional_frequency_distance"
+            ] = frequency_distance_matrix[
+                np.arange(initialized_periods.size), nearest_index
+            ].tolist()
+
+        return diagnostics
+
     def _consensus_iter_band_lightcurves(self):
         """Yield per-band 1D light curves using stored band-label metadata.
 
@@ -12389,6 +12546,37 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "fitted diagnostics vectors do not share one-to-one "
                         "component lengths."
                     )
+                initialized_periods_arr = np.asarray(
+                    diagnostics.get("initialized_mixture_periods", []), dtype=float
+                ).ravel()
+                initialized_frequencies_arr = np.asarray(
+                    diagnostics.get("initialized_mixture_means", []), dtype=float
+                ).ravel()
+                if not np.all(
+                    np.isfinite(initialized_periods_arr)
+                    & (initialized_periods_arr > 0)
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'initialized_mixture_periods' is missing or invalid."
+                    )
+                if not np.all(
+                    np.isfinite(initialized_frequencies_arr)
+                    & (initialized_frequencies_arr > 0)
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'initialized_mixture_means' is missing or invalid."
+                    )
+                if (
+                    initialized_periods_arr.size != fitted_frequencies_arr.size
+                    or initialized_frequencies_arr.size != fitted_frequencies_arr.size
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "initialized diagnostics vectors do not match fitted "
+                        "component lengths."
+                    )
                 drift_warning_fraction = diagnostics.get("drift_warning_fraction")
                 if drift_warning_fraction is None:
                     raise RuntimeError(
@@ -12536,6 +12724,217 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "components_with_large_frequency_drift",
                     np.flatnonzero(expected_frequency_flags).tolist(),
                 )
+                nearest_initialized_component_index = diagnostics.get(
+                    "nearest_initialized_component_index"
+                )
+                nearest_initialized_component_fractional_period_distance = (
+                    diagnostics.get(
+                        "nearest_initialized_component_fractional_period_distance"
+                    )
+                )
+                component_identity_preserved = diagnostics.get(
+                    "component_identity_preserved"
+                )
+                all_component_identities_preserved = diagnostics.get(
+                    "all_component_identities_preserved"
+                )
+                if not (
+                    isinstance(nearest_initialized_component_index, list)
+                    and len(nearest_initialized_component_index)
+                    == fitted_frequencies_arr.size
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'nearest_initialized_component_index' is missing or invalid."
+                    )
+                coerced_nearest_idx = []
+                for value in nearest_initialized_component_index:
+                    if isinstance(value, (bool, np.bool_)):
+                        raise RuntimeError(
+                            "consensus_success is True for 'consensus_multicomp' but "
+                            "'nearest_initialized_component_index' contains invalid "
+                            "component indices."
+                        )
+                    if not isinstance(value, (int, np.integer)):
+                        raise RuntimeError(
+                            "consensus_success is True for 'consensus_multicomp' but "
+                            "'nearest_initialized_component_index' contains invalid "
+                            "component indices."
+                        )
+                    idx = int(value)
+                    if idx < 0 or idx >= int(fitted_frequencies_arr.size):
+                        raise RuntimeError(
+                            "consensus_success is True for 'consensus_multicomp' but "
+                            "'nearest_initialized_component_index' contains "
+                            "out-of-range indices."
+                        )
+                    coerced_nearest_idx.append(idx)
+                if not (
+                    isinstance(
+                        nearest_initialized_component_fractional_period_distance, list
+                    )
+                    and len(nearest_initialized_component_fractional_period_distance)
+                    == fitted_frequencies_arr.size
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'nearest_initialized_component_fractional_period_distance' "
+                        "is missing or invalid."
+                    )
+                try:
+                    coerced_nearest_period_distance = np.asarray(
+                        nearest_initialized_component_fractional_period_distance,
+                        dtype=float,
+                    ).ravel()
+                except Exception as exc:
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'nearest_initialized_component_fractional_period_distance' "
+                        "is missing or invalid."
+                    ) from exc
+                if not np.all(
+                    np.isfinite(coerced_nearest_period_distance)
+                    & (coerced_nearest_period_distance >= 0)
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'nearest_initialized_component_fractional_period_distance' "
+                        "is missing or invalid."
+                    )
+                if not (
+                    isinstance(component_identity_preserved, list)
+                    and len(component_identity_preserved) == fitted_frequencies_arr.size
+                    and all(
+                        isinstance(flag, (bool, np.bool_))
+                        for flag in component_identity_preserved
+                    )
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'component_identity_preserved' is missing or invalid."
+                    )
+                coerced_identity_flags = [
+                    bool(flag) for flag in component_identity_preserved
+                ]
+                expected_identity_flags = [
+                    idx == component_idx
+                    for component_idx, idx in enumerate(coerced_nearest_idx)
+                ]
+                if coerced_identity_flags != expected_identity_flags:
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'component_identity_preserved' does not match nearest "
+                        "initialized-component diagnostics."
+                    )
+                if not isinstance(all_component_identities_preserved, (bool, np.bool_)):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'all_component_identities_preserved' is missing or invalid."
+                    )
+                if bool(all_component_identities_preserved) != bool(
+                    all(coerced_identity_flags)
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'all_component_identities_preserved' does not match per-"
+                        "component identity diagnostics."
+                    )
+                expected_possible_swaps = [
+                    idx for idx, flag in enumerate(coerced_identity_flags) if not flag
+                ]
+                _validate_component_index_list(
+                    "possible_component_swaps", expected_possible_swaps
+                )
+                expected_identity = (
+                    self._consensus_compute_component_identity_diagnostics(
+                        initialized_periods=initialized_periods_arr,
+                        fitted_periods=fitted_periods_arr,
+                        initialized_frequencies=initialized_frequencies_arr,
+                        fitted_frequencies=fitted_frequencies_arr,
+                    )
+                )
+                if (
+                    expected_identity["nearest_initialized_component_index"]
+                    != coerced_nearest_idx
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'nearest_initialized_component_index' does not match fitted "
+                        "period identity diagnostics."
+                    )
+                expected_nearest_period_distance = np.asarray(
+                    expected_identity[
+                        "nearest_initialized_component_fractional_period_distance"
+                    ],
+                    dtype=float,
+                ).ravel()
+                if not np.allclose(
+                    coerced_nearest_period_distance,
+                    expected_nearest_period_distance,
+                    rtol=1e-8,
+                    atol=1e-12,
+                ):
+                    raise RuntimeError(
+                        "consensus_success is True for 'consensus_multicomp' but "
+                        "'nearest_initialized_component_fractional_period_distance' "
+                        "does not match fitted period identity diagnostics."
+                    )
+                nearest_initialized_component_fractional_frequency_distance = (
+                    diagnostics.get(
+                        "nearest_initialized_component_fractional_frequency_distance"
+                    )
+                )
+                if (
+                    nearest_initialized_component_fractional_frequency_distance
+                    is not None
+                ):
+                    if not isinstance(
+                        nearest_initialized_component_fractional_frequency_distance,
+                        list,
+                    ):
+                        raise RuntimeError(
+                            "consensus_success is True for 'consensus_multicomp' but "
+                            "'nearest_initialized_component_fractional_frequency_"
+                            "distance' is invalid."
+                        )
+                    if nearest_initialized_component_fractional_frequency_distance:
+                        coerced_freq_distance = np.asarray(
+                            nearest_initialized_component_fractional_frequency_distance,
+                            dtype=float,
+                        ).ravel()
+                        if (
+                            coerced_freq_distance.size != fitted_frequencies_arr.size
+                            or not np.all(
+                                np.isfinite(coerced_freq_distance)
+                                & (coerced_freq_distance >= 0)
+                            )
+                        ):
+                            raise RuntimeError(
+                                "consensus_success is True for "
+                                "'consensus_multicomp' but "
+                                "'nearest_initialized_component_fractional_frequency_"
+                                "distance' is invalid."
+                            )
+                        expected_nearest_frequency_distance = np.asarray(
+                            expected_identity[
+                                "nearest_initialized_component_fractional_frequency_distance"
+                            ],
+                            dtype=float,
+                        ).ravel()
+                        if not np.allclose(
+                            coerced_freq_distance,
+                            expected_nearest_frequency_distance,
+                            rtol=1e-8,
+                            atol=1e-12,
+                        ):
+                            raise RuntimeError(
+                                "consensus_success is True for "
+                                "'consensus_multicomp' but "
+                                "'nearest_initialized_component_fractional_frequency_"
+                                "distance' "
+                                "does not match fitted frequency identity "
+                                "diagnostics."
+                            )
             elif not (
                 has_scalar_consensus_frequency or has_vector_consensus_frequencies
             ):
@@ -15728,6 +16127,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "fitted_abs_fractional_frequency_shift_from_initialization": None,
                     "fitted_period_drift_flag": None,
                     "fitted_frequency_drift_flag": None,
+                    "nearest_initialized_component_index": None,
+                    "nearest_initialized_component_fractional_period_distance": None,
+                    "nearest_initialized_component_fractional_frequency_distance": None,
+                    "component_identity_preserved": None,
                     "member_bands": list(source_summary.get("member_bands") or []),
                     "n_member_bands": source_summary.get("n_member_bands"),
                 }
@@ -15867,6 +16270,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 int(idx) for idx in np.flatnonzero(frequency_drift_flags).tolist()
             ]
             result_diagnostics["drift_warning_fraction"] = float(drift_warning_fraction)
+            component_identity_diagnostics = (
+                self._consensus_compute_component_identity_diagnostics(
+                    initialized_periods=initialized_mixture_periods,
+                    fitted_periods=fitted_periods,
+                    initialized_frequencies=initialized_mixture_means,
+                    fitted_frequencies=fitted_frequencies,
+                )
+            )
+            result_diagnostics.update(component_identity_diagnostics)
 
             for component_index in range(expected_size):
                 period_summaries[component_index]["fitted_mixture_frequency"] = float(
@@ -15905,6 +16317,37 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 period_summaries[component_index][
                     "fitted_frequency_drift_flag"
                 ] = bool(frequency_drift_flags[component_index])
+                period_summaries[component_index][
+                    "nearest_initialized_component_index"
+                ] = int(
+                    component_identity_diagnostics[
+                        "nearest_initialized_component_index"
+                    ][component_index]
+                )
+                period_summaries[component_index][
+                    "nearest_initialized_component_fractional_period_distance"
+                ] = float(
+                    component_identity_diagnostics[
+                        "nearest_initialized_component_fractional_period_distance"
+                    ][component_index]
+                )
+                nearest_frequency_distance = component_identity_diagnostics.get(
+                    "nearest_initialized_component_fractional_frequency_distance"
+                ) or []
+                period_summaries[component_index][
+                    "nearest_initialized_component_fractional_frequency_distance"
+                ] = (
+                    float(nearest_frequency_distance[component_index])
+                    if component_index < len(nearest_frequency_distance)
+                    else None
+                )
+                period_summaries[component_index][
+                    "component_identity_preserved"
+                ] = bool(
+                    component_identity_diagnostics["component_identity_preserved"][
+                        component_index
+                    ]
+                )
 
             result_diagnostics["multicomponent_period_summaries"] = (
                 self._consensus_make_json_safe(period_summaries)

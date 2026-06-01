@@ -197,6 +197,12 @@ def _make_valid_diagnostics(
         "component_fit_drift_flags": [],
         "components_with_large_period_drift": [],
         "components_with_large_frequency_drift": [],
+        "nearest_initialized_component_index": [],
+        "nearest_initialized_component_fractional_period_distance": [],
+        "nearest_initialized_component_fractional_frequency_distance": [],
+        "component_identity_preserved": [],
+        "all_component_identities_preserved": True,
+        "possible_component_swaps": [],
         "drift_warning_fraction": 0.10,
         "initialization_strategy": None,
         "default_constraints_applied_before_consensus": False,
@@ -884,11 +890,22 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
         diag["fitted_period_shift_from_initialization"] = [0.0, 0.0]
         diag["fitted_fractional_frequency_shift_from_initialization"] = [0.0, 0.0]
         diag["fitted_fractional_period_shift_from_initialization"] = [0.0, 0.0]
+        diag["initialized_mixture_means"] = [0.5, 1.0]
+        diag["initialized_mixture_periods"] = [2.0, 1.0]
         diag["max_abs_fractional_period_shift_from_initialization"] = 0.0
         diag["max_abs_fractional_frequency_shift_from_initialization"] = 0.0
         diag["component_fit_drift_flags"] = [False, False]
         diag["components_with_large_period_drift"] = []
         diag["components_with_large_frequency_drift"] = []
+        diag["nearest_initialized_component_index"] = [0, 1]
+        diag["nearest_initialized_component_fractional_period_distance"] = [0.0, 0.0]
+        diag["nearest_initialized_component_fractional_frequency_distance"] = [
+            0.0,
+            0.0,
+        ]
+        diag["component_identity_preserved"] = [True, True]
+        diag["all_component_identities_preserved"] = True
+        diag["possible_component_swaps"] = []
         diag["drift_warning_fraction"] = 0.10
         diag["final_consensus_frequency"] = None
         diag["final_consensus_period"] = None
@@ -912,6 +929,8 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
         diag["fitted_period_shift_from_initialization"] = [0.0, 0.0]
         diag["fitted_fractional_frequency_shift_from_initialization"] = [0.0, 0.0]
         diag["fitted_fractional_period_shift_from_initialization"] = [0.0, 0.0]
+        diag["initialized_mixture_means"] = [0.5, 1.0]
+        diag["initialized_mixture_periods"] = [2.0, 1.0]
         diag["final_consensus_frequency"] = None
         diag["final_consensus_period"] = None
         self._assert_structural_raises(diag)
@@ -950,6 +969,39 @@ class TestConsensusSuccessInvariants(unittest.TestCase):
         diag["fitted_period_shift_from_initialization"] = [0.0, 0.0]
         diag["fitted_fractional_frequency_shift_from_initialization"] = [0.0, 0.0]
         diag["fitted_fractional_period_shift_from_initialization"] = [0.0, 0.0]
+        diag["initialized_mixture_means"] = [0.5, 1.0]
+        diag["initialized_mixture_periods"] = [2.0, 1.0]
+        diag["component_fit_drift_flags"] = [False, False]
+        diag["components_with_large_period_drift"] = []
+        diag["components_with_large_frequency_drift"] = []
+        diag["drift_warning_fraction"] = 0.10
+        diag["final_consensus_frequency"] = None
+        diag["final_consensus_period"] = None
+        self._assert_structural_raises(diag)
+
+    def test_multicomponent_success_without_identity_diagnostics_raises(self):
+        diag = _make_valid_diagnostics(
+            accepted_bands=["A"],
+            rejected_bands=[],
+            consensus_success=True,
+            consensus_frequency=None,
+            trusted_candidate_count=2,
+        )
+        diag["fit_strategy"] = "consensus_multicomp"
+        diag["consensus_frequencies"] = [0.5, 1.0]
+        diag["consensus_periods"] = [2.0, 1.0]
+        diag["initialized_mixture_means"] = [0.5, 1.0]
+        diag["initialized_mixture_periods"] = [2.0, 1.0]
+        diag["fitted_mixture_frequencies"] = [0.5, 1.0]
+        diag["fitted_mixture_periods"] = [2.0, 1.0]
+        diag["fitted_mixture_scales"] = [0.1, 0.2]
+        diag["fitted_mixture_period_widths"] = [0.4, 0.2]
+        diag["fitted_frequency_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_period_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_fractional_frequency_shift_from_initialization"] = [0.0, 0.0]
+        diag["fitted_fractional_period_shift_from_initialization"] = [0.0, 0.0]
+        diag["max_abs_fractional_period_shift_from_initialization"] = 0.0
+        diag["max_abs_fractional_frequency_shift_from_initialization"] = 0.0
         diag["component_fit_drift_flags"] = [False, False]
         diag["components_with_large_period_drift"] = []
         diag["components_with_large_frequency_drift"] = []
