@@ -965,5 +965,425 @@ class TestConsensusMulticompFit(unittest.TestCase):
         multicomp_mock.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Tests for _consensus_multicomp_reconcile_to_n_components (static helper)
+# ---------------------------------------------------------------------------
+
+def _make_n_component_summaries(n):
+    """Return a list of N synthetic accepted component summaries."""
+    summaries = []
+    for i in range(n):
+        freq = float(i + 1) * 1.0
+        summaries.append({
+            "component_index": i,
+            "source_cluster_id": i,
+            "consensus_frequency": freq,
+            "consensus_frequency_width": 0.1 * freq,
+            "consensus_scale": float(n - i),  # first component strongest
+            "n_member_bands": 2 if i < 2 else 1,
+            "member_bands": ["A", "B"] if i < 2 else ["A"],
+        })
+    return summaries
+
+
+def _make_n_component_init_diagnostics(n, freqs, scales):
+    """Return mock initialization diagnostics for N components."""
+    freqs = np.asarray(freqs, dtype=float)
+    scales = np.asarray(scales, dtype=float)
+    return {
+        "requested_consensus_frequencies": freqs.tolist(),
+        "requested_consensus_scales": scales.tolist(),
+        "requested_consensus_frequency_widths": scales.tolist(),
+        "requested_consensus_periods": (1.0 / freqs).tolist(),
+        "requested_consensus_period_widths": (scales / freqs**2).tolist(),
+        "initialized_mixture_means": freqs.tolist(),
+        "initialized_mixture_periods": (1.0 / freqs).tolist(),
+        "initialized_mixture_scales": scales.tolist(),
+        "initialized_mixture_period_widths": (scales / freqs**2).tolist(),
+        "initialization_strategy": "per_component_consensus_initialization",
+    }
+
+
+def _make_n_component_fitted_diagnostics(n, freqs, scales):
+    """Return mock fitted diagnostics for N components (tiny shift from init)."""
+    freqs = np.asarray(freqs, dtype=float)
+    fitted_freqs = freqs * 1.001  # tiny shift
+    fitted_scales = np.asarray(scales, dtype=float) * 1.01
+    init_periods = 1.0 / freqs
+    fitted_periods = 1.0 / fitted_freqs
+    freq_shift = fitted_freqs - freqs
+    period_shift = fitted_periods - init_periods
+    return {
+        "fitted_mixture_frequencies": fitted_freqs.tolist(),
+        "fitted_mixture_periods": fitted_periods.tolist(),
+        "fitted_mixture_scales": fitted_scales.tolist(),
+        "fitted_mixture_period_widths": (fitted_scales / fitted_freqs**2).tolist(),
+        "fitted_frequency_shift_from_initialization": freq_shift.tolist(),
+        "fitted_period_shift_from_initialization": period_shift.tolist(),
+        "fitted_fractional_frequency_shift_from_initialization": (
+            freq_shift / freqs
+        ).tolist(),
+        "fitted_fractional_period_shift_from_initialization": (
+            period_shift / init_periods
+        ).tolist(),
+    }
+
+
+class TestReconcileToNComponents(unittest.TestCase):
+    """Unit tests for _consensus_multicomp_reconcile_to_n_components."""
+
+    def _call(self, accepted, requested_n, rejected=None, band_cands=None):
+        return Lightcurve._consensus_multicomp_reconcile_to_n_components(
+            accepted_component_summaries=accepted,
+            requested_num_mixtures=requested_n,
+            rejected_clusters=rejected or [],
+            band_component_candidates=band_cands or [],
+        )
+
+    def test_exact_match_m_equals_n(self):
+        summaries = _make_n_component_summaries(2)
+        reconciled, diag = self._call(summaries, requested_n=2)
+        self.assertEqual(len(reconciled), 2)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "exact_match")
+        self.assertEqual(diag["accepted_consensus_component_count"], 2)
+        self.assertEqual(diag["initialization_component_count"], 2)
+        self.assertEqual(diag["requested_num_mixtures"], 2)
+        self.assertEqual(diag["dropped_consensus_components"], [])
+        self.assertEqual(diag["fallback_initialization_components"], [])
+        for s in reconciled:
+            self.assertEqual(s["component_source"], "accepted_consensus")
+
+    def test_no_requested_n_uses_m(self):
+        summaries = _make_n_component_summaries(2)
+        reconciled, diag = self._call(summaries, requested_n=None)
+        self.assertEqual(len(reconciled), 2)
+        self.assertEqual(diag["requested_num_mixtures"], None)
+        self.assertEqual(diag["accepted_consensus_component_count"], 2)
+        self.assertEqual(diag["initialization_component_count"], 2)
+
+    def test_m_greater_than_n_drops_weakest(self):
+        # M=3 components, keep top N=1
+        summaries = [
+            {
+                "component_index": 0,
+                "source_cluster_id": 0,
+                "consensus_frequency": 1.0,
+                "consensus_frequency_width": 0.1,
+                "consensus_scale": 5.0,   # medium
+                "n_member_bands": 2,
+                "member_bands": ["A", "B"],
+            },
+            {
+                "component_index": 1,
+                "source_cluster_id": 1,
+                "consensus_frequency": 2.0,
+                "consensus_frequency_width": 0.2,
+                "consensus_scale": 10.0,  # strongest → should be KEPT
+                "n_member_bands": 3,
+                "member_bands": ["A", "B", "C"],
+            },
+            {
+                "component_index": 2,
+                "source_cluster_id": 2,
+                "consensus_frequency": 3.0,
+                "consensus_frequency_width": 0.3,
+                "consensus_scale": 2.0,   # weakest → dropped
+                "n_member_bands": 1,
+                "member_bands": ["A"],
+            },
+        ]
+        reconciled, diag = self._call(summaries, requested_n=1)
+        self.assertEqual(len(reconciled), 1)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "drop_weakest")
+        self.assertEqual(diag["accepted_consensus_component_count"], 3)
+        self.assertEqual(diag["initialization_component_count"], 1)
+        self.assertEqual(diag["requested_num_mixtures"], 1)
+        # Kept component: highest n_member_bands (3) → source_cluster_id=1
+        self.assertAlmostEqual(reconciled[0]["consensus_frequency"], 2.0)
+        self.assertEqual(reconciled[0]["component_source"], "accepted_consensus")
+        # Two components dropped
+        self.assertEqual(len(diag["dropped_consensus_components"]), 2)
+        dropped_cids = {d["source_cluster_id"] for d in diag["dropped_consensus_components"]}
+        self.assertIn(0, dropped_cids)
+        self.assertIn(2, dropped_cids)
+
+    def test_m_greater_than_n_keeps_two_of_three(self):
+        summaries = _make_n_component_summaries(3)  # scales 3, 2, 1; n_member_bands 2,2,1
+        reconciled, diag = self._call(summaries, requested_n=2)
+        self.assertEqual(len(reconciled), 2)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "drop_weakest")
+        self.assertEqual(len(diag["dropped_consensus_components"]), 1)
+        # Third component (index 2, 1 member band, scale 1) should be dropped
+        self.assertEqual(diag["dropped_consensus_components"][0]["source_cluster_id"], 2)
+
+    def test_m_greater_than_n_ranking_n_member_bands_first(self):
+        # All have same scale; ranking must use n_member_bands then cluster_id
+        summaries = [
+            {
+                "component_index": 0,
+                "source_cluster_id": 10,
+                "consensus_frequency": 1.0,
+                "consensus_frequency_width": 0.1,
+                "consensus_scale": 5.0,
+                "n_member_bands": 3,
+                "member_bands": ["A", "B", "C"],
+            },
+            {
+                "component_index": 1,
+                "source_cluster_id": 20,
+                "consensus_frequency": 2.0,
+                "consensus_frequency_width": 0.2,
+                "consensus_scale": 5.0,
+                "n_member_bands": 1,
+                "member_bands": ["A"],
+            },
+        ]
+        reconciled, diag = self._call(summaries, requested_n=1)
+        # Higher n_member_bands kept
+        self.assertAlmostEqual(reconciled[0]["consensus_frequency"], 1.0)
+        self.assertEqual(diag["dropped_consensus_components"][0]["source_cluster_id"], 20)
+
+    def test_m_less_than_n_uses_rejected_clusters(self):
+        summaries = _make_n_component_summaries(1)  # M=1 accepted
+        rejected = [
+            {
+                "cluster_id": 99,
+                "center_frequency": 5.0,
+                "frequency_scatter": 0.2,
+                "n_member_bands": 1,
+                "member_bands": ["B"],
+                "accepted": False,
+            }
+        ]
+        reconciled, diag = self._call(summaries, requested_n=2, rejected=rejected)
+        self.assertEqual(len(reconciled), 2)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "pad_with_fallback")
+        self.assertEqual(diag["initialization_component_count"], 2)
+        sources = [s["component_source"] for s in reconciled]
+        self.assertIn("accepted_consensus", sources)
+        self.assertIn("rejected_cluster_fallback", sources)
+        fallback_entry = diag["fallback_initialization_components"]
+        self.assertEqual(len(fallback_entry), 1)
+        self.assertEqual(fallback_entry[0]["component_source"], "rejected_cluster_fallback")
+        self.assertAlmostEqual(fallback_entry[0]["consensus_frequency"], 5.0)
+
+    def test_m_less_than_n_uses_per_band_candidates(self):
+        summaries = _make_n_component_summaries(1)  # M=1 accepted (freq ~1.0)
+        band_cands = [
+            {
+                "band_name": "A",
+                "component_candidates": [
+                    {"frequency": 7.0, "peak_power": 3.0, "significant": True},
+                    {"frequency": 1.01, "peak_power": 5.0, "significant": True},  # too close to accepted
+                ],
+            }
+        ]
+        reconciled, diag = self._call(summaries, requested_n=2, band_cands=band_cands)
+        self.assertEqual(len(reconciled), 2)
+        sources = [s["component_source"] for s in reconciled]
+        self.assertIn("per_band_candidate_fallback", sources)
+        fallback_entry = diag["fallback_initialization_components"]
+        self.assertEqual(len(fallback_entry), 1)
+        self.assertEqual(fallback_entry[0]["component_source"], "per_band_candidate_fallback")
+        # freq=7.0 used (1.01 skipped as too close to accepted freq=1.0)
+        self.assertAlmostEqual(fallback_entry[0]["consensus_frequency"], 7.0)
+
+    def test_m_less_than_n_uses_broad_fallback(self):
+        # No rejected clusters, no band candidates → broad fallback
+        summaries = _make_n_component_summaries(2)  # freqs: 1.0, 2.0
+        reconciled, diag = self._call(summaries, requested_n=4)
+        self.assertEqual(len(reconciled), 4)
+        sources = [s["component_source"] for s in reconciled]
+        n_broad = sources.count("broad_fallback")
+        self.assertEqual(n_broad, 2)
+        # Broad fallback components have positive frequencies
+        for s in reconciled:
+            self.assertGreater(s["consensus_frequency"], 0)
+
+    def test_reconciled_summaries_have_component_source(self):
+        summaries = _make_n_component_summaries(2)
+        reconciled, _ = self._call(summaries, requested_n=2)
+        for s in reconciled:
+            self.assertIn("component_source", s)
+            self.assertEqual(s["component_source"], "accepted_consensus")
+
+    def test_diagnostic_keys_present(self):
+        summaries = _make_n_component_summaries(2)
+        _, diag = self._call(summaries, requested_n=2)
+        for key in [
+            "requested_num_mixtures",
+            "accepted_consensus_component_count",
+            "initialization_component_count",
+            "fitted_num_mixtures",
+            "component_count_reconciliation_strategy",
+            "dropped_consensus_components",
+            "fallback_initialization_components",
+        ]:
+            self.assertIn(key, diag, msg=f"Missing key: {key}")
+
+
+class TestConsensusMulticompFitRequestedNumMixtures(unittest.TestCase):
+    """Integration tests: requested num_mixtures is preserved through the fit."""
+
+    def setUp(self):
+        self.lc = _make_minimal_multiband_lightcurve()
+        self.lc.model = object()
+        self.lc._model_pars = {}
+
+    def _run_fit(self, num_mixtures, consensus, expected_n):
+        """Run _consensus_multicomp_fit with mocks and check num_mixtures."""
+        init_diag = _make_n_component_init_diagnostics(
+            expected_n,
+            freqs=[float(i + 1) * 1.0 for i in range(expected_n)],
+            scales=[0.1 * float(i + 1) for i in range(expected_n)],
+        )
+        fitted_diag = _make_n_component_fitted_diagnostics(
+            expected_n,
+            freqs=[float(i + 1) * 1.0 for i in range(expected_n)],
+            scales=[0.1 * float(i + 1) for i in range(expected_n)],
+        )
+        fit_kwargs = dict(
+            model=None,
+            constrain_consensus=False,
+            _allow_existing_model_for_consensus=True,
+        )
+        if num_mixtures is not None:
+            fit_kwargs["num_mixtures"] = num_mixtures
+
+        with mock.patch.object(
+            self.lc,
+            "_consensus_collect_band_component_candidates",
+            return_value=_band_component_candidates(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_cluster_component_candidates",
+            return_value=_component_clusters(),
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_build_multicomponent_frequency_consensus",
+            return_value=consensus,
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_build_guess",
+            return_value={},
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_collect_initialization_diagnostics",
+            return_value=init_diag,
+        ), mock.patch.object(
+            self.lc,
+            "_consensus_collect_fitted_mixture_diagnostics",
+            return_value=fitted_diag,
+        ), mock.patch.object(
+            self.lc,
+            "fit",
+            return_value={"status": "ok"},
+        ) as fit_mock:
+            self.lc._consensus_multicomp_fit(**fit_kwargs)
+
+        return fit_mock, self.lc.consensus_diagnostics
+
+    def test_num_mixtures_2_exact_match(self):
+        """M=2 accepted, N=2 requested → exact match."""
+        consensus = _multicomponent_consensus()  # 2 components
+        fit_mock, diag = self._run_fit(num_mixtures=2, consensus=consensus, expected_n=2)
+        self.assertEqual(fit_mock.call_args.kwargs["num_mixtures"], 2)
+        self.assertEqual(diag["fitted_num_mixtures"], 2)
+        self.assertEqual(diag["requested_num_mixtures"], 2)
+        self.assertEqual(diag["accepted_consensus_component_count"], 2)
+        self.assertEqual(diag["initialization_component_count"], 2)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "exact_match")
+
+    def test_num_mixtures_1_drops_weakest(self):
+        """M=2 accepted, N=1 requested → drop weakest component."""
+        consensus = _multicomponent_consensus()  # 2 components
+        fit_mock, diag = self._run_fit(num_mixtures=1, consensus=consensus, expected_n=1)
+        self.assertEqual(fit_mock.call_args.kwargs["num_mixtures"], 1)
+        self.assertEqual(diag["fitted_num_mixtures"], 1)
+        self.assertEqual(diag["requested_num_mixtures"], 1)
+        self.assertEqual(diag["accepted_consensus_component_count"], 2)
+        self.assertEqual(diag["initialization_component_count"], 1)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "drop_weakest")
+        self.assertEqual(len(diag["dropped_consensus_components"]), 1)
+        # Period summaries must match N=1
+        self.assertEqual(len(diag["multicomponent_period_summaries"]), 1)
+
+    def test_num_mixtures_3_pads_with_fallback(self):
+        """M=2 accepted, N=3 requested → one fallback component added."""
+        consensus = _multicomponent_consensus()  # 2 components
+        fit_mock, diag = self._run_fit(num_mixtures=3, consensus=consensus, expected_n=3)
+        self.assertEqual(fit_mock.call_args.kwargs["num_mixtures"], 3)
+        self.assertEqual(diag["fitted_num_mixtures"], 3)
+        self.assertEqual(diag["requested_num_mixtures"], 3)
+        self.assertEqual(diag["accepted_consensus_component_count"], 2)
+        self.assertEqual(diag["initialization_component_count"], 3)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "pad_with_fallback")
+        self.assertEqual(len(diag["fallback_initialization_components"]), 1)
+        # Period summaries must match N=3
+        self.assertEqual(len(diag["multicomponent_period_summaries"]), 3)
+
+    def test_num_mixtures_4_pads_with_two_fallbacks(self):
+        """M=2 accepted, N=4 requested → two fallback components added."""
+        consensus = _multicomponent_consensus()  # 2 components
+        fit_mock, diag = self._run_fit(num_mixtures=4, consensus=consensus, expected_n=4)
+        self.assertEqual(fit_mock.call_args.kwargs["num_mixtures"], 4)
+        self.assertEqual(diag["fitted_num_mixtures"], 4)
+        self.assertEqual(diag["requested_num_mixtures"], 4)
+        self.assertEqual(diag["accepted_consensus_component_count"], 2)
+        self.assertEqual(diag["initialization_component_count"], 4)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "pad_with_fallback")
+        self.assertEqual(len(diag["fallback_initialization_components"]), 2)
+        # Period summaries must match N=4
+        self.assertEqual(len(diag["multicomponent_period_summaries"]), 4)
+
+    def test_no_num_mixtures_uses_m(self):
+        """No num_mixtures requested → M=2 used unchanged (legacy behaviour)."""
+        consensus = _multicomponent_consensus()  # 2 components
+        fit_mock, diag = self._run_fit(num_mixtures=None, consensus=consensus, expected_n=2)
+        self.assertEqual(fit_mock.call_args.kwargs["num_mixtures"], 2)
+        self.assertEqual(diag["fitted_num_mixtures"], 2)
+        self.assertIsNone(diag["requested_num_mixtures"])
+        self.assertEqual(diag["accepted_consensus_component_count"], 2)
+        self.assertEqual(diag["initialization_component_count"], 2)
+        self.assertEqual(diag["component_count_reconciliation_strategy"], "exact_match")
+
+    def test_period_summaries_have_component_source(self):
+        """Every period summary entry must carry a component_source field."""
+        consensus = _multicomponent_consensus()  # 2 components, M=N=2
+        _, diag = self._run_fit(num_mixtures=2, consensus=consensus, expected_n=2)
+        for entry in diag["multicomponent_period_summaries"]:
+            self.assertIn("component_source", entry)
+            self.assertEqual(entry["component_source"], "accepted_consensus")
+
+    def test_period_summaries_fallback_component_source(self):
+        """Fallback period summary entries must carry their provenance."""
+        consensus = _multicomponent_consensus()  # M=2, request N=3
+        _, diag = self._run_fit(num_mixtures=3, consensus=consensus, expected_n=3)
+        summaries = diag["multicomponent_period_summaries"]
+        self.assertEqual(len(summaries), 3)
+        accepted_sources = [
+            s["component_source"]
+            for s in summaries
+            if s["component_source"] == "accepted_consensus"
+        ]
+        fallback_sources = [
+            s["component_source"]
+            for s in summaries
+            if s["component_source"] != "accepted_consensus"
+        ]
+        self.assertEqual(len(accepted_sources), 2)
+        self.assertEqual(len(fallback_sources), 1)
+
+    def test_consensus_frequencies_reflect_reconciled_n(self):
+        """consensus_frequencies in diagnostics must have exactly N elements."""
+        consensus = _multicomponent_consensus()  # M=2
+        for n in [1, 2, 3, 4]:
+            with self.subTest(n=n):
+                _, diag = self._run_fit(num_mixtures=n, consensus=consensus, expected_n=n)
+                self.assertEqual(len(diag["consensus_frequencies"]), n)
+                self.assertEqual(len(diag["consensus_periods"]), n)
+                self.assertEqual(len(diag["consensus_scales"]), n)
+
+
 if __name__ == "__main__":
     unittest.main()

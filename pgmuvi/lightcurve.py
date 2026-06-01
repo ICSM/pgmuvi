@@ -14733,6 +14733,273 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "consensus_frequency_width": consensus_frequency_width,
         }
 
+    @staticmethod
+    def _consensus_multicomp_reconcile_to_n_components(
+        accepted_component_summaries,
+        requested_num_mixtures,
+        rejected_clusters,
+        band_component_candidates,
+        min_width_fraction=0.05,
+    ):
+        """Reconcile accepted consensus components to the user-requested count.
+
+        Given M accepted consensus components and a user-requested count N,
+        this helper returns exactly N component descriptors and a diagnostics
+        dict describing what was done.
+
+        Parameters
+        ----------
+        accepted_component_summaries : list of dict
+            Component summaries from
+            :meth:`_consensus_build_multicomponent_frequency_consensus`.
+            Each entry must contain ``consensus_frequency``,
+            ``consensus_frequency_width``, ``consensus_scale``,
+            ``n_member_bands``, and ``source_cluster_id``.
+        requested_num_mixtures : int or None
+            User-requested mixture count N.  When ``None`` the accepted
+            count M is used unchanged.
+        rejected_clusters : list of dict
+            Rejected cluster dicts (fallback source a).
+        band_component_candidates : list of dict
+            Per-band component candidate dicts (fallback source b).
+        min_width_fraction : float
+            Minimum frequency width as a fraction of the centre frequency
+            used when constructing fallback component widths.
+
+        Returns
+        -------
+        tuple of (list of dict, dict)
+            *reconciled_summaries* – exactly N component dicts, each
+            containing the ``component_source`` provenance key.
+            *reconciliation_diagnostics* – diagnostic fields to be merged
+            into ``consensus_diagnostics``.
+        """
+        M = len(accepted_component_summaries)
+        N = int(requested_num_mixtures) if requested_num_mixtures is not None else M
+        _mwf = float(min_width_fraction) if min_width_fraction else 0.0
+        min_wf = _mwf if _mwf > 0 else 0.05
+
+        # Tag accepted summaries with provenance
+        accepted_with_source = [
+            dict(s, component_source="accepted_consensus")
+            for s in accepted_component_summaries
+        ]
+
+        reconciliation_diagnostics = {
+            "requested_num_mixtures": (
+                int(requested_num_mixtures)
+                if requested_num_mixtures is not None
+                else None
+            ),
+            "accepted_consensus_component_count": M,
+            "initialization_component_count": None,
+            "fitted_num_mixtures": None,
+            "component_count_reconciliation_strategy": None,
+            "dropped_consensus_components": [],
+            "fallback_initialization_components": [],
+        }
+
+        if M == N:
+            reconciled = list(accepted_with_source)
+            reconciliation_diagnostics[
+                "component_count_reconciliation_strategy"
+            ] = "exact_match"
+
+        elif M > N:
+            # Rank: higher n_member_bands first, higher consensus_scale second,
+            # lower source_cluster_id as deterministic tie-breaker.
+            def _rank_key(s):
+                n_mb = int(s.get("n_member_bands") or 0)
+                scale = float(s.get("consensus_scale") or 0.0)
+                cid = s.get("source_cluster_id")
+                try:
+                    cid_int = int(cid)
+                except (TypeError, ValueError):
+                    cid_int = 999999
+                return (-n_mb, -scale, cid_int)
+
+            sorted_summaries = sorted(accepted_with_source, key=_rank_key)
+            kept = sorted_summaries[:N]
+            dropped = sorted_summaries[N:]
+
+            # Re-sort kept by source_cluster_id for deterministic ordering.
+            kept.sort(
+                key=lambda s: (
+                    999999
+                    if s.get("source_cluster_id") is None
+                    else int(s["source_cluster_id"])
+                )
+            )
+
+            reconciled = kept
+            reconciliation_diagnostics["dropped_consensus_components"] = [
+                {
+                    "original_component_index": s.get("component_index"),
+                    "source_cluster_id": s.get("source_cluster_id"),
+                    "consensus_frequency": float(s["consensus_frequency"]),
+                    "n_member_bands": s.get("n_member_bands"),
+                    "consensus_scale": float(s.get("consensus_scale") or 0.0),
+                }
+                for s in dropped
+            ]
+            reconciliation_diagnostics[
+                "component_count_reconciliation_strategy"
+            ] = "drop_weakest"
+
+        else:
+            # M < N: pad with fallback components.
+            reconciled = list(accepted_with_source)
+            fallback_list = []
+            needed = N - M
+
+            accepted_freqs = np.array(
+                [
+                    float(s["consensus_frequency"])
+                    for s in accepted_with_source
+                    if s.get("consensus_frequency") is not None
+                ],
+                dtype=float,
+            )
+            all_used_freqs = list(map(float, accepted_freqs))
+
+            def _freq_too_close(freq, used, rtol=0.1):
+                if not used:
+                    return False
+                arr = np.array(used, dtype=float)
+                return bool(np.any(np.abs(freq - arr) / arr < rtol))
+
+            # Fallback a: rejected consensus clusters.
+            if needed > 0 and rejected_clusters:
+                sorted_rejected = sorted(
+                    [c for c in rejected_clusters if isinstance(c, dict)],
+                    key=lambda c: (
+                        -int(c.get("n_member_bands") or 0),
+                        int(c.get("cluster_id") or 0),
+                    ),
+                )
+                for cluster in sorted_rejected:
+                    if needed <= 0:
+                        break
+                    freq_raw = cluster.get("center_frequency")
+                    try:
+                        freq = float(freq_raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if not (np.isfinite(freq) and freq > 0):
+                        continue
+                    if _freq_too_close(freq, all_used_freqs):
+                        continue
+                    try:
+                        scatter = float(cluster.get("frequency_scatter") or 0.0)
+                    except (TypeError, ValueError):
+                        scatter = 0.0
+                    freq_width = max(scatter, min_wf * freq)
+                    fallback_list.append({
+                        "source_cluster_id": cluster.get("cluster_id"),
+                        "consensus_frequency": freq,
+                        "consensus_frequency_width": freq_width,
+                        "consensus_scale": float(cluster.get("n_member_bands") or 1),
+                        "n_member_bands": cluster.get("n_member_bands"),
+                        "member_bands": list(cluster.get("member_bands") or []),
+                        "component_source": "rejected_cluster_fallback",
+                    })
+                    all_used_freqs.append(freq)
+                    needed -= 1
+
+            # Fallback b: unused per-band candidate frequencies.
+            if needed > 0 and band_component_candidates:
+                all_cands = []
+                for entry in band_component_candidates:
+                    if not isinstance(entry, dict):
+                        continue
+                    band_name = entry.get("band_name")
+                    for cand in entry.get("component_candidates") or []:
+                        if not isinstance(cand, dict):
+                            continue
+                        try:
+                            f = float(cand.get("frequency"))
+                        except (TypeError, ValueError):
+                            continue
+                        if not (np.isfinite(f) and f > 0):
+                            continue
+                        all_cands.append({
+                            "frequency": f,
+                            "peak_power": float(cand.get("peak_power") or 0.0),
+                            "band_name": band_name,
+                        })
+                all_cands.sort(key=lambda c: (-c["peak_power"], c["frequency"]))
+                for cand in all_cands:
+                    if needed <= 0:
+                        break
+                    freq = cand["frequency"]
+                    if _freq_too_close(freq, all_used_freqs):
+                        continue
+                    freq_width = min_wf * freq
+                    fallback_list.append({
+                        "source_cluster_id": None,
+                        "consensus_frequency": freq,
+                        "consensus_frequency_width": freq_width,
+                        "consensus_scale": 1.0,
+                        "n_member_bands": 1,
+                        "member_bands": (
+                            [cand["band_name"]]
+                            if cand["band_name"] is not None
+                            else []
+                        ),
+                        "component_source": "per_band_candidate_fallback",
+                    })
+                    all_used_freqs.append(freq)
+                    needed -= 1
+
+            # Fallback c: broad fallback within the global frequency range.
+            if needed > 0:
+                if len(all_used_freqs) >= 2:
+                    log_min = float(np.log(np.min(all_used_freqs)))
+                    log_max = float(np.log(np.max(all_used_freqs)))
+                elif len(all_used_freqs) == 1:
+                    log_base = float(np.log(all_used_freqs[0]))
+                    log_min = log_base - 1.0
+                    log_max = log_base + 1.0
+                else:
+                    log_min = float(np.log(0.1))
+                    log_max = float(np.log(10.0))
+                for i in range(needed):
+                    frac = (i + 0.5) / needed
+                    log_f = log_min + frac * (log_max - log_min)
+                    freq = float(np.exp(log_f))
+                    for _ in range(20):
+                        if not _freq_too_close(freq, all_used_freqs):
+                            break
+                        freq *= 1.05
+                    freq_width = min_wf * freq
+                    fallback_list.append({
+                        "source_cluster_id": None,
+                        "consensus_frequency": freq,
+                        "consensus_frequency_width": freq_width,
+                        "consensus_scale": 1.0,
+                        "n_member_bands": 0,
+                        "member_bands": [],
+                        "component_source": "broad_fallback",
+                    })
+                    all_used_freqs.append(freq)
+
+            reconciled = reconciled + fallback_list
+            reconciliation_diagnostics["fallback_initialization_components"] = [
+                {
+                    "component_source": s["component_source"],
+                    "consensus_frequency": float(s["consensus_frequency"]),
+                    "n_member_bands": s.get("n_member_bands"),
+                    "source_cluster_id": s.get("source_cluster_id"),
+                }
+                for s in fallback_list
+            ]
+            reconciliation_diagnostics[
+                "component_count_reconciliation_strategy"
+            ] = "pad_with_fallback"
+
+        reconciliation_diagnostics["initialization_component_count"] = len(reconciled)
+        return reconciled, reconciliation_diagnostics
+
     def _consensus_standard_fit(self, **fit_kwargs):
         """Run the conservative consensus fit workflow.
 
@@ -15641,6 +15908,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         verbose = fit_kwargs.get("verbose", False)
         _allow_existing = fit_kwargs.pop("_allow_existing_model_for_consensus", False)
+        # Capture the user-requested mixture count before any mutation.
+        # This value is authoritative: the final GP model must use exactly
+        # requested_num_mixtures components when the user specifies it.
+        requested_num_mixtures = fit_kwargs.get("num_mixtures", None)
 
         if self.ndim != 2:
             raise ValueError(
@@ -15819,10 +16090,45 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         initialization_payload = self._consensus_build_multicomponent_initialization(
             multicomponent_consensus
         )
-        consensus_frequencies = initialization_payload["consensus_frequencies"]
-        consensus_scales = initialization_payload["consensus_scales"]
-        consensus_frequency_width = initialization_payload["consensus_frequency_width"]
+        # M = accepted consensus component count (from clustering).
         n_components = initialization_payload["n_components"]
+
+        # ------------------------------------------------------------------ #
+        # Reconcile accepted components to the user-requested count N.        #
+        # The user-requested num_mixtures is authoritative; consensus         #
+        # clustering provides initialisation information only.               #
+        # ------------------------------------------------------------------ #
+        accepted_comp_summaries = list(
+            multicomponent_consensus.get("component_summaries") or []
+        )
+        rejected_clusters_for_fallback = list(
+            multicomponent_consensus.get("rejected_clusters") or []
+        )
+        reconciled_summaries, reconciliation_diagnostics = (
+            self._consensus_multicomp_reconcile_to_n_components(
+                accepted_component_summaries=accepted_comp_summaries,
+                requested_num_mixtures=requested_num_mixtures,
+                rejected_clusters=rejected_clusters_for_fallback,
+                band_component_candidates=band_component_candidates,
+                min_width_fraction=min_width_fraction,
+            )
+        )
+        # Update component arrays to reflect the reconciled count N.
+        final_n = len(reconciled_summaries)
+        consensus_frequencies = np.array(
+            [float(s["consensus_frequency"]) for s in reconciled_summaries],
+            dtype=float,
+        )
+        consensus_scales = np.array(
+            [float(s.get("consensus_scale") or 1.0) for s in reconciled_summaries],
+            dtype=float,
+        )
+        consensus_frequency_width = np.array(
+            [float(s["consensus_frequency_width"]) for s in reconciled_summaries],
+            dtype=float,
+        )
+        n_components = final_n
+
         consensus_periods = 1.0 / consensus_frequencies
         consensus_period_widths = consensus_frequency_width / (consensus_frequencies**2)
         if (
@@ -15834,11 +16140,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ):
             raise RuntimeError(
                 "Consensus multi-component diagnostics failed: component vector "
-                "length mismatch in consensus initialization payload."
+                "length mismatch after component-count reconciliation."
             )
         # Primary component is canonical component_index==0 by cluster order.
         primary_component_index = 0 if int(n_components) > 0 else None
 
+        # Use the reconciled (user-requested) component count for the final model.
         fit_kwargs["num_mixtures"] = n_components
         mad_frequency_scatter = float(
             np.median(
@@ -15886,6 +16193,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 float(consensus_periods[0]) if primary_component_index == 0 else None
             ),
         })
+        # Add component-count reconciliation diagnostics.
+        result_diagnostics.update(reconciliation_diagnostics)
 
         _requested_model = fit_kwargs.get("model")
         if _requested_model is not None:
@@ -16066,9 +16375,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             initialization_diagnostics.get("initialized_mixture_period_widths", []),
             dtype=float,
         ).ravel()
-        component_summaries = list(
-            multicomponent_consensus.get("component_summaries") or []
-        )
+        # Use the reconciled component summaries (may differ from the original
+        # multicomponent_consensus["component_summaries"] when N != M).
+        component_summaries = reconciled_summaries
         period_summaries = []
         for component_index in range(int(n_components)):
             source_summary = (
@@ -16080,6 +16389,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             period_summaries.append(
                 {
                     "component_index": component_index,
+                    "component_source": source_summary.get(
+                        "component_source", "accepted_consensus"
+                    ),
                     "source_cluster_id": source_summary.get("source_cluster_id"),
                     "consensus_frequency": float(consensus_frequencies[component_index]),
                     "consensus_period": float(consensus_periods[component_index]),
@@ -16360,6 +16672,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise
 
         result_diagnostics["consensus_success"] = True
+        result_diagnostics["fitted_num_mixtures"] = int(n_components)
         self.consensus_diagnostics = self._consensus_finalize_result_structure(
             result_diagnostics
         )
