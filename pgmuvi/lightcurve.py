@@ -14775,7 +14775,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             into ``consensus_diagnostics``.
         """
         M = len(accepted_component_summaries)
-        N = int(requested_num_mixtures) if requested_num_mixtures is not None else M
+        if requested_num_mixtures is None:
+            N = M
+        else:
+            if isinstance(requested_num_mixtures, bool) or not isinstance(
+                requested_num_mixtures, int
+            ):
+                raise TypeError(
+                    "`num_mixtures` must be a positive integer or None, "
+                    f"got {requested_num_mixtures!r} of type "
+                    f"{type(requested_num_mixtures)!r}."
+                )
+            if requested_num_mixtures < 1:
+                raise ValueError(
+                    "`num_mixtures` must be a positive integer or None, "
+                    f"got {requested_num_mixtures}."
+                )
+            N = requested_num_mixtures
         min_wf = (
             float(min_width_fraction)
             if (min_width_fraction and min_width_fraction > 0)
