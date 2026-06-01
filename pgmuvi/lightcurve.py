@@ -14776,8 +14776,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         M = len(accepted_component_summaries)
         N = int(requested_num_mixtures) if requested_num_mixtures is not None else M
-        _mwf = float(min_width_fraction) if min_width_fraction else 0.0
-        min_wf = _mwf if _mwf > 0 else 0.05
+        min_wf = (
+            float(min_width_fraction)
+            if (min_width_fraction and min_width_fraction > 0)
+            else 0.05
+        )
 
         # Tag accepted summaries with provenance
         accepted_with_source = [
@@ -14967,6 +14970,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     frac = (i + 0.5) / needed
                     log_f = log_min + frac * (log_max - log_min)
                     freq = float(np.exp(log_f))
+                    # Up to 20 nudge attempts (1.05× per step) to avoid
+                    # collisions with already-placed components.
                     for _ in range(20):
                         if not _freq_too_close(freq, all_used_freqs):
                             break
@@ -16096,7 +16101,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # ------------------------------------------------------------------ #
         # Reconcile accepted components to the user-requested count N.        #
         # The user-requested num_mixtures is authoritative; consensus         #
-        # clustering provides initialisation information only.               #
+        # clustering provides initialization information only.               #
         # ------------------------------------------------------------------ #
         accepted_comp_summaries = list(
             multicomponent_consensus.get("component_summaries") or []

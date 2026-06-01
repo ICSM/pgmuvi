@@ -1098,7 +1098,8 @@ class TestReconcileToNComponents(unittest.TestCase):
         self.assertEqual(diag["accepted_consensus_component_count"], 3)
         self.assertEqual(diag["initialization_component_count"], 1)
         self.assertEqual(diag["requested_num_mixtures"], 1)
-        # Kept component: highest n_member_bands (3) → source_cluster_id=1
+        # Kept component: highest n_member_bands (3) AND highest consensus_scale
+        # (10.0) → source_cluster_id=1 (freq=2.0); others have lower support.
         self.assertAlmostEqual(reconciled[0]["consensus_frequency"], 2.0)
         self.assertEqual(reconciled[0]["component_source"], "accepted_consensus")
         # Two components dropped
@@ -1337,7 +1338,7 @@ class TestConsensusMulticompFitRequestedNumMixtures(unittest.TestCase):
         self.assertEqual(len(diag["multicomponent_period_summaries"]), 4)
 
     def test_no_num_mixtures_uses_m(self):
-        """No num_mixtures requested → M=2 used unchanged (legacy behaviour)."""
+        """No num_mixtures requested → M=2 used unchanged (legacy behavior)."""
         consensus = _multicomponent_consensus()  # 2 components
         fit_mock, diag = self._run_fit(num_mixtures=None, consensus=consensus, expected_n=2)
         self.assertEqual(fit_mock.call_args.kwargs["num_mixtures"], 2)
