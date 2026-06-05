@@ -9905,6 +9905,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 lr=lr,
                 optim=optim,
                 stopavg=stopavg,
+                verbose=verbose
             )
         self.__FITTED_MAP = True
         self.is_fitted = True
