@@ -9403,6 +9403,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             clear_consensus=bool(fit_strategy is not None),
         )
 
+        verbose = kwargs.get("verbose", False)
+
         # Dispatch alternative fit strategies before any stateful setup from
         # the default/general fit pathway mutates this Lightcurve instance.
         if fit_strategy is not None:
