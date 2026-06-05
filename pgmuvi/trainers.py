@@ -23,6 +23,7 @@ def train(
     optim="SGD",
     eps=1e-8,
     stopavg=9,
+    verbose=True,
     **kwargs,
 ):
     """Given a GP model, a likelihood, and some training data, optimise a
@@ -174,7 +175,7 @@ def train(
             p = param_name.split(".")[1] if "raw" in param_name else param_name
             results[p] = []
     # for param_name, param in
-    for i in tqdm(range(maxiter)):
+    for i in tqdm(range(maxiter), disable=not verbose):
         optimizer.zero_grad()
         output = model(train_x)
         loss = -lossfn(output, train_y)
@@ -200,10 +201,11 @@ def train(
         if stop and i > miniter:
             stopval = np.std(results["loss"][-stopavg:])
             if stopval < stop:
-                print(
-                    f"""Average change in loss over the last {stopavg} iterations
-                    was {stopval}.\n This is < {stop}, so we will end training here."""
-                )
+                if verbose:
+                    print(
+                        f"""Average change in loss over the last {stopavg} iterations
+                        was {stopval}.\n This is < {stop}, so we will end training here."""
+                    )
                 break  # break out of the training loop early
 
     return results
