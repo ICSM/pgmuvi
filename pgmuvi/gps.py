@@ -22,6 +22,14 @@ from gpytorch.models import ExactGP, ApproximateGP
 from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.variational import VariationalStrategy
 
+from pgmuvi.parameter_specs import (
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+    ParameterSpec,
+    ParameterSpecCollection,
+)
+
 # Module-level constant: log(1.7) used as default initial value for
 # DustMean.log_alpha, corresponding to a typical interstellar dust-extinction
 # power-law index of alpha ≈ 1.7.
@@ -169,6 +177,52 @@ class DustMean(gpt.means.Mean):
         alpha = self.log_alpha.squeeze(-1).exp()
         extinction = tau * wavelength.pow(-alpha)
         return self.offset.squeeze(-1) + amplitude * (-extinction).exp()
+
+    def parameter_schema(self, prefix="mean_module"):
+        """Return model-independent parameter specifications for DustMean."""
+        def name(local_name):
+            return f"{prefix}.{local_name}" if prefix else local_name
+
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("offset"),
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description="Constant additive flux offset shared across wavelengths.",
+                ),
+                ParameterSpec(
+                    name=name("log_amplitude"),
+                    role=ParameterRole.AMPLITUDE,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LOG,
+                    description=(
+                        "Positive amplitude of the dust-attenuated wavelength-dependent "
+                        "mean function, represented in physical flux units before log transformation."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("log_tau"),
+                    role=ParameterRole.SHAPE,
+                    domain=ParameterDomain.DIMENSIONLESS,
+                    scale=ParameterScale.LOG,
+                    description=(
+                        "Positive effective dust optical-depth parameter controlling the "
+                        "strength of wavelength-dependent attenuation."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("log_alpha"),
+                    role=ParameterRole.SHAPE,
+                    domain=ParameterDomain.DIMENSIONLESS,
+                    scale=ParameterScale.LOG,
+                    description=(
+                        "Positive power-law index of the wavelength-dependent attenuation law."
+                    ),
+                ),
+            ]
+        )
 
 
 # FIRST WE HAVE SOME Naive GPs
