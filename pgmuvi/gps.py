@@ -36,6 +36,59 @@ from pgmuvi.parameter_specs import (
 _LOG_1_7 = math.log(1.7)
 
 
+# ---------------------------------------------------------------------
+# Parameter schema helpers
+# ---------------------------------------------------------------------
+def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
+    """Return model-independent parameter specifications for a spectral-mixture kernel."""
+
+    def name(local_name):
+        return f"{prefix}.{local_name}" if prefix else local_name
+
+    shape = None if num_mixtures is None else (num_mixtures,)
+
+    return ParameterSpecCollection(
+        [
+            ParameterSpec(
+                name=name("mixture_means"),
+                role=ParameterRole.FREQUENCY,
+                domain=ParameterDomain.FREQUENCY,
+                scale=ParameterScale.LINEAR,
+                shape=shape,
+                description=(
+                    "Central frequencies of the spectral-mixture components. "
+                    "Period diagnostics should be converted to frequencies before "
+                    "constructing estimates for this parameter."
+                ),
+            ),
+            ParameterSpec(
+                name=name("mixture_scales"),
+                role=ParameterRole.LENGTHSCALE,
+                domain=ParameterDomain.FREQUENCY,
+                scale=ParameterScale.LOG,
+                shape=shape,
+                description=(
+                    "Positive frequency-space widths of the spectral-mixture components."
+                ),
+            ),
+            ParameterSpec(
+                name=name("mixture_weights"),
+                role=ParameterRole.WEIGHT,
+                domain=ParameterDomain.VARIANCE,
+                scale=ParameterScale.LOG,
+                shape=shape,
+                description=(
+                    "Positive variance contributions of the spectral-mixture components, "
+                    "equivalent to integrated PSD power up to kernel convention factors."
+                ),
+            ),
+        ]
+    )
+
+
+# ---------------------------------------------------------------------
+# Mean functions
+# ---------------------------------------------------------------------
 class PowerLawMean(gpt.means.Mean):
     """Mean function with power-law wavelength dependence for 2D GP models.
 
