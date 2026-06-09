@@ -36,6 +36,162 @@ from pgmuvi.parameter_specs import (
 _LOG_1_7 = math.log(1.7)
 
 
+# ---------------------------------------------------------------------
+# Parameter schema helpers
+# ---------------------------------------------------------------------
+def rq_kernel_parameter_schema(
+    prefix="covar_module",
+    *,
+    domain,
+    description_context=None,
+):
+    """Return model-independent parameter specifications for an RQ kernel."""
+
+    if domain not in {ParameterDomain.TIME, ParameterDomain.WAVELENGTH}:
+        raise ValueError(
+            "rq_kernel_parameter_schema requires domain to be "
+            "ParameterDomain.TIME or ParameterDomain.WAVELENGTH."
+        )
+
+    def name(local_name):
+        return f"{prefix}.{local_name}" if prefix else local_name
+
+    if description_context is None:
+        description_context = domain.value
+
+    return ParameterSpecCollection(
+        [
+            ParameterSpec(
+                name=name("lengthscale"),
+                role=ParameterRole.LENGTHSCALE,
+                domain=domain,
+                scale=ParameterScale.LOG,
+                description=(
+                    "Positive correlation lengthscale of the Rational Quadratic "
+                    f"kernel in {description_context} space."
+                ),
+            ),
+            ParameterSpec(
+                name=name("alpha"),
+                role=ParameterRole.SHAPE,
+                domain=ParameterDomain.DIMENSIONLESS,
+                scale=ParameterScale.LOG,
+                description=(
+                    "Positive Rational Quadratic shape parameter controlling "
+                    "the mixture of correlation scales."
+                ),
+            ),
+        ]
+    )
+
+
+def lengthscale_kernel_parameter_schema(
+    prefix="covar_module",
+    *,
+    domain,
+    description_context=None,
+):
+    """Return model-independent parameter specifications for a kernel lengthscale."""
+    if domain not in {ParameterDomain.TIME, ParameterDomain.WAVELENGTH}:
+        raise ValueError(
+            "lengthscale_kernel_parameter_schema requires domain to be "
+            "ParameterDomain.TIME or ParameterDomain.WAVELENGTH."
+        )
+
+    def name(local_name):
+        return f"{prefix}.{local_name}" if prefix else local_name
+
+    if description_context is None:
+        description_context = domain.value
+
+    return ParameterSpecCollection(
+        [
+            ParameterSpec(
+                name=name("lengthscale"),
+                role=ParameterRole.LENGTHSCALE,
+                domain=domain,
+                scale=ParameterScale.LOG,
+                description=(
+                    "Positive correlation lengthscale of the kernel in "
+                    f"{description_context} space."
+                ),
+            ),
+        ]
+    )
+
+
+def scale_kernel_parameter_schema(prefix="covar_module"):
+    """Return model-independent parameter specifications for a ScaleKernel."""
+
+    def name(local_name):
+        return f"{prefix}.{local_name}" if prefix else local_name
+
+    return ParameterSpecCollection(
+        [
+            ParameterSpec(
+                name=name("outputscale"),
+                role=ParameterRole.WEIGHT,
+                domain=ParameterDomain.VARIANCE,
+                scale=ParameterScale.LOG,
+                description=(
+                    "Positive covariance-amplitude scale factor multiplying the base "
+                    "kernel."
+                ),
+            ),
+        ]
+    )
+
+
+def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
+    """Return model-independent parameter specifications for a spectral-mixture kernel."""
+
+    def name(local_name):
+        return f"{prefix}.{local_name}" if prefix else local_name
+
+    shape = None if num_mixtures is None else (num_mixtures,)
+
+    return ParameterSpecCollection(
+        [
+            ParameterSpec(
+                name=name("mixture_means"),
+                role=ParameterRole.FREQUENCY,
+                domain=ParameterDomain.FREQUENCY,
+                scale=ParameterScale.LINEAR,
+                shape=shape,
+                description=(
+                    "Central frequencies of the spectral-mixture components. "
+                    "Period diagnostics should be converted to frequencies before "
+                    "constructing estimates for this parameter."
+                ),
+            ),
+            ParameterSpec(
+                name=name("mixture_scales"),
+                role=ParameterRole.LENGTHSCALE,
+                domain=ParameterDomain.FREQUENCY,
+                scale=ParameterScale.LOG,
+                shape=shape,
+                description=(
+                    "Positive frequency-space widths of the spectral-mixture components."
+                ),
+            ),
+            ParameterSpec(
+                name=name("mixture_weights"),
+                role=ParameterRole.WEIGHT,
+                domain=ParameterDomain.VARIANCE,
+                scale=ParameterScale.LOG,
+                shape=shape,
+                description=(
+                    "Positive variance contributions of the spectral-mixture components, "
+                    "equivalent to integrated PSD power up to kernel convention factors."
+                ),
+            ),
+        ]
+    )
+
+
+# ---------------------------------------------------------------------
+# Mean functions
+# ---------------------------------------------------------------------
 class PowerLawMean(gpt.means.Mean):
     """Mean function with power-law wavelength dependence for 2D GP models.
 
