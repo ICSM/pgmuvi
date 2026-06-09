@@ -45,9 +45,62 @@ class ParameterScale(str, Enum):
     OTHER = "other"
 
 
+class GuessStrategy(str, Enum):
+    USER = "user"
+    DEFAULT = "default"
+
+    MEDIAN_FLUX = "median_flux"
+    ROBUST_FLUX_RANGE = "robust_flux_range"
+    FLUX_STD = "flux_std"
+    MAD = "mad"
+
+    BASELINE = "baseline"
+    CADENCE = "cadence"
+
+    LS_PERIOD = "ls_period"
+    ACF_PERIOD = "acf_period"
+    CONSENSUS_PERIOD = "consensus_period"
+    CONSENSUS_MULTICOMP_PERIOD = "consensus_multicomp_period"
+
+    VARIABILITY_TIMESCALE = "variability_timescale"
+
+    WAVELENGTH_RANGE = "wavelength_range"
+
+    CUSTOM = "custom"
+
+
+class ConstraintStrategy(str, Enum):
+    USER = "user"
+    DEFAULT = "default"
+
+    MEDIAN_FLUX = "median_flux"
+    ROBUST_FLUX_RANGE = "robust_flux_range"
+    FLUX_STD = "flux_std"
+    MAD = "mad"
+
+    BASELINE = "baseline"
+    CADENCE = "cadence"
+
+    LS_PERIOD = "ls_period"
+    ACF_PERIOD = "acf_period"
+    CONSENSUS_PERIOD = "consensus_period"
+    CONSENSUS_MULTICOMP_PERIOD = "consensus_multicomp_period"
+
+    VARIABILITY_TIMESCALE = "variability_timescale"
+
+    WAVELENGTH_RANGE = "wavelength_range"
+
+    CUSTOM = "custom"
+
+
 @dataclass(frozen=True)
 class ParameterSpec:
-    """Description of one trainable model parameter in data/physical space."""
+    """Description of one trainable model parameter in data/physical space.
+
+    The specification describes the parameter semantically and records
+    how initial values and constraints should be constructed. It does
+    not contain any model-specific transformation logic.
+    """
 
     name: str
     role: ParameterRole
@@ -61,6 +114,8 @@ class ParameterSpec:
     units: str | None = None
     description: str | None = None
 
+    guess_strategy: GuessStrategy | None = None
+    constraint_strategy: ConstraintStrategy | None = None
     guess_source: str | None = None
     constraint_source: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

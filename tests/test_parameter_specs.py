@@ -7,6 +7,8 @@ from pgmuvi.parameter_specs import (
     ParameterScale,
     ParameterSpec,
     ParameterSpecCollection,
+    GuessStrategy,
+    ConstraintStrategy,
 )
 
 
@@ -110,3 +112,20 @@ def test_parameter_spec_collection_lookup_and_add():
     assert "mean_module.offset" in collection
     assert collection["mean_module.offset"] is spec
     assert collection.names() == ["mean_module.offset"]
+
+
+def test_parameter_spec_accepts_strategy_metadata():
+    spec = ParameterSpec(
+        name="mean_module.log_tau",
+        role=ParameterRole.TIMESCALE,
+        domain=ParameterDomain.TIME,
+        scale=ParameterScale.LOG,
+        guess_strategy=GuessStrategy.VARIABILITY_TIMESCALE,
+        constraint_strategy=ConstraintStrategy.VARIABILITY_TIMESCALE,
+    )
+
+    assert spec.guess_strategy is GuessStrategy.VARIABILITY_TIMESCALE
+    assert (
+        spec.constraint_strategy
+        is ConstraintStrategy.VARIABILITY_TIMESCALE
+    )
