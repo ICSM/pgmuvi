@@ -107,6 +107,9 @@ class ParameterSpec:
     domain: ParameterDomain
     scale: ParameterScale = ParameterScale.LINEAR
 
+    required: bool = True
+    trainable: bool = True
+
     initial_value: Any | None = None
     constraint: tuple[Any, Any] | None = None
     shape: tuple[int, ...] | None = None
@@ -116,6 +119,7 @@ class ParameterSpec:
 
     guess_strategy: GuessStrategy | None = None
     constraint_strategy: ConstraintStrategy | None = None
+
     guess_source: str | None = None
     constraint_source: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

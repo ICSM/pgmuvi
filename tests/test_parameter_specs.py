@@ -129,3 +129,17 @@ def test_parameter_spec_accepts_strategy_metadata():
         spec.constraint_strategy
         is ConstraintStrategy.VARIABILITY_TIMESCALE
     )
+
+
+def test_parameter_spec_supports_fixed_parameters():
+    spec = ParameterSpec(
+        name="mean_module.log_alpha",
+        role=ParameterRole.SHAPE,
+        domain=ParameterDomain.DIMENSIONLESS,
+        scale=ParameterScale.LOG,
+        required=True,
+        trainable=False,
+    )
+
+    assert spec.required is True
+    assert spec.trainable is False
