@@ -19,7 +19,7 @@ class LightcurveDiagnostics:
     cadence: float | None = None
     median_flux: float | None = None
     mad_flux: float | None = None
-    flux_percentiles: tuple[float, float] | None = None
+    flux_percentiles: dict[float, float] = field(default_factory=dict)
     n_points: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -34,7 +34,7 @@ class BandDiagnostics:
     cadence: float | None = None
     median_flux: float | None = None
     mad_flux: float | None = None
-    flux_percentiles: tuple[float, float] | None = None
+    flux_percentiles: dict[float, float] = field(default_factory=dict)
     n_points: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 

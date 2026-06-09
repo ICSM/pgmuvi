@@ -15,14 +15,21 @@ class TestParameterContext(unittest.TestCase):
             cadence=10.0,
             median_flux=123.0,
             mad_flux=5.0,
-            flux_percentiles=(100.0, 150.0),
+            flux_percentiles={2.5: 100.0, 50.0: 125.0, 97.5: 150.0},
             n_points=42,
         )
 
         self.assertEqual(diagnostics.baseline, 1000.0)
         self.assertEqual(diagnostics.cadence, 10.0)
         self.assertEqual(diagnostics.median_flux, 123.0)
-        self.assertEqual(diagnostics.flux_percentiles, (100.0, 150.0))
+        self.assertEqual(
+            diagnostics.flux_percentiles,
+            {
+                2.5: 100.0,
+                50.0: 125.0,
+                97.5: 150.0,
+            },
+        )
 
     def test_band_diagnostics_stores_per_band_quantities(self):
         diagnostics = BandDiagnostics(
