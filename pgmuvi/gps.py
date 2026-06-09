@@ -39,6 +39,52 @@ _LOG_1_7 = math.log(1.7)
 # ---------------------------------------------------------------------
 # Parameter schema helpers
 # ---------------------------------------------------------------------
+def rq_kernel_parameter_schema(
+    prefix="covar_module",
+    *,
+    domain,
+    description_context=None,
+):
+    """Return model-independent parameter specifications for an RQ kernel."""
+
+    if domain not in {ParameterDomain.TIME, ParameterDomain.WAVELENGTH}:
+        raise ValueError(
+            "rq_kernel_parameter_schema requires domain to be "
+            "ParameterDomain.TIME or ParameterDomain.WAVELENGTH."
+        )
+
+    def name(local_name):
+        return f"{prefix}.{local_name}" if prefix else local_name
+
+    if description_context is None:
+        description_context = domain.value
+
+    return ParameterSpecCollection(
+        [
+            ParameterSpec(
+                name=name("lengthscale"),
+                role=ParameterRole.LENGTHSCALE,
+                domain=domain,
+                scale=ParameterScale.LOG,
+                description=(
+                    "Positive correlation lengthscale of the Rational Quadratic "
+                    f"kernel in {description_context} space."
+                ),
+            ),
+            ParameterSpec(
+                name=name("alpha"),
+                role=ParameterRole.SHAPE,
+                domain=ParameterDomain.DIMENSIONLESS,
+                scale=ParameterScale.LOG,
+                description=(
+                    "Positive Rational Quadratic shape parameter controlling "
+                    "the mixture of correlation scales."
+                ),
+            ),
+        ]
+    )
+
+
 def lengthscale_kernel_parameter_schema(
     prefix="covar_module",
     *,
