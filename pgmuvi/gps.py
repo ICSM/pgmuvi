@@ -22,6 +22,14 @@ from gpytorch.models import ExactGP, ApproximateGP
 from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.variational import VariationalStrategy
 
+from pgmuvi.parameter_specs import (
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+    ParameterSpec,
+    ParameterSpecCollection,
+)
+
 # Module-level constant: log(1.7) used as default initial value for
 # DustMean.log_alpha, corresponding to a typical interstellar dust-extinction
 # power-law index of alpha ≈ 1.7.
@@ -80,6 +88,48 @@ class PowerLawMean(gpt.means.Mean):
         # Default exponent of -2 gives a steep optical-to-IR decline
         self.register_parameter(
             "exponent", t.nn.Parameter(t.full((*batch_shape, 1), -2.0))
+        )
+
+    def parameter_schema(self, prefix="mean_module"):
+        """Return model-independent parameter specifications for PowerLawMean."""
+
+        def name(local_name):
+            return f"{prefix}.{local_name}" if prefix else local_name
+
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("offset"),
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Constant additive flux offset of the wavelength "
+                        "power-law mean function."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("weight"),
+                    role=ParameterRole.AMPLITUDE,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Linear flux-domain amplitude multiplying the wavelength "
+                        "power-law term. The sign controls whether the mean flux "
+                        "increases or decreases with wavelength."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("exponent"),
+                    role=ParameterRole.SHAPE,
+                    domain=ParameterDomain.DIMENSIONLESS,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Dimensionless power-law index controlling the wavelength "
+                        "dependence of the mean flux."
+                    ),
+                ),
+            ]
         )
 
     def forward(self, x):
@@ -157,6 +207,58 @@ class DustMean(gpt.means.Mean):
         self.register_parameter(
             "log_alpha",
             t.nn.Parameter(t.full((*batch_shape, 1), _LOG_1_7)),
+        )
+
+    def parameter_schema(self, prefix="mean_module"):
+        """Return model-independent parameter specifications for DustMean."""
+        def name(local_name):
+            return f"{prefix}.{local_name}" if prefix else local_name
+
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("offset"),
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Constant additive flux offset shared across "
+                        "wavelengths."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("log_amplitude"),
+                    role=ParameterRole.AMPLITUDE,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LOG,
+                    description=(
+                        "Positive amplitude of the dust-attenuated "
+                        "wavelength-dependent mean function, represented in "
+                        "physical flux units before log transformation."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("log_tau"),
+                    role=ParameterRole.SHAPE,
+                    domain=ParameterDomain.DIMENSIONLESS,
+                    scale=ParameterScale.LOG,
+                    description=(
+                        "Positive effective dust optical-depth parameter "
+                        "controlling the "
+                        "strength of wavelength-dependent attenuation."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("log_alpha"),
+                    role=ParameterRole.SHAPE,
+                    domain=ParameterDomain.DIMENSIONLESS,
+                    scale=ParameterScale.LOG,
+                    description=(
+                        "Positive power-law index of the "
+                        "wavelength-dependent attenuation law."
+                    ),
+                ),
+            ]
         )
 
     def forward(self, x):
@@ -1441,6 +1543,36 @@ class CustomLinearConstantMean(Mean):
             parameter=t.nn.Parameter(t.tensor(0.0)),
         )
 
+    def parameter_schema(self, prefix="mean_module"):
+        """Return model-independent parameter specifications for this mean."""
+        def name(local_name):
+            return f"{prefix}.{local_name}" if prefix else local_name
+
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("wavelength_slope"),
+                    role=ParameterRole.WAVELENGTH_SCALE,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Linear coefficient describing how the mean flux changes "
+                        "with wavelength in the transformed wavelength coordinate."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("bias"),
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Constant flux offset of the wavelength-linear mean "
+                        "function."
+                    ),
+                ),
+            ]
+        )
+
     def forward(self, x):
         return self.bias + self.wavelength_slope * x[:, 1]
 
@@ -1462,6 +1594,38 @@ class CustomQuadConstantMean(Mean):
         self.register_parameter(
             name="bias",
             parameter=t.nn.Parameter(t.tensor(0.0)),
+        )
+
+    def parameter_schema(self, prefix="mean_module"):
+        """Return model-independent parameter specifications for this mean."""
+        def name(local_name):
+            return f"{prefix}.{local_name}" if prefix else local_name
+
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("weights"),
+                    role=ParameterRole.WAVELENGTH_SCALE,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    shape=(2,),
+                    description=(
+                        "Linear and quadratic coefficients describing how the mean "
+                        "flux changes with wavelength in the transformed "
+                        "wavelength coordinate."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("bias"),
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Constant flux offset of the wavelength-quadratic "
+                        "mean function."
+                    ),
+                ),
+            ]
         )
 
     def forward(self, x):
@@ -1765,4 +1929,3 @@ class PowerLawMeanGPModel(WavelengthDependentGPModel):
             mean_module="power_law",
             **kwargs,
         )
-
