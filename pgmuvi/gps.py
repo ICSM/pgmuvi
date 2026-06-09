@@ -39,6 +39,41 @@ _LOG_1_7 = math.log(1.7)
 # ---------------------------------------------------------------------
 # Parameter schema helpers
 # ---------------------------------------------------------------------
+def lengthscale_kernel_parameter_schema(
+    prefix="covar_module",
+    *,
+    domain,
+    description_context=None,
+):
+    """Return model-independent parameter specifications for a kernel lengthscale."""
+    if domain not in {ParameterDomain.TIME, ParameterDomain.WAVELENGTH}:
+        raise ValueError(
+            "lengthscale_kernel_parameter_schema requires domain to be "
+            "ParameterDomain.TIME or ParameterDomain.WAVELENGTH."
+        )
+
+    def name(local_name):
+        return f"{prefix}.{local_name}" if prefix else local_name
+
+    if description_context is None:
+        description_context = domain.value
+
+    return ParameterSpecCollection(
+        [
+            ParameterSpec(
+                name=name("lengthscale"),
+                role=ParameterRole.LENGTHSCALE,
+                domain=domain,
+                scale=ParameterScale.LOG,
+                description=(
+                    "Positive correlation lengthscale of the kernel in "
+                    f"{description_context} space."
+                ),
+            ),
+        ]
+    )
+
+
 def scale_kernel_parameter_schema(prefix="covar_module"):
     """Return model-independent parameter specifications for a ScaleKernel."""
 
