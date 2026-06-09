@@ -39,6 +39,27 @@ _LOG_1_7 = math.log(1.7)
 # ---------------------------------------------------------------------
 # Parameter schema helpers
 # ---------------------------------------------------------------------
+def scale_kernel_parameter_schema(prefix="covar_module"):
+    """Return model-independent parameter specifications for a ScaleKernel."""
+
+    def name(local_name):
+        return f"{prefix}.{local_name}" if prefix else local_name
+
+    return ParameterSpecCollection(
+        [
+            ParameterSpec(
+                name=name("outputscale"),
+                role=ParameterRole.WEIGHT,
+                domain=ParameterDomain.VARIANCE,
+                scale=ParameterScale.LOG,
+                description=(
+                    "Positive covariance-amplitude scale factor multiplying the base kernel."
+                ),
+            ),
+        ]
+    )
+
+
 def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
     """Return model-independent parameter specifications for a spectral-mixture kernel."""
 
