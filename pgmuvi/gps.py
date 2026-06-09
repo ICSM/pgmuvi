@@ -90,6 +90,45 @@ class PowerLawMean(gpt.means.Mean):
             "exponent", t.nn.Parameter(t.full((*batch_shape, 1), -2.0))
         )
 
+    def parameter_schema(self, prefix="mean_module"):
+        """Return model-independent parameter specifications for PowerLawMean."""
+
+        def name(local_name):
+            return f"{prefix}.{local_name}" if prefix else local_name
+
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("offset"),
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description="Constant additive flux offset of the wavelength power-law mean function.",
+                ),
+                ParameterSpec(
+                    name=name("weight"),
+                    role=ParameterRole.AMPLITUDE,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Linear flux-domain amplitude multiplying the wavelength "
+                        "power-law term. The sign controls whether the mean flux "
+                        "increases or decreases with wavelength."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("exponent"),
+                    role=ParameterRole.SHAPE,
+                    domain=ParameterDomain.DIMENSIONLESS,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Dimensionless power-law index controlling the wavelength "
+                        "dependence of the mean flux."
+                    ),
+                ),
+            ]
+        )
+
     def forward(self, x):
         wavelength = x[..., 1]  # second column is wavelength
         return (
@@ -167,17 +206,6 @@ class DustMean(gpt.means.Mean):
             t.nn.Parameter(t.full((*batch_shape, 1), _LOG_1_7)),
         )
 
-    def forward(self, x):
-        # Clamp wavelength to avoid overflow in λ^(-alpha): any physical
-        # wavelength in microns is far above 1e-6, so this guard is only
-        # triggered for pathological inputs.
-        wavelength = x[..., 1].clamp(min=1e-6)
-        amplitude = self.log_amplitude.squeeze(-1).exp()
-        tau = self.log_tau.squeeze(-1).exp()
-        alpha = self.log_alpha.squeeze(-1).exp()
-        extinction = tau * wavelength.pow(-alpha)
-        return self.offset.squeeze(-1) + amplitude * (-extinction).exp()
-
     def parameter_schema(self, prefix="mean_module"):
         """Return model-independent parameter specifications for DustMean."""
         def name(local_name):
@@ -223,6 +251,17 @@ class DustMean(gpt.means.Mean):
                 ),
             ]
         )
+
+    def forward(self, x):
+        # Clamp wavelength to avoid overflow in λ^(-alpha): any physical
+        # wavelength in microns is far above 1e-6, so this guard is only
+        # triggered for pathological inputs.
+        wavelength = x[..., 1].clamp(min=1e-6)
+        amplitude = self.log_amplitude.squeeze(-1).exp()
+        tau = self.log_tau.squeeze(-1).exp()
+        alpha = self.log_alpha.squeeze(-1).exp()
+        extinction = tau * wavelength.pow(-alpha)
+        return self.offset.squeeze(-1) + amplitude * (-extinction).exp()
 
 
 # FIRST WE HAVE SOME Naive GPs
@@ -1495,9 +1534,6 @@ class CustomLinearConstantMean(Mean):
             parameter=t.nn.Parameter(t.tensor(0.0)),
         )
 
-    def forward(self, x):
-        return self.bias + self.wavelength_slope * x[:, 1]
-
     def parameter_schema(self, prefix="mean_module"):
         """Return model-independent parameter specifications for this mean."""
         def name(local_name):
@@ -1525,6 +1561,9 @@ class CustomLinearConstantMean(Mean):
             ]
         )
 
+    def forward(self, x):
+        return self.bias + self.wavelength_slope * x[:, 1]
+
 
 class CustomQuadConstantMean(Mean):
     """ Custom mean function that is quadratic in wavelength and constant in time.
@@ -1544,14 +1583,6 @@ class CustomQuadConstantMean(Mean):
             name="bias",
             parameter=t.nn.Parameter(t.tensor(0.0)),
         )
-
-    def forward(self, x):
-        x_wl = x[:, 1]
-        powers = t.arange(1, len(self.weights) + 1,
-                          device=self.weights.device,
-                          dtype=self.weights.dtype)
-        x_powers = x_wl.unsqueeze(-1) ** powers
-        return self.bias + t.sum(self.weights * x_powers, dim=-1)
 
     def parameter_schema(self, prefix="mean_module"):
         """Return model-independent parameter specifications for this mean."""
@@ -1580,6 +1611,14 @@ class CustomQuadConstantMean(Mean):
                 ),
             ]
         )
+
+    def forward(self, x):
+        x_wl = x[:, 1]
+        powers = t.arange(1, len(self.weights) + 1,
+                          device=self.weights.device,
+                          dtype=self.weights.dtype)
+        x_powers = x_wl.unsqueeze(-1) ** powers
+        return self.bias + t.sum(self.weights * x_powers, dim=-1)
 
 
 class WavelengthDependentGPModel(SeparableGPModel):
