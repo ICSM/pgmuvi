@@ -103,7 +103,10 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
-                    description="Constant additive flux offset of the wavelength power-law mean function.",
+                    description=(
+                        "Constant additive flux offset of the wavelength "
+                        "power-law mean function."
+                    ),
                 ),
                 ParameterSpec(
                     name=name("weight"),
@@ -218,7 +221,10 @@ class DustMean(gpt.means.Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
-                    description="Constant additive flux offset shared across wavelengths.",
+                    description=(
+                        "Constant additive flux offset shared across "
+                        "wavelengths."
+                    ),
                 ),
                 ParameterSpec(
                     name=name("log_amplitude"),
@@ -226,8 +232,9 @@ class DustMean(gpt.means.Mean):
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LOG,
                     description=(
-                        "Positive amplitude of the dust-attenuated wavelength-dependent "
-                        "mean function, represented in physical flux units before log transformation."
+                        "Positive amplitude of the dust-attenuated "
+                        "wavelength-dependent mean function, represented in "
+                        "physical flux units before log transformation."
                     ),
                 ),
                 ParameterSpec(
@@ -236,7 +243,8 @@ class DustMean(gpt.means.Mean):
                     domain=ParameterDomain.DIMENSIONLESS,
                     scale=ParameterScale.LOG,
                     description=(
-                        "Positive effective dust optical-depth parameter controlling the "
+                        "Positive effective dust optical-depth parameter "
+                        "controlling the "
                         "strength of wavelength-dependent attenuation."
                     ),
                 ),
@@ -246,7 +254,8 @@ class DustMean(gpt.means.Mean):
                     domain=ParameterDomain.DIMENSIONLESS,
                     scale=ParameterScale.LOG,
                     description=(
-                        "Positive power-law index of the wavelength-dependent attenuation law."
+                        "Positive power-law index of the "
+                        "wavelength-dependent attenuation law."
                     ),
                 ),
             ]
@@ -1556,7 +1565,10 @@ class CustomLinearConstantMean(Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
-                    description="Constant flux offset of the wavelength-linear mean function.",
+                    description=(
+                        "Constant flux offset of the wavelength-linear mean "
+                        "function."
+                    ),
                 ),
             ]
         )
@@ -1599,7 +1611,8 @@ class CustomQuadConstantMean(Mean):
                     shape=(2,),
                     description=(
                         "Linear and quadratic coefficients describing how the mean "
-                        "flux changes with wavelength in the transformed wavelength coordinate."
+                        "flux changes with wavelength in the transformed "
+                        "wavelength coordinate."
                     ),
                 ),
                 ParameterSpec(
@@ -1607,7 +1620,10 @@ class CustomQuadConstantMean(Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
-                    description="Constant flux offset of the wavelength-quadratic mean function.",
+                    description=(
+                        "Constant flux offset of the wavelength-quadratic "
+                        "mean function."
+                    ),
                 ),
             ]
         )
@@ -1913,4 +1929,3 @@ class PowerLawMeanGPModel(WavelengthDependentGPModel):
             mean_module="power_law",
             **kwargs,
         )
-
