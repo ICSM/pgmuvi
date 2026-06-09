@@ -1498,6 +1498,33 @@ class CustomLinearConstantMean(Mean):
     def forward(self, x):
         return self.bias + self.wavelength_slope * x[:, 1]
 
+    def parameter_schema(self, prefix="mean_module"):
+        """Return model-independent parameter specifications for this mean."""
+        def name(local_name):
+            return f"{prefix}.{local_name}" if prefix else local_name
+
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("wavelength_slope"),
+                    role=ParameterRole.WAVELENGTH_SCALE,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description=(
+                        "Linear coefficient describing how the mean flux changes "
+                        "with wavelength in the transformed wavelength coordinate."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("bias"),
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description="Constant flux offset of the wavelength-linear mean function.",
+                ),
+            ]
+        )
+
 
 class CustomQuadConstantMean(Mean):
     """ Custom mean function that is quadratic in wavelength and constant in time.
@@ -1525,6 +1552,34 @@ class CustomQuadConstantMean(Mean):
                           dtype=self.weights.dtype)
         x_powers = x_wl.unsqueeze(-1) ** powers
         return self.bias + t.sum(self.weights * x_powers, dim=-1)
+
+    def parameter_schema(self, prefix="mean_module"):
+        """Return model-independent parameter specifications for this mean."""
+        def name(local_name):
+            return f"{prefix}.{local_name}" if prefix else local_name
+
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("weights"),
+                    role=ParameterRole.WAVELENGTH_SCALE,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    shape=(2,),
+                    description=(
+                        "Linear and quadratic coefficients describing how the mean "
+                        "flux changes with wavelength in the transformed wavelength coordinate."
+                    ),
+                ),
+                ParameterSpec(
+                    name=name("bias"),
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    description="Constant flux offset of the wavelength-quadratic mean function.",
+                ),
+            ]
+        )
 
 
 class WavelengthDependentGPModel(SeparableGPModel):
