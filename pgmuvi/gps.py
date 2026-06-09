@@ -134,7 +134,8 @@ def scale_kernel_parameter_schema(prefix="covar_module"):
                 domain=ParameterDomain.VARIANCE,
                 scale=ParameterScale.LOG,
                 description=(
-                    "Positive covariance-amplitude scale factor multiplying the base kernel."
+                    "Positive covariance-amplitude scale factor multiplying the base "
+                    "kernel."
                 ),
             ),
         ]
