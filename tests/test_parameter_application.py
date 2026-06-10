@@ -2,6 +2,13 @@ import unittest
 
 from pgmuvi.parameter_application import ParameterEstimateApplicator
 from pgmuvi.parameter_estimates import ParameterEstimateCollection
+from pgmuvi.parameter_estimates import ParameterEstimate
+from pgmuvi.parameter_specs import (
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+    ParameterSpec,
+)
 
 
 class TestParameterEstimateApplicator(unittest.TestCase):
@@ -26,6 +33,57 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         )
 
         self.assertEqual(result, 123.0)
+
+    def test_transform_linear_value_returns_value_unchanged(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=123.0,
+        )
+
+        applicator = ParameterEstimateApplicator()
+
+        self.assertEqual(
+            applicator._transform_value(estimate),
+            123.0,
+        )
+
+    def test_transform_value_returns_none_when_value_missing(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+        estimate = ParameterEstimate(spec=spec)
+
+        applicator = ParameterEstimateApplicator()
+
+        self.assertIsNone(
+            applicator._transform_value(estimate)
+        )
+
+    def test_transform_non_linear_value_is_not_implemented_yet(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LOG,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=100.0,
+        )
+
+        applicator = ParameterEstimateApplicator()
+
+        with self.assertRaises(NotImplementedError):
+            applicator._transform_value(estimate)
 
 
 class DummyMeanModule:

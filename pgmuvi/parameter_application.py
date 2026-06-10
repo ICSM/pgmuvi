@@ -8,6 +8,7 @@ later commits.
 from __future__ import annotations
 
 from pgmuvi.parameter_estimates import ParameterEstimateCollection
+from pgmuvi.parameter_specs import ParameterScale
 
 
 class ParameterEstimateApplicator:
@@ -42,4 +43,17 @@ class ParameterEstimateApplicator:
         """Apply one estimated constraint to a model parameter."""
         raise NotImplementedError(
             "Parameter constraint application is not implemented yet."
+        )
+
+    def _transform_value(self, estimate):
+        """Transform a physical-space estimate value into model parameter space."""
+        if estimate.value is None:
+            return None
+
+        if estimate.spec.scale is ParameterScale.LINEAR:
+            return estimate.value
+
+        raise NotImplementedError(
+            f"Value transformation for scale {estimate.spec.scale.value!r} "
+            "is not implemented yet."
         )
