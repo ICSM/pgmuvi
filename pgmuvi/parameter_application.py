@@ -10,6 +10,7 @@ from __future__ import annotations
 from pgmuvi.parameter_estimates import ParameterEstimateCollection
 from pgmuvi.parameter_specs import ParameterScale
 import math
+import torch
 
 
 class ParameterEstimateApplicator:
@@ -36,9 +37,23 @@ class ParameterEstimateApplicator:
 
     def _apply_value(self, parameter, estimate):
         """Apply one estimated value to a resolved parameter."""
-        raise NotImplementedError(
-            "Parameter value application is not implemented yet."
+        transformed_value = self._transform_value(estimate)
+
+        if transformed_value is None:
+            return False
+
+        value_tensor = torch.as_tensor(
+            transformed_value,
+            dtype=parameter.data.dtype,
+            device=parameter.data.device,
         )
+
+        value_tensor = value_tensor.reshape_as(parameter.data)
+
+        with torch.no_grad():
+            parameter.copy_(value_tensor)
+
+        return True
 
     def _apply_constraint(self, model, estimate):
         """Apply one estimated constraint to a model parameter."""

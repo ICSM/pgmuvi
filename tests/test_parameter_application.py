@@ -9,6 +9,18 @@ from pgmuvi.parameter_specs import (
     ParameterScale,
     ParameterSpec,
 )
+import torch
+
+
+class DummyTensorMeanModule:
+    def __init__(self):
+        self.offset = torch.nn.Parameter(torch.zeros(1))
+        self.log_amplitude = torch.nn.Parameter(torch.zeros(1))
+
+
+class DummyTensorModel:
+    def __init__(self):
+        self.mean_module = DummyTensorMeanModule()
 
 
 class TestParameterEstimateApplicator(unittest.TestCase):
@@ -120,6 +132,82 @@ class TestParameterEstimateApplicator(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "non-positive"):
             applicator._transform_value(estimate)
+
+    def test_apply_linear_value_to_tensor_parameter(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=123.0,
+        )
+
+        model = DummyTensorModel()
+        applicator = ParameterEstimateApplicator()
+
+        applied = applicator._apply_value(
+            model.mean_module.offset,
+            estimate,
+        )
+
+        self.assertTrue(applied)
+        self.assertAlmostEqual(
+            float(model.mean_module.offset.item()),
+            123.0,
+        )
+
+    def test_apply_log_value_to_tensor_parameter(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LOG,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=100.0,
+        )
+
+        model = DummyTensorModel()
+        applicator = ParameterEstimateApplicator()
+
+        applied = applicator._apply_value(
+            model.mean_module.log_amplitude,
+            estimate,
+        )
+
+        self.assertTrue(applied)
+        self.assertAlmostEqual(
+            float(model.mean_module.log_amplitude.item()),
+            4.605170185988092,
+            places=6,
+        )
+
+    def test_apply_value_returns_false_when_value_missing(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+        estimate = ParameterEstimate(spec=spec)
+
+        model = DummyTensorModel()
+        applicator = ParameterEstimateApplicator()
+
+        applied = applicator._apply_value(
+            model.mean_module.offset,
+            estimate,
+        )
+
+        self.assertFalse(applied)
+        self.assertAlmostEqual(
+            float(model.mean_module.offset.item()),
+            0.0,
+        )
 
 
 class DummyMeanModule:
