@@ -1,7 +1,13 @@
 import unittest
 
 from pgmuvi.gps import DustMean
-from pgmuvi.parameter_specs import ParameterDomain, ParameterRole, ParameterScale
+from pgmuvi.parameter_specs import (
+        ConstraintStrategy,
+        GuessStrategy,
+        ParameterDomain,
+        ParameterRole,
+        ParameterScale,
+        )
 
 
 class TestDustMeanParameterSchema(unittest.TestCase):
@@ -54,3 +60,42 @@ class TestDustMeanParameterSchema(unittest.TestCase):
                 "log_alpha",
             ],
         )
+
+def test_dust_mean_schema_estimation_strategies(self):
+    schema = DustMean().parameter_schema()
+
+    self.assertEqual(
+        schema["mean_module.offset"].guess_strategy,
+        GuessStrategy.MEDIAN_FLUX,
+    )
+
+    self.assertEqual(
+        schema["mean_module.offset"].constraint_strategy,
+        ConstraintStrategy.ROBUST_FLUX_RANGE,
+    )
+
+    self.assertEqual(
+        schema["mean_module.log_amplitude"].guess_strategy,
+        GuessStrategy.ROBUST_FLUX_SPAN,
+    )
+
+    self.assertEqual(
+        schema["mean_module.log_amplitude"].constraint_strategy,
+        ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN,
+    )
+
+    self.assertIsNone(
+        schema["mean_module.log_tau"].guess_strategy,
+    )
+
+    self.assertIsNone(
+        schema["mean_module.log_tau"].constraint_strategy,
+    )
+
+    self.assertIsNone(
+        schema["mean_module.log_alpha"].guess_strategy,
+    )
+
+    self.assertIsNone(
+        schema["mean_module.log_alpha"].constraint_strategy,
+    )
