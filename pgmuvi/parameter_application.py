@@ -22,12 +22,16 @@ class ParameterEstimateApplicator:
         model,
         estimates: ParameterEstimateCollection,
     ):
-        """Apply available parameter estimate values to a model."""
+        """Apply available parameter estimate values and constraints to a model."""
         results = {}
 
         for estimate in estimates:
             parameter = self._resolve_parameter(model, estimate.name)
-            results[estimate.name] = self._apply_value(parameter, estimate)
+
+            results[estimate.name] = {
+                "value": self._apply_value(parameter, estimate),
+                "constraint": self._apply_constraint(model, estimate),
+            }
 
         return results
 

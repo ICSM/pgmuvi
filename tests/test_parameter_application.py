@@ -271,10 +271,17 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         self.assertEqual(
             results,
             {
-                "mean_module.offset": True,
-                "mean_module.log_amplitude": True,
+                "mean_module.offset": {
+                    "value": True,
+                    "constraint": False,
+                },
+                "mean_module.log_amplitude": {
+                    "value": True,
+                    "constraint": False,
+                },
             },
         )
+
         self.assertAlmostEqual(
             float(model.mean_module.offset.item()),
             123.0,
