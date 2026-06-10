@@ -351,6 +351,22 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         ):
             applicator._transform_constraint(estimate)
 
+    def test_split_nested_parameter_path(self):
+        module_path, local_name = ParameterEstimateApplicator._split_parameter_path(
+            "mean_module.log_amplitude"
+        )
+
+        self.assertEqual(module_path, "mean_module")
+        self.assertEqual(local_name, "log_amplitude")
+
+    def test_split_bare_parameter_path(self):
+        module_path, local_name = ParameterEstimateApplicator._split_parameter_path(
+            "offset"
+        )
+
+        self.assertEqual(module_path, "")
+        self.assertEqual(local_name, "offset")
+
 
 class DummyMeanModule:
     def __init__(self):

@@ -39,6 +39,16 @@ class ParameterEstimateApplicator:
 
         return obj
 
+    @staticmethod
+    def _split_parameter_path(parameter_name: str):
+        """Split a parameter path into module path and local parameter name."""
+        parts = parameter_name.split(".")
+
+        if len(parts) == 1:
+            return "", parts[0]
+
+        return ".".join(parts[:-1]), parts[-1]
+
     def _apply_value(self, parameter, estimate):
         """Apply one estimated value to a resolved parameter."""
         transformed_value = self._transform_value(estimate)
