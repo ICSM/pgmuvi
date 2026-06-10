@@ -522,6 +522,61 @@ class TestParameterEstimateApplicator(unittest.TestCase):
                                places=6,
                                )
 
+    def test_transform_log_vector_value_applies_elementwise_log(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_weights",
+            role=ParameterRole.WEIGHT,
+            domain=ParameterDomain.VARIANCE,
+            scale=ParameterScale.LOG,
+            shape=(2,),
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=[1.0, 100.0],
+        )
+
+        applicator = ParameterEstimateApplicator()
+        transformed = applicator._transform_value(estimate)
+
+        self.assertTrue(torch.allclose(
+            transformed,
+            torch.tensor([0.0, 4.605170185988092]),
+        ))
+
+    def test_transform_log_vector_constraint_applies_elementwise_log(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_weights",
+            role=ParameterRole.WEIGHT,
+            domain=ParameterDomain.VARIANCE,
+            scale=ParameterScale.LOG,
+            shape=(2,),
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+            constraint=(
+                [1.0, 10.0],
+                [100.0, 1000.0],
+            ),
+        )
+
+        applicator = ParameterEstimateApplicator()
+        lower, upper = applicator._transform_constraint(estimate)
+
+        self.assertTrue(
+            torch.allclose(
+                lower,
+                torch.tensor([0.0, 2.302585092994046]),
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                upper,
+                torch.tensor([4.605170185988092, 6.907755278982137]),
+            )
+        )
+
 
 class DummyMeanModule:
     def __init__(self):

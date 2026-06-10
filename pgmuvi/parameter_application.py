@@ -1,8 +1,8 @@
 """Application layer for parameter estimates.
 
-This module defines the interface for applying physical-space parameter
-estimates to model parameters. Concrete application logic is added in
-later commits.
+This module defines utilities for applying physical-space parameter
+estimates to GPyTorch model parameters, including parameter-path
+resolution and parameter-space transformations.
 """
 
 from __future__ import annotations
@@ -139,12 +139,24 @@ class ParameterEstimateApplicator:
             return estimate.value
 
         if estimate.spec.scale is ParameterScale.LOG:
-            if estimate.value <= 0:
+            value_tensor = torch.as_tensor(estimate.value)
+
+            if value_tensor.numel() == 1:
+                scalar = float(value_tensor.item())
+                if scalar <= 0:
+                    raise ValueError(
+                        f"Cannot apply log transform to non-positive value for "
+                        f"{estimate.name!r}."
+                    )
+                return math.log(scalar)
+
+            if torch.any(value_tensor <= 0):
                 raise ValueError(
                     f"Cannot apply log transform to non-positive value for "
                     f"{estimate.name!r}."
                 )
-            return math.log(estimate.value)
+
+            return torch.log(value_tensor)
 
         raise NotImplementedError(
             f"Value transformation for scale {estimate.spec.scale.value!r} "
@@ -162,15 +174,33 @@ class ParameterEstimateApplicator:
             return (lower, upper)
 
         if estimate.spec.scale is ParameterScale.LOG:
-            if lower <= 0 or upper <= 0:
+            lower_tensor = torch.as_tensor(lower)
+            upper_tensor = torch.as_tensor(upper)
+
+            if lower_tensor.numel() == 1 and upper_tensor.numel() == 1:
+                lower_scalar = float(lower_tensor.item())
+                upper_scalar = float(upper_tensor.item())
+
+                if lower_scalar <= 0 or upper_scalar <= 0:
+                    raise ValueError(
+                        f"Cannot apply log transform to non-positive constraint "
+                        f"for {estimate.name!r}."
+                    )
+
+                return (
+                    math.log(lower_scalar),
+                    math.log(upper_scalar),
+                )
+
+            if torch.any(lower_tensor <= 0) or torch.any(upper_tensor <= 0):
                 raise ValueError(
                     f"Cannot apply log transform to non-positive constraint "
                     f"for {estimate.name!r}."
                 )
 
             return (
-                math.log(lower),
-                math.log(upper),
+                torch.log(lower_tensor),
+                torch.log(upper_tensor),
             )
 
         raise NotImplementedError(
