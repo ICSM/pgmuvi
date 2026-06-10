@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pgmuvi.parameter_estimates import ParameterEstimateCollection
 from pgmuvi.parameter_specs import ParameterScale
+import math
 
 
 class ParameterEstimateApplicator:
@@ -52,6 +53,14 @@ class ParameterEstimateApplicator:
 
         if estimate.spec.scale is ParameterScale.LINEAR:
             return estimate.value
+
+        if estimate.spec.scale is ParameterScale.LOG:
+            if estimate.value <= 0:
+                raise ValueError(
+                    f"Cannot apply log transform to non-positive value for "
+                    f"{estimate.name!r}."
+                )
+            return math.log(estimate.value)
 
         raise NotImplementedError(
             f"Value transformation for scale {estimate.spec.scale.value!r} "

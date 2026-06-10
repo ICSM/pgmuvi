@@ -68,7 +68,24 @@ class TestParameterEstimateApplicator(unittest.TestCase):
             applicator._transform_value(estimate)
         )
 
-    def test_transform_non_linear_value_is_not_implemented_yet(self):
+    def test_transform_unsupported_value_scale_is_not_implemented_yet(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LOG10,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=100.0,
+        )
+
+        applicator = ParameterEstimateApplicator()
+
+        with self.assertRaises(NotImplementedError):
+            applicator._transform_value(estimate)
+
+    def test_transform_log_value_applies_natural_log(self):
         spec = ParameterSpec(
             name="mean_module.log_amplitude",
             role=ParameterRole.AMPLITUDE,
@@ -82,7 +99,26 @@ class TestParameterEstimateApplicator(unittest.TestCase):
 
         applicator = ParameterEstimateApplicator()
 
-        with self.assertRaises(NotImplementedError):
+        self.assertAlmostEqual(
+                applicator._transform_value(estimate),
+                4.605170185988092,
+                )
+
+    def test_transform_log_value_rejects_non_positive_values(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LOG,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=0.0,
+        )
+
+        applicator = ParameterEstimateApplicator()
+
+        with self.assertRaisesRegex(ValueError, "non-positive"):
             applicator._transform_value(estimate)
 
 
