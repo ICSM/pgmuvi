@@ -2,12 +2,12 @@ import unittest
 
 from pgmuvi.gps import DustMean
 from pgmuvi.parameter_specs import (
-        ConstraintStrategy,
-        GuessStrategy,
-        ParameterDomain,
-        ParameterRole,
-        ParameterScale,
-        )
+    ConstraintStrategy,
+    GuessStrategy,
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+)
 from pgmuvi.parameter_builders import ParameterEstimateBuilder
 from pgmuvi.parameter_context import (
     LightcurveDiagnostics,
