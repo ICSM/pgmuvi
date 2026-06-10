@@ -63,6 +63,9 @@ class ParameterEstimateBuilder:
         if spec.guess_strategy is GuessStrategy.MEDIAN_FLUX:
             return self._estimate_median_flux(context)
 
+        if spec.guess_strategy is GuessStrategy.ROBUST_FLUX_SPAN:
+            return self._estimate_robust_flux_span(context)
+
         return None
 
     def _estimate_constraint(

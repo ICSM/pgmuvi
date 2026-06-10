@@ -143,6 +143,50 @@ class TestParameterEstimateBuilder(unittest.TestCase):
         self.assertIsNone(estimate.constraint)
         self.assertEqual(estimate.constraint_source, "robust_flux_range")
 
+    def test_robust_flux_span_guess_strategy(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        builder = ParameterEstimateBuilder()
+        estimate = builder.build_one(spec=spec, context=context)
+
+        self.assertEqual(estimate.value, 90.0)
+        self.assertEqual(
+            estimate.value_source,
+            "robust_flux_span",
+        )
+
+    def test_robust_flux_span_guess_strategy_returns_none_when_unavailable(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+        )
+
+        builder = ParameterEstimateBuilder()
+        estimate = builder.build_one(spec=spec, context=context)
+
+        self.assertIsNone(estimate.value)
+
     def test_offset_estimate_can_use_median_and_robust_range_together(self):
         spec = ParameterSpec(
             name="mean_module.offset",
