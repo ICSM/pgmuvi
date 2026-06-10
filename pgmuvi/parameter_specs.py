@@ -69,6 +69,7 @@ class GuessStrategy(str, Enum):
 
     CUSTOM = "custom"
 
+
 class ConstraintStrategy(str, Enum):
     USER = "user"
     DEFAULT = "default"
