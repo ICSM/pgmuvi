@@ -1,7 +1,18 @@
 import unittest
 
 from pgmuvi.gps import DustMean
-from pgmuvi.parameter_specs import ParameterDomain, ParameterRole, ParameterScale
+from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+)
+from pgmuvi.parameter_builders import ParameterEstimateBuilder
+from pgmuvi.parameter_context import (
+    LightcurveDiagnostics,
+    ParameterEstimationContext,
+)
 
 
 class TestDustMeanParameterSchema(unittest.TestCase):
@@ -54,3 +65,79 @@ class TestDustMeanParameterSchema(unittest.TestCase):
                 "log_alpha",
             ],
         )
+
+def test_dust_mean_schema_estimation_strategies(self):
+    schema = DustMean().parameter_schema()
+
+    self.assertEqual(
+        schema["mean_module.offset"].guess_strategy,
+        GuessStrategy.MEDIAN_FLUX,
+    )
+
+    self.assertEqual(
+        schema["mean_module.offset"].constraint_strategy,
+        ConstraintStrategy.ROBUST_FLUX_RANGE,
+    )
+
+    self.assertEqual(
+        schema["mean_module.log_amplitude"].guess_strategy,
+        GuessStrategy.ROBUST_FLUX_SPAN,
+    )
+
+    self.assertEqual(
+        schema["mean_module.log_amplitude"].constraint_strategy,
+        ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN,
+    )
+
+    self.assertIsNone(
+        schema["mean_module.log_tau"].guess_strategy,
+    )
+
+    self.assertIsNone(
+        schema["mean_module.log_tau"].constraint_strategy,
+    )
+
+    self.assertIsNone(
+        schema["mean_module.log_alpha"].guess_strategy,
+    )
+
+    self.assertIsNone(
+        schema["mean_module.log_alpha"].constraint_strategy,
+    )
+
+def test_dust_mean_schema_builds_estimates_from_diagnostics(self):
+    schema = DustMean().parameter_schema()
+
+    context = ParameterEstimationContext(
+        is_multiband=True,
+        global_diagnostics=LightcurveDiagnostics(
+            median_flux=55.0,
+            flux_percentiles={
+                2.5: 10.0,
+                50.0: 55.0,
+                97.5: 100.0,
+            },
+        ),
+    )
+
+    estimates = ParameterEstimateBuilder().build(
+        schema=schema,
+        context=context,
+    )
+
+    offset = estimates["mean_module.offset"]
+    amplitude = estimates["mean_module.log_amplitude"]
+
+    self.assertEqual(offset.value, 55.0)
+    self.assertEqual(offset.constraint, (10.0, 100.0))
+
+    self.assertEqual(amplitude.value, 90.0)
+
+    self.assertAlmostEqual(
+        amplitude.constraint[0],
+        9.0e-5,
+    )
+    self.assertAlmostEqual(
+        amplitude.constraint[1],
+        450.0,
+    )

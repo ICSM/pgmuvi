@@ -51,6 +51,7 @@ class GuessStrategy(str, Enum):
 
     MEDIAN_FLUX = "median_flux"
     ROBUST_FLUX_RANGE = "robust_flux_range"
+    ROBUST_FLUX_SPAN = "robust_flux_span"
     FLUX_STD = "flux_std"
     MAD = "mad"
 
@@ -75,6 +76,8 @@ class ConstraintStrategy(str, Enum):
 
     MEDIAN_FLUX = "median_flux"
     ROBUST_FLUX_RANGE = "robust_flux_range"
+    ROBUST_POSITIVE_FLUX_SPAN = "robust_positive_flux_span"
+    ROBUST_FLUX_SPAN = "robust_flux_span"
     FLUX_STD = "flux_std"
     MAD = "mad"
 

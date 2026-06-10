@@ -23,6 +23,8 @@ from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.variational import VariationalStrategy
 
 from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
     ParameterDomain,
     ParameterRole,
     ParameterScale,
@@ -377,6 +379,8 @@ class DustMean(gpt.means.Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
+                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
                     description=(
                         "Constant additive flux offset shared across "
                         "wavelengths."
@@ -387,6 +391,8 @@ class DustMean(gpt.means.Mean):
                     role=ParameterRole.AMPLITUDE,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LOG,
+                    guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
+                    constraint_strategy=ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN,
                     description=(
                         "Positive amplitude of the dust-attenuated "
                         "wavelength-dependent mean function, represented in "
