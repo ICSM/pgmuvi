@@ -26,10 +26,22 @@ class ParameterEstimateApplicator:
         results = {}
 
         for estimate in estimates:
-            parameter = self._resolve_parameter(model, estimate.name)
+            module_path, parameter_name = self._split_parameter_path(
+                estimate.name
+            )
+
+            target_module = (
+                model
+                if not module_path
+                else self._resolve_parameter(model, module_path)
+            )
 
             results[estimate.name] = {
-                "value": self._apply_value(parameter, estimate),
+                "value": self._apply_value(
+                    target_module,
+                    parameter_name,
+                    estimate,
+                ),
                 "constraint": self._apply_constraint(model, estimate),
             }
 
@@ -54,8 +66,9 @@ class ParameterEstimateApplicator:
 
         return ".".join(parts[:-1]), parts[-1]
 
-    def _apply_value(self, parameter, estimate):
+    def _apply_value(self, target_module, parameter_name, estimate):
         """Apply one estimated value to a resolved parameter."""
+        parameter = getattr(target_module, parameter_name)
         transformed_value = self._transform_value(estimate)
 
         if transformed_value is None:
@@ -95,8 +108,20 @@ class ParameterEstimateApplicator:
             else self._resolve_parameter(model, module_path)
         )
 
+        raw_parameter_name = (
+            parameter_name
+            if parameter_name.startswith("raw_")
+            else f"raw_{parameter_name}"
+        )
+
+        constraint_target = (
+            raw_parameter_name
+            if hasattr(target_module, raw_parameter_name)
+            else parameter_name
+        )
+
         target_module.register_constraint(
-            parameter_name,
+            constraint_target,
             gpytorch.constraints.Interval(
                 lower,
                 upper,

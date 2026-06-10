@@ -13,6 +13,20 @@ import math
 import torch
 
 
+class DummyRawConstraintModule:
+    def __init__(self):
+        self.raw_lengthscale = torch.nn.Parameter(torch.zeros(1))
+        self.calls = []
+
+    def register_constraint(self, parameter_name, constraint):
+        self.calls.append((parameter_name, constraint))
+
+
+class DummyRawConstraintModel:
+    def __init__(self):
+        self.covar_module = DummyRawConstraintModule()
+
+
 class DummyTensorMeanModule:
     def __init__(self):
         self.offset = torch.nn.Parameter(torch.zeros(1))
@@ -173,7 +187,8 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         applicator = ParameterEstimateApplicator()
 
         applied = applicator._apply_value(
-            model.mean_module.offset,
+            model.mean_module,
+            "offset",
             estimate,
         )
 
@@ -199,7 +214,8 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         applicator = ParameterEstimateApplicator()
 
         applied = applicator._apply_value(
-            model.mean_module.log_amplitude,
+            model.mean_module,
+            "log_amplitude",
             estimate,
         )
 
@@ -223,7 +239,8 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         applicator = ParameterEstimateApplicator()
 
         applied = applicator._apply_value(
-            model.mean_module.offset,
+            model.mean_module,
+            "offset",
             estimate,
         )
 
@@ -471,6 +488,39 @@ class TestParameterEstimateApplicator(unittest.TestCase):
             len(model.mean_module.calls),
             0,
         )
+
+    def test_apply_constraint_prefers_raw_parameter_name_when_available(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+            constraint=(1.0, 100.0),
+        )
+
+        model = DummyRawConstraintModel()
+        applicator = ParameterEstimateApplicator()
+
+        applied = applicator._apply_constraint(
+            model,
+            estimate,
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(len(model.covar_module.calls), 1)
+
+        parameter_name, constraint = model.covar_module.calls[0]
+
+        self.assertEqual(parameter_name, "raw_lengthscale")
+        self.assertAlmostEqual(float(constraint.lower_bound), 0.0)
+        self.assertAlmostEqual(float(constraint.upper_bound),
+                               4.605170185988092,
+                               places=6,
+                               )
 
 
 class DummyMeanModule:
