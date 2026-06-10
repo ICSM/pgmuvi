@@ -85,3 +85,30 @@ class ParameterEstimateApplicator:
             f"Value transformation for scale {estimate.spec.scale.value!r} "
             "is not implemented yet."
         )
+
+    def _transform_constraint(self, estimate):
+        """Transform a physical-space constraint into parameter space."""
+        if estimate.constraint is None:
+            return None
+
+        lower, upper = estimate.constraint
+
+        if estimate.spec.scale is ParameterScale.LINEAR:
+            return (lower, upper)
+
+        if estimate.spec.scale is ParameterScale.LOG:
+            if lower <= 0 or upper <= 0:
+                raise ValueError(
+                    f"Cannot apply log transform to non-positive constraint "
+                    f"for {estimate.name!r}."
+                )
+
+            return (
+                math.log(lower),
+                math.log(upper),
+            )
+
+        raise NotImplementedError(
+            f"Constraint transformation for scale "
+            f"{estimate.spec.scale.value!r} is not implemented yet."
+        )

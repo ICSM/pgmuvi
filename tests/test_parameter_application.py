@@ -9,6 +9,7 @@ from pgmuvi.parameter_specs import (
     ParameterScale,
     ParameterSpec,
 )
+import math
 import torch
 
 
@@ -261,6 +262,94 @@ class TestParameterEstimateApplicator(unittest.TestCase):
             4.605170185988092,
             places=6,
         )
+
+    def test_transform_linear_constraint_returns_constraint_unchanged(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+            constraint=(10.0, 100.0),
+        )
+
+        applicator = ParameterEstimateApplicator()
+
+        self.assertEqual(
+            applicator._transform_constraint(estimate),
+            (10.0, 100.0),
+        )
+
+    def test_transform_log_constraint_applies_natural_log(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LOG,
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+            constraint=(1.0e-4, 450.0),
+        )
+
+        applicator = ParameterEstimateApplicator()
+
+        lower, upper = applicator._transform_constraint(
+            estimate
+        )
+
+        self.assertAlmostEqual(
+            lower,
+            math.log(1.0e-4),
+        )
+
+        self.assertAlmostEqual(
+            upper,
+            math.log(450.0),
+        )
+
+    def test_transform_constraint_returns_none_when_missing(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+        )
+
+        applicator = ParameterEstimateApplicator()
+
+        self.assertIsNone(
+            applicator._transform_constraint(estimate)
+        )
+
+    def test_transform_log_constraint_rejects_non_positive_bounds(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LOG,
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+            constraint=(0.0, 100.0),
+        )
+
+        applicator = ParameterEstimateApplicator()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "non-positive",
+        ):
+            applicator._transform_constraint(estimate)
 
 
 class DummyMeanModule:
