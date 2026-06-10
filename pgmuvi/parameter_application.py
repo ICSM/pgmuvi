@@ -24,10 +24,13 @@ class ParameterEstimateApplicator:
         )
 
     def _resolve_parameter(self, model, parameter_name: str):
-        """Resolve a dotted parameter name on a model."""
-        raise NotImplementedError(
-            "Parameter resolution is not implemented yet."
-        )
+        """Resolve a dotted parameter path on a model."""
+        obj = model
+
+        for part in parameter_name.split("."):
+            obj = getattr(obj, part)
+
+        return obj
 
     def _apply_value(self, parameter, estimate):
         """Apply one estimated value to a resolved parameter."""
