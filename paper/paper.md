@@ -169,6 +169,7 @@ To summarise, the key features of `pgmuvi` are:
 `pgmuvi` is already in use for projects in our group. 
 One of the authors' (DAVT) masters thesis served as the first test of the code and has analyzed thousands of light curves at optical and infrared wavelengths for over seven hundred dusty stars within 3 kpc of the Solar Neighborhood.
 The paper resulting from this work (Srinivasan et al., in prep) deals with the analysis of multiwavelength light curves for targets from the Nearby Evolved Stars Survey (NESS; @Scicluna2022, [https://evolvedstars.space](https://evolvedstars.space)).
+Beyond these projects, `pgmuvi` has also been used in [@EstradaDorada2025] and is highlighted as an example of GP regression for timeseries analysis of long-period variables in [@Mori2025].
 <!-- A different project related to dusty variable stars in M33 has also used `pgmuvi` to estimate the periods of these objects from infrared light curves. This work will be published in 2023 (Srinivasan et al., in prep.).-->
 
 
