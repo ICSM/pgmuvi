@@ -264,5 +264,57 @@ class TestParameterEstimateBuilder(unittest.TestCase):
             builder._estimate_robust_flux_span(context)
         )
 
+    def test_robust_positive_flux_span_constraint_strategy(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            constraint_strategy=ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        builder = ParameterEstimateBuilder()
+        estimate = builder.build_one(spec=spec, context=context)
+
+        self.assertAlmostEqual(estimate.constraint[0], 9.0e-5)
+        self.assertAlmostEqual(estimate.constraint[1], 450.0)
+        self.assertEqual(
+            estimate.constraint_source,
+            "robust_positive_flux_span",
+        )
+
+    def test_robust_positive_flux_span_constraint_returns_none_for_zero_span(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            constraint_strategy=ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 10.0,
+                },
+            ),
+        )
+
+        builder = ParameterEstimateBuilder()
+        estimate = builder.build_one(spec=spec, context=context)
+
+        self.assertIsNone(estimate.constraint)
+
+
 if __name__ == "__main__":
     unittest.main()

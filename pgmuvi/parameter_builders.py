@@ -76,8 +76,25 @@ class ParameterEstimateBuilder:
         """Estimate a constraint for one parameter specification."""
         if spec.constraint_strategy is ConstraintStrategy.ROBUST_FLUX_RANGE:
             return self._estimate_robust_flux_range(context)
+        if spec.constraint_strategy is ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN:
+            return self._estimate_robust_positive_flux_span_constraint(context)
 
         return None
+
+    def _estimate_robust_positive_flux_span_constraint(
+        self,
+        context: ParameterEstimationContext,
+    ):
+        """Return a positive amplitude constraint based on robust flux span."""
+        span = self._estimate_robust_flux_span(context)
+
+        if span is None or span <= 0:
+            return None
+
+        lower = max(1e-12, 1e-6 * span)
+        upper = 5.0 * span
+
+        return (lower, upper)
 
     @staticmethod
     def _estimate_median_flux(context: ParameterEstimationContext):
