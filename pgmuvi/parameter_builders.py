@@ -96,3 +96,40 @@ class ParameterEstimateBuilder:
             return None
 
         return (percentiles[2.5], percentiles[97.5])
+
+    @staticmethod
+    def _get_flux_percentile(
+        context: ParameterEstimationContext,
+        percentile: float,
+    ):
+        """Return a global flux percentile value if available."""
+        if context.global_diagnostics is None:
+            return None
+
+        return context.global_diagnostics.flux_percentiles.get(percentile)
+
+    def _estimate_robust_flux_interval(
+        self,
+        context: ParameterEstimationContext,
+    ):
+        """Return (p2.5, p97.5) if available."""
+        p025 = self._get_flux_percentile(context, 2.5)
+        p975 = self._get_flux_percentile(context, 97.5)
+
+        if p025 is None or p975 is None:
+            return None
+
+        return (p025, p975)
+
+    def _estimate_robust_flux_span(
+        self,
+        context: ParameterEstimationContext,
+    ):
+        """Return p97.5 - p2.5 if available."""
+        interval = self._estimate_robust_flux_interval(context)
+
+        if interval is None:
+            return None
+
+        lower, upper = interval
+        return upper - lower

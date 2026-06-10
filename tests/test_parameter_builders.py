@@ -172,6 +172,53 @@ class TestParameterEstimateBuilder(unittest.TestCase):
         self.assertEqual(estimate.value_source, "median_flux")
         self.assertEqual(estimate.constraint_source, "robust_flux_range")
 
+    def test_robust_flux_interval_helper(self):
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                flux_percentiles={
+                    2.5: 10.0,
+                    50.0: 55.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        builder = ParameterEstimateBuilder()
+
+        self.assertEqual(
+            builder._estimate_robust_flux_interval(context),
+            (10.0, 100.0),
+        )
+
+    def test_robust_flux_span_helper(self):
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        builder = ParameterEstimateBuilder()
+
+        self.assertEqual(
+            builder._estimate_robust_flux_span(context),
+            90.0,
+        )
+
+    def test_robust_flux_span_helper_returns_none_when_unavailable(self):
+        context = ParameterEstimationContext(
+            is_multiband=False,
+        )
+
+        builder = ParameterEstimateBuilder()
+
+        self.assertIsNone(
+            builder._estimate_robust_flux_span(context)
+        )
 
 if __name__ == "__main__":
     unittest.main()
