@@ -1,6 +1,25 @@
 import unittest
 
-from pgmuvi.parameter_workflow import get_parameter_schema
+import torch
+
+from pgmuvi.parameter_context import (
+    LightcurveDiagnostics,
+    ParameterEstimationContext,
+)
+from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+    ParameterSpec,
+    ParameterSpecCollection,
+)
+from pgmuvi.parameter_workflow import (
+    apply_parameter_estimates,
+    build_parameter_estimates,
+    get_parameter_schema,
+)
 
 
 class ModelWithSchema:
@@ -10,6 +29,34 @@ class ModelWithSchema:
 
 class ModelWithoutSchema:
     pass
+
+
+class DummyMeanModule:
+    def __init__(self):
+        self.offset = torch.nn.Parameter(torch.zeros(1))
+        self.calls = []
+
+    def register_constraint(self, parameter_name, constraint):
+        self.calls.append((parameter_name, constraint))
+
+
+class ModelWithRealSchema:
+    def __init__(self):
+        self.mean_module = DummyMeanModule()
+
+    def parameter_schema(self):
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name="mean_module.offset",
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.MEDIAN_FLUX,
+                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
+                ),
+            ]
+        )
 
 
 class TestParameterWorkflow(unittest.TestCase):
@@ -23,6 +70,90 @@ class TestParameterWorkflow(unittest.TestCase):
     def test_returns_none_when_unavailable(self):
         self.assertIsNone(
             get_parameter_schema(ModelWithoutSchema())
+        )
+
+    def test_build_parameter_estimates_returns_none_without_schema(self):
+        context = ParameterEstimationContext(is_multiband=False)
+
+        self.assertIsNone(
+            build_parameter_estimates(
+                model=ModelWithoutSchema(),
+                context=context,
+            )
+        )
+
+    def test_build_parameter_estimates_uses_schema_and_context(self):
+        model = ModelWithRealSchema()
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                median_flux=55.0,
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        estimates = build_parameter_estimates(
+            model=model,
+            context=context,
+        )
+
+        estimate = estimates["mean_module.offset"]
+
+        self.assertEqual(estimate.value, 55.0)
+        self.assertEqual(estimate.constraint, (10.0, 100.0))
+
+    def test_apply_parameter_estimates_returns_none_without_estimates(self):
+        self.assertIsNone(
+            apply_parameter_estimates(
+                model=ModelWithoutSchema(),
+                estimates=None,
+            )
+        )
+
+    def test_apply_parameter_estimates_applies_values_and_constraints(self):
+        model = ModelWithRealSchema()
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                median_flux=55.0,
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        estimates = build_parameter_estimates(
+            model=model,
+            context=context,
+        )
+
+        results = apply_parameter_estimates(
+            model=model,
+            estimates=estimates,
+        )
+
+        self.assertEqual(
+            results,
+            {
+                "mean_module.offset": {
+                    "value": True,
+                    "constraint": True,
+                },
+            },
+        )
+
+        self.assertAlmostEqual(
+            float(model.mean_module.offset.item()),
+            55.0,
+        )
+
+        self.assertEqual(
+            model.mean_module.calls[0][0],
+            "offset",
         )
 
 
