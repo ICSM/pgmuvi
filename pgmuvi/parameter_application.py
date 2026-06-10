@@ -11,6 +11,7 @@ from pgmuvi.parameter_estimates import ParameterEstimateCollection
 from pgmuvi.parameter_specs import ParameterScale
 import math
 import torch
+import gpytorch
 
 
 class ParameterEstimateApplicator:
@@ -71,9 +72,34 @@ class ParameterEstimateApplicator:
 
     def _apply_constraint(self, model, estimate):
         """Apply one estimated constraint to a model parameter."""
-        raise NotImplementedError(
-            "Parameter constraint application is not implemented yet."
+        transformed_constraint = self._transform_constraint(
+            estimate
         )
+
+        if transformed_constraint is None:
+            return False
+
+        lower, upper = transformed_constraint
+
+        module_path, parameter_name = self._split_parameter_path(
+            estimate.name
+        )
+
+        target_module = (
+            model
+            if not module_path
+            else self._resolve_parameter(model, module_path)
+        )
+
+        target_module.register_constraint(
+            parameter_name,
+            gpytorch.constraints.Interval(
+                lower,
+                upper,
+            ),
+        )
+
+        return True
 
     def _transform_value(self, estimate):
         """Transform a physical-space estimate value into model parameter space."""

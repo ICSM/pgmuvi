@@ -24,6 +24,28 @@ class DummyTensorModel:
         self.mean_module = DummyTensorMeanModule()
 
 
+class DummyConstraintModule:
+    def __init__(self):
+        self.calls = []
+
+    def register_constraint(
+        self,
+        parameter_name,
+        constraint,
+    ):
+        self.calls.append(
+            (
+                parameter_name,
+                constraint,
+            )
+        )
+
+
+class DummyConstraintModel:
+    def __init__(self):
+        self.mean_module = DummyConstraintModule()
+
+
 class TestParameterEstimateApplicator(unittest.TestCase):
 
     def test_apply_empty_collection_returns_empty_results(self):
@@ -366,6 +388,82 @@ class TestParameterEstimateApplicator(unittest.TestCase):
 
         self.assertEqual(module_path, "")
         self.assertEqual(local_name, "offset")
+
+    def test_apply_linear_constraint(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+            constraint=(10.0, 100.0),
+        )
+
+        model = DummyConstraintModel()
+
+        applicator = ParameterEstimateApplicator()
+
+        applied = applicator._apply_constraint(
+            model,
+            estimate,
+        )
+
+        self.assertTrue(applied)
+
+        self.assertEqual(
+            len(model.mean_module.calls),
+            1,
+        )
+
+        parameter_name, constraint = (
+            model.mean_module.calls[0]
+        )
+
+        self.assertEqual(
+            parameter_name,
+            "offset",
+        )
+
+        self.assertAlmostEqual(
+            float(constraint.lower_bound),
+            10.0,
+        )
+
+        self.assertAlmostEqual(
+            float(constraint.upper_bound),
+            100.0,
+        )
+
+    def test_apply_constraint_returns_false_when_missing(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+
+        estimate = ParameterEstimate(
+            spec=spec,
+        )
+
+        model = DummyConstraintModel()
+
+        applicator = ParameterEstimateApplicator()
+
+        self.assertFalse(
+            applicator._apply_constraint(
+                model,
+                estimate,
+            )
+        )
+
+        self.assertEqual(
+            len(model.mean_module.calls),
+            0,
+        )
 
 
 class DummyMeanModule:
