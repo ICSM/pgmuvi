@@ -21,10 +21,14 @@ class ParameterEstimateApplicator:
         model,
         estimates: ParameterEstimateCollection,
     ):
-        """Apply a collection of parameter estimates to a model."""
-        raise NotImplementedError(
-            "Parameter estimate application is not implemented yet."
-        )
+        """Apply available parameter estimate values to a model."""
+        results = {}
+
+        for estimate in estimates:
+            parameter = self._resolve_parameter(model, estimate.name)
+            results[estimate.name] = self._apply_value(parameter, estimate)
+
+        return results
 
     def _resolve_parameter(self, model, parameter_name: str):
         """Resolve a dotted parameter path on a model."""

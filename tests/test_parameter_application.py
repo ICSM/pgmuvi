@@ -25,14 +25,15 @@ class DummyTensorModel:
 
 class TestParameterEstimateApplicator(unittest.TestCase):
 
-    def test_apply_is_not_implemented_initially(self):
+    def test_apply_empty_collection_returns_empty_results(self):
         applicator = ParameterEstimateApplicator()
 
-        with self.assertRaises(NotImplementedError):
-            applicator.apply(
-                model=object(),
-                estimates=ParameterEstimateCollection(),
-            )
+        results = applicator.apply(
+            model=object(),
+            estimates=ParameterEstimateCollection(),
+        )
+
+        self.assertEqual(results, {})
 
     def test_resolve_parameter(self):
         applicator = ParameterEstimateApplicator()
@@ -207,6 +208,58 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         self.assertAlmostEqual(
             float(model.mean_module.offset.item()),
             0.0,
+        )
+
+    def test_apply_collection_applies_available_values(self):
+        offset_spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+        )
+        amplitude_spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LOG,
+        )
+
+        estimates = ParameterEstimateCollection(
+            [
+                ParameterEstimate(
+                    spec=offset_spec,
+                    value=123.0,
+                ),
+                ParameterEstimate(
+                    spec=amplitude_spec,
+                    value=100.0,
+                ),
+            ]
+        )
+
+        model = DummyTensorModel()
+        applicator = ParameterEstimateApplicator()
+
+        results = applicator.apply(
+            model=model,
+            estimates=estimates,
+        )
+
+        self.assertEqual(
+            results,
+            {
+                "mean_module.offset": True,
+                "mean_module.log_amplitude": True,
+            },
+        )
+        self.assertAlmostEqual(
+            float(model.mean_module.offset.item()),
+            123.0,
+        )
+        self.assertAlmostEqual(
+            float(model.mean_module.log_amplitude.item()),
+            4.605170185988092,
+            places=6,
         )
 
 
