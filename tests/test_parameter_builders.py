@@ -360,6 +360,52 @@ class TestParameterEstimateBuilder(unittest.TestCase):
         self.assertEqual(estimate.constraint, (1.0e-3, 1.0e3))
         self.assertEqual(estimate.constraint_source, "default")
 
+    def test_geometric_sampling_timescale_guess(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+            guess_strategy=GuessStrategy.GEOMETRIC_SAMPLING_TIMESCALE,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                baseline_duration=1000.0,
+                median_cadence=10.0,
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertAlmostEqual(
+            estimate.value,
+            100.0,
+        )
+
+    def test_geometric_sampling_timescale_requires_sampling_diagnostics(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+            guess_strategy=GuessStrategy.GEOMETRIC_SAMPLING_TIMESCALE,
+        )
+
+        context = ParameterEstimationContext(
+                is_multiband=False,
+                )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertIsNone(estimate.value)
 
 if __name__ == "__main__":
     unittest.main()

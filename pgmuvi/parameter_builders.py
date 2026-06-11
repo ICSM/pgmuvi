@@ -5,6 +5,7 @@ diagnostic contexts into parameter estimates.
 """
 
 from __future__ import annotations
+import math
 
 from pgmuvi.parameter_context import ParameterEstimationContext
 from pgmuvi.parameter_estimates import (
@@ -68,6 +69,9 @@ class ParameterEstimateBuilder:
 
         if spec.guess_strategy is GuessStrategy.ROBUST_FLUX_SPAN:
             return self._estimate_robust_flux_span(context)
+
+        if spec.guess_strategy is GuessStrategy.GEOMETRIC_SAMPLING_TIMESCALE:
+            return self._estimate_geometric_sampling_timescale(context)
 
         return None
 
@@ -160,3 +164,24 @@ class ParameterEstimateBuilder:
 
         lower, upper = interval
         return upper - lower
+
+    @staticmethod
+    def _estimate_geometric_sampling_timescale(
+        context: ParameterEstimationContext,
+    ):
+        """Estimate a timescale from sampling diagnostics."""
+        diagnostics = context.global_diagnostics
+
+        if diagnostics is None:
+            return None
+
+        baseline = diagnostics.baseline_duration
+        cadence = diagnostics.median_cadence
+
+        if baseline is None or cadence is None:
+            return None
+
+        if baseline <= 0 or cadence <= 0:
+            return None
+
+        return math.sqrt(baseline * cadence)
