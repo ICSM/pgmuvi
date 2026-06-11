@@ -118,7 +118,6 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         self.assertEqual(context.global_diagnostics.n_points, 2)
         self.assertAlmostEqual(context.global_diagnostics.median_flux, 20.0)
 
-
     def test_apply_parameter_workflow_estimates_returns_none_without_schema(self):
         lc = Lightcurve(
             torch.tensor([0.0, 1.0, 2.0]),
@@ -129,6 +128,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         result = lc._apply_parameter_workflow_estimates()
 
         self.assertIsNone(result)
+        self.assertIsNone(lc.parameter_workflow_result)
 
     def test_apply_parameter_workflow_estimates_applies_supported_schema(self):
         lc = Lightcurve(
@@ -147,6 +147,11 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                     "constraint": True,
                 },
             },
+        )
+
+        self.assertEqual(
+            lc.parameter_workflow_result,
+            result,
         )
 
         self.assertAlmostEqual(
@@ -174,4 +179,54 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         self.assertAlmostEqual(
             context.global_diagnostics.median_cadence,
             10.0,
+        )
+
+    def test_parameter_workflow_result_initialized_to_none(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        self.assertIsNone(
+            lc.parameter_workflow_result,
+        )
+
+    def test_parameter_workflow_summary_without_results(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": False,
+                "applied": 0,
+                "skipped": 0,
+                "applied_parameters": [],
+                "skipped_parameters": [],
+            },
+        )
+
+    def test_parameter_workflow_summary_counts_results(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        lc.parameter_workflow_result = {
+            "a": True,
+            "b": True,
+            "c": False,
+        }
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": True,
+                "applied": 2,
+                "skipped": 1,
+                "applied_parameters": ["a", "b"],
+                "skipped_parameters": ["c"],
+            },
         )

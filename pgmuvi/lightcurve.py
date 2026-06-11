@@ -2839,6 +2839,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.failure_diagnostics = None
         self.failure_summary = None
         self.fit_history = []
+        self.parameter_workflow_result = None
 
         # ------------------------------------------------------------------
         # Sampling quality check
@@ -9074,15 +9075,58 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def _apply_parameter_workflow_estimates(self):
         """Apply parameter workflow estimates when the model supports them."""
+        self.parameter_workflow_result = None
+
         if not model_supports_parameter_workflow(self.model):
             return None
 
         context = self._build_parameter_estimation_context()
 
-        return build_and_apply_parameter_estimates(
+        self.parameter_workflow_result = build_and_apply_parameter_estimates(
             model=self.model,
             context=context,
         )
+
+        return self.parameter_workflow_result
+
+    def get_parameter_workflow_summary(self):
+        """Return a lightweight summary of parameter workflow results."""
+        result = self.parameter_workflow_result
+
+        if result is None:
+            return {
+                "available": False,
+                "applied": 0,
+                "skipped": 0,
+                "applied_parameters": [],
+                "skipped_parameters": [],
+            }
+
+        applied = 0
+        skipped = 0
+
+        for value in result.values():
+            if value:
+                applied += 1
+            else:
+                skipped += 1
+
+        applied_parameters = []
+        skipped_parameters = []
+
+        for name, value in result.items():
+            if value:
+                applied_parameters.append(name)
+            else:
+                skipped_parameters.append(name)
+
+        return {
+            "available": True,
+            "applied": applied,
+            "skipped": skipped,
+            "applied_parameters": applied_parameters,
+            "skipped_parameters": skipped_parameters,
+        }
 
     def fit(self, *args, **kwargs):
         """Fit wrapper that records lightweight in-memory fit history."""
