@@ -89,20 +89,24 @@ class TestDustMeanParameterSchema(unittest.TestCase):
             ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN,
         )
 
-        self.assertIsNone(
+        self.assertEqual(
             schema["mean_module.log_tau"].guess_strategy,
+            GuessStrategy.DEFAULT,
         )
 
-        self.assertIsNone(
+        self.assertEqual(
             schema["mean_module.log_tau"].constraint_strategy,
+            ConstraintStrategy.DEFAULT,
         )
 
-        self.assertIsNone(
+        self.assertEqual(
             schema["mean_module.log_alpha"].guess_strategy,
+            GuessStrategy.DEFAULT,
         )
 
-        self.assertIsNone(
+        self.assertEqual(
             schema["mean_module.log_alpha"].constraint_strategy,
+            ConstraintStrategy.DEFAULT,
         )
 
     def test_dust_mean_schema_builds_estimates_from_diagnostics(self):
@@ -128,6 +132,9 @@ class TestDustMeanParameterSchema(unittest.TestCase):
         offset = estimates["mean_module.offset"]
         amplitude = estimates["mean_module.log_amplitude"]
 
+        tau = estimates["mean_module.log_tau"]
+        alpha = estimates["mean_module.log_alpha"]
+
         self.assertEqual(offset.value, 55.0)
         self.assertEqual(offset.constraint, (10.0, 100.0))
 
@@ -141,3 +148,9 @@ class TestDustMeanParameterSchema(unittest.TestCase):
             amplitude.constraint[1],
             450.0,
         )
+
+        self.assertEqual(tau.value, 1.0)
+        self.assertEqual(tau.constraint, (1.0e-3, 1.0e3))
+
+        self.assertEqual(alpha.value, 1.7)
+        self.assertEqual(alpha.constraint, (0.1, 10.0))

@@ -404,6 +404,10 @@ class DustMean(gpt.means.Mean):
                     role=ParameterRole.SHAPE,
                     domain=ParameterDomain.DIMENSIONLESS,
                     scale=ParameterScale.LOG,
+                    initial_value=1.0,
+                    constraint=(1.0e-3, 1.0e3),
+                    guess_strategy=GuessStrategy.DEFAULT,
+                    constraint_strategy=ConstraintStrategy.DEFAULT,
                     description=(
                         "Positive effective dust optical-depth parameter "
                         "controlling the "
@@ -415,6 +419,10 @@ class DustMean(gpt.means.Mean):
                     role=ParameterRole.SHAPE,
                     domain=ParameterDomain.DIMENSIONLESS,
                     scale=ParameterScale.LOG,
+                    initial_value=1.7,
+                    constraint=(0.1, 10.0),
+                    guess_strategy=GuessStrategy.DEFAULT,
+                    constraint_strategy=ConstraintStrategy.DEFAULT,
                     description=(
                         "Positive power-law index of the "
                         "wavelength-dependent attenuation law."
