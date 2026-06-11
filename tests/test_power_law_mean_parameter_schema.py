@@ -67,3 +67,17 @@ class TestPowerLawMeanParameterSchema(unittest.TestCase):
             offset.constraint_strategy,
             ConstraintStrategy.ROBUST_FLUX_RANGE,
         )
+
+    def test_power_law_mean_weight_estimation_strategies(self):
+        schema = PowerLawMean().parameter_schema()
+
+        weight = schema["mean_module.weight"]
+
+        self.assertEqual(
+            weight.guess_strategy,
+            GuessStrategy.ROBUST_FLUX_SPAN,
+        )
+        self.assertEqual(
+            weight.constraint_strategy,
+            ConstraintStrategy.ROBUST_FLUX_RANGE,
+        )

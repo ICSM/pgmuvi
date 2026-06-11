@@ -273,6 +273,8 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.AMPLITUDE,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
+                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
                     description=(
                         "Linear flux-domain amplitude multiplying the wavelength "
                         "power-law term. The sign controls whether the mean flux "
