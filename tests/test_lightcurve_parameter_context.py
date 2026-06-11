@@ -99,6 +99,14 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         self.assertTrue(context.is_multiband)
         self.assertEqual(context.global_diagnostics.n_points, 4)
         self.assertAlmostEqual(context.global_diagnostics.median_flux, 60.0)
+        self.assertAlmostEqual(
+            context.global_diagnostics.baseline_duration,
+            1.0,
+        )
+        self.assertAlmostEqual(
+            context.global_diagnostics.median_cadence,
+            1.0,
+        )
 
     def test_build_parameter_estimation_context_ignores_nonfinite_flux_values(self):
         lc = Lightcurve(
@@ -149,4 +157,21 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         self.assertEqual(
             lc.model.mean_module.calls[0][0],
             "offset",
+        )
+
+    def test_build_parameter_estimation_context_computes_1d_sampling_diagnostics(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 10.0, 20.0, 40.0]),
+            torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        )
+
+        context = lc._build_parameter_estimation_context()
+
+        self.assertAlmostEqual(
+            context.global_diagnostics.baseline_duration,
+            40.0,
+        )
+        self.assertAlmostEqual(
+            context.global_diagnostics.median_cadence,
+            10.0,
         )

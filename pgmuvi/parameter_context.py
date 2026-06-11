@@ -18,6 +18,8 @@ class LightcurveDiagnostics:
     baseline: float | None = None
     cadence: float | None = None
     median_flux: float | None = None
+    baseline_duration: float | None = None
+    median_cadence: float | None = None
     mad_flux: float | None = None
     flux_percentiles: dict[float, float] = field(default_factory=dict)
     n_points: int | None = None

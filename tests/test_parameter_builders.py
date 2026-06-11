@@ -9,6 +9,7 @@ from pgmuvi.parameter_specs import (
     ConstraintStrategy,
     GuessStrategy,
     ParameterDomain,
+    ParameterScale,
     ParameterRole,
     ParameterSpec,
     ParameterSpecCollection,
@@ -314,6 +315,50 @@ class TestParameterEstimateBuilder(unittest.TestCase):
         estimate = builder.build_one(spec=spec, context=context)
 
         self.assertIsNone(estimate.constraint)
+
+    def test_default_guess_strategy_uses_spec_initial_value(self):
+        spec = ParameterSpec(
+            name="mean_module.log_tau",
+            role=ParameterRole.SHAPE,
+            domain=ParameterDomain.DIMENSIONLESS,
+            scale=ParameterScale.LOG,
+            initial_value=1.0,
+            guess_strategy=GuessStrategy.DEFAULT,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=True,
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(estimate.value, 1.0)
+        self.assertEqual(estimate.value_source, "default")
+
+    def test_default_constraint_strategy_uses_spec_constraint(self):
+        spec = ParameterSpec(
+            name="mean_module.log_tau",
+            role=ParameterRole.SHAPE,
+            domain=ParameterDomain.DIMENSIONLESS,
+            scale=ParameterScale.LOG,
+            constraint=(1.0e-3, 1.0e3),
+            constraint_strategy=ConstraintStrategy.DEFAULT,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=True,
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(estimate.constraint, (1.0e-3, 1.0e3))
+        self.assertEqual(estimate.constraint_source, "default")
 
 
 if __name__ == "__main__":

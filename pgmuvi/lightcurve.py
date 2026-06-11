@@ -9020,13 +9020,40 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         flux_values = self._ydata_raw
         if isinstance(flux_values, torch.Tensor):
             flux_values = flux_values.detach().cpu().numpy()
+
         flux_values = np.asarray(flux_values, dtype=float)
         flux_values = flux_values[np.isfinite(flux_values)]
+
+        time_values = self._xdata_raw
+        if isinstance(time_values, torch.Tensor):
+            time_values = time_values.detach().cpu().numpy()
+
+        time_values = np.asarray(time_values, dtype=float)
+
+        if self.ndim > 1:
+            times = np.sort(time_values[:, 0])
+        else:
+            times = np.sort(time_values)
+
+        baseline_duration = None
+        median_cadence = None
+
+        if times.size >= 2:
+            baseline_duration = float(times.max() - times.min())
+
+            gaps = np.diff(times)
+            gaps = gaps[gaps > 0]
+
+            if gaps.size:
+                median_cadence = float(np.median(gaps))
 
         if flux_values.size == 0:
             return ParameterEstimationContext(
                 is_multiband=self.ndim > 1,
-                global_diagnostics=LightcurveDiagnostics(),
+                global_diagnostics=LightcurveDiagnostics(
+                    baseline_duration=baseline_duration,
+                    median_cadence=median_cadence,
+                ),
             )
 
         p025, p50, p975 = np.percentile(flux_values, [2.5, 50.0, 97.5])
@@ -9040,6 +9067,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     97.5: float(p975),
                 },
                 n_points=int(flux_values.size),
+                baseline_duration=baseline_duration,
+                median_cadence=median_cadence,
             ),
         )
 

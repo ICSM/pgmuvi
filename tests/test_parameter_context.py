@@ -87,3 +87,12 @@ class TestParameterContext(unittest.TestCase):
 
         with self.assertRaisesRegex(KeyError, "No diagnostics found"):
             context.get_band("WISE_W2")
+
+    def test_lightcurve_diagnostics_stores_sampling_quantities(self):
+        diagnostics = LightcurveDiagnostics(
+            baseline_duration=1000.0,
+            median_cadence=7.5,
+        )
+
+        self.assertEqual(diagnostics.baseline_duration, 1000.0)
+        self.assertEqual(diagnostics.median_cadence, 7.5)
