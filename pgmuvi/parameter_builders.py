@@ -76,6 +76,42 @@ class ParameterEstimateBuilder:
         if spec.guess_strategy is GuessStrategy.BASELINE_FREQUENCY:
             return self._estimate_baseline_frequency(context)
 
+        if spec.guess_strategy is GuessStrategy.CONSENSUS_FREQUENCY:
+            return self._estimate_consensus_frequency(context)
+
+        return None
+
+    @staticmethod
+    def _estimate_consensus_frequency(
+        context: ParameterEstimationContext,
+    ):
+        """Estimate frequency from consensus diagnostics."""
+        diagnostics = context.consensus_diagnostics
+
+        if diagnostics is None:
+            return None
+
+        if diagnostics.frequencies is not None:
+            frequencies = diagnostics.frequencies
+
+            try:
+                return frequencies[0]
+            except (TypeError, IndexError):
+                return frequencies
+
+        if diagnostics.periods is not None:
+            periods = diagnostics.periods
+
+            try:
+                period = periods[0]
+            except (TypeError, IndexError):
+                period = periods
+
+            if period is None or period <= 0:
+                return None
+
+            return 1.0 / period
+
         return None
 
     def _estimate_constraint(

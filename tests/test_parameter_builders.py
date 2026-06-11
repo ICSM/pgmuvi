@@ -2,6 +2,7 @@ import unittest
 
 from pgmuvi.parameter_builders import ParameterEstimateBuilder
 from pgmuvi.parameter_context import (
+    ConsensusDiagnostics,
     LightcurveDiagnostics,
     ParameterEstimationContext,
 )
@@ -481,6 +482,55 @@ class TestParameterEstimateBuilder(unittest.TestCase):
             estimate.value,
             1.0 / 500.0,
         )
+
+    def test_consensus_frequency_from_frequency_diagnostics(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus",
+                frequencies=[0.05],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertAlmostEqual(estimate.value, 0.05)
+
+    def test_consensus_frequency_from_period_diagnostics(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus",
+                periods=[20.0],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertAlmostEqual(estimate.value, 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()
