@@ -37,7 +37,10 @@ class TestSpectralMixtureParameterSchema(unittest.TestCase):
         self.assertEqual(means.shape, (3,))
         self.assertIsNone(means.initial_value)
         self.assertEqual(means.constraint, (1.0e-6, 1.0e6))
-        self.assertIsNone(means.guess_strategy)
+        self.assertEqual(
+            means.guess_strategy,
+            GuessStrategy.BASELINE_FREQUENCY,
+        )
         self.assertEqual(
             means.constraint_strategy,
             ConstraintStrategy.DEFAULT,

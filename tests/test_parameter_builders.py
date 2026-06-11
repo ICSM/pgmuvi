@@ -456,5 +456,31 @@ class TestParameterEstimateBuilder(unittest.TestCase):
 
         self.assertIsNone(estimate.value)
 
+    def test_baseline_frequency_can_initialize_spectral_mixture_means(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            guess_strategy=GuessStrategy.BASELINE_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                baseline_duration=500.0,
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertAlmostEqual(
+            estimate.value,
+            1.0 / 500.0,
+        )
+
 if __name__ == "__main__":
     unittest.main()
