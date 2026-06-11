@@ -76,7 +76,7 @@ class ParameterEstimateBuilder:
         if spec.guess_strategy is GuessStrategy.BASELINE_FREQUENCY:
             return self._estimate_baseline_frequency(context)
 
-            return None
+        return None
 
     def _estimate_constraint(
         self,
