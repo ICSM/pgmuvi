@@ -261,6 +261,8 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.MEDIAN_FLUX,
+                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
                     description=(
                         "Constant additive flux offset of the wavelength "
                         "power-law mean function."
@@ -271,6 +273,8 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.AMPLITUDE,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
+                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
                     description=(
                         "Linear flux-domain amplitude multiplying the wavelength "
                         "power-law term. The sign controls whether the mean flux "
@@ -282,6 +286,10 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.SHAPE,
                     domain=ParameterDomain.DIMENSIONLESS,
                     scale=ParameterScale.LINEAR,
+                    initial_value=-2.0,
+                    constraint=(-10.0, 10.0),
+                    guess_strategy=GuessStrategy.DEFAULT,
+                    constraint_strategy=ConstraintStrategy.DEFAULT,
                     description=(
                         "Dimensionless power-law index controlling the wavelength "
                         "dependence of the mean flux."
