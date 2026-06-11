@@ -379,7 +379,7 @@ class DustMean(gpt.means.Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
-                    guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
+                    guess_strategy=GuessStrategy.MEDIAN_FLUX,
                     constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
                     description=(
                         "Constant additive flux offset shared across "
