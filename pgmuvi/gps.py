@@ -119,7 +119,11 @@ def lengthscale_kernel_parameter_schema(
                 scale=ParameterScale.LOG,
                 initial_value=1.0,
                 constraint=(1.0e-3, 1.0e3),
-                guess_strategy=GuessStrategy.DEFAULT,
+                guess_strategy=(
+                    GuessStrategy.GEOMETRIC_SAMPLING_TIMESCALE
+                    if domain is ParameterDomain.TIME
+                    else GuessStrategy.DEFAULT
+                ),
                 constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
                     "Positive correlation lengthscale of the kernel in "
