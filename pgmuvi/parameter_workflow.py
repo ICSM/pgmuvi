@@ -18,7 +18,15 @@ def get_parameter_schema(model: Any) -> ParameterSpecCollection | None:
     if schema_attr is None or not callable(schema_attr):
         return None
 
-    return schema_attr()
+    try:
+        schema = schema_attr()
+    except TypeError:
+        return None
+
+    if not isinstance(schema, ParameterSpecCollection):
+        return None
+
+    return schema
 
 
 def build_parameter_estimates(

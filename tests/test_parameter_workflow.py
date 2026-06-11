@@ -23,9 +23,19 @@ from pgmuvi.parameter_workflow import (
 )
 
 
+class ModelWithWrongSchemaType:
+    def parameter_schema(self):
+        return "not-a-schema"
+
+
+class ModelWithSchemaRequiringArguments:
+    def parameter_schema(self, required_argument):
+        return required_argument
+
+
 class ModelWithSchema:
     def parameter_schema(self):
-        return "schema"
+        return ParameterSpecCollection()
 
 
 class ModelWithoutSchema:
@@ -63,9 +73,18 @@ class ModelWithRealSchema:
 class TestParameterWorkflow(unittest.TestCase):
 
     def test_returns_schema_when_available(self):
+        schema = get_parameter_schema(
+            ModelWithSchema()
+        )
+
+        self.assertIsInstance(
+            schema,
+            ParameterSpecCollection,
+        )
+
         self.assertEqual(
-            get_parameter_schema(ModelWithSchema()),
-            "schema",
+            len(schema),
+            0,
         )
 
     def test_returns_none_when_unavailable(self):
@@ -193,6 +212,17 @@ class TestParameterWorkflow(unittest.TestCase):
         self.assertEqual(
             model.mean_module.calls[0][0],
             "offset",
+        )
+
+    def test_returns_none_when_schema_has_wrong_type(self):
+        self.assertIsNone(
+            get_parameter_schema(ModelWithWrongSchemaType())
+        )
+
+
+    def test_returns_none_when_schema_requires_arguments(self):
+        self.assertIsNone(
+            get_parameter_schema(ModelWithSchemaRequiringArguments())
         )
 
 
