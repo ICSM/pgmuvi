@@ -78,6 +78,10 @@ def rq_kernel_parameter_schema(
                 role=ParameterRole.SHAPE,
                 domain=ParameterDomain.DIMENSIONLESS,
                 scale=ParameterScale.LOG,
+                initial_value=1.0,
+                constraint=(1.0e-3, 1.0e3),
+                guess_strategy=GuessStrategy.DEFAULT,
+                constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
                     "Positive Rational Quadratic shape parameter controlling "
                     "the mixture of correlation scales."

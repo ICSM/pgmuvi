@@ -2,6 +2,8 @@ import unittest
 
 from pgmuvi.gps import rq_kernel_parameter_schema
 from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
     ParameterDomain,
     ParameterRole,
     ParameterScale,
@@ -34,6 +36,13 @@ class TestRQKernelParameterSchema(unittest.TestCase):
         self.assertIs(alpha.role, ParameterRole.SHAPE)
         self.assertIs(alpha.domain, ParameterDomain.DIMENSIONLESS)
         self.assertIs(alpha.scale, ParameterScale.LOG)
+        self.assertEqual(alpha.initial_value, 1.0)
+        self.assertEqual(alpha.constraint, (1.0e-3, 1.0e3))
+        self.assertEqual(alpha.guess_strategy, GuessStrategy.DEFAULT)
+        self.assertEqual(
+            alpha.constraint_strategy,
+            ConstraintStrategy.DEFAULT,
+        )
 
     def test_wavelength_domain_schema(self):
         schema = rq_kernel_parameter_schema(
