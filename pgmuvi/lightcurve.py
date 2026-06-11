@@ -58,6 +58,14 @@ import dataclasses
 import json
 import math
 from types import MappingProxyType
+from pgmuvi.parameter_context import (
+    LightcurveDiagnostics,
+    ParameterEstimationContext,
+)
+from pgmuvi.parameter_workflow import (
+    build_and_apply_parameter_estimates,
+    model_supports_parameter_workflow,
+)
 
 try:
     from scipy.signal import find_peaks as _scipy_find_peaks
@@ -9007,6 +9015,46 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return model_str, diagnostics
 
+    def _build_parameter_estimation_context(self):
+        """Construct a parameter-estimation context from this light curve."""
+        flux_values = self._ydata_raw
+        if isinstance(flux_values, torch.Tensor):
+            flux_values = flux_values.detach().cpu().numpy()
+        flux_values = np.asarray(flux_values, dtype=float)
+        flux_values = flux_values[np.isfinite(flux_values)]
+
+        if flux_values.size == 0:
+            return ParameterEstimationContext(
+                is_multiband=self.ndim > 1,
+                global_diagnostics=LightcurveDiagnostics(),
+            )
+
+        p025, p50, p975 = np.percentile(flux_values, [2.5, 50.0, 97.5])
+        return ParameterEstimationContext(
+            is_multiband=self.ndim > 1,
+            global_diagnostics=LightcurveDiagnostics(
+                median_flux=float(p50),
+                flux_percentiles={
+                    2.5: float(p025),
+                    50.0: float(p50),
+                    97.5: float(p975),
+                },
+                n_points=int(flux_values.size),
+            ),
+        )
+
+    def _apply_parameter_workflow_estimates(self):
+        """Apply parameter workflow estimates when the model supports them."""
+        if not model_supports_parameter_workflow(self.model):
+            return None
+
+        context = self._build_parameter_estimation_context()
+
+        return build_and_apply_parameter_estimates(
+            model=self.model,
+            context=context,
+        )
+
     def fit(self, *args, **kwargs):
         """Fit wrapper that records lightweight in-memory fit history."""
         # Nested fit() calls (e.g. from _consensus_standard_fit) delegate
@@ -9402,6 +9450,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             clear_model_state=False,
             clear_consensus=bool(fit_strategy is not None),
         )
+        _constraints_were_set_before_fit = bool(self.__CONTRAINTS_SET)
 
         verbose = kwargs.get("verbose", False)
 
@@ -9790,6 +9839,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if not self.__CONTRAINTS_SET:
             self.set_default_constraints()
+
+        if not _constraints_were_set_before_fit:
+            self._apply_parameter_workflow_estimates()
 
         if cuda:
             self.cuda()
@@ -16707,6 +16759,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         raise NotImplementedError(
             "fit_strategy='consensus_relaxed' is not implemented yet."
         )
+
 
     def mcmc(
         self,
