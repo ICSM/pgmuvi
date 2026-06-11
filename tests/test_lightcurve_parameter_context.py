@@ -180,3 +180,13 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
             context.global_diagnostics.median_cadence,
             10.0,
         )
+
+    def test_parameter_workflow_result_initialized_to_none(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        self.assertIsNone(
+            lc.parameter_workflow_result,
+        )

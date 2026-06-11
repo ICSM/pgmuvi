@@ -2839,6 +2839,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.failure_diagnostics = None
         self.failure_summary = None
         self.fit_history = []
+        self.parameter_workflow_result = None
 
         # ------------------------------------------------------------------
         # Sampling quality check
