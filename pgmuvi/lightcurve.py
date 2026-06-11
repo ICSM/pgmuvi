@@ -9029,14 +9029,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 global_diagnostics=LightcurveDiagnostics(),
             )
 
+        p025, p50, p975 = np.percentile(flux_values, [2.5, 50.0, 97.5])
         return ParameterEstimationContext(
             is_multiband=self.ndim > 1,
             global_diagnostics=LightcurveDiagnostics(
-                median_flux=float(np.median(flux_values)),
+                median_flux=float(p50),
                 flux_percentiles={
-                    2.5: float(np.percentile(flux_values, 2.5)),
-                    50.0: float(np.percentile(flux_values, 50.0)),
-                    97.5: float(np.percentile(flux_values, 97.5)),
+                    2.5: float(p025),
+                    50.0: float(p50),
+                    97.5: float(p975),
                 },
                 n_points=int(flux_values.size),
             ),
