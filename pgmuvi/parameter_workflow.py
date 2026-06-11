@@ -14,19 +14,18 @@ from pgmuvi.parameter_specs import ParameterSpecCollection
 def get_parameter_schema(model: Any) -> ParameterSpecCollection | None:
     """Return a model parameter schema if one is available."""
     schema_attr = getattr(model, "parameter_schema", None)
-    if schema_attr is None:
+
+    if schema_attr is None or not callable(schema_attr):
         return None
 
     return schema_attr()
 
-    return model.parameter_schema()
-
 
 def build_parameter_estimates(
-        model: Any,
-        context: ParameterEstimationContext,
-        builder: ParameterEstimateBuilder | None = None,
-        ) -> ParameterEstimateCollection | None:
+    model: Any,
+    context: ParameterEstimationContext,
+    builder: ParameterEstimateBuilder | None = None,
+) -> ParameterEstimateCollection | None:
     """Build parameter estimates for a model if a schema is available."""
     schema = get_parameter_schema(model)
 
@@ -43,10 +42,10 @@ def build_parameter_estimates(
 
 
 def apply_parameter_estimates(
-        model: Any,
-        estimates: ParameterEstimateCollection | None,
-        applicator: ParameterEstimateApplicator | None = None,
-        ) -> dict[str, dict[str, bool]] | None:
+    model: Any,
+    estimates: ParameterEstimateCollection | None,
+    applicator: ParameterEstimateApplicator | None = None,
+) -> dict[str, dict[str, bool]] | None:
     """Apply parameter estimates to a model if estimates are available."""
     if estimates is None:
         return None
