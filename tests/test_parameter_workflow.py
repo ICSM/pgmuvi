@@ -20,6 +20,7 @@ from pgmuvi.parameter_workflow import (
     build_and_apply_parameter_estimates,
     build_parameter_estimates,
     get_parameter_schema,
+    model_supports_parameter_workflow,
 )
 
 
@@ -223,6 +224,29 @@ class TestParameterWorkflow(unittest.TestCase):
     def test_returns_none_when_schema_requires_arguments(self):
         self.assertIsNone(
             get_parameter_schema(ModelWithSchemaRequiringArguments())
+        )
+
+    def test_model_supports_parameter_workflow_when_schema_available(self):
+        self.assertTrue(
+            model_supports_parameter_workflow(
+                ModelWithSchema()
+            )
+        )
+
+
+    def test_model_supports_parameter_workflow_when_schema_missing(self):
+        self.assertFalse(
+            model_supports_parameter_workflow(
+                ModelWithoutSchema()
+            )
+        )
+
+
+    def test_model_supports_parameter_workflow_when_schema_invalid(self):
+        self.assertFalse(
+            model_supports_parameter_workflow(
+                ModelWithWrongSchemaType()
+            )
         )
 
 

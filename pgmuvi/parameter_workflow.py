@@ -11,6 +11,11 @@ from pgmuvi.parameter_estimates import ParameterEstimateCollection
 from pgmuvi.parameter_specs import ParameterSpecCollection
 
 
+def model_supports_parameter_workflow(model: Any) -> bool:
+    """Return whether a model exposes a valid parameter schema."""
+    return get_parameter_schema(model) is not None
+
+
 def get_parameter_schema(model: Any) -> ParameterSpecCollection | None:
     """Return a model parameter schema if one is available."""
     schema_attr = getattr(model, "parameter_schema", None)
