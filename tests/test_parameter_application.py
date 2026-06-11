@@ -11,6 +11,7 @@ from pgmuvi.parameter_specs import (
 )
 import math
 import torch
+import gpytorch
 
 
 class DummyRawConstraintModule:
@@ -572,6 +573,50 @@ class TestParameterEstimateApplicator(unittest.TestCase):
                 upper,
                 torch.tensor([4.605170185988092, 6.907755278982137]),
             )
+        )
+
+    def test_apply_value_updates_gpytorch_property_parameter(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+        )
+
+        estimates = ParameterEstimateCollection(
+            [
+                ParameterEstimate(
+                    spec=spec,
+                    value=2.0,
+                )
+            ]
+        )
+
+        class Model:
+            def __init__(self):
+                self.covar_module = gpytorch.kernels.RBFKernel()
+
+        model = Model()
+        applicator = ParameterEstimateApplicator()
+
+        results = applicator.apply(
+            model=model,
+            estimates=estimates,
+        )
+
+        self.assertEqual(
+            results,
+            {
+                "covar_module.lengthscale": {
+                    "value": True,
+                    "constraint": False,
+                },
+            },
+        )
+
+        self.assertAlmostEqual(
+            float(model.covar_module.lengthscale.detach().cpu().view(-1)[0]),
+            2.0,
         )
 
 

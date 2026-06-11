@@ -74,22 +74,36 @@ class ParameterEstimateApplicator:
 
     def _apply_value(self, target_module, parameter_name, estimate):
         """Apply one estimated value to a resolved parameter."""
-        parameter = getattr(target_module, parameter_name)
         transformed_value = self._transform_value(estimate)
 
         if transformed_value is None:
             return False
 
+        current = getattr(target_module, parameter_name)
+
+        dtype = getattr(current, "dtype", None)
+        device = getattr(current, "device", None)
+
+        if isinstance(current, torch.nn.Parameter):
+            dtype = current.data.dtype
+            device = current.data.device
+
         value_tensor = torch.as_tensor(
             transformed_value,
-            dtype=parameter.data.dtype,
-            device=parameter.data.device,
+            dtype=dtype,
+            device=device,
         )
 
-        value_tensor = value_tensor.reshape_as(parameter.data)
+        if hasattr(current, "shape"):
+            value_tensor = value_tensor.reshape_as(current)
 
         with torch.no_grad():
-            parameter.copy_(value_tensor)
+            if isinstance(target_module, gpytorch.Module):
+                target_module.initialize(**{parameter_name: value_tensor})
+            elif isinstance(current, torch.nn.Parameter):
+                current.copy_(value_tensor)
+            else:
+                setattr(target_module, parameter_name, value_tensor)
 
         return True
 
@@ -149,6 +163,11 @@ class ParameterEstimateApplicator:
                 return estimate.value
 
             value_tensor = torch.as_tensor(estimate.value)
+            value_tensor = torch.as_tensor(
+                    estimate.value,
+                    dtype=torch.get_default_dtype(),
+                    )
+
 
             if value_tensor.numel() == 1:
                 scalar = float(value_tensor.item())
@@ -186,8 +205,14 @@ class ParameterEstimateApplicator:
             if not self._is_explicit_log_parameter(estimate.name):
                 return (lower, upper)
 
-            lower_tensor = torch.as_tensor(lower)
-            upper_tensor = torch.as_tensor(upper)
+            lower_tensor = torch.as_tensor(
+                lower,
+                dtype=torch.get_default_dtype(),
+                )
+            upper_tensor = torch.as_tensor(
+                upper,
+                dtype=torch.get_default_dtype(),
+                )
 
             if lower_tensor.numel() == 1 and upper_tensor.numel() == 1:
                 lower_scalar = float(lower_tensor.item())
