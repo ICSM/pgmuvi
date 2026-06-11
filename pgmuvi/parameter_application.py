@@ -162,12 +162,10 @@ class ParameterEstimateApplicator:
             if not self._is_explicit_log_parameter(estimate.name):
                 return estimate.value
 
-            value_tensor = torch.as_tensor(estimate.value)
             value_tensor = torch.as_tensor(
                     estimate.value,
                     dtype=torch.get_default_dtype(),
                     )
-
 
             if value_tensor.numel() == 1:
                 scalar = float(value_tensor.item())
