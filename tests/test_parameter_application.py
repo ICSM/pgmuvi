@@ -516,17 +516,14 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         parameter_name, constraint = model.covar_module.calls[0]
 
         self.assertEqual(parameter_name, "raw_lengthscale")
-        self.assertAlmostEqual(float(constraint.lower_bound), 0.0)
-        self.assertAlmostEqual(float(constraint.upper_bound),
-                               4.605170185988092,
-                               places=6,
-                               )
+        self.assertAlmostEqual(float(constraint.lower_bound), 1.0)
+        self.assertAlmostEqual(float(constraint.upper_bound), 100.0)
 
     def test_transform_log_vector_value_applies_elementwise_log(self):
         spec = ParameterSpec(
-            name="covar_module.mixture_weights",
-            role=ParameterRole.WEIGHT,
-            domain=ParameterDomain.VARIANCE,
+            name="mean_module.log_amplitudes",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
             scale=ParameterScale.LOG,
             shape=(2,),
         )
@@ -546,9 +543,9 @@ class TestParameterEstimateApplicator(unittest.TestCase):
 
     def test_transform_log_vector_constraint_applies_elementwise_log(self):
         spec = ParameterSpec(
-            name="covar_module.mixture_weights",
-            role=ParameterRole.WEIGHT,
-            domain=ParameterDomain.VARIANCE,
+            name="mean_module.log_amplitudes",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
             scale=ParameterScale.LOG,
             shape=(2,),
         )

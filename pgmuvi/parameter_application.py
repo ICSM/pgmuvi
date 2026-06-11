@@ -57,6 +57,12 @@ class ParameterEstimateApplicator:
         return obj
 
     @staticmethod
+    def _is_explicit_log_parameter(parameter_name: str) -> bool:
+        """Return True when the model parameter itself stores log(value)."""
+        local_name = parameter_name.split(".")[-1]
+        return local_name.startswith("log_")
+
+    @staticmethod
     def _split_parameter_path(parameter_name: str):
         """Split a parameter path into module path and local parameter name."""
         parts = parameter_name.split(".")
@@ -139,6 +145,9 @@ class ParameterEstimateApplicator:
             return estimate.value
 
         if estimate.spec.scale is ParameterScale.LOG:
+            if not self._is_explicit_log_parameter(estimate.name):
+                return estimate.value
+
             value_tensor = torch.as_tensor(estimate.value)
 
             if value_tensor.numel() == 1:
@@ -174,6 +183,9 @@ class ParameterEstimateApplicator:
             return (lower, upper)
 
         if estimate.spec.scale is ParameterScale.LOG:
+            if not self._is_explicit_log_parameter(estimate.name):
+                return (lower, upper)
+
             lower_tensor = torch.as_tensor(lower)
             upper_tensor = torch.as_tensor(upper)
 
