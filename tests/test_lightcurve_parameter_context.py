@@ -203,6 +203,8 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "available": False,
                 "applied": 0,
                 "skipped": 0,
+                "applied_parameters": [],
+                "skipped_parameters": [],
             },
         )
 
@@ -224,5 +226,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "available": True,
                 "applied": 2,
                 "skipped": 1,
+                "applied_parameters": ["a", "b"],
+                "skipped_parameters": ["c"],
             },
         )

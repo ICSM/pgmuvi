@@ -9098,6 +9098,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "available": False,
                 "applied": 0,
                 "skipped": 0,
+                "applied_parameters": [],
+                "skipped_parameters": [],
             }
 
         applied = 0
@@ -9109,10 +9111,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else:
                 skipped += 1
 
+        applied_parameters = []
+        skipped_parameters = []
+
+        for name, value in result.items():
+            if value:
+                applied_parameters.append(name)
+            else:
+                skipped_parameters.append(name)
+
         return {
             "available": True,
             "applied": applied,
             "skipped": skipped,
+            "applied_parameters": applied_parameters,
+            "skipped_parameters": skipped_parameters,
         }
 
     def fit(self, *args, **kwargs):
