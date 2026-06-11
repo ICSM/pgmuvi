@@ -561,6 +561,59 @@ class TestParameterEstimateBuilder(unittest.TestCase):
             0.05,
         )
 
+    def test_consensus_frequency_returns_multiple_components(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus",
+                frequencies=[0.10, 0.05, 0.02],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(
+            estimate.value,
+            [0.10, 0.05, 0.02],
+        )
+
+    def test_consensus_frequency_requires_enough_components(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus",
+                frequencies=[0.10, 0.05],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertIsNone(estimate.value)
+
 
 if __name__ == "__main__":
     unittest.main()
