@@ -9074,15 +9074,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def _apply_parameter_workflow_estimates(self):
         """Apply parameter workflow estimates when the model supports them."""
+        self.parameter_workflow_result = None
+
         if not model_supports_parameter_workflow(self.model):
             return None
 
         context = self._build_parameter_estimation_context()
 
-        return build_and_apply_parameter_estimates(
+        self.parameter_workflow_result = build_and_apply_parameter_estimates(
             model=self.model,
             context=context,
         )
+
+        return self.parameter_workflow_result
 
     def fit(self, *args, **kwargs):
         """Fit wrapper that records lightweight in-memory fit history."""

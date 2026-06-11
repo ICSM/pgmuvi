@@ -118,7 +118,6 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         self.assertEqual(context.global_diagnostics.n_points, 2)
         self.assertAlmostEqual(context.global_diagnostics.median_flux, 20.0)
 
-
     def test_apply_parameter_workflow_estimates_returns_none_without_schema(self):
         lc = Lightcurve(
             torch.tensor([0.0, 1.0, 2.0]),
@@ -129,6 +128,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         result = lc._apply_parameter_workflow_estimates()
 
         self.assertIsNone(result)
+        self.assertIsNone(lc.parameter_workflow_result)
 
     def test_apply_parameter_workflow_estimates_applies_supported_schema(self):
         lc = Lightcurve(
@@ -147,6 +147,11 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                     "constraint": True,
                 },
             },
+        )
+
+        self.assertEqual(
+            lc.parameter_workflow_result,
+            result,
         )
 
         self.assertAlmostEqual(
