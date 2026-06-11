@@ -113,6 +113,10 @@ def lengthscale_kernel_parameter_schema(
                 role=ParameterRole.LENGTHSCALE,
                 domain=domain,
                 scale=ParameterScale.LOG,
+                initial_value=1.0,
+                constraint=(1.0e-3, 1.0e3),
+                guess_strategy=GuessStrategy.DEFAULT,
+                constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
                     "Positive correlation lengthscale of the kernel in "
                     f"{description_context} space."

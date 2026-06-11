@@ -2,6 +2,8 @@ import unittest
 
 from pgmuvi.gps import lengthscale_kernel_parameter_schema
 from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
     ParameterDomain,
     ParameterRole,
     ParameterScale,
@@ -23,6 +25,13 @@ class TestLengthscaleKernelParameterSchema(unittest.TestCase):
         self.assertIs(lengthscale.role, ParameterRole.LENGTHSCALE)
         self.assertIs(lengthscale.domain, ParameterDomain.TIME)
         self.assertIs(lengthscale.scale, ParameterScale.LOG)
+        self.assertEqual(lengthscale.initial_value, 1.0)
+        self.assertEqual(lengthscale.constraint, (1.0e-3, 1.0e3))
+        self.assertEqual(lengthscale.guess_strategy, GuessStrategy.DEFAULT)
+        self.assertEqual(
+            lengthscale.constraint_strategy,
+            ConstraintStrategy.DEFAULT,
+        )
 
     def test_wavelength_lengthscale_schema(self):
         schema = lengthscale_kernel_parameter_schema(
