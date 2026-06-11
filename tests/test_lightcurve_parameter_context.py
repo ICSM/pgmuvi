@@ -106,9 +106,10 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
             torch.tensor([10.0, float("nan"), 30.0]),
         )
 
-        # Lightcurve currently rejects NaNs on construction, so this test is
-        # only useful if non-finite values can exist internally later.
-        # Do not add this test if constructor validation rejects the input.
+        context = lc._build_parameter_estimation_context()
+        self.assertEqual(context.global_diagnostics.n_points, 2)
+        self.assertAlmostEqual(context.global_diagnostics.median_flux, 20.0)
+
 
     def test_apply_parameter_workflow_estimates_returns_none_without_schema(self):
         lc = Lightcurve(

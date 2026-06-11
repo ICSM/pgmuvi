@@ -9017,7 +9017,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def _build_parameter_estimation_context(self):
         """Construct a parameter-estimation context from this light curve."""
-        flux_values = np.asarray(self._ydata_raw, dtype=float)
+        flux_values = self._ydata_raw
+        if isinstance(flux_values, torch.Tensor):
+            flux_values = flux_values.detach().cpu().numpy()
+        flux_values = np.asarray(flux_values, dtype=float)
         flux_values = flux_values[np.isfinite(flux_values)]
 
         if flux_values.size == 0:
