@@ -163,6 +163,7 @@ def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
         return f"{prefix}.{local_name}" if prefix else local_name
 
     shape = None if num_mixtures is None else (num_mixtures,)
+    default_components = None if num_mixtures is None else [1.0] * num_mixtures
 
     return ParameterSpecCollection(
         [
@@ -172,6 +173,9 @@ def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
                 domain=ParameterDomain.FREQUENCY,
                 scale=ParameterScale.LINEAR,
                 shape=shape,
+                initial_value=None,
+                constraint=(1.0e-6, 1.0e6),
+                constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
                     "Central frequencies of the spectral-mixture components. "
                     "Period diagnostics should be converted to frequencies before "
@@ -184,6 +188,10 @@ def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
                 domain=ParameterDomain.FREQUENCY,
                 scale=ParameterScale.LOG,
                 shape=shape,
+                initial_value=default_components,
+                constraint=(1.0e-6, 1.0e6),
+                guess_strategy=GuessStrategy.DEFAULT,
+                constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
                     "Positive frequency-space widths of the spectral-mixture components."
                 ),
@@ -194,6 +202,10 @@ def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
                 domain=ParameterDomain.VARIANCE,
                 scale=ParameterScale.LOG,
                 shape=shape,
+                initial_value=default_components,
+                constraint=(1.0e-12, 1.0e12),
+                guess_strategy=GuessStrategy.DEFAULT,
+                constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
                     "Positive variance contributions of the spectral-mixture components, "
                     "equivalent to integrated PSD power up to kernel convention factors."
