@@ -561,6 +561,140 @@ class TestParameterEstimateBuilder(unittest.TestCase):
             0.05,
         )
 
+    def test_consensus_frequency_returns_multiple_components(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus",
+                frequencies=[0.10, 0.05, 0.02],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(
+            estimate.value,
+            [0.10, 0.05, 0.02],
+        )
+
+    def test_consensus_frequency_requires_enough_components(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus",
+                frequencies=[0.10, 0.05],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertIsNone(estimate.value)
+
+    def test_consensus_multicomp_period_returns_multiple_components(self):
+        spec = ParameterSpec(
+            name="periods",
+            role=ParameterRole.PERIOD,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_MULTICOMP_PERIOD,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus_multicomp",
+                periods=[300.0, 600.0, 1200.0],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(
+            estimate.value,
+            [300.0, 600.0, 1200.0],
+        )
+
+    def test_consensus_multicomp_period_requires_enough_components(self):
+        spec = ParameterSpec(
+            name="periods",
+            role=ParameterRole.PERIOD,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_MULTICOMP_PERIOD,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus_multicomp",
+                periods=[300.0, 600.0],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertIsNone(estimate.value)
+
+    def test_consensus_frequency_initializes_multicomponent_mixture_means_from_periods(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus_multicomp",
+                periods=[10.0, 20.0, 50.0],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(
+            estimate.value,
+            [0.1, 0.05, 0.02],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
