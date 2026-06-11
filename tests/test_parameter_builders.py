@@ -531,6 +531,36 @@ class TestParameterEstimateBuilder(unittest.TestCase):
 
         self.assertAlmostEqual(estimate.value, 0.05)
 
+    def test_consensus_frequency_preferred_over_baseline_frequency(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                baseline_duration=1000.0,
+            ),
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus",
+                frequencies=[0.05],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertAlmostEqual(
+            estimate.value,
+            0.05,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

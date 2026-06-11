@@ -39,7 +39,7 @@ class TestSpectralMixtureParameterSchema(unittest.TestCase):
         self.assertEqual(means.constraint, (1.0e-6, 1.0e6))
         self.assertEqual(
             means.guess_strategy,
-            GuessStrategy.BASELINE_FREQUENCY,
+            GuessStrategy.CONSENSUS_FREQUENCY,
         )
         self.assertEqual(
             means.constraint_strategy,
@@ -50,7 +50,7 @@ class TestSpectralMixtureParameterSchema(unittest.TestCase):
         self.assertIs(scales.domain, ParameterDomain.FREQUENCY)
         self.assertIs(scales.scale, ParameterScale.LOG)
         self.assertEqual(scales.shape, (3,))
-        self.assertEqual(scales.initial_value, 1.0)
+        self.assertEqual(scales.initial_value, [1.0, 1.0, 1.0])
         self.assertEqual(scales.constraint, (1.0e-6, 1.0e6))
         self.assertEqual(scales.guess_strategy, GuessStrategy.DEFAULT)
         self.assertEqual(
@@ -62,7 +62,7 @@ class TestSpectralMixtureParameterSchema(unittest.TestCase):
         self.assertIs(weights.domain, ParameterDomain.VARIANCE)
         self.assertIs(weights.scale, ParameterScale.LOG)
         self.assertEqual(weights.shape, (3,))
-        self.assertEqual(weights.initial_value, 1.0)
+        self.assertEqual(weights.initial_value, [1.0, 1.0, 1.0])
         self.assertEqual(weights.constraint, (1.0e-12, 1.0e12))
         self.assertEqual(weights.guess_strategy, GuessStrategy.DEFAULT)
         self.assertEqual(
