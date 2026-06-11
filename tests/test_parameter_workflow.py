@@ -17,6 +17,7 @@ from pgmuvi.parameter_specs import (
 )
 from pgmuvi.parameter_workflow import (
     apply_parameter_estimates,
+    build_and_apply_parameter_estimates,
     build_parameter_estimates,
     get_parameter_schema,
 )
@@ -134,6 +135,44 @@ class TestParameterWorkflow(unittest.TestCase):
         results = apply_parameter_estimates(
             model=model,
             estimates=estimates,
+        )
+
+        self.assertEqual(
+            results,
+            {
+                "mean_module.offset": {
+                    "value": True,
+                    "constraint": True,
+                },
+            },
+        )
+
+        self.assertAlmostEqual(
+            float(model.mean_module.offset.item()),
+            55.0,
+        )
+
+        self.assertEqual(
+            model.mean_module.calls[0][0],
+            "offset",
+        )
+
+    def test_build_and_apply_parameter_estimates_runs_full_workflow(self):
+        model = ModelWithRealSchema()
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                median_flux=55.0,
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        results = build_and_apply_parameter_estimates(
+            model=model,
+            context=context,
         )
 
         self.assertEqual(

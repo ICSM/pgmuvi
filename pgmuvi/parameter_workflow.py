@@ -57,3 +57,23 @@ def apply_parameter_estimates(
         model=model,
         estimates=estimates,
     )
+
+
+def build_and_apply_parameter_estimates(
+    model: Any,
+    context: ParameterEstimationContext,
+    builder: ParameterEstimateBuilder | None = None,
+    applicator: ParameterEstimateApplicator | None = None,
+) -> dict[str, dict[str, bool]] | None:
+    """Build and apply parameter estimates for a model when possible."""
+    estimates = build_parameter_estimates(
+        model=model,
+        context=context,
+        builder=builder,
+    )
+
+    return apply_parameter_estimates(
+        model=model,
+        estimates=estimates,
+        applicator=applicator,
+    )
