@@ -73,7 +73,10 @@ class ParameterEstimateBuilder:
         if spec.guess_strategy is GuessStrategy.GEOMETRIC_SAMPLING_TIMESCALE:
             return self._estimate_geometric_sampling_timescale(context)
 
-        return None
+        if spec.guess_strategy is GuessStrategy.BASELINE_FREQUENCY:
+            return self._estimate_baseline_frequency(context)
+
+            return None
 
     def _estimate_constraint(
         self,
@@ -185,3 +188,20 @@ class ParameterEstimateBuilder:
             return None
 
         return math.sqrt(baseline * cadence)
+
+    @staticmethod
+    def _estimate_baseline_frequency(
+        context: ParameterEstimationContext,
+    ):
+        """Estimate the lowest baseline-resolved frequency."""
+        diagnostics = context.global_diagnostics
+
+        if diagnostics is None:
+            return None
+
+        baseline = diagnostics.baseline_duration
+
+        if baseline is None or baseline <= 0:
+            return None
+
+        return 1.0 / baseline

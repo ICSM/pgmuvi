@@ -179,6 +179,7 @@ def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
                 shape=shape,
                 initial_value=None,
                 constraint=(1.0e-6, 1.0e6),
+                guess_strategy=GuessStrategy.BASELINE_FREQUENCY,
                 constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
                     "Central frequencies of the spectral-mixture components. "
