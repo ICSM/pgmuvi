@@ -286,6 +286,10 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.SHAPE,
                     domain=ParameterDomain.DIMENSIONLESS,
                     scale=ParameterScale.LINEAR,
+                    initial_value=-2.0,
+                    constraint=(-10.0, 10.0),
+                    guess_strategy=GuessStrategy.DEFAULT,
+                    constraint_strategy=ConstraintStrategy.DEFAULT,
                     description=(
                         "Dimensionless power-law index controlling the wavelength "
                         "dependence of the mean flux."

@@ -81,3 +81,19 @@ class TestPowerLawMeanParameterSchema(unittest.TestCase):
             weight.constraint_strategy,
             ConstraintStrategy.ROBUST_FLUX_RANGE,
         )
+
+    def test_power_law_mean_exponent_default_estimation_strategies(self):
+        schema = PowerLawMean().parameter_schema()
+
+        exponent = schema["mean_module.exponent"]
+
+        self.assertEqual(exponent.initial_value, -2.0)
+        self.assertEqual(exponent.constraint, (-10.0, 10.0))
+        self.assertEqual(
+            exponent.guess_strategy,
+            GuessStrategy.DEFAULT,
+        )
+        self.assertEqual(
+            exponent.constraint_strategy,
+            ConstraintStrategy.DEFAULT,
+        )
