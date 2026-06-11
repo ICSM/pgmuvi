@@ -1,7 +1,13 @@
 import unittest
 
 from pgmuvi.gps import PowerLawMean
-from pgmuvi.parameter_specs import ParameterDomain, ParameterRole, ParameterScale
+from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+)
 
 
 class TestPowerLawMeanParameterSchema(unittest.TestCase):
@@ -46,4 +52,18 @@ class TestPowerLawMeanParameterSchema(unittest.TestCase):
                 "weight",
                 "exponent",
             ],
+        )
+
+    def test_power_law_mean_offset_estimation_strategies(self):
+        schema = PowerLawMean().parameter_schema()
+
+        offset = schema["mean_module.offset"]
+
+        self.assertEqual(
+            offset.guess_strategy,
+            GuessStrategy.MEDIAN_FLUX,
+        )
+        self.assertEqual(
+            offset.constraint_strategy,
+            ConstraintStrategy.ROBUST_FLUX_RANGE,
         )

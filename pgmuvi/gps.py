@@ -261,6 +261,8 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.MEDIAN_FLUX,
+                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
                     description=(
                         "Constant additive flux offset of the wavelength "
                         "power-law mean function."
