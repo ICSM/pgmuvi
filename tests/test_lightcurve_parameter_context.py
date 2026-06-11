@@ -3,10 +3,51 @@ import unittest
 import torch
 
 from pgmuvi.lightcurve import Lightcurve
+from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+    ParameterSpec,
+    ParameterSpecCollection,
+)
 from pgmuvi.parameter_context import (
     LightcurveDiagnostics,
     ParameterEstimationContext,
 )
+
+
+class DummyWorkflowMeanModule:
+    def __init__(self):
+        self.offset = torch.nn.Parameter(torch.zeros(1))
+        self.calls = []
+
+    def register_constraint(self, parameter_name, constraint):
+        self.calls.append((parameter_name, constraint))
+
+
+class DummyWorkflowModel:
+    def __init__(self):
+        self.mean_module = DummyWorkflowMeanModule()
+
+    def parameter_schema(self):
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name="mean_module.offset",
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.MEDIAN_FLUX,
+                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
+                ),
+            ]
+        )
+
+
+class DummyNoWorkflowModel:
+    pass
 
 
 class TestLightcurveParameterEstimationContext(unittest.TestCase):
@@ -68,3 +109,43 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         # Lightcurve currently rejects NaNs on construction, so this test is
         # only useful if non-finite values can exist internally later.
         # Do not add this test if constructor validation rejects the input.
+
+    def test_apply_parameter_workflow_estimates_returns_none_without_schema(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+        lc.model = DummyNoWorkflowModel()
+
+        result = lc._apply_parameter_workflow_estimates()
+
+        self.assertIsNone(result)
+
+    def test_apply_parameter_workflow_estimates_applies_supported_schema(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+        lc.model = DummyWorkflowModel()
+
+        result = lc._apply_parameter_workflow_estimates()
+
+        self.assertEqual(
+            result,
+            {
+                "mean_module.offset": {
+                    "value": True,
+                    "constraint": True,
+                },
+            },
+        )
+
+        self.assertAlmostEqual(
+            float(lc.model.mean_module.offset.item()),
+            20.0,
+        )
+
+        self.assertEqual(
+            lc.model.mean_module.calls[0][0],
+            "offset",
+        )

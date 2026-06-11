@@ -9039,6 +9039,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ),
         )
 
+    def _apply_parameter_workflow_estimates(self):
+        """Apply parameter workflow estimates when the model supports them."""
+        if not model_supports_parameter_workflow(self.model):
+            return None
+
+        context = self._build_parameter_estimation_context()
+
+        return build_and_apply_parameter_estimates(
+            model=self.model,
+            context=context,
+        )
+
     def fit(self, *args, **kwargs):
         """Fit wrapper that records lightweight in-memory fit history."""
         # Nested fit() calls (e.g. from _consensus_standard_fit) delegate
@@ -9823,12 +9835,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if not self.__CONTRAINTS_SET:
             self.set_default_constraints()
 
-        if model_supports_parameter_workflow(self.model):
-            context = self._build_parameter_estimation_context()
-            build_and_apply_parameter_estimates(
-                model=self.model,
-                context=context,
-            )
+        self._apply_parameter_workflow_estimates()
 
         if cuda:
             self.cuda()
