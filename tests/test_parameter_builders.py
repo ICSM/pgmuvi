@@ -614,6 +614,59 @@ class TestParameterEstimateBuilder(unittest.TestCase):
 
         self.assertIsNone(estimate.value)
 
+    def test_consensus_multicomp_period_returns_multiple_components(self):
+        spec = ParameterSpec(
+            name="periods",
+            role=ParameterRole.PERIOD,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_MULTICOMP_PERIOD,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus_multicomp",
+                periods=[300.0, 600.0, 1200.0],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(
+            estimate.value,
+            [300.0, 600.0, 1200.0],
+        )
+
+    def test_consensus_multicomp_period_requires_enough_components(self):
+        spec = ParameterSpec(
+            name="periods",
+            role=ParameterRole.PERIOD,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_MULTICOMP_PERIOD,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus_multicomp",
+                periods=[300.0, 600.0],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertIsNone(estimate.value)
+
 
 if __name__ == "__main__":
     unittest.main()

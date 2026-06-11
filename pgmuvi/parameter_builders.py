@@ -79,7 +79,41 @@ class ParameterEstimateBuilder:
         if spec.guess_strategy is GuessStrategy.CONSENSUS_FREQUENCY:
             return self._estimate_consensus_frequency(spec, context)
 
+        if spec.guess_strategy is GuessStrategy.CONSENSUS_MULTICOMP_PERIOD:
+            return self._estimate_consensus_multicomp_period(spec, context)
+
         return None
+
+    @staticmethod
+    def _estimate_consensus_multicomp_period(
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Estimate period(s) from multicomponent consensus diagnostics."""
+        diagnostics = context.consensus_diagnostics
+
+        if diagnostics is None:
+            return None
+
+        periods = diagnostics.periods
+
+        if periods is None:
+            return None
+
+        periods = list(periods)
+
+        if spec.shape is None:
+            return periods[0] if periods else None
+
+        if len(spec.shape) != 1:
+            return None
+
+        n_components = spec.shape[0]
+
+        if len(periods) < n_components:
+            return None
+
+        return periods[:n_components]
 
     @staticmethod
     def _estimate_consensus_frequency(
