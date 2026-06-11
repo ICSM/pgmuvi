@@ -60,6 +60,9 @@ class ParameterEstimateBuilder:
         context: ParameterEstimationContext,
     ):
         """Estimate an initial value for one parameter specification."""
+        if spec.guess_strategy is GuessStrategy.DEFAULT:
+            return spec.initial_value
+
         if spec.guess_strategy is GuessStrategy.MEDIAN_FLUX:
             return self._estimate_median_flux(context)
 
@@ -74,8 +77,12 @@ class ParameterEstimateBuilder:
         context: ParameterEstimationContext,
     ):
         """Estimate a constraint for one parameter specification."""
+        if spec.constraint_strategy is ConstraintStrategy.DEFAULT:
+            return spec.constraint
+
         if spec.constraint_strategy is ConstraintStrategy.ROBUST_FLUX_RANGE:
             return self._estimate_robust_flux_range(context)
+
         if spec.constraint_strategy is ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN:
             return self._estimate_robust_positive_flux_span_constraint(context)
 
