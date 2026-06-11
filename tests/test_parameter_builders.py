@@ -667,6 +667,34 @@ class TestParameterEstimateBuilder(unittest.TestCase):
 
         self.assertIsNone(estimate.value)
 
+    def test_consensus_frequency_initializes_multicomponent_mixture_means_from_periods(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            shape=(3,),
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            consensus_diagnostics=ConsensusDiagnostics(
+                method="consensus_multicomp",
+                periods=[10.0, 20.0, 50.0],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(
+            estimate.value,
+            [0.1, 0.05, 0.02],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -122,7 +122,6 @@ class ParameterEstimateBuilder:
     ):
         """Estimate frequency from consensus diagnostics."""
         diagnostics = context.consensus_diagnostics
-        diagnostics = context.consensus_diagnostics
 
         if diagnostics is None:
             return None
