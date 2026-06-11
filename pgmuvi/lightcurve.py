@@ -9450,6 +9450,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             clear_model_state=False,
             clear_consensus=bool(fit_strategy is not None),
         )
+        _constraints_were_set_before_fit = bool(self.__CONTRAINTS_SET)
 
         verbose = kwargs.get("verbose", False)
 
@@ -9839,7 +9840,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if not self.__CONTRAINTS_SET:
             self.set_default_constraints()
 
-        self._apply_parameter_workflow_estimates()
+        if not _constraints_were_set_before_fit:
+            self._apply_parameter_workflow_estimates()
 
         if cuda:
             self.cuda()
