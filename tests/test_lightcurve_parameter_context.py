@@ -190,3 +190,39 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         self.assertIsNone(
             lc.parameter_workflow_result,
         )
+
+    def test_parameter_workflow_summary_without_results(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": False,
+                "applied": 0,
+                "skipped": 0,
+            },
+        )
+
+    def test_parameter_workflow_summary_counts_results(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        lc.parameter_workflow_result = {
+            "a": True,
+            "b": True,
+            "c": False,
+        }
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": True,
+                "applied": 2,
+                "skipped": 1,
+            },
+        )

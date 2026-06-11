@@ -9089,6 +9089,32 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return self.parameter_workflow_result
 
+    def get_parameter_workflow_summary(self):
+        """Return a lightweight summary of parameter workflow results."""
+        result = self.parameter_workflow_result
+
+        if result is None:
+            return {
+                "available": False,
+                "applied": 0,
+                "skipped": 0,
+            }
+
+        applied = 0
+        skipped = 0
+
+        for value in result.values():
+            if value:
+                applied += 1
+            else:
+                skipped += 1
+
+        return {
+            "available": True,
+            "applied": applied,
+            "skipped": skipped,
+        }
+
     def fit(self, *args, **kwargs):
         """Fit wrapper that records lightweight in-memory fit history."""
         # Nested fit() calls (e.g. from _consensus_standard_fit) delegate
