@@ -151,9 +151,9 @@ class TestParameterEstimateApplicator(unittest.TestCase):
         applicator = ParameterEstimateApplicator()
 
         self.assertAlmostEqual(
-                applicator._transform_value(estimate),
-                4.605170185988092,
-                )
+            applicator._transform_value(estimate),
+            4.605170185988092,
+        )
 
     def test_transform_log_value_rejects_non_positive_values(self):
         spec = ParameterSpec(

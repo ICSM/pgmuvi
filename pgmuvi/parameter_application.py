@@ -163,9 +163,9 @@ class ParameterEstimateApplicator:
                 return estimate.value
 
             value_tensor = torch.as_tensor(
-                    estimate.value,
-                    dtype=torch.get_default_dtype(),
-                    )
+                estimate.value,
+                dtype=torch.get_default_dtype(),
+            )
 
             if value_tensor.numel() == 1:
                 scalar = float(value_tensor.item())
@@ -206,11 +206,11 @@ class ParameterEstimateApplicator:
             lower_tensor = torch.as_tensor(
                 lower,
                 dtype=torch.get_default_dtype(),
-                )
+            )
             upper_tensor = torch.as_tensor(
                 upper,
                 dtype=torch.get_default_dtype(),
-                )
+            )
 
             if lower_tensor.numel() == 1 and upper_tensor.numel() == 1:
                 lower_scalar = float(lower_tensor.item())
