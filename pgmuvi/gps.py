@@ -139,6 +139,10 @@ def scale_kernel_parameter_schema(prefix="covar_module"):
                 role=ParameterRole.WEIGHT,
                 domain=ParameterDomain.VARIANCE,
                 scale=ParameterScale.LOG,
+                initial_value=1.0,
+                constraint=(1.0e-6, 1.0e6),
+                guess_strategy=GuessStrategy.DEFAULT,
+                constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
                     "Positive covariance-amplitude scale factor multiplying the base "
                     "kernel."
