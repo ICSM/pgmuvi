@@ -1,0 +1,92 @@
+"""High-level parameter-estimation workflow helpers."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pgmuvi.parameter_application import ParameterEstimateApplicator
+from pgmuvi.parameter_builders import ParameterEstimateBuilder
+from pgmuvi.parameter_context import ParameterEstimationContext
+from pgmuvi.parameter_estimates import ParameterEstimateCollection
+from pgmuvi.parameter_specs import ParameterSpecCollection
+
+
+def model_supports_parameter_workflow(model: Any) -> bool:
+    """Return whether a model exposes a valid parameter schema."""
+    return get_parameter_schema(model) is not None
+
+
+def get_parameter_schema(model: Any) -> ParameterSpecCollection | None:
+    """Return a model parameter schema if one is available."""
+    schema_attr = getattr(model, "parameter_schema", None)
+
+    if schema_attr is None or not callable(schema_attr):
+        return None
+
+    try:
+        schema = schema_attr()
+    except TypeError:
+        return None
+
+    if not isinstance(schema, ParameterSpecCollection):
+        return None
+
+    return schema
+
+
+def build_parameter_estimates(
+    model: Any,
+    context: ParameterEstimationContext,
+    builder: ParameterEstimateBuilder | None = None,
+) -> ParameterEstimateCollection | None:
+    """Build parameter estimates for a model if a schema is available."""
+    schema = get_parameter_schema(model)
+
+    if schema is None:
+        return None
+
+    if builder is None:
+        builder = ParameterEstimateBuilder()
+
+    return builder.build(
+        schema=schema,
+        context=context,
+    )
+
+
+def apply_parameter_estimates(
+    model: Any,
+    estimates: ParameterEstimateCollection | None,
+    applicator: ParameterEstimateApplicator | None = None,
+) -> dict[str, dict[str, bool]] | None:
+    """Apply parameter estimates to a model if estimates are available."""
+    if estimates is None:
+        return None
+
+    if applicator is None:
+        applicator = ParameterEstimateApplicator()
+
+    return applicator.apply(
+        model=model,
+        estimates=estimates,
+    )
+
+
+def build_and_apply_parameter_estimates(
+    model: Any,
+    context: ParameterEstimationContext,
+    builder: ParameterEstimateBuilder | None = None,
+    applicator: ParameterEstimateApplicator | None = None,
+) -> dict[str, dict[str, bool]] | None:
+    """Build and apply parameter estimates for a model when possible."""
+    estimates = build_parameter_estimates(
+        model=model,
+        context=context,
+        builder=builder,
+    )
+
+    return apply_parameter_estimates(
+        model=model,
+        estimates=estimates,
+        applicator=applicator,
+    )

@@ -1,0 +1,254 @@
+import unittest
+
+import torch
+
+from pgmuvi.parameter_context import (
+    LightcurveDiagnostics,
+    ParameterEstimationContext,
+)
+from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
+    ParameterDomain,
+    ParameterRole,
+    ParameterScale,
+    ParameterSpec,
+    ParameterSpecCollection,
+)
+from pgmuvi.parameter_workflow import (
+    apply_parameter_estimates,
+    build_and_apply_parameter_estimates,
+    build_parameter_estimates,
+    get_parameter_schema,
+    model_supports_parameter_workflow,
+)
+
+
+class ModelWithWrongSchemaType:
+    def parameter_schema(self):
+        return "not-a-schema"
+
+
+class ModelWithSchemaRequiringArguments:
+    def parameter_schema(self, required_argument):
+        return required_argument
+
+
+class ModelWithSchema:
+    def parameter_schema(self):
+        return ParameterSpecCollection()
+
+
+class ModelWithoutSchema:
+    pass
+
+
+class DummyMeanModule:
+    def __init__(self):
+        self.offset = torch.nn.Parameter(torch.zeros(1))
+        self.calls = []
+
+    def register_constraint(self, parameter_name, constraint):
+        self.calls.append((parameter_name, constraint))
+
+
+class ModelWithRealSchema:
+    def __init__(self):
+        self.mean_module = DummyMeanModule()
+
+    def parameter_schema(self):
+        return ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name="mean_module.offset",
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                    scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.MEDIAN_FLUX,
+                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
+                ),
+            ]
+        )
+
+
+class TestParameterWorkflow(unittest.TestCase):
+
+    def test_returns_schema_when_available(self):
+        schema = get_parameter_schema(
+            ModelWithSchema()
+        )
+
+        self.assertIsInstance(
+            schema,
+            ParameterSpecCollection,
+        )
+
+        self.assertEqual(
+            len(schema),
+            0,
+        )
+
+    def test_returns_none_when_unavailable(self):
+        self.assertIsNone(
+            get_parameter_schema(ModelWithoutSchema())
+        )
+
+    def test_build_parameter_estimates_returns_none_without_schema(self):
+        context = ParameterEstimationContext(is_multiband=False)
+
+        self.assertIsNone(
+            build_parameter_estimates(
+                model=ModelWithoutSchema(),
+                context=context,
+            )
+        )
+
+    def test_build_parameter_estimates_uses_schema_and_context(self):
+        model = ModelWithRealSchema()
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                median_flux=55.0,
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        estimates = build_parameter_estimates(
+            model=model,
+            context=context,
+        )
+
+        estimate = estimates["mean_module.offset"]
+
+        self.assertEqual(estimate.value, 55.0)
+        self.assertEqual(estimate.constraint, (10.0, 100.0))
+
+    def test_apply_parameter_estimates_returns_none_without_estimates(self):
+        self.assertIsNone(
+            apply_parameter_estimates(
+                model=ModelWithoutSchema(),
+                estimates=None,
+            )
+        )
+
+    def test_apply_parameter_estimates_applies_values_and_constraints(self):
+        model = ModelWithRealSchema()
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                median_flux=55.0,
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        estimates = build_parameter_estimates(
+            model=model,
+            context=context,
+        )
+
+        results = apply_parameter_estimates(
+            model=model,
+            estimates=estimates,
+        )
+
+        self.assertEqual(
+            results,
+            {
+                "mean_module.offset": {
+                    "value": True,
+                    "constraint": True,
+                },
+            },
+        )
+
+        self.assertAlmostEqual(
+            float(model.mean_module.offset.item()),
+            55.0,
+        )
+
+        self.assertEqual(
+            model.mean_module.calls[0][0],
+            "offset",
+        )
+
+    def test_build_and_apply_parameter_estimates_runs_full_workflow(self):
+        model = ModelWithRealSchema()
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                median_flux=55.0,
+                flux_percentiles={
+                    2.5: 10.0,
+                    97.5: 100.0,
+                },
+            ),
+        )
+
+        results = build_and_apply_parameter_estimates(
+            model=model,
+            context=context,
+        )
+
+        self.assertEqual(
+            results,
+            {
+                "mean_module.offset": {
+                    "value": True,
+                    "constraint": True,
+                },
+            },
+        )
+
+        self.assertAlmostEqual(
+            float(model.mean_module.offset.item()),
+            55.0,
+        )
+
+        self.assertEqual(
+            model.mean_module.calls[0][0],
+            "offset",
+        )
+
+    def test_returns_none_when_schema_has_wrong_type(self):
+        self.assertIsNone(
+            get_parameter_schema(ModelWithWrongSchemaType())
+        )
+
+
+    def test_returns_none_when_schema_requires_arguments(self):
+        self.assertIsNone(
+            get_parameter_schema(ModelWithSchemaRequiringArguments())
+        )
+
+    def test_model_supports_parameter_workflow_when_schema_available(self):
+        self.assertTrue(
+            model_supports_parameter_workflow(
+                ModelWithSchema()
+            )
+        )
+
+
+    def test_model_supports_parameter_workflow_when_schema_missing(self):
+        self.assertFalse(
+            model_supports_parameter_workflow(
+                ModelWithoutSchema()
+            )
+        )
+
+
+    def test_model_supports_parameter_workflow_when_schema_invalid(self):
+        self.assertFalse(
+            model_supports_parameter_workflow(
+                ModelWithWrongSchemaType()
+            )
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
