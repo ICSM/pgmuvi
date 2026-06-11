@@ -54,6 +54,7 @@ class GuessStrategy(str, Enum):
     ROBUST_FLUX_SPAN = "robust_flux_span"
     GEOMETRIC_SAMPLING_TIMESCALE = "geometric_sampling_timescale"
     BASELINE_FREQUENCY = "baseline_frequency"
+    CONSENSUS_FREQUENCY = "consensus_frequency"
     FLUX_STD = "flux_std"
     MAD = "mad"
 
