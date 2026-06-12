@@ -1431,6 +1431,37 @@ class QuasiPeriodicGPModel(ExactGP):
         self.covar_module = _make_qp_kernel(period)
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            scale_kernel_parameter_schema(
+                prefix="covar_module",
+            ),
+            ParameterSpecCollection(
+                [
+                    ParameterSpec(
+                        name="covar_module.base_kernel.kernels.0.period_length",
+                        role=ParameterRole.PERIOD,
+                        domain=ParameterDomain.TIME,
+                        scale=ParameterScale.LOG,
+                        initial_value=1.0,
+                        constraint=(1.0e-3, 1.0e6),
+                        guess_strategy=GuessStrategy.CONSENSUS_PERIOD,
+                        constraint_strategy=ConstraintStrategy.DEFAULT,
+                        description=(
+                            "Positive period length of the periodic component "
+                            "in the quasi-periodic kernel."
+                        ),
+                    ),
+                ]
+            ),
+            lengthscale_kernel_parameter_schema(
+                prefix="covar_module.base_kernel.kernels.1",
+                domain=ParameterDomain.TIME,
+                description_context="quasi-periodic decay time",
+            ),
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
