@@ -139,3 +139,37 @@ class TestParameterSpecs(unittest.TestCase):
 
         self.assertIs(spec.required, True)
         self.assertIs(spec.trainable, False)
+
+    def test_parameter_spec_collection_combine(self):
+        first = ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name="mean_module.offset",
+                    role=ParameterRole.OFFSET,
+                    domain=ParameterDomain.FLUX,
+                )
+            ]
+        )
+        second = ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name="covar_module.outputscale",
+                    role=ParameterRole.WEIGHT,
+                    domain=ParameterDomain.VARIANCE,
+                )
+            ]
+        )
+
+        combined = ParameterSpecCollection.combine(
+            first,
+            None,
+            second,
+        )
+
+        self.assertEqual(
+            combined.names(),
+            [
+                "mean_module.offset",
+                "covar_module.outputscale",
+            ],
+        )
