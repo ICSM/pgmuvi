@@ -249,6 +249,37 @@ class TestParameterWorkflow(unittest.TestCase):
             )
         )
 
+    def test_matern_gp_model_exposes_parameter_schema(self):
+        import gpytorch
+        import torch
+
+        from pgmuvi.gps import MaternGPModel
+
+        train_x = torch.tensor([0.0, 1.0, 2.0])
+        train_y = torch.tensor([1.0, 2.0, 3.0])
+
+        model = MaternGPModel(
+            train_x,
+            train_y,
+            gpytorch.likelihoods.GaussianLikelihood(),
+        )
+
+        schema = model.parameter_schema()
+
+        self.assertIsNotNone(schema)
+
+        names = schema.names()
+
+        self.assertIn(
+            "covar_module.outputscale",
+            names,
+        )
+
+        self.assertIn(
+            "covar_module.base_kernel.lengthscale",
+            names,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

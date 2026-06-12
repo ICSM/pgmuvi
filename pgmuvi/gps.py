@@ -1487,6 +1487,19 @@ class MaternGPModel(ExactGP):
         self.covar_module = ScaleKernel(matern_k)
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            scale_kernel_parameter_schema(
+                prefix="covar_module",
+            ),
+            lengthscale_kernel_parameter_schema(
+                prefix="covar_module.base_kernel",
+                domain=ParameterDomain.TIME,
+                description_context="time",
+            ),
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
