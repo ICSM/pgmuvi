@@ -312,6 +312,34 @@ class TestParameterWorkflow(unittest.TestCase):
             names,
         )
 
+    def test_spectral_mixture_gp_model_exposes_parameter_schema(self):
+        import gpytorch
+        import torch
+
+        from pgmuvi.gps import SpectralMixtureGPModel
+
+        train_x = torch.tensor([0.0, 1.0, 2.0])
+        train_y = torch.tensor([1.0, 2.0, 3.0])
+
+        model = SpectralMixtureGPModel(
+            train_x,
+            train_y,
+            gpytorch.likelihoods.GaussianLikelihood(),
+            num_mixtures=3,
+        )
+
+        schema = model.parameter_schema()
+        names = schema.names()
+
+        self.assertIn("covar_module.mixture_means", names)
+        self.assertIn("covar_module.mixture_scales", names)
+        self.assertIn("covar_module.mixture_weights", names)
+
+        self.assertEqual(
+            schema["covar_module.mixture_means"].shape,
+            (3,),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
