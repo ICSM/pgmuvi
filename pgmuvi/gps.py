@@ -815,14 +815,33 @@ class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=2000):
         super().__init__(train_x, train_y, likelihood)
+
+        if not grid_size:
+            grid_size = gpt.utils.grid.choose_grid_size(train_x, 1.0)
+            print(f"Using a grid of size {grid_size} for SKI")
+
+        grid_bounds = [[t.min(train_x), t.max(train_x)]]
+
         self.mean_module = LinearMean(input_size=1)
-        self.covar_module = GIK(SMK(num_mixtures=num_mixtures), grid_size=grid_size)
+        self.covar_module = GIK(
+            SMK(num_mixtures=num_mixtures),
+            grid_size=grid_size,
+            num_dims=1,
+            grid_bounds=grid_bounds,
+        )
         self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 
         # Now we alias the covariance kernel so that we can exploit the
         # same object properties in different classes with different kernel
         # structure. Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module.base_kernel",
+            num_mixtures=self.covar_module.base_kernel.num_mixtures,
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
