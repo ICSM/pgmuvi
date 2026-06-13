@@ -314,7 +314,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "covar_module.mixture_means": {
                     "value": False,
                     "constraint": True,
-                    "value_reason": "value_unavailable",
+                    "value_reason": "consensus_frequency_unavailable",
                     "constraint_reason": None,
                 },
                 "covar_module.mixture_scales": {

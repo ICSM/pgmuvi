@@ -46,7 +46,15 @@ class ParameterEstimateApplicator:
             results[estimate.name] = {
                 "value": value_applied,
                 "constraint": constraint_applied,
-                "value_reason": None if value_applied else "value_unavailable",
+                "value_reason": (
+                    None
+                    if value_applied
+                    else estimate.metadata.get(
+                        "value_reason",
+                        "value_unavailable",
+                    )
+                    or "value_unavailable"
+                ),
                 "constraint_reason": (
                     None if constraint_applied else "constraint_unavailable"
                 ),

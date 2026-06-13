@@ -45,6 +45,14 @@ class ParameterEstimateBuilder:
         value = self._estimate_value(spec, context)
         constraint = self._estimate_constraint(spec, context)
 
+        value = self._estimate_value(spec, context)
+        constraint = self._estimate_constraint(spec, context)
+        value_reason = self._estimate_value_reason(
+            spec,
+            context,
+            value,
+        )
+
         return ParameterEstimate(
             spec=spec,
             value=value,
@@ -53,7 +61,25 @@ class ParameterEstimateBuilder:
             constraint_source=(
                 spec.constraint_strategy.value if spec.constraint_strategy else None
             ),
+            metadata={
+                "value_reason": value_reason,
+            },
         )
+
+    def _estimate_value_reason(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+        value,
+    ):
+        """Return a reason string when value estimation did not produce a value."""
+        if value is not None:
+            return None
+
+        if spec.guess_strategy is GuessStrategy.CONSENSUS_FREQUENCY:
+            return "consensus_frequency_unavailable"
+
+        return None
 
     def _estimate_value(
         self,
