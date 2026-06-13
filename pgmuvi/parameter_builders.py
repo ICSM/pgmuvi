@@ -44,9 +44,6 @@ class ParameterEstimateBuilder:
         """Build one parameter estimate."""
         value = self._estimate_value(spec, context)
         constraint = self._estimate_constraint(spec, context)
-
-        value = self._estimate_value(spec, context)
-        constraint = self._estimate_constraint(spec, context)
         value_reason = self._estimate_value_reason(
             spec,
             context,
@@ -95,6 +92,25 @@ class ParameterEstimateBuilder:
 
         return None
 
+    def _reshape_initial_value(self, value, shape):
+        """Return an initial value reshaped to the declared parameter shape."""
+        if value is None or shape is None:
+            return value
+
+        value_tensor = torch.as_tensor(value)
+
+        if tuple(value_tensor.shape) == tuple(shape):
+            return value
+
+        if value_tensor.numel() == 1:
+            return value_tensor.expand(shape).clone()
+
+        if value_tensor.numel() == shape[0]:
+            view_shape = (shape[0],) + (1,) * (len(shape) - 1)
+            return value_tensor.reshape(view_shape).expand(shape).clone()
+
+        return value
+
     def _estimate_value(
         self,
         spec: ParameterSpec,
@@ -102,7 +118,10 @@ class ParameterEstimateBuilder:
     ):
         """Estimate an initial value for one parameter specification."""
         if spec.guess_strategy is GuessStrategy.DEFAULT:
-            return spec.initial_value
+            return self._reshape_initial_value(
+                spec.initial_value,
+                spec.shape,
+            )
 
         if spec.guess_strategy is GuessStrategy.MEDIAN_FLUX:
             return self._estimate_median_flux(context)
