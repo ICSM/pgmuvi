@@ -79,6 +79,20 @@ class ParameterEstimateBuilder:
         if spec.guess_strategy is GuessStrategy.CONSENSUS_FREQUENCY:
             return "consensus_frequency_unavailable"
 
+        diagnostics = context.global_diagnostics
+
+        if spec.guess_strategy is GuessStrategy.MEDIAN_FLUX:
+            if diagnostics is None:
+                return "global_diagnostics_unavailable"
+
+            return "median_flux_unavailable"
+
+        if spec.guess_strategy is GuessStrategy.ROBUST_FLUX_SPAN:
+            if diagnostics is None:
+                return "global_diagnostics_unavailable"
+
+            return "robust_flux_span_unavailable"
+
         return None
 
     def _estimate_value(
