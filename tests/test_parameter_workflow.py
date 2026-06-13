@@ -403,7 +403,7 @@ class TestParameterWorkflow(unittest.TestCase):
 
         self.assertEqual(
             schema["covar_module.mixture_means"].shape,
-            (3,),
+            (3, 1, 2),
         )
 
     def test_two_d_spectral_mixture_linear_mean_gp_model_exposes_parameter_schema(self):
@@ -437,7 +437,7 @@ class TestParameterWorkflow(unittest.TestCase):
 
         self.assertEqual(
             schema["covar_module.mixture_means"].shape,
-            (3,),
+            (3, 1, 2),
         )
 
     def test_spectral_mixture_kiss_gp_model_exposes_parameter_schema(self):
@@ -531,7 +531,7 @@ class TestParameterWorkflow(unittest.TestCase):
 
         self.assertEqual(
             schema["covar_module.base_kernel.mixture_means"].shape,
-            (3,),
+            (3, 1, 2),
         )
 
     def test_two_d_spectral_mixture_linear_mean_kiss_gp_model_exposes_parameter_schema(self):
@@ -566,7 +566,7 @@ class TestParameterWorkflow(unittest.TestCase):
 
         self.assertEqual(
             schema["covar_module.base_kernel.mixture_means"].shape,
-            (3,),
+            (3, 1, 2),
         )
 
     def test_two_d_spectral_mixture_power_law_mean_gp_model_exposes_parameter_schema(self):
@@ -604,7 +604,7 @@ class TestParameterWorkflow(unittest.TestCase):
 
         self.assertEqual(
             schema["covar_module.mixture_means"].shape,
-            (3,),
+            (3, 1, 2),
         )
 
     def test_two_d_spectral_mixture_power_law_mean_kiss_gp_model_exposes_parameter_schema(self):
@@ -643,7 +643,7 @@ class TestParameterWorkflow(unittest.TestCase):
 
         self.assertEqual(
             schema["covar_module.base_kernel.mixture_means"].shape,
-            (3,),
+            (3, 1, 2),
         )
 
     def test_two_d_spectral_mixture_dust_mean_gp_model_exposes_parameter_schema(self):
@@ -682,7 +682,7 @@ class TestParameterWorkflow(unittest.TestCase):
 
         self.assertEqual(
             schema["covar_module.mixture_means"].shape,
-            (3,),
+            (3, 1, 2),
         )
 
     def test_two_d_spectral_mixture_dust_mean_kiss_gp_model_exposes_parameter_schema(self):
@@ -722,7 +722,7 @@ class TestParameterWorkflow(unittest.TestCase):
 
         self.assertEqual(
             schema["covar_module.base_kernel.mixture_means"].shape,
-            (3,),
+            (3, 1, 2),
         )
 
     def test_sparse_spectral_mixture_gp_model_exposes_parameter_schema(self):

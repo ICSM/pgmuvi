@@ -159,14 +159,30 @@ def scale_kernel_parameter_schema(prefix="covar_module"):
     )
 
 
-def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
+def spectral_mixture_parameter_schema(
+    prefix="covar_module",
+    num_mixtures=None,
+    ard_num_dims=1,
+):
     """Return model-independent parameter specifications for a spectral-mixture kernel."""
 
     def name(local_name):
         return f"{prefix}.{local_name}" if prefix else local_name
 
-    shape = None if num_mixtures is None else (num_mixtures,)
-    default_components = None if num_mixtures is None else [1.0] * num_mixtures
+    if num_mixtures is None:
+        shape = None
+        default_components = None
+
+    elif ard_num_dims > 1:
+        shape = (num_mixtures, 1, ard_num_dims)
+        default_components = [
+            [[1.0] * ard_num_dims]
+            for _ in range(num_mixtures)
+        ]
+
+    else:
+        shape = (num_mixtures,)
+        default_components = [1.0] * num_mixtures
 
     return ParameterSpecCollection(
         [
@@ -205,8 +221,8 @@ def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
                 role=ParameterRole.WEIGHT,
                 domain=ParameterDomain.VARIANCE,
                 scale=ParameterScale.LOG,
-                shape=shape,
-                initial_value=default_components,
+                shape=None if num_mixtures is None else (num_mixtures,),
+                initial_value=None if num_mixtures is None else [1.0] * num_mixtures,
                 constraint=(1.0e-12, 1.0e12),
                 guess_strategy=GuessStrategy.DEFAULT,
                 constraint_strategy=ConstraintStrategy.DEFAULT,
@@ -258,6 +274,7 @@ def _kernel_parameter_schema(
         return spectral_mixture_parameter_schema(
             prefix=prefix,
             num_mixtures=kernel.num_mixtures,
+            ard_num_dims=kernel.ard_num_dims,
         )
 
     if isinstance(kernel, GIK):
@@ -595,6 +612,7 @@ class SpectralMixtureGPModel(ExactGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module",
             num_mixtures=self.covar_module.num_mixtures,
+            ard_num_dims=self.covar_module.ard_num_dims,
         )
 
     def forward(self, x):
@@ -649,6 +667,7 @@ class SpectralMixtureLinearMeanGPModel(ExactGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module",
             num_mixtures=self.covar_module.num_mixtures,
+            ard_num_dims=self.covar_module.ard_num_dims,
         )
 
     def forward(self, x):
@@ -707,6 +726,7 @@ class TwoDSpectralMixtureGPModel(ExactGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module",
             num_mixtures=self.covar_module.num_mixtures,
+            ard_num_dims=self.covar_module.ard_num_dims,
         )
 
     def forward(self, x):
@@ -767,6 +787,7 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module",
             num_mixtures=self.covar_module.num_mixtures,
+            ard_num_dims=self.covar_module.ard_num_dims,
         )
 
     def forward(self, x):
@@ -836,6 +857,7 @@ class SpectralMixtureKISSGPModel(ExactGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module.base_kernel",
             num_mixtures=self.covar_module.base_kernel.num_mixtures,
+            ard_num_dims=self.covar_module.base_kernel.ard_num_dims,
         )
 
     def forward(self, x):
@@ -908,6 +930,7 @@ class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module.base_kernel",
             num_mixtures=self.covar_module.base_kernel.num_mixtures,
+            ard_num_dims=self.covar_module.base_kernel.ard_num_dims,
         )
 
     def forward(self, x):
@@ -978,6 +1001,7 @@ class TwoDSpectralMixtureKISSGPModel(ExactGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module.base_kernel",
             num_mixtures=self.covar_module.base_kernel.num_mixtures,
+            ard_num_dims=self.covar_module.base_kernel.ard_num_dims,
         )
 
     def forward(self, x):
@@ -1050,6 +1074,7 @@ class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module.base_kernel",
             num_mixtures=self.covar_module.base_kernel.num_mixtures,
+            ard_num_dims=self.covar_module.base_kernel.ard_num_dims,
         )
 
     def forward(self, x):
@@ -1109,6 +1134,7 @@ class TwoDSpectralMixturePowerLawMeanGPModel(ExactGP):
             spectral_mixture_parameter_schema(
                 prefix="covar_module",
                 num_mixtures=self.covar_module.num_mixtures,
+                ard_num_dims=self.covar_module.ard_num_dims,
             ),
         )
 
@@ -1182,6 +1208,7 @@ class TwoDSpectralMixturePowerLawMeanKISSGPModel(ExactGP):
             spectral_mixture_parameter_schema(
                 prefix="covar_module.base_kernel",
                 num_mixtures=self.covar_module.base_kernel.num_mixtures,
+                ard_num_dims=self.covar_module.base_kernel.ard_num_dims,
             ),
         )
 
@@ -1245,6 +1272,7 @@ class TwoDSpectralMixtureDustMeanGPModel(ExactGP):
             spectral_mixture_parameter_schema(
                 prefix="covar_module",
                 num_mixtures=self.covar_module.num_mixtures,
+                ard_num_dims=self.covar_module.ard_num_dims,
             ),
         )
 
@@ -1319,6 +1347,7 @@ class TwoDSpectralMixtureDustMeanKISSGPModel(ExactGP):
             spectral_mixture_parameter_schema(
                 prefix="covar_module.base_kernel",
                 num_mixtures=self.covar_module.base_kernel.num_mixtures,
+                ard_num_dims=self.covar_module.base_kernel.ard_num_dims,
             ),
         )
 
@@ -1384,6 +1413,7 @@ class SparseSpectralMixtureGPModel(ApproximateGP):
         return spectral_mixture_parameter_schema(
             prefix="covar_module",
             num_mixtures=self.covar_module.num_mixtures,
+            ard_num_dims=self.covar_module.ard_num_dims,
         )
 
     def forward(self, x):
