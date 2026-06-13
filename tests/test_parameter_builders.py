@@ -722,3 +722,51 @@ if __name__ == "__main__":
             estimate.metadata["value_reason"],
             "consensus_frequency_unavailable",
         )
+
+    def test_median_flux_unavailable_records_reason(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.MEAN,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+            guess_strategy=GuessStrategy.MEDIAN_FLUX,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertIsNone(estimate.value)
+        self.assertEqual(
+            estimate.metadata["value_reason"],
+            "global_diagnostics_unavailable",
+        )
+
+    def test_robust_flux_span_unavailable_records_reason(self):
+        spec = ParameterSpec(
+            name="mean_module.log_amplitude",
+            role=ParameterRole.AMPLITUDE,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LOG,
+            guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertIsNone(estimate.value)
+        self.assertEqual(
+            estimate.metadata["value_reason"],
+            "global_diagnostics_unavailable",
+        )
