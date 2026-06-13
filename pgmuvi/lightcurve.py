@@ -9424,6 +9424,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             variability.  This can improve convergence for sources with a
             large dynamic range in the number of observations across bands.
             Has no effect for 1D lightcurves or when ``use_mls_init=False``.
+        use_parameter_workflow : bool, optional
+            Whether to apply schema-driven parameter initialization before
+            training. When enabled, models that expose a parameter_schema()
+            may automatically receive parameter estimates and constraints
+            derived from available light-curve diagnostics. Defaults to True.
+
+            Set to False to disable automatic parameter-workflow application
+            and rely only on existing defaults, explicit user guesses,
+            consensus/MLS initialization, and manually supplied constraints.
         constraint_set : str or None, optional
             Name of a pre-defined source-type constraint set to apply via
             :meth:`set_default_constraints`.  When provided, the period bounds
