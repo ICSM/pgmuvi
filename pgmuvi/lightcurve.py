@@ -9205,6 +9205,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self._fit_nesting_depth -= 1
 
         self._fit_nesting_depth = 1
+        self.parameter_workflow_result = None
         _fit_start = time.perf_counter()
         _model_arg = kwargs.get("model")
         _fit_strategy = kwargs.get("fit_strategy")
