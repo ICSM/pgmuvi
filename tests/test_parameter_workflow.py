@@ -849,6 +849,50 @@ class TestParameterWorkflow(unittest.TestCase):
             ParameterDomain.WAVELENGTH,
         )
 
+    def test_achromatic_gp_model_inherits_separable_parameter_schema(self):
+        import gpytorch
+        import torch
+
+        from pgmuvi.gps import AchromaticGPModel
+
+        train_x = torch.tensor(
+            [
+                [0.0, 1.0],
+                [1.0, 1.0],
+                [2.0, 2.0],
+                [3.0, 2.0],
+            ]
+        )
+        train_y = torch.tensor([1.0, 2.0, 3.0, 4.0])
+
+        model = AchromaticGPModel(
+            train_x,
+            train_y,
+            gpytorch.likelihoods.GaussianLikelihood(),
+        )
+
+        schema = model.parameter_schema()
+        names = schema.names()
+
+        self.assertIn("covar_module.kernels.0.outputscale", names)
+        self.assertIn(
+            "covar_module.kernels.0.base_kernel.lengthscale",
+            names,
+        )
+
+        self.assertNotIn("covar_module.kernels.1.outputscale", names)
+        self.assertNotIn(
+            "covar_module.kernels.1.base_kernel.lengthscale",
+            names,
+        )
+
+        self.assertEqual(
+            schema["covar_module.kernels.0.base_kernel.lengthscale"].domain,
+            ParameterDomain.TIME,
+        )
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
