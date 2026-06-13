@@ -36,13 +36,28 @@ class ParameterEstimateApplicator:
                 else self._resolve_parameter(model, module_path)
             )
 
+            value_applied = self._apply_value(
+                target_module,
+                parameter_name,
+                estimate,
+            )
+            constraint_applied = self._apply_constraint(model, estimate)
+
             results[estimate.name] = {
-                "value": self._apply_value(
-                    target_module,
-                    parameter_name,
-                    estimate,
+                "value": value_applied,
+                "constraint": constraint_applied,
+                "value_reason": (
+                    None
+                    if value_applied
+                    else estimate.metadata.get(
+                        "value_reason",
+                        "value_unavailable",
+                    )
+                    or "value_unavailable"
                 ),
-                "constraint": self._apply_constraint(model, estimate),
+                "constraint_reason": (
+                    None if constraint_applied else "constraint_unavailable"
+                ),
             }
 
         return results

@@ -146,6 +146,8 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "mean_module.offset": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
             },
         )
@@ -256,10 +258,14 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "covar_module.outputscale": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
                 "covar_module.base_kernel.lengthscale": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
             },
         )
@@ -308,14 +314,20 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "covar_module.mixture_means": {
                     "value": False,
                     "constraint": True,
+                    "value_reason": "consensus_frequency_unavailable",
+                    "constraint_reason": None,
                 },
                 "covar_module.mixture_scales": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
                 "covar_module.mixture_weights": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
             },
         )
@@ -352,10 +364,14 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "covar_module.outputscale": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
                 "covar_module.base_kernel.lengthscale": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
             },
         )

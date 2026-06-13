@@ -698,3 +698,27 @@ class TestParameterEstimateBuilder(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_consensus_frequency_unavailable_records_value_reason(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertIsNone(estimate.value)
+        self.assertEqual(
+            estimate.metadata["value_reason"],
+            "consensus_frequency_unavailable",
+        )

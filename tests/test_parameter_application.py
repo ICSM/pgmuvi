@@ -292,10 +292,14 @@ class TestParameterEstimateApplicator(unittest.TestCase):
                 "mean_module.offset": {
                     "value": True,
                     "constraint": False,
+                    "value_reason": None,
+                    "constraint_reason": "constraint_unavailable",
                 },
                 "mean_module.log_amplitude": {
                     "value": True,
                     "constraint": False,
+                    "value_reason": None,
+                    "constraint_reason": "constraint_unavailable",
                 },
             },
         )
@@ -610,6 +614,8 @@ class TestParameterEstimateApplicator(unittest.TestCase):
                 "covar_module.lengthscale": {
                     "value": True,
                     "constraint": False,
+                    "value_reason": None,
+                    "constraint_reason": "constraint_unavailable",
                 },
             },
         )
