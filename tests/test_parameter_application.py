@@ -625,6 +625,102 @@ class TestParameterEstimateApplicator(unittest.TestCase):
             2.0,
         )
 
+    def test_apply_value_reports_shape_mismatch(self):
+        class ModelWithVectorParameter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.target = torch.nn.Module()
+                self.target.param = torch.nn.Parameter(
+                    torch.zeros(3, 1, 2)
+                )
+
+        model = ModelWithVectorParameter()
+
+        estimate = ParameterEstimate(
+            spec=ParameterSpec(
+                name="target.param",
+                role=ParameterRole.FREQUENCY,
+                domain=ParameterDomain.FREQUENCY,
+                scale=ParameterScale.LINEAR,
+            ),
+            value=torch.tensor([1.0, 2.0, 3.0]),
+            constraint=None,
+            metadata={},
+        )
+
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "target.param": {
+                    "value": False,
+                    "constraint": False,
+                    "value_reason": "shape_mismatch",
+                    "constraint_reason": "constraint_unavailable",
+                },
+            },
+        )
+
+        self.assertEqual(
+            tuple(estimate.metadata["expected_shape"]),
+            (3, 1, 2),
+        )
+        self.assertEqual(
+            tuple(estimate.metadata["actual_shape"]),
+            (3,),
+        )
+
+    def test_apply_value_reshapes_when_element_count_matches(self):
+        class ModelWithVectorParameter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.target = torch.nn.Module()
+                self.target.param = torch.nn.Parameter(
+                    torch.zeros(3, 1, 2)
+                )
+
+        model = ModelWithVectorParameter()
+
+        estimate = ParameterEstimate(
+            spec=ParameterSpec(
+                name="target.param",
+                role=ParameterRole.FREQUENCY,
+                domain=ParameterDomain.FREQUENCY,
+                scale=ParameterScale.LINEAR,
+            ),
+            value=torch.arange(6.0),
+            constraint=None,
+            metadata={},
+        )
+
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "target.param": {
+                    "value": True,
+                    "constraint": False,
+                    "value_reason": None,
+                    "constraint_reason": "constraint_unavailable",
+                },
+            },
+        )
+
+        self.assertTrue(
+            torch.equal(
+                model.target.param.detach(),
+                torch.arange(6.0).reshape(3, 1, 2),
+            )
+        )
+
 
 class DummyMeanModule:
     def __init__(self):
