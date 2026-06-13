@@ -127,3 +127,33 @@ print(f"{results['summary']['n_variable']} variable bands")
 lc_var = lc2d.filter_variable_bands()
 lc_var.fit(...)
 ```
+
+### Parameter workflow initialization
+
+Schema-enabled models can automatically initialize supported model
+parameters from available light-curve diagnostics during `fit()`.
+
+By default, the parameter workflow is enabled:
+```python
+    lc.fit(
+        model="1DMatern",
+    )
+```
+To disable schema-driven initialization:
+```python
+    lc.fit(
+        model="1DMatern",
+        use_parameter_workflow=False,
+    )
+```
+After fitting, the workflow results can be inspected directly:
+```python
+    lc.parameter_workflow_result
+```
+or summarized using:
+```python
+    lc.get_parameter_workflow_summary()
+```
+The summary reports whether parameter-workflow results are available,
+which parameters were successfully initialized, which were skipped,
+and the corresponding parameter names.
