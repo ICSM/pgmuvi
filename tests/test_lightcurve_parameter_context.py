@@ -472,3 +472,42 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "skipped_reasons": {},
             },
         )
+
+    def test_parameter_workflow_propagates_global_diagnostics_reason(self):
+        import gpytorch
+
+        from pgmuvi.gps import DustMeanGPModel
+
+        lc = Lightcurve(
+            torch.tensor(
+                [
+                    [0.0, 1.0],
+                    [1.0, 1.0],
+                    [2.0, 2.0],
+                    [3.0, 2.0],
+                ]
+            ),
+            torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        )
+
+        lc.model = DustMeanGPModel(
+            lc.xdata,
+            lc.ydata,
+            gpytorch.likelihoods.GaussianLikelihood(),
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=True,
+        )
+
+        with patch.object(
+            lc,
+            "_build_parameter_estimation_context",
+            return_value=context,
+        ):
+            result = lc._apply_parameter_workflow_estimates()
+
+        self.assertEqual(
+            result["mean_module.offset"]["value_reason"],
+            "global_diagnostics_unavailable",
+        )
