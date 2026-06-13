@@ -9100,32 +9100,43 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "skipped": 0,
                 "applied_parameters": [],
                 "skipped_parameters": [],
+                "skipped_reasons": {},
             }
-
-        applied = 0
-        skipped = 0
-
-        for value in result.values():
-            if value:
-                applied += 1
-            else:
-                skipped += 1
 
         applied_parameters = []
         skipped_parameters = []
+        skipped_reasons = {}
 
         for name, value in result.items():
-            if value:
+            if isinstance(value, dict):
+                value_applied = bool(value.get("value"))
+                constraint_applied = bool(value.get("constraint"))
+                applied = value_applied or constraint_applied
+            else:
+                applied = bool(value)
+
+            if applied:
                 applied_parameters.append(name)
             else:
                 skipped_parameters.append(name)
 
+            if isinstance(value, dict):
+                value_reason = value.get("value_reason")
+                constraint_reason = value.get("constraint_reason")
+
+                if value_reason is not None or constraint_reason is not None:
+                    skipped_reasons[name] = {
+                        "value_reason": value_reason,
+                        "constraint_reason": constraint_reason,
+                    }
+
         return {
             "available": True,
-            "applied": applied,
-            "skipped": skipped,
+            "applied": len(applied_parameters),
+            "skipped": len(skipped_parameters),
             "applied_parameters": applied_parameters,
             "skipped_parameters": skipped_parameters,
+            "skipped_reasons": skipped_reasons,
         }
 
     def fit(self, *args, **kwargs):
