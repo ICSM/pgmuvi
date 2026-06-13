@@ -163,6 +163,8 @@ class TestParameterWorkflow(unittest.TestCase):
                 "mean_module.offset": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
             },
         )
@@ -201,6 +203,8 @@ class TestParameterWorkflow(unittest.TestCase):
                 "mean_module.offset": {
                     "value": True,
                     "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
                 },
             },
         )
