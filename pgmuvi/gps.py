@@ -268,6 +268,19 @@ def _kernel_parameter_schema(
             description_context=description_context,
         )
 
+    if isinstance(kernel, (ProductKernel, AdditiveKernel)):
+        return ParameterSpecCollection.combine(
+            *[
+                _kernel_parameter_schema(
+                    component,
+                    prefix=f"{prefix}.kernels.{index}",
+                    domain=domain,
+                    description_context=description_context,
+                )
+                for index, component in enumerate(kernel.kernels)
+            ]
+        )
+
     if isinstance(kernel, ConstantKernel):
         return ParameterSpecCollection()
 
