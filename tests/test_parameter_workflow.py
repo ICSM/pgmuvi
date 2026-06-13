@@ -930,6 +930,47 @@ class TestParameterWorkflow(unittest.TestCase):
             names,
         )
 
+    def test_dust_mean_gp_model_inherits_wavelength_dependent_schema(self):
+        import gpytorch
+        import torch
+
+        from pgmuvi.gps import DustMeanGPModel
+
+        train_x = torch.tensor(
+            [
+                [0.0, 1.0],
+                [1.0, 1.0],
+                [2.0, 2.0],
+                [3.0, 2.0],
+            ]
+        )
+        train_y = torch.tensor([1.0, 2.0, 3.0, 4.0])
+
+        model = DustMeanGPModel(
+            train_x,
+            train_y,
+            gpytorch.likelihoods.GaussianLikelihood(),
+        )
+
+        schema = model.parameter_schema()
+        names = schema.names()
+
+        self.assertIn("mean_module.offset", names)
+        self.assertIn("mean_module.log_amplitude", names)
+        self.assertIn("mean_module.log_tau", names)
+        self.assertIn("mean_module.log_alpha", names)
+
+        self.assertIn("covar_module.kernels.0.outputscale", names)
+        self.assertIn(
+            "covar_module.kernels.0.base_kernel.lengthscale",
+            names,
+        )
+        self.assertIn("covar_module.kernels.1.outputscale", names)
+        self.assertIn(
+            "covar_module.kernels.1.base_kernel.lengthscale",
+            names,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
