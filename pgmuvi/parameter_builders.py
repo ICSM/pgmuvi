@@ -6,6 +6,7 @@ diagnostic contexts into parameter estimates.
 
 from __future__ import annotations
 import math
+import torch
 
 from pgmuvi.parameter_context import ParameterEstimationContext
 from pgmuvi.parameter_estimates import (
