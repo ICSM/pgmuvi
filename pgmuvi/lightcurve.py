@@ -9992,6 +9992,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if use_parameter_workflow and not _constraints_were_set_before_fit:
             self._apply_parameter_workflow_estimates()
+        elif use_parameter_workflow and _constraints_were_set_before_fit:
+            self.parameter_workflow_result = {
+                "__workflow__": {
+                    "value": False,
+                    "constraint": False,
+                    "value_reason": "skipped_existing_constraints",
+                    "constraint_reason": "skipped_existing_constraints",
+                },
+            }
 
         if cuda:
             self.cuda()
