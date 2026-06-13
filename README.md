@@ -157,3 +157,5 @@ or summarized using:
 The summary reports whether parameter-workflow results are available,
 which parameters were successfully initialized, which were skipped,
 and the corresponding parameter names.
+Use `get_parameter_workflow_report()` when you need a structured list
+of applied and skipped parameters with value/constraint reason metadata.

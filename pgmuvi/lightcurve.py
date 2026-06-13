@@ -9496,6 +9496,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Set to False to disable automatic parameter-workflow application
             and rely only on existing defaults, explicit user guesses,
             consensus/MLS initialization, and manually supplied constraints.
+
+            After fitting, use get_parameter_workflow_summary() or
+            get_parameter_workflow_report() to inspect what was applied or skipped.
         constraint_set : str or None, optional
             Name of a pre-defined source-type constraint set to apply via
             :meth:`set_default_constraints`.  When provided, the period bounds
