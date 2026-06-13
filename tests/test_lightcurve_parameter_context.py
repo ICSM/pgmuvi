@@ -230,3 +230,96 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "skipped_parameters": ["c"],
             },
         )
+
+    def test_parameter_workflow_applies_real_matern_model_schema(self):
+        import gpytorch
+
+        from pgmuvi.gps import MaternGPModel
+
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0, 3.0]),
+            torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        )
+
+        lc.model = MaternGPModel(
+            lc.xdata,
+            lc.ydata,
+            gpytorch.likelihoods.GaussianLikelihood(),
+        )
+
+        result = lc._apply_parameter_workflow_estimates()
+
+        self.assertEqual(
+            result,
+            {
+                "covar_module.outputscale": {
+                    "value": True,
+                    "constraint": True,
+                },
+                "covar_module.base_kernel.lengthscale": {
+                    "value": True,
+                    "constraint": True,
+                },
+            },
+        )
+
+        self.assertEqual(
+            lc.parameter_workflow_result,
+            result,
+        )
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": True,
+                "applied": 2,
+                "skipped": 0,
+                "applied_parameters": [
+                    "covar_module.outputscale",
+                    "covar_module.base_kernel.lengthscale",
+                ],
+                "skipped_parameters": [],
+            },
+        )
+
+    def test_parameter_workflow_applies_real_spectral_mixture_model_schema(self):
+        import gpytorch
+
+        from pgmuvi.gps import SpectralMixtureGPModel
+
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0, 3.0]),
+            torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        )
+
+        lc.model = SpectralMixtureGPModel(
+            lc.xdata,
+            lc.ydata,
+            gpytorch.likelihoods.GaussianLikelihood(),
+            num_mixtures=2,
+        )
+
+        result = lc._apply_parameter_workflow_estimates()
+
+        self.assertEqual(
+            result,
+            {
+                "covar_module.mixture_means": {
+                    "value": False,
+                    "constraint": True,
+                },
+                "covar_module.mixture_scales": {
+                    "value": True,
+                    "constraint": True,
+                },
+                "covar_module.mixture_weights": {
+                    "value": True,
+                    "constraint": True,
+                },
+            },
+        )
+
+        self.assertEqual(
+            lc.parameter_workflow_result,
+            result,
+        )
