@@ -9308,6 +9308,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         periods=None,
         use_mls_init=True,
         use_best_band_init: bool = False,
+        use_parameter_workflow: bool = True,
         constraint_set=None,
         grid_size=2000,
         cuda=False,
@@ -9913,7 +9914,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if not self.__CONTRAINTS_SET:
             self.set_default_constraints()
 
-        if not _constraints_were_set_before_fit:
+        if use_parameter_workflow and not _constraints_were_set_before_fit:
             self._apply_parameter_workflow_estimates()
 
         if cuda:
