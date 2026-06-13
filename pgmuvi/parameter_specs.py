@@ -205,3 +205,20 @@ class ParameterSpecCollection:
 
     def as_dict(self) -> dict[str, ParameterSpec]:
         return {spec.name: spec for spec in self.specs}
+
+    @classmethod
+    def combine(
+        cls,
+        *collections: "ParameterSpecCollection | None",
+    ) -> "ParameterSpecCollection":
+        """Combine multiple parameter specification collections."""
+        combined = cls()
+
+        for collection in collections:
+            if collection is None:
+                continue
+
+            for spec in collection:
+                combined.add(spec)
+
+        return combined

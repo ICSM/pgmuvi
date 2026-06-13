@@ -61,33 +61,32 @@ def rq_kernel_parameter_schema(
     if description_context is None:
         description_context = domain.value
 
-    return ParameterSpecCollection(
-        [
-            ParameterSpec(
-                name=name("lengthscale"),
-                role=ParameterRole.LENGTHSCALE,
-                domain=domain,
-                scale=ParameterScale.LOG,
-                description=(
-                    "Positive correlation lengthscale of the Rational Quadratic "
-                    f"kernel in {description_context} space."
-                ),
+    return ParameterSpecCollection.combine(
+        lengthscale_kernel_parameter_schema(
+            prefix=prefix,
+            domain=domain,
+            description_context=(
+                f"Rational Quadratic {description_context}"
             ),
-            ParameterSpec(
-                name=name("alpha"),
-                role=ParameterRole.SHAPE,
-                domain=ParameterDomain.DIMENSIONLESS,
-                scale=ParameterScale.LOG,
-                initial_value=1.0,
-                constraint=(1.0e-3, 1.0e3),
-                guess_strategy=GuessStrategy.DEFAULT,
-                constraint_strategy=ConstraintStrategy.DEFAULT,
-                description=(
-                    "Positive Rational Quadratic shape parameter controlling "
-                    "the mixture of correlation scales."
+        ),
+        ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("alpha"),
+                    role=ParameterRole.SHAPE,
+                    domain=ParameterDomain.DIMENSIONLESS,
+                    scale=ParameterScale.LOG,
+                    initial_value=1.0,
+                    constraint=(1.0e-3, 1.0e3),
+                    guess_strategy=GuessStrategy.DEFAULT,
+                    constraint_strategy=ConstraintStrategy.DEFAULT,
+                    description=(
+                        "Positive Rational Quadratic shape parameter controlling "
+                        "the mixture of correlation scales."
+                    ),
                 ),
-            ),
-        ]
+            ]
+        ),
     )
 
 
@@ -218,6 +217,74 @@ def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
             ),
         ]
     )
+
+
+def _kernel_parameter_schema(
+    kernel,
+    *,
+    prefix,
+    domain,
+    description_context=None,
+):
+    """Return parameter specifications for supported kernel instances."""
+    if isinstance(kernel, ScaleKernel):
+        return ParameterSpecCollection.combine(
+            scale_kernel_parameter_schema(
+                prefix=prefix,
+            ),
+            _kernel_parameter_schema(
+                kernel.base_kernel,
+                prefix=f"{prefix}.base_kernel",
+                domain=domain,
+                description_context=description_context,
+            ),
+        )
+
+    if isinstance(kernel, (MaternKernel, RBFKernel)):
+        return lengthscale_kernel_parameter_schema(
+            prefix=prefix,
+            domain=domain,
+            description_context=description_context,
+        )
+
+    if isinstance(kernel, RQKernel):
+        return rq_kernel_parameter_schema(
+            prefix=prefix,
+            domain=domain,
+            description_context=description_context,
+        )
+
+    if isinstance(kernel, SMK):
+        return spectral_mixture_parameter_schema(
+            prefix=prefix,
+            num_mixtures=kernel.num_mixtures,
+        )
+
+    if isinstance(kernel, GIK):
+        return _kernel_parameter_schema(
+            kernel.base_kernel,
+            prefix=f"{prefix}.base_kernel",
+            domain=domain,
+            description_context=description_context,
+        )
+
+    if isinstance(kernel, (ProductKernel, AdditiveKernel)):
+        return ParameterSpecCollection.combine(
+            *[
+                _kernel_parameter_schema(
+                    component,
+                    prefix=f"{prefix}.kernels.{index}",
+                    domain=domain,
+                    description_context=description_context,
+                )
+                for index, component in enumerate(kernel.kernels)
+            ]
+        )
+
+    if isinstance(kernel, ConstantKernel):
+        return ParameterSpecCollection()
+
+    return ParameterSpecCollection()
 
 
 # ---------------------------------------------------------------------
@@ -523,6 +590,13 @@ class SpectralMixtureGPModel(ExactGP):
         # Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module",
+            num_mixtures=self.covar_module.num_mixtures,
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -569,6 +643,13 @@ class SpectralMixtureLinearMeanGPModel(ExactGP):
         # object properties in different classes with different kernel structure
         # Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module",
+            num_mixtures=self.covar_module.num_mixtures,
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -620,6 +701,13 @@ class TwoDSpectralMixtureGPModel(ExactGP):
         # same object properties in different classes with different kernel
         # structure. Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module",
+            num_mixtures=self.covar_module.num_mixtures,
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -673,6 +761,13 @@ class TwoDSpectralMixtureLinearMeanGPModel(ExactGP):
         # object properties in different classes with different kernel
         # structure. Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module",
+            num_mixtures=self.covar_module.num_mixtures,
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -736,6 +831,13 @@ class SpectralMixtureKISSGPModel(ExactGP):
         self.sci_kernel = self.covar_module.base_kernel
         # self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module.base_kernel",
+            num_mixtures=self.covar_module.base_kernel.num_mixtures,
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -780,14 +882,33 @@ class SpectralMixtureLinearMeanKISSGPModel(ExactGP):
 
     def __init__(self, train_x, train_y, likelihood, num_mixtures=4, grid_size=2000):
         super().__init__(train_x, train_y, likelihood)
+
+        if not grid_size:
+            grid_size = gpt.utils.grid.choose_grid_size(train_x, 1.0)
+            print(f"Using a grid of size {grid_size} for SKI")
+
+        grid_bounds = [[t.min(train_x), t.max(train_x)]]
+
         self.mean_module = LinearMean(input_size=1)
-        self.covar_module = GIK(SMK(num_mixtures=num_mixtures), grid_size=grid_size)
+        self.covar_module = GIK(
+            SMK(num_mixtures=num_mixtures),
+            grid_size=grid_size,
+            num_dims=1,
+            grid_bounds=grid_bounds,
+        )
         self.covar_module.base_kernel.initialize_from_data(train_x, train_y)
 
         # Now we alias the covariance kernel so that we can exploit the
         # same object properties in different classes with different kernel
         # structure. Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module.base_kernel",
+            num_mixtures=self.covar_module.base_kernel.num_mixtures,
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -851,6 +972,13 @@ class TwoDSpectralMixtureKISSGPModel(ExactGP):
         # same object properties in different classes with different kernel
         # structure. Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module.base_kernel",
+            num_mixtures=self.covar_module.base_kernel.num_mixtures,
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -917,6 +1045,13 @@ class TwoDSpectralMixtureLinearMeanKISSGPModel(ExactGP):
         # structure. Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module.base_kernel",
+            num_mixtures=self.covar_module.base_kernel.num_mixtures,
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -966,6 +1101,16 @@ class TwoDSpectralMixturePowerLawMeanGPModel(ExactGP):
         self.covar_module = SMK(ard_num_dims=2, num_mixtures=num_mixtures)
 
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            self.mean_module.parameter_schema(prefix="mean_module"),
+            spectral_mixture_parameter_schema(
+                prefix="covar_module",
+                num_mixtures=self.covar_module.num_mixtures,
+            ),
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -1029,6 +1174,17 @@ class TwoDSpectralMixturePowerLawMeanKISSGPModel(ExactGP):
 
         self.sci_kernel = self.covar_module
 
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            self.mean_module.parameter_schema(prefix="mean_module"),
+            spectral_mixture_parameter_schema(
+                prefix="covar_module.base_kernel",
+                num_mixtures=self.covar_module.base_kernel.num_mixtures,
+            ),
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -1081,6 +1237,16 @@ class TwoDSpectralMixtureDustMeanGPModel(ExactGP):
         self.covar_module = SMK(ard_num_dims=2, num_mixtures=num_mixtures)
 
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            self.mean_module.parameter_schema(prefix="mean_module"),
+            spectral_mixture_parameter_schema(
+                prefix="covar_module",
+                num_mixtures=self.covar_module.num_mixtures,
+            ),
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -1146,6 +1312,16 @@ class TwoDSpectralMixtureDustMeanKISSGPModel(ExactGP):
 
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            self.mean_module.parameter_schema(prefix="mean_module"),
+            spectral_mixture_parameter_schema(
+                prefix="covar_module.base_kernel",
+                num_mixtures=self.covar_module.base_kernel.num_mixtures,
+            ),
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -1202,6 +1378,13 @@ class SparseSpectralMixtureGPModel(ApproximateGP):
         # same object properties in different classes with different kernel
         # structure. Will turn this into an @property at some point.
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return spectral_mixture_parameter_schema(
+            prefix="covar_module",
+            num_mixtures=self.covar_module.num_mixtures,
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -1431,6 +1614,37 @@ class QuasiPeriodicGPModel(ExactGP):
         self.covar_module = _make_qp_kernel(period)
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            scale_kernel_parameter_schema(
+                prefix="covar_module",
+            ),
+            ParameterSpecCollection(
+                [
+                    ParameterSpec(
+                        name="covar_module.base_kernel.kernels.0.period_length",
+                        role=ParameterRole.PERIOD,
+                        domain=ParameterDomain.TIME,
+                        scale=ParameterScale.LOG,
+                        initial_value=1.0,
+                        constraint=(1.0e-3, 1.0e6),
+                        guess_strategy=GuessStrategy.CONSENSUS_PERIOD,
+                        constraint_strategy=ConstraintStrategy.DEFAULT,
+                        description=(
+                            "Positive period length of the periodic component "
+                            "in the quasi-periodic kernel."
+                        ),
+                    ),
+                ]
+            ),
+            lengthscale_kernel_parameter_schema(
+                prefix="covar_module.base_kernel.kernels.1",
+                domain=ParameterDomain.TIME,
+                description_context="quasi-periodic decay time",
+            ),
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -1487,6 +1701,19 @@ class MaternGPModel(ExactGP):
         self.covar_module = ScaleKernel(matern_k)
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            scale_kernel_parameter_schema(
+                prefix="covar_module",
+            ),
+            lengthscale_kernel_parameter_schema(
+                prefix="covar_module.base_kernel",
+                domain=ParameterDomain.TIME,
+                description_context="time",
+            ),
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -1539,6 +1766,45 @@ class PeriodicPlusStochasticGPModel(ExactGP):
         self.covar_module = AdditiveKernel(qp_part, rbf_stochastic)
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            scale_kernel_parameter_schema(
+                prefix="covar_module.kernels.0",
+            ),
+            ParameterSpecCollection(
+                [
+                    ParameterSpec(
+                        name="covar_module.kernels.0.base_kernel.kernels.0.period_length",
+                        role=ParameterRole.PERIOD,
+                        domain=ParameterDomain.TIME,
+                        scale=ParameterScale.LOG,
+                        initial_value=1.0,
+                        constraint=(1.0e-3, 1.0e6),
+                        guess_strategy=GuessStrategy.CONSENSUS_PERIOD,
+                        constraint_strategy=ConstraintStrategy.DEFAULT,
+                        description=(
+                            "Positive period length of the periodic component "
+                            "in the quasi-periodic kernel."
+                        ),
+                    ),
+                ]
+            ),
+            lengthscale_kernel_parameter_schema(
+                prefix="covar_module.kernels.0.base_kernel.kernels.1",
+                domain=ParameterDomain.TIME,
+                description_context="quasi-periodic decay time",
+            ),
+            scale_kernel_parameter_schema(
+                prefix="covar_module.kernels.1",
+            ),
+            lengthscale_kernel_parameter_schema(
+                prefix="covar_module.kernels.1.base_kernel",
+                domain=ParameterDomain.TIME,
+                description_context="stochastic RBF time",
+            ),
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -1573,6 +1839,37 @@ class LinearMeanQuasiPeriodicGPModel(ExactGP):
 
         self.covar_module = _make_qp_kernel(period)
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            scale_kernel_parameter_schema(
+                prefix="covar_module",
+            ),
+            ParameterSpecCollection(
+                [
+                    ParameterSpec(
+                        name="covar_module.base_kernel.kernels.0.period_length",
+                        role=ParameterRole.PERIOD,
+                        domain=ParameterDomain.TIME,
+                        scale=ParameterScale.LOG,
+                        initial_value=1.0,
+                        constraint=(1.0e-3, 1.0e6),
+                        guess_strategy=GuessStrategy.CONSENSUS_PERIOD,
+                        constraint_strategy=ConstraintStrategy.DEFAULT,
+                        description=(
+                            "Positive period length of the periodic component "
+                            "in the quasi-periodic kernel."
+                        ),
+                    ),
+                ]
+            ),
+            lengthscale_kernel_parameter_schema(
+                prefix="covar_module.base_kernel.kernels.1",
+                domain=ParameterDomain.TIME,
+                description_context="quasi-periodic decay time",
+            ),
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -1644,6 +1941,23 @@ class SeparableGPModel(ExactGP):
         # without any custom forward() code.
         self.covar_module = time_kernel * wavelength_kernel
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            _kernel_parameter_schema(
+                self.covar_module.kernels[0],
+                prefix="covar_module.kernels.0",
+                domain=ParameterDomain.TIME,
+                description_context="time",
+            ),
+            _kernel_parameter_schema(
+                self.covar_module.kernels[1],
+                prefix="covar_module.kernels.1",
+                domain=ParameterDomain.WAVELENGTH,
+                description_context="wavelength",
+            ),
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -1996,6 +2310,20 @@ class WavelengthDependentGPModel(SeparableGPModel):
             wavelength_kernel=wl_kernel,
             mean_module=mean_module,
             **kwargs
+        )
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        mean_schema = None
+
+        if hasattr(self.mean_module, "parameter_schema"):
+            mean_schema = self.mean_module.parameter_schema(
+                prefix="mean_module",
+            )
+
+        return ParameterSpecCollection.combine(
+            mean_schema,
+            super().parameter_schema(),
         )
 
 
