@@ -811,6 +811,44 @@ class TestParameterWorkflow(unittest.TestCase):
             names,
         )
 
+    def test_separable_gp_model_exposes_default_parameter_schema(self):
+        import gpytorch
+        import torch
+
+        from pgmuvi.gps import SeparableGPModel
+
+        train_x = torch.tensor(
+            [
+                [0.0, 1.0],
+                [1.0, 1.0],
+                [2.0, 1.0],
+            ]
+        )
+        train_y = torch.tensor([1.0, 2.0, 3.0])
+
+        model = SeparableGPModel(
+            train_x,
+            train_y,
+            gpytorch.likelihoods.GaussianLikelihood(),
+        )
+
+        schema = model.parameter_schema()
+        names = schema.names()
+
+        self.assertIn("covar_module.kernels.0.outputscale", names)
+        self.assertIn("covar_module.kernels.0.base_kernel.lengthscale", names)
+        self.assertIn("covar_module.kernels.1.outputscale", names)
+        self.assertIn("covar_module.kernels.1.base_kernel.lengthscale", names)
+
+        self.assertEqual(
+            schema["covar_module.kernels.0.base_kernel.lengthscale"].domain,
+            ParameterDomain.TIME,
+        )
+        self.assertEqual(
+            schema["covar_module.kernels.1.base_kernel.lengthscale"].domain,
+            ParameterDomain.WAVELENGTH,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

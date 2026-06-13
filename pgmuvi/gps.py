@@ -220,6 +220,61 @@ def spectral_mixture_parameter_schema(prefix="covar_module", num_mixtures=None):
     )
 
 
+def _kernel_parameter_schema(
+    kernel,
+    *,
+    prefix,
+    domain,
+    description_context=None,
+):
+    """Return parameter specifications for supported kernel instances."""
+    if isinstance(kernel, ScaleKernel):
+        return ParameterSpecCollection.combine(
+            scale_kernel_parameter_schema(
+                prefix=prefix,
+            ),
+            _kernel_parameter_schema(
+                kernel.base_kernel,
+                prefix=f"{prefix}.base_kernel",
+                domain=domain,
+                description_context=description_context,
+            ),
+        )
+
+    if isinstance(kernel, (MaternKernel, RBFKernel)):
+        return lengthscale_kernel_parameter_schema(
+            prefix=prefix,
+            domain=domain,
+            description_context=description_context,
+        )
+
+    if isinstance(kernel, RQKernel):
+        return rq_kernel_parameter_schema(
+            prefix=prefix,
+            domain=domain,
+            description_context=description_context,
+        )
+
+    if isinstance(kernel, SMK):
+        return spectral_mixture_parameter_schema(
+            prefix=prefix,
+            num_mixtures=kernel.num_mixtures,
+        )
+
+    if isinstance(kernel, GIK):
+        return _kernel_parameter_schema(
+            kernel.base_kernel,
+            prefix=f"{prefix}.base_kernel",
+            domain=domain,
+            description_context=description_context,
+        )
+
+    if isinstance(kernel, ConstantKernel):
+        return ParameterSpecCollection()
+
+    return ParameterSpecCollection()
+
+
 # ---------------------------------------------------------------------
 # Mean functions
 # ---------------------------------------------------------------------
@@ -1874,6 +1929,23 @@ class SeparableGPModel(ExactGP):
         # without any custom forward() code.
         self.covar_module = time_kernel * wavelength_kernel
         self.sci_kernel = self.covar_module
+
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            _kernel_parameter_schema(
+                self.covar_module.kernels[0],
+                prefix="covar_module.kernels.0",
+                domain=ParameterDomain.TIME,
+                description_context="time",
+            ),
+            _kernel_parameter_schema(
+                self.covar_module.kernels[1],
+                prefix="covar_module.kernels.1",
+                domain=ParameterDomain.WAVELENGTH,
+                description_context="wavelength",
+            ),
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
