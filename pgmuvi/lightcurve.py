@@ -9139,6 +9139,58 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "skipped_reasons": skipped_reasons,
         }
 
+    def get_parameter_workflow_report(self):
+        """Return a structured parameter workflow report."""
+        result = self.parameter_workflow_result
+
+        if result is None:
+            return {
+                "available": False,
+                "applied": [],
+                "skipped": [],
+            }
+
+        applied = []
+        skipped = []
+
+        for parameter, info in result.items():
+            if not isinstance(info, dict):
+                if info:
+                    applied.append(
+                        {
+                            "parameter": parameter,
+                        }
+                    )
+                else:
+                    skipped.append(
+                        {
+                            "parameter": parameter,
+                        }
+                    )
+                continue
+
+            value_applied = bool(info.get("value"))
+            constraint_applied = bool(info.get("constraint"))
+
+            entry = {
+                "parameter": parameter,
+                "value_applied": value_applied,
+                "constraint_applied": constraint_applied,
+                "value_reason": info.get("value_reason"),
+                "constraint_reason": info.get("constraint_reason"),
+            }
+
+            if value_applied or constraint_applied:
+                applied.append(entry)
+            else:
+                skipped.append(entry)
+
+        return {
+            "available": True,
+            "applied": applied,
+            "skipped": skipped,
+        }
+
     def fit(self, *args, **kwargs):
         """Fit wrapper that records lightweight in-memory fit history."""
         # Nested fit() calls (e.g. from _consensus_standard_fit) delegate
