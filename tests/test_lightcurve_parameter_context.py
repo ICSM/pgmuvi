@@ -208,6 +208,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "skipped": 0,
                 "applied_parameters": [],
                 "skipped_parameters": [],
+                "skipped_reasons": {},
             },
         )
 
@@ -231,6 +232,48 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "skipped": 1,
                 "applied_parameters": ["a", "b"],
                 "skipped_parameters": ["c"],
+                "skipped_reasons": {},
+            },
+        )
+
+    def test_parameter_workflow_summary_reports_skip_reasons(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        lc.parameter_workflow_result = {
+            "covar_module.mixture_means": {
+                "value": False,
+                "constraint": True,
+                "value_reason": "consensus_frequency_unavailable",
+                "constraint_reason": None,
+            },
+            "covar_module.mixture_scales": {
+                "value": True,
+                "constraint": True,
+                "value_reason": None,
+                "constraint_reason": None,
+            },
+        }
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": True,
+                "applied": 2,
+                "skipped": 0,
+                "applied_parameters": [
+                    "covar_module.mixture_means",
+                    "covar_module.mixture_scales",
+                ],
+                "skipped_parameters": [],
+                "skipped_reasons": {
+                    "covar_module.mixture_means": {
+                        "value_reason": "consensus_frequency_unavailable",
+                        "constraint_reason": None,
+                    },
+                },
             },
         )
 
@@ -286,6 +329,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                     "covar_module.base_kernel.lengthscale",
                 ],
                 "skipped_parameters": [],
+                "skipped_reasons": {},
             },
         )
 
@@ -387,6 +431,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                     "covar_module.base_kernel.lengthscale",
                 ],
                 "skipped_parameters": [],
+                "skipped_reasons": {},
             },
         )
 
@@ -424,5 +469,6 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "skipped": 0,
                 "applied_parameters": [],
                 "skipped_parameters": [],
+                "skipped_reasons": {},
             },
         )
