@@ -891,7 +891,44 @@ class TestParameterWorkflow(unittest.TestCase):
             ParameterDomain.TIME,
         )
 
+    def test_wavelength_dependent_gp_model_exposes_mean_and_kernel_schema(self):
+        import gpytorch
+        import torch
 
+        from pgmuvi.gps import WavelengthDependentGPModel
+
+        train_x = torch.tensor(
+            [
+                [0.0, 1.0],
+                [1.0, 1.0],
+                [2.0, 2.0],
+                [3.0, 2.0],
+            ]
+        )
+        train_y = torch.tensor([1.0, 2.0, 3.0, 4.0])
+
+        model = WavelengthDependentGPModel(
+            train_x,
+            train_y,
+            gpytorch.likelihoods.GaussianLikelihood(),
+        )
+
+        schema = model.parameter_schema()
+        names = schema.names()
+
+        self.assertIn("mean_module.weights", names)
+        self.assertIn("mean_module.bias", names)
+
+        self.assertIn("covar_module.kernels.0.outputscale", names)
+        self.assertIn(
+            "covar_module.kernels.0.base_kernel.lengthscale",
+            names,
+        )
+        self.assertIn("covar_module.kernels.1.outputscale", names)
+        self.assertIn(
+            "covar_module.kernels.1.base_kernel.lengthscale",
+            names,
+        )
 
 
 if __name__ == "__main__":

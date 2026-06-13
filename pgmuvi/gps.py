@@ -2300,6 +2300,20 @@ class WavelengthDependentGPModel(SeparableGPModel):
             **kwargs
         )
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        mean_schema = None
+
+        if hasattr(self.mean_module, "parameter_schema"):
+            mean_schema = self.mean_module.parameter_schema(
+                prefix="mean_module",
+            )
+
+        return ParameterSpecCollection.combine(
+            mean_schema,
+            super().parameter_schema(),
+        )
+
 
 class DustMeanGPModel(WavelengthDependentGPModel):
     """2D GP model combining a dust-extinction mean with separable simple kernels.
