@@ -61,33 +61,32 @@ def rq_kernel_parameter_schema(
     if description_context is None:
         description_context = domain.value
 
-    return ParameterSpecCollection(
-        [
-            ParameterSpec(
-                name=name("lengthscale"),
-                role=ParameterRole.LENGTHSCALE,
-                domain=domain,
-                scale=ParameterScale.LOG,
-                description=(
-                    "Positive correlation lengthscale of the Rational Quadratic "
-                    f"kernel in {description_context} space."
-                ),
+    return ParameterSpecCollection.combine(
+        lengthscale_kernel_parameter_schema(
+            prefix=prefix,
+            domain=domain,
+            description_context=(
+                f"Rational Quadratic {description_context}"
             ),
-            ParameterSpec(
-                name=name("alpha"),
-                role=ParameterRole.SHAPE,
-                domain=ParameterDomain.DIMENSIONLESS,
-                scale=ParameterScale.LOG,
-                initial_value=1.0,
-                constraint=(1.0e-3, 1.0e3),
-                guess_strategy=GuessStrategy.DEFAULT,
-                constraint_strategy=ConstraintStrategy.DEFAULT,
-                description=(
-                    "Positive Rational Quadratic shape parameter controlling "
-                    "the mixture of correlation scales."
+        ),
+        ParameterSpecCollection(
+            [
+                ParameterSpec(
+                    name=name("alpha"),
+                    role=ParameterRole.SHAPE,
+                    domain=ParameterDomain.DIMENSIONLESS,
+                    scale=ParameterScale.LOG,
+                    initial_value=1.0,
+                    constraint=(1.0e-3, 1.0e3),
+                    guess_strategy=GuessStrategy.DEFAULT,
+                    constraint_strategy=ConstraintStrategy.DEFAULT,
+                    description=(
+                        "Positive Rational Quadratic shape parameter controlling "
+                        "the mixture of correlation scales."
+                    ),
                 ),
-            ),
-        ]
+            ]
+        ),
     )
 
 
