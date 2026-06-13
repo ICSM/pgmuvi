@@ -751,6 +751,37 @@ class TestParameterWorkflow(unittest.TestCase):
             (3,),
         )
 
+    def test_periodic_plus_stochastic_gp_model_exposes_parameter_schema(self):
+        import gpytorch
+        import torch
+
+        from pgmuvi.gps import PeriodicPlusStochasticGPModel
+
+        train_x = torch.tensor([0.0, 1.0, 2.0, 3.0])
+        train_y = torch.tensor([1.0, 2.0, 3.0, 4.0])
+
+        model = PeriodicPlusStochasticGPModel(
+            train_x,
+            train_y,
+            gpytorch.likelihoods.GaussianLikelihood(),
+            period=2.0,
+        )
+
+        schema = model.parameter_schema()
+        names = schema.names()
+
+        self.assertIn("covar_module.kernels.0.outputscale", names)
+        self.assertIn(
+            "covar_module.kernels.0.base_kernel.kernels.0.period_length",
+            names,
+        )
+        self.assertIn(
+            "covar_module.kernels.0.base_kernel.kernels.1.lengthscale",
+            names,
+        )
+        self.assertIn("covar_module.kernels.1.outputscale", names)
+        self.assertIn("covar_module.kernels.1.base_kernel.lengthscale", names)
+
 
 if __name__ == "__main__":
     unittest.main()
