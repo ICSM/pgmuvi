@@ -1245,6 +1245,16 @@ class TwoDSpectralMixtureDustMeanKISSGPModel(ExactGP):
 
         self.sci_kernel = self.covar_module
 
+    def parameter_schema(self):
+        """Return parameter specifications for this model."""
+        return ParameterSpecCollection.combine(
+            self.mean_module.parameter_schema(prefix="mean_module"),
+            spectral_mixture_parameter_schema(
+                prefix="covar_module.base_kernel",
+                num_mixtures=self.covar_module.base_kernel.num_mixtures,
+            ),
+        )
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)

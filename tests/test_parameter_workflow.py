@@ -681,6 +681,46 @@ class TestParameterWorkflow(unittest.TestCase):
             (3,),
         )
 
+    def test_two_d_spectral_mixture_dust_mean_kiss_gp_model_exposes_parameter_schema(self):
+        import gpytorch
+        import torch
+
+        from pgmuvi.gps import TwoDSpectralMixtureDustMeanKISSGPModel
+
+        train_x = torch.tensor(
+            [
+                [0.0, 1.0],
+                [1.0, 1.0],
+                [2.0, 1.0],
+            ]
+        )
+        train_y = torch.tensor([1.0, 2.0, 3.0])
+
+        model = TwoDSpectralMixtureDustMeanKISSGPModel(
+            train_x,
+            train_y,
+            gpytorch.likelihoods.GaussianLikelihood(),
+            num_mixtures=3,
+            grid_size=[8, 4],
+        )
+
+        schema = model.parameter_schema()
+        names = schema.names()
+
+        self.assertIn("mean_module.offset", names)
+        self.assertIn("mean_module.log_amplitude", names)
+        self.assertIn("mean_module.log_tau", names)
+        self.assertIn("mean_module.log_alpha", names)
+
+        self.assertIn("covar_module.base_kernel.mixture_means", names)
+        self.assertIn("covar_module.base_kernel.mixture_scales", names)
+        self.assertIn("covar_module.base_kernel.mixture_weights", names)
+
+        self.assertEqual(
+            schema["covar_module.base_kernel.mixture_means"].shape,
+            (3,),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
