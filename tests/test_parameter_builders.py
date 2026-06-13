@@ -1,4 +1,5 @@
 import unittest
+import torch
 
 from pgmuvi.parameter_builders import ParameterEstimateBuilder
 from pgmuvi.parameter_context import (
@@ -584,9 +585,11 @@ class TestParameterEstimateBuilder(unittest.TestCase):
             context=context,
         )
 
-        self.assertEqual(
-            estimate.value,
-            [0.10, 0.05, 0.02],
+        self.assertTrue(
+            torch.allclose(
+                estimate.value,
+                torch.tensor([0.1, 0.05, 0.02]),
+            )
         )
 
     def test_consensus_frequency_requires_enough_components(self):
@@ -690,9 +693,11 @@ class TestParameterEstimateBuilder(unittest.TestCase):
             context=context,
         )
 
-        self.assertEqual(
-            estimate.value,
-            [0.1, 0.05, 0.02],
+        self.assertTrue(
+            torch.allclose(
+                estimate.value,
+                torch.tensor([0.1, 0.05, 0.02]),
+            )
         )
 
 
@@ -770,3 +775,45 @@ if __name__ == "__main__":
             estimate.metadata["value_reason"],
             "global_diagnostics_unavailable",
         )
+
+    def test_consensus_frequency_expands_to_ard_shape(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_means",
+            role=ParameterRole.FREQUENCY,
+            domain=ParameterDomain.FREQUENCY,
+            scale=ParameterScale.LINEAR,
+            shape=(3, 1, 2),
+            guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=True,
+            consensus_diagnostics=ConsensusDiagnostics(
+                frequencies=[0.1, 0.2, 0.3],
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(
+            tuple(estimate.value.shape),
+            (3, 1, 2),
+        )
+
+        self.assertTrue(
+            (
+                estimate.value
+                == torch.tensor(
+                    [
+                        [[0.1, 0.1]],
+                        [[0.2, 0.2]],
+                        [[0.3, 0.3]],
+                    ]
+                )
+            ).all()
+        )
+
+        self.assertIsNone(estimate.metadata["value_reason"])

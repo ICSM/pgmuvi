@@ -112,6 +112,30 @@ class ParameterEstimateBuilder:
 
         return value
 
+    def _expand_component_values(self, values, shape):
+        """Expand per-component values to the declared parameter shape."""
+        if values is None or shape is None:
+            return values
+
+        value_tensor = torch.as_tensor(values)
+
+        if tuple(value_tensor.shape) == tuple(shape):
+            return value_tensor
+
+        if len(shape) == 1:
+            if value_tensor.numel() < shape[0]:
+                return None
+
+            return value_tensor[: shape[0]]
+
+        if value_tensor.numel() < shape[0]:
+            return None
+
+        component_values = value_tensor[: shape[0]]
+        view_shape = (shape[0],) + (1,) * (len(shape) - 1)
+
+        return component_values.reshape(view_shape).expand(shape).clone()
+
     def _estimate_value(
         self,
         spec: ParameterSpec,
@@ -175,8 +199,8 @@ class ParameterEstimateBuilder:
 
         return periods[:n_components]
 
-    @staticmethod
     def _estimate_consensus_frequency(
+        self,
         spec: ParameterSpec,
         context: ParameterEstimationContext,
     ):
@@ -202,18 +226,16 @@ class ParameterEstimateBuilder:
 
         frequencies = list(frequencies)
 
+        if not frequencies:
+            return None
+
         if spec.shape is None:
-            return frequencies[0] if frequencies else None
+            return frequencies[0]
 
-        if len(spec.shape) != 1:
-            return None
-
-        n_components = spec.shape[0]
-
-        if len(frequencies) < n_components:
-            return None
-
-        return frequencies[:n_components]
+        return self._expand_component_values(
+            frequencies,
+            spec.shape,
+        )
 
     def _estimate_constraint(
         self,
