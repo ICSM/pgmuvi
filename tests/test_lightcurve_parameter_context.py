@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import torch
 
@@ -322,4 +323,53 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         self.assertEqual(
             lc.parameter_workflow_result,
             result,
+        )
+
+    def test_fit_applies_parameter_workflow_for_schema_enabled_model(self):
+        import gpytorch
+
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0, 3.0]),
+            torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        )
+
+        with patch("pgmuvi.lightcurve.train", return_value={"mock": "result"}):
+            result = lc.fit(
+                model="1DMatern",
+                likelihood=gpytorch.likelihoods.GaussianLikelihood,
+                training_iter=0,
+                miniter=0,
+            )
+
+        self.assertEqual(
+            result,
+            {"mock": "result"},
+        )
+
+        self.assertEqual(
+            lc.parameter_workflow_result,
+            {
+                "covar_module.outputscale": {
+                    "value": True,
+                    "constraint": True,
+                },
+                "covar_module.base_kernel.lengthscale": {
+                    "value": True,
+                    "constraint": True,
+                },
+            },
+        )
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": True,
+                "applied": 2,
+                "skipped": 0,
+                "applied_parameters": [
+                    "covar_module.outputscale",
+                    "covar_module.base_kernel.lengthscale",
+                ],
+                "skipped_parameters": [],
+            },
         )
