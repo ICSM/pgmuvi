@@ -534,6 +534,53 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
             },
         )
 
+    def test_fit_clears_previous_parameter_workflow_result_when_disabled(self):
+        import gpytorch
+
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0, 3.0]),
+            torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        )
+
+        with patch("pgmuvi.lightcurve.train", return_value={"mock": "result"}):
+            lc.fit(
+                model="1DMatern",
+                likelihood=gpytorch.likelihoods.GaussianLikelihood,
+                training_iter=0,
+                miniter=0,
+                use_parameter_workflow=True,
+            )
+
+        self.assertIsNotNone(lc.parameter_workflow_result)
+
+        with patch("pgmuvi.lightcurve.train", return_value={"mock": "result"}):
+            result = lc.fit(
+                model="1DMatern",
+                likelihood=gpytorch.likelihoods.GaussianLikelihood,
+                training_iter=0,
+                miniter=0,
+                use_parameter_workflow=False,
+            )
+
+        self.assertEqual(
+            result,
+            {"mock": "result"},
+        )
+
+        self.assertIsNone(lc.parameter_workflow_result)
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": False,
+                "applied": 0,
+                "skipped": 0,
+                "applied_parameters": [],
+                "skipped_parameters": [],
+                "skipped_reasons": {},
+            },
+        )
+
     def test_parameter_workflow_propagates_global_diagnostics_reason(self):
         import gpytorch
 
