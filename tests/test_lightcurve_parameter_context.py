@@ -277,6 +277,67 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
             },
         )
 
+    def test_parameter_workflow_report_without_results(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        self.assertEqual(
+            lc.get_parameter_workflow_report(),
+            {
+                "available": False,
+                "applied": [],
+                "skipped": [],
+            },
+        )
+
+    def test_parameter_workflow_report_with_structured_results(self):
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+        )
+
+        lc.parameter_workflow_result = {
+            "covar_module.outputscale": {
+                "value": True,
+                "constraint": True,
+                "value_reason": None,
+                "constraint_reason": None,
+            },
+            "covar_module.mixture_means": {
+                "value": False,
+                "constraint": False,
+                "value_reason": "consensus_frequency_unavailable",
+                "constraint_reason": None,
+            },
+        }
+
+        self.assertEqual(
+            lc.get_parameter_workflow_report(),
+            {
+                "available": True,
+                "applied": [
+                    {
+                        "parameter": "covar_module.outputscale",
+                        "value_applied": True,
+                        "constraint_applied": True,
+                        "value_reason": None,
+                        "constraint_reason": None,
+                    }
+                ],
+                "skipped": [
+                    {
+                        "parameter": "covar_module.mixture_means",
+                        "value_applied": False,
+                        "constraint_applied": False,
+                        "value_reason": "consensus_frequency_unavailable",
+                        "constraint_reason": None,
+                    }
+                ],
+            },
+        )
+
     def test_parameter_workflow_applies_real_matern_model_schema(self):
         import gpytorch
 
