@@ -442,6 +442,65 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
             result,
         )
 
+    def test_fit_applies_parameter_workflow_despite_existing_constraints(self):
+        import gpytorch
+
+        lc = Lightcurve(
+            torch.tensor([0.0, 1.0, 2.0, 3.0]),
+            torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        )
+
+        with patch(
+            "pgmuvi.lightcurve.train",
+            return_value={"mock": "result"},
+        ), patch.object(
+            lc,
+            "_Lightcurve__CONTRAINTS_SET",
+            True,
+        ):
+            result = lc.fit(
+                model="1DMatern",
+                likelihood=gpytorch.likelihoods.GaussianLikelihood,
+                training_iter=0,
+                miniter=0,
+                use_parameter_workflow=True,
+            )
+
+        self.assertEqual(result, {"mock": "result"})
+
+        self.assertEqual(
+            lc.parameter_workflow_result,
+            {
+                "covar_module.outputscale": {
+                    "value": True,
+                    "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
+                },
+                "covar_module.base_kernel.lengthscale": {
+                    "value": True,
+                    "constraint": True,
+                    "value_reason": None,
+                    "constraint_reason": None,
+                },
+            },
+        )
+
+        self.assertEqual(
+            lc.get_parameter_workflow_summary(),
+            {
+                "available": True,
+                "applied": 2,
+                "skipped": 0,
+                "applied_parameters": [
+                    "covar_module.outputscale",
+                    "covar_module.base_kernel.lengthscale",
+                ],
+                "skipped_parameters": [],
+                "skipped_reasons": {},
+            },
+        )
+
     def test_fit_applies_parameter_workflow_for_schema_enabled_model(self):
         import gpytorch
 
@@ -531,81 +590,6 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                 "applied_parameters": [],
                 "skipped_parameters": [],
                 "skipped_reasons": {},
-            },
-        )
-
-    def test_fit_reports_parameter_workflow_skipped_by_existing_constraints(self):
-        import gpytorch
-
-        lc = Lightcurve(
-            torch.tensor([0.0, 1.0, 2.0, 3.0]),
-            torch.tensor([1.0, 2.0, 3.0, 4.0]),
-        )
-
-        with patch(
-            "pgmuvi.lightcurve.train",
-            return_value={"mock": "result"},
-        ), patch.object(
-            lc,
-            "_Lightcurve__CONTRAINTS_SET",
-            True,
-        ):
-            result = lc.fit(
-                model="1DMatern",
-                likelihood=gpytorch.likelihoods.GaussianLikelihood,
-                training_iter=0,
-                miniter=0,
-                use_parameter_workflow=True,
-            )
-
-        self.assertEqual(
-            result,
-            {"mock": "result"},
-        )
-
-        self.assertEqual(
-            lc.parameter_workflow_result,
-            {
-                "__workflow__": {
-                    "value": False,
-                    "constraint": False,
-                    "value_reason": "skipped_existing_constraints",
-                    "constraint_reason": "skipped_existing_constraints",
-                },
-            },
-        )
-
-        self.assertEqual(
-            lc.get_parameter_workflow_summary(),
-            {
-                "available": True,
-                "applied": 0,
-                "skipped": 1,
-                "applied_parameters": [],
-                "skipped_parameters": ["__workflow__"],
-                "skipped_reasons": {
-                    "__workflow__": {
-                        "value_reason": "skipped_existing_constraints",
-                        "constraint_reason": "skipped_existing_constraints",
-                    },
-                },
-            },
-        )
-
-        self.assertEqual(
-            lc.get_parameter_workflow_report(),
-            {
-                "available": True,
-                "applied": [],
-                "skipped": [
-                    {
-                        "parameter": "__workflow__",
-                        "value_applied": False,
-                        "constraint_applied": False,
-                        "value_reason": "skipped_existing_constraints",
-                        "constraint_reason": "skipped_existing_constraints",
-                    },
-                ],
             },
         )
 

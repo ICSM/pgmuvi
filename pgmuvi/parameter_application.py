@@ -110,6 +110,12 @@ class ParameterEstimateApplicator:
         )
 
         if hasattr(current, "shape"):
+            if value_tensor.numel() != current.numel():
+                estimate.metadata["value_reason"] = "shape_mismatch"
+                estimate.metadata["expected_shape"] = tuple(current.shape)
+                estimate.metadata["actual_shape"] = tuple(value_tensor.shape)
+                return False
+
             value_tensor = value_tensor.reshape_as(current)
 
         with torch.no_grad():
