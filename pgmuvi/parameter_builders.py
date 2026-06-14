@@ -112,6 +112,30 @@ class ParameterEstimateBuilder:
 
         return value
 
+    def _expand_component_values(self, values, shape):
+        """Expand per-component values to the declared parameter shape."""
+        if values is None or shape is None:
+            return values
+
+        value_tensor = torch.as_tensor(values)
+
+        if tuple(value_tensor.shape) == tuple(shape):
+            return value_tensor
+
+        if len(shape) == 1:
+            if value_tensor.numel() < shape[0]:
+                return None
+
+            return value_tensor[: shape[0]]
+
+        if value_tensor.numel() < shape[0]:
+            return None
+
+        component_values = value_tensor[: shape[0]]
+        view_shape = (shape[0],) + (1,) * (len(shape) - 1)
+
+        return component_values.reshape(view_shape).expand(shape).clone()
+
     def _estimate_value(
         self,
         spec: ParameterSpec,
@@ -175,8 +199,67 @@ class ParameterEstimateBuilder:
 
         return periods[:n_components]
 
-    @staticmethod
+    def _estimate_frequency_fallback(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Fallback frequency estimate based on data baseline."""
+        baseline_frequency = self._estimate_baseline_frequency(context)
+        lower = 1.0e-6
+        upper = None
+
+        if spec.constraint is not None:
+            lower = float(spec.constraint[0])
+            upper = float(spec.constraint[1])
+
+        min_frequency = max(10.0 * lower, 1.0e-5)
+
+        if baseline_frequency is None:
+            return None
+
+        if spec.shape is None:
+            return baseline_frequency
+
+        n_components = spec.shape[0]
+
+        frequencies = torch.tensor(
+            [
+                max(baseline_frequency * (i + 1), min_frequency)
+                for i in range(n_components)
+            ],
+            dtype=torch.float32,
+        )
+
+        if upper is not None:
+            frequencies = torch.clamp(
+                frequencies,
+                min=min_frequency,
+                max=0.5 * upper,
+            )
+
+        if len(spec.shape) == 1:
+            return frequencies
+
+        lower = 1.0e-6
+
+        if spec.constraint is not None:
+            lower = float(spec.constraint[0])
+
+        neutral_frequency = max(10.0 * lower, 1.0e-5)
+
+        fallback = torch.full(
+            spec.shape,
+            min_frequency,
+            dtype=torch.float32,
+        )
+
+        fallback[:, 0, 0] = frequencies
+
+        return fallback
+
     def _estimate_consensus_frequency(
+        self,
         spec: ParameterSpec,
         context: ParameterEstimationContext,
     ):
@@ -184,7 +267,10 @@ class ParameterEstimateBuilder:
         diagnostics = context.consensus_diagnostics
 
         if diagnostics is None:
-            return None
+            return self._estimate_frequency_fallback(
+                spec,
+                context,
+            )
 
         frequencies = diagnostics.frequencies
 
@@ -198,22 +284,26 @@ class ParameterEstimateBuilder:
                 frequencies.append(1.0 / period)
 
         if frequencies is None:
-            return None
+            return self._estimate_frequency_fallback(
+                spec,
+                context,
+            )
 
         frequencies = list(frequencies)
 
+        if not frequencies:
+            return self._estimate_frequency_fallback(
+                spec,
+                context,
+            )
+
         if spec.shape is None:
-            return frequencies[0] if frequencies else None
+            return frequencies[0]
 
-        if len(spec.shape) != 1:
-            return None
-
-        n_components = spec.shape[0]
-
-        if len(frequencies) < n_components:
-            return None
-
-        return frequencies[:n_components]
+        return self._expand_component_values(
+            frequencies,
+            spec.shape,
+        )
 
     def _estimate_constraint(
         self,
