@@ -226,9 +226,16 @@ class ParameterEstimateBuilder:
         if len(spec.shape) == 1:
             return frequencies
 
+        lower = 1.0e-6
+
+        if spec.constraint is not None:
+            lower = float(spec.constraint[0])
+
+        neutral_frequency = max(10.0 * lower, 1.0e-5)
+
         fallback = torch.full(
             spec.shape,
-            1.0e-6,
+            neutral_frequency,
             dtype=torch.float32,
         )
 
