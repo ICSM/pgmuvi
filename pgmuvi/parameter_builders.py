@@ -215,15 +215,26 @@ class ParameterEstimateBuilder:
 
         n_components = spec.shape[0]
 
-        frequencies = [
-            baseline_frequency * (i + 1)
-            for i in range(n_components)
-        ]
-
-        return self._expand_component_values(
-            frequencies,
-            spec.shape,
+        frequencies = torch.tensor(
+            [
+                baseline_frequency * (i + 1)
+                for i in range(n_components)
+            ],
+            dtype=torch.float32,
         )
+
+        if len(spec.shape) == 1:
+            return frequencies
+
+        fallback = torch.full(
+            spec.shape,
+            1.0e-6,
+            dtype=torch.float32,
+        )
+
+        fallback[:, 0, 0] = frequencies
+
+        return fallback
 
     def _estimate_consensus_frequency(
         self,
