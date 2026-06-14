@@ -199,6 +199,32 @@ class ParameterEstimateBuilder:
 
         return periods[:n_components]
 
+    def _estimate_frequency_fallback(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Fallback frequency estimate based on data baseline."""
+        baseline_frequency = self._estimate_baseline_frequency(context)
+
+        if baseline_frequency is None:
+            return None
+
+        if spec.shape is None:
+            return baseline_frequency
+
+        n_components = spec.shape[0]
+
+        frequencies = [
+            baseline_frequency * (i + 1)
+            for i in range(n_components)
+        ]
+
+        return self._expand_component_values(
+            frequencies,
+            spec.shape,
+        )
+
     def _estimate_consensus_frequency(
         self,
         spec: ParameterSpec,
@@ -208,7 +234,10 @@ class ParameterEstimateBuilder:
         diagnostics = context.consensus_diagnostics
 
         if diagnostics is None:
-            return None
+            return self._estimate_frequency_fallback(
+                spec,
+                context,
+            )
 
         frequencies = diagnostics.frequencies
 
@@ -222,12 +251,18 @@ class ParameterEstimateBuilder:
                 frequencies.append(1.0 / period)
 
         if frequencies is None:
-            return None
+            return self._estimate_frequency_fallback(
+                spec,
+                context,
+            )
 
         frequencies = list(frequencies)
 
         if not frequencies:
-            return None
+            return self._estimate_frequency_fallback(
+                spec,
+                context,
+            )
 
         if spec.shape is None:
             return frequencies[0]
