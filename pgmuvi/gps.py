@@ -209,7 +209,7 @@ def spectral_mixture_parameter_schema(
                 scale=ParameterScale.LOG,
                 shape=shape,
                 initial_value=default_components,
-                constraint=(1.0e-6, 1.0e6),
+                constraint=(1.0e-6, 1.0e3),
                 guess_strategy=GuessStrategy.DEFAULT,
                 constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
@@ -223,7 +223,7 @@ def spectral_mixture_parameter_schema(
                 scale=ParameterScale.LOG,
                 shape=None if num_mixtures is None else (num_mixtures,),
                 initial_value=None if num_mixtures is None else [1.0] * num_mixtures,
-                constraint=(1.0e-12, 1.0e12),
+                constraint=(1.0e-8, 1.0e4),
                 guess_strategy=GuessStrategy.DEFAULT,
                 constraint_strategy=ConstraintStrategy.DEFAULT,
                 description=(
