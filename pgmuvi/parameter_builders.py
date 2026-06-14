@@ -206,6 +206,14 @@ class ParameterEstimateBuilder:
     ):
         """Fallback frequency estimate based on data baseline."""
         baseline_frequency = self._estimate_baseline_frequency(context)
+        lower = 1.0e-6
+        upper = None
+
+        if spec.constraint is not None:
+            lower = float(spec.constraint[0])
+            upper = float(spec.constraint[1])
+
+        min_frequency = max(10.0 * lower, 1.0e-5)
 
         if baseline_frequency is None:
             return None
@@ -217,11 +225,18 @@ class ParameterEstimateBuilder:
 
         frequencies = torch.tensor(
             [
-                baseline_frequency * (i + 1)
+                max(baseline_frequency * (i + 1), min_frequency)
                 for i in range(n_components)
             ],
             dtype=torch.float32,
         )
+
+        if upper is not None:
+            frequencies = torch.clamp(
+                frequencies,
+                min=min_frequency,
+                max=0.5 * upper,
+            )
 
         if len(spec.shape) == 1:
             return frequencies
@@ -235,7 +250,7 @@ class ParameterEstimateBuilder:
 
         fallback = torch.full(
             spec.shape,
-            neutral_frequency,
+            min_frequency,
             dtype=torch.float32,
         )
 
