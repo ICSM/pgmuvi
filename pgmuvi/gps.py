@@ -211,7 +211,7 @@ def spectral_mixture_parameter_schema(
                 initial_value=None,
                 constraint=(1.0e-6, 1.0e3),
                 guess_strategy=GuessStrategy.DEFAULT,
-                constraint_strategy=ConstraintStrategy.DEFAULT,
+                constraint_strategy=None,
                 description=(
                     "Positive frequency-space widths of the spectral-mixture components."
                 ),
@@ -225,7 +225,7 @@ def spectral_mixture_parameter_schema(
                 initial_value=None,
                 constraint=(1.0e-8, 1.0e4),
                 guess_strategy=GuessStrategy.DEFAULT,
-                constraint_strategy=ConstraintStrategy.DEFAULT,
+                constraint_strategy=None,
                 description=(
                     "Positive variance contributions of the spectral-mixture components, "
                     "equivalent to integrated PSD power up to kernel convention factors."
