@@ -1,0 +1,284 @@
+"""Tests for the prior-setting logic in Lightcurve.fit()."""
+
+import math
+import unittest
+import warnings
+from unittest.mock import patch
+
+import gpytorch
+
+from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
+
+# Sentinel return value for the patched `train` function.
+_DUMMY_RESULTS = {"loss": [1.0], "delta_loss": [0.0]}
+
+
+def _fit_without_training(lc, **kwargs):
+    """Call lc.fit() with the training loop patched out."""
+    with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
+        with patch.object(lc, "_train"):
+            return lc.fit(**kwargs)
+
+
+def _make_lc():
+    return make_simple_sinusoid_1d(
+        n_obs=80, period=150.0, noise_level=0.1, t_span=800.0, seed=7
+    )
+
+
+class TestFitPriorSetValidation(unittest.TestCase):
+    """Test that invalid prior_set values are caught early in fit()."""
+
+    def test_prior_set_wrong_type_raises_type_error(self):
+        """Non-string prior_set raises TypeError."""
+        lc = _make_lc()
+        with self.assertRaises(TypeError):
+            _fit_without_training(lc, model="1D", prior_set=42)
+
+    def test_prior_set_unknown_string_raises_value_error(self):
+        """Unrecognised prior_set name raises ValueError."""
+        lc = _make_lc()
+        with self.assertRaises(ValueError):
+            _fit_without_training(lc, model="1D", prior_set="NOT_A_REAL_SET")
+
+    def test_prior_set_none_accepted(self):
+        """prior_set=None (default) is accepted without error."""
+        lc = _make_lc()
+        # Should not raise.
+        _fit_without_training(lc, model="1D", prior_set=None, training_iter=1)
+
+    def test_prior_set_lpv_accepted(self):
+        """prior_set='LPV' (valid named set) is accepted without error."""
+        lc = _make_lc()
+        _fit_without_training(lc, model="1D", prior_set="LPV", training_iter=1)
+
+
+class TestFitMlsDataDrivenPrior(unittest.TestCase):
+    """Test that MLS-based initialisation produces a data-driven prior."""
+
+    def setUp(self):
+        self.lc = _make_lc()
+        # Record the dominant LS frequency BEFORE fitting so we can
+        # compare it to the prior without re-running the periodogram.
+        ls_freqs, _ = self.lc.fit_LS(num_peaks=10)
+        self._dominant_freq = float(ls_freqs[0])
+        _fit_without_training(self.lc, model="1D", prior_set=None, training_iter=1)
+
+    def _get_mm_prior(self):
+        for name, _mod, prior, _cl, _scl in self.lc.model.named_priors():
+            if "mixture_means_prior" in name:
+                return prior
+        return None
+
+    def test_mixture_means_prior_is_set(self):
+        """After MLS init, a mixture_means_prior should be registered."""
+        prior = self._get_mm_prior()
+        self.assertIsNotNone(prior)
+
+    def test_mixture_means_prior_is_lognormal(self):
+        """The data-driven prior should be a LogNormalPrior."""
+        prior = self._get_mm_prior()
+        self.assertIsInstance(prior, gpytorch.priors.LogNormalPrior)
+
+    def test_mixture_means_prior_broad_sigma(self):
+        """The data-driven prior should have sigma=_MLS_PRIOR_SIGMA (broad)."""
+        from pgmuvi.lightcurve import _MLS_PRIOR_SIGMA
+
+        prior = self._get_mm_prior()
+        self.assertAlmostEqual(float(prior.scale), _MLS_PRIOR_SIGMA, places=5)
+
+    def test_mixture_means_prior_median_matches_dominant_freq(self):
+        """The prior median should equal the dominant MLS frequency."""
+        prior = self._get_mm_prior()
+        # median of LogNormal(mu, sigma) = exp(mu)
+        median_freq = math.exp(float(prior.loc))
+        self.assertAlmostEqual(median_freq, self._dominant_freq, places=5)
+
+    def test_priors_set_flag_is_true(self):
+        """__PRIORS_SET flag should be True after fit()."""
+        # Access the mangled name
+        flag_attr = "_Lightcurve__PRIORS_SET"
+        self.assertTrue(getattr(self.lc, flag_attr))
+
+
+class TestFitPriorSetOverrideWarning(unittest.TestCase):
+    """Test that specifying prior_set alongside MLS init issues a warning."""
+
+    def test_prior_set_with_mls_warns(self):
+        """A UserWarning should be issued when prior_set overrides MLS prior."""
+        lc = _make_lc()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _fit_without_training(lc, model="1D", prior_set="LPV", training_iter=1)
+        override_warns = [
+            x for x in w
+            if issubclass(x.category, UserWarning)
+            and "overrides" in str(x.message).lower()
+        ]
+        self.assertTrue(
+            len(override_warns) >= 1,
+            "Expected at least one UserWarning about prior_set overriding MLS prior",
+        )
+
+
+class TestFitNoMlsFallsBackToLpv(unittest.TestCase):
+    """When no MLS and no prior_set, default is LPV prior."""
+
+    def test_lpv_prior_applied_when_no_mls(self):
+        """Prior should use LPV set when periods are user-supplied."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
+        lc = _make_lc()
+        # Providing explicit periods disables MLS → should fall back to LPV
+        _fit_without_training(
+            lc, model="1D", periods=[150.0], prior_set=None, training_iter=1
+        )
+        # Under LPV, mixture_means_prior should be a LogNormalFrequencyPrior
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in lc.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
+        self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
+
+    def test_use_mls_false_falls_back_to_lpv(self):
+        """Prior should use LPV set when use_mls_init=False."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
+        lc = _make_lc()
+        _fit_without_training(
+            lc,
+            model="1D",
+            use_mls_init=False,
+            num_mixtures=2,
+            prior_set=None,
+            training_iter=1,
+        )
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in lc.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
+        self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
+
+
+class TestFitPreregisteredPriorsNotOverridden(unittest.TestCase):
+    """Priors set before fit() should not be overridden by fit()."""
+
+    def test_preregistered_prior_survives_fit(self):
+        """set_default_priors() before fit() prevents fit() from replacing it."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
+        lc = _make_lc()
+        lc.set_model("1D", num_mixtures=2)
+        lc.set_default_priors(prior_set="LPV")
+        # Now we know the prior is LPV (LogNormalFrequencyPrior).
+        # Calling fit() should NOT replace it.
+        _fit_without_training(lc, model=None, training_iter=1)
+
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in lc.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
+        # Should still be the LPV prior, not a plain LogNormalPrior
+        self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
+
+    def test_invalid_prior_set_silently_ignored_when_priors_preset(self):
+        """When priors are already set, an invalid prior_set is silently ignored."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
+        lc = _make_lc()
+        lc.set_model("1D", num_mixtures=2)
+        lc.set_default_priors(prior_set="LPV")
+        # prior_set validation is skipped when __PRIORS_SET is True, so
+        # neither a bad type nor an unrecognised string should raise.
+        _fit_without_training(lc, model=None, prior_set=42, training_iter=1)
+        _fit_without_training(lc, model=None, prior_set="NOT_REAL", training_iter=1)
+        # The pre-registered LPV prior must still be in effect.
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in lc.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
+        self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
+
+
+class TestFit2DSmModel(unittest.TestCase):
+    """Test prior-setting behaviour for 2D spectral-mixture models."""
+
+    def setUp(self):
+        self.lc_2d = make_chromatic_sinusoid_2d(
+            n_per_band=[40, 35],
+            period=5.0,
+            wavelengths=[0.5, 1.5],
+            amplitude_law="linear",
+            noise_level=0.1,
+            t_span=20.0,
+            irregular=False,
+            seed=42,
+        )
+
+    def test_2d_sm_mls_uses_generic_defaults(self):
+        """2D SM model with MLS init should use generic LogNormalPrior(0,1)."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
+        with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
+            with patch.object(self.lc_2d, "_train"):
+                self.lc_2d.fit(
+                    model="2D",
+                    num_mixtures=2,
+                    prior_set=None,
+                    training_iter=1,
+                )
+
+        # For 2D SM (ard_num_dims=2) the period/frequency prior branch is
+        # skipped.  set_default_priors() still registers a generic
+        # LogNormalPrior(0, 1) on mixture_means (no period bounds), which is
+        # different from a LogNormalFrequencyPrior (which has period bounds).
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in self.lc_2d.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
+        # Should be a plain LogNormalPrior, NOT a period-bounded
+        # LogNormalFrequencyPrior which would cause inf losses.
+        self.assertNotIsInstance(mm_prior, LogNormalFrequencyPrior)
+
+    def test_2d_sm_user_prior_set_warns_and_applied(self):
+        """2D SM model with explicit prior_set applies prior but warns about it."""
+        from pgmuvi.priors import LogNormalFrequencyPrior
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            with patch("pgmuvi.lightcurve.train", return_value=_DUMMY_RESULTS):
+                with patch.object(self.lc_2d, "_train"):
+                    self.lc_2d.fit(
+                        model="2D",
+                        num_mixtures=2,
+                        prior_set="LPV",
+                        training_iter=1,
+                    )
+
+        # A UserWarning should be issued about 2D prior concerns.
+        _is_2d_dim_warn = (
+            lambda x: issubclass(x.category, UserWarning)
+            and "2d" in str(x.message).lower()
+        )
+        dim_warns = [x for x in w if _is_2d_dim_warn(x)]
+        self.assertTrue(
+            len(dim_warns) >= 1,
+            "Expected a UserWarning about 2D SM prior dimensionality",
+        )
+
+        # Despite the warning, the LPV prior should still be registered.
+        mm_prior = None
+        for name, _mod, prior, _cl, _scl in self.lc_2d.model.named_priors():
+            if "mixture_means_prior" in name:
+                mm_prior = prior
+        self.assertIsNotNone(mm_prior)
+        self.assertIsInstance(mm_prior, LogNormalFrequencyPrior)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -843,6 +843,13 @@ _SM_MODELS: frozenset[str] = frozenset(
     }
 )
 
+# Standard deviation (sigma) of the LogNormal prior registered on
+# mixture_means when MLS-based initialisation is used and the user has not
+# specified a prior_set.  A value of 1.5 gives an ~4.5x factor around the
+# median, ensuring the prior is informative enough to regularise training
+# while remaining broad enough not to overly constrain the period.
+_MLS_PRIOR_SIGMA: float = 1.5
+
 
 @dataclasses.dataclass(frozen=True)
 class PeriodPeakResult:
@@ -5646,6 +5653,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lr=0.1,
         stopavg=30,
         variance=False,
+        prior_set=None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -5792,6 +5800,51 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
+        prior_set : str or None, optional
+            Name of a predefined prior set to apply to the period/frequency
+            parameter (e.g. ``"LPV"``).  Controls prior selection as follows:
+
+            - If ``prior_set`` is given, the named prior set is validated and
+              applied via :meth:`set_default_priors`.  A warning is raised if
+              ``prior_set`` is specified alongside MLS-based initialisation
+              (1D SM models), since it overrides the data-driven prior that
+              would otherwise be used.  An unrecognised name raises a
+              :class:`ValueError`.  For 2D SM models a warning is also raised
+              because the period/frequency prior applies to both temporal and
+              wavelength dimensions.
+
+              **Note:** ``prior_set`` is only validated and applied when priors
+              have not already been set (i.e. when :meth:`set_default_priors`
+              or :meth:`set_period_prior` has **not** been called before
+              :meth:`fit`).  If priors are pre-registered, ``prior_set`` is
+              silently ignored and no error is raised even for invalid values.
+            - If ``prior_set`` is ``None`` (default) **and** the Lomb-Scargle
+              periodogram was used to initialise a **1D** spectral-mixture
+              model, a ``LogNormalPrior`` is automatically registered on
+              ``mixture_means`` with its median set to the dominant LS
+              frequency and a broad standard deviation
+              (``sigma=_MLS_PRIOR_SIGMA``) so as not to overly constrain the
+              period distribution.
+            - For **2D** spectral-mixture models (``ard_num_dims=2``),
+              generic default priors are still applied, including the broad
+              default spectral-mixture ``mixture_means`` prior. However, no
+              LPV/data-driven period-bounded prior is added automatically,
+              because such a prior would constrain both temporal and
+              wavelength dimensions identically, which is physically
+              incorrect.
+            - If ``prior_set`` is ``None`` and no MLS-based initialisation was
+              performed (e.g. explicit ``periods`` supplied,
+              ``use_mls_init=False``, or MLS returned no peaks), the
+              ``"LPV"`` prior set is used as a default for 1D SM and
+              period-parameterised models.
+
+            To apply fully custom priors that affect MAP training, call
+            :meth:`set_period_prior` or :meth:`set_default_priors` **before**
+            calling :meth:`fit`; in that case the logic above is skipped
+            entirely (the ``__PRIORS_SET`` flag is respected).  Priors set
+            *after* :meth:`fit` returns do not affect the MAP optimisation
+            that has already occurred, but will be used by a subsequent
+            :meth:`mcmc` call.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -5804,7 +5857,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Raises
         ------
         ValueError
-            If no model is provided.
+            If no model is provided or if ``prior_set`` is not a recognised
+            prior-set name.
+        TypeError
+            If ``prior_set`` is not a string or ``None``.
 
         Notes
         -----
@@ -6264,6 +6320,99 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 #                 # self.model.initialize(**guess)
 #                 self.set_hypers(guess)
 
+        # --- Prior setting ---
+        # Apply priors if they have not already been set by the user (e.g. via
+        # a prior call to set_default_priors() or set_period_prior()).
+        if not self.__PRIORS_SET:
+            # Validate prior_set before applying any priors, but ONLY when
+            # the prior logic will actually run.  When __PRIORS_SET is True
+            # the value is irrelevant and we must not raise even for an
+            # invalid/mismatched prior_set.
+            if prior_set is not None:
+                if not isinstance(prior_set, str):
+                    raise TypeError(
+                        "`prior_set` must be a string or None, "
+                        f"got {type(prior_set)!r}."
+                    )
+                # Raises ValueError for unrecognised names.
+                get_prior_set(prior_set)
+
+            # Determine whether the MLS periodogram was the source of
+            # _init_freqs.  When the user supplied explicit `periods`, they
+            # were not MLS-derived; when MLS was not used (use_mls_init=False,
+            # non-SM model, or MLS returned no peaks), _init_freqs is None.
+            _mls_init_used = periods is None and _init_freqs is not None
+            # Detect dimensionality of the spectral-mixture kernel.
+            # Only 1D SM kernels (ard_num_dims=1) support dimension-specific
+            # priors.  For 2D SM kernels (ard_num_dims=2) the mixture_means
+            # tensor encodes BOTH temporal AND wavelength frequencies; applying
+            # a single LogNormalPrior (whether data-driven or LPV) to the
+            # whole tensor constrains the wavelength dimension with temporal
+            # period bounds, which is physically wrong and causes inf losses.
+            # For 2D SM models we therefore only register the generic default
+            # priors (noise, means, scales, weights) and skip the period prior.
+            _covar = (
+                self.model.covar_module
+                if hasattr(self, "model")
+                and hasattr(self.model, "covar_module")
+                else None
+            )
+            _ard_dims = getattr(_covar, "ard_num_dims", 1)
+            _is_1d_sm = _ard_dims == 1
+            _is_2d_sm = _ard_dims == 2
+
+            if _mls_init_used and prior_set is None and _is_1d_sm:
+                # MLS-based initialisation on a 1D SM model and no explicit
+                # prior choice: register a LogNormalPrior centred on the
+                # dominant LS frequency with a broad sigma so the prior does
+                # not overly constrain the period distribution.
+                self.set_default_priors()
+                if "mixture_means" in self._model_pars:
+                    _f_dom = float(_init_freqs[0])
+                    _mu_f = math.log(_f_dom)
+                    _mls_mm_prior = gpytorch.priors.LogNormalPrior(
+                        _mu_f, _MLS_PRIOR_SIGMA
+                    )
+                    self._model_pars["mixture_means"]["module"].register_prior(
+                        "mixture_means_prior",
+                        _mls_mm_prior,
+                        "mixture_means",
+                    )
+            elif _is_2d_sm:
+                # 2D SM model: apply generic default priors only (no period
+                # prior).  The LPV/frequency prior would constrain the
+                # wavelength column with temporal period bounds, which is
+                # physically incorrect and degrades convergence.
+                if prior_set is not None:
+                    _msg = (
+                        f"prior_set={prior_set!r} was requested for a 2D "
+                        "spectral-mixture model.  The period/frequency prior "
+                        "will be applied to the full mixture_means tensor "
+                        "(both temporal and wavelength dimensions), which may "
+                        "bias the wavelength component.  Consider setting "
+                        "priors manually via set_period_prior() if you need "
+                        "dimension-specific control."
+                    )
+                    warnings.warn(_msg, UserWarning, stacklevel=2)
+                    self.set_default_priors(prior_set=prior_set)
+                else:
+                    self.set_default_priors()
+            else:
+                # 1D SM without MLS init, or period-parameterised model
+                # (e.g. QuasiPeriodic): apply LPV as the default period prior.
+                if _mls_init_used and prior_set is not None:
+                    _msg = (
+                        f"prior_set={prior_set!r} overrides the MLS-based "
+                        "data-driven frequency prior. To use a prior centred "
+                        "on the dominant LS frequency automatically, omit "
+                        "prior_set."
+                    )
+                    warnings.warn(_msg, UserWarning, stacklevel=2)
+                _effective_prior_set = (
+                    prior_set if prior_set is not None else "LPV"
+                )
+                self.set_default_priors(prior_set=_effective_prior_set)
+
         if miniter is None:
             miniter = training_iter
 
@@ -6308,6 +6457,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         disable_progbar=False,
         max_cg_iterations=None,
         cuda=False,
+        prior_set=None,
         **kwargs,
     ):
         """Run an MCMC sampler on the model
@@ -6330,6 +6480,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The number of warmup steps to use, by default 100.
         disable_progbar : bool, optional
             Whether to disable the progress bar, by default False.
+        prior_set : str or None, optional
+            Name of a predefined prior set to use when priors have not already
+            been set (e.g. by a preceding call to :meth:`fit` or
+            :meth:`set_default_priors`).  Defaults to ``"LPV"`` when ``None``
+            and priors need to be applied.  Ignored if priors have already
+            been registered.  See :meth:`set_default_priors` and
+            :data:`~pgmuvi.priors.PRIOR_SETS` for available options.
         **kwargs : dict, optional
 
         Returns
@@ -6364,7 +6521,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self.cuda()
 
         if not self.__PRIORS_SET:
-            self.set_default_priors()
+            _mcmc_prior_set = prior_set if prior_set is not None else "LPV"
+            self.set_default_priors(prior_set=_mcmc_prior_set)
 
         if max_cg_iterations is None:
             max_cg_iterations = 10000
