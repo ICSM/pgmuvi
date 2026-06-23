@@ -1,6 +1,13 @@
 import contextlib
 import csv
+import copy
+import datetime
+import enum
+import random
+import subprocess
+import sys
 from pathlib import Path
+import time
 from typing import ClassVar
 import numpy as np
 import torch
@@ -50,6 +57,496 @@ import warnings
 import dataclasses
 import json
 import math
+from types import MappingProxyType
+
+try:
+    from scipy.signal import find_peaks as _scipy_find_peaks
+except ImportError:
+    _scipy_find_peaks = None
+
+
+class ConsensusFitError(RuntimeError):
+    """Raised when the consensus-fit pipeline cannot produce a valid result.
+
+    This exception is raised instead of a bare ``RuntimeError`` whenever the
+    consensus-fit algorithm determines that the data do not support a coherent
+    shared period.  It is **not** raised for unrelated optimisation or GP
+    errors; those continue to raise standard exceptions.
+
+    Attributes
+    ----------
+    failure_diagnostics : dict
+        A lightweight, JSON-safe structured description of the failure.
+        The dict always contains the key ``"status": "failed"`` and a
+        machine-readable ``"reason"`` string.  Additional keys vary by
+        failure mode and are described in the individual ``reason`` values
+        below.
+
+        Common ``reason`` values:
+
+        ``"no_accepted_bands"``
+            Every band was rejected by the pre-LS sampling quality gate
+            before any frequency could be extracted.  Extra keys:
+            ``rejection_reasons`` (dict).
+
+        ``"insufficient_consensus_inliers"``
+            Accepted bands carry mutually inconsistent frequencies; after
+            sigma-clipping fewer than ``min_consensus_inliers`` bands remain
+            in the inlier cluster.  Extra keys: ``n_inlier_bands`` (int),
+            ``required_inliers`` (int), ``n_candidate_bands`` (int),
+            ``candidate_periods`` (list[float | None]).
+
+        ``"frequency_aggregation_error"``
+            An unexpected error occurred during robust frequency aggregation.
+            Extra keys: ``detail`` (str).
+
+        ``"invalid_consensus_frequency"``
+            The aggregated consensus frequency is not finite or not strictly
+            positive.  Extra keys: ``frequency_value`` (float | None).
+
+    Parameters
+    ----------
+    message : str
+        Human-readable description of the failure.  Must be scientifically
+        informative and must not imply a software bug when the cause is a
+        data-quality issue.
+    failure_diagnostics : dict, optional
+        Structured diagnostics dict (see ``failure_diagnostics`` attribute).
+        If omitted, an empty ``{"status": "failed"}`` dict is attached.
+
+    Examples
+    --------
+    >>> raise ConsensusFitError(
+    ...     "Consensus fit failed: only 1 inlier band remained after period"
+    ...     " consistency filtering (minimum required: 2).",
+    ...     failure_diagnostics={
+    ...         "status": "failed",
+    ...         "reason": "insufficient_consensus_inliers",
+    ...         "n_inlier_bands": 1,
+    ...         "required_inliers": 2,
+    ...         "n_candidate_bands": 4,
+    ...         "candidate_periods": [18.0, 31.0, 47.0, 73.0],
+    ...     },
+    ... )
+    """
+
+    def __init__(self, message, *, failure_diagnostics=None):
+        super().__init__(message)
+        self.failure_diagnostics = (
+            dict(failure_diagnostics)
+            if failure_diagnostics is not None
+            else {"status": "failed"}
+        )
+        self.failure_summary = None
+
+
+_CONSENSUS_MIN_FREQUENCY_BOUND = 1.0e-12
+_CONSENSUS_MIN_SCALE_BOUND = 1.0e-6
+_ACF_STATUS_AGREEMENT = "agreement"
+_ACF_STATUS_HARMONIC = "harmonic"
+_ACF_STATUS_DISAGREEMENT = "disagreement"
+_ACF_STATUS_UNAVAILABLE = "unavailable"
+_CONSENSUS_BAND_STATUS_PENDING = "pending"
+_CONSENSUS_BAND_STATUS_ACCEPTED = "accepted"
+_CONSENSUS_BAND_STATUS_REJECTED = "rejected"
+_CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED = "not_requested"
+_CONSENSUS_GP_VALIDATION_STATUS_SKIPPED = "skipped"
+_CONSENSUS_GP_VALIDATION_STATUS_FAILED = "failed"
+_CONSENSUS_GP_VALIDATION_STATUS_SUCCESS = "success"
+_CONSENSUS_GP_VALIDATION_STATUS_REJECTED = "rejected"
+_CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED = "band_not_accepted"
+_CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED = "diagnostics_failed"
+_CONSENSUS_GP_VALIDATION_REASON_EXCEPTION = "exception"
+_CONSENSUS_REJECTION_REASON_SAMPLING_METRICS_UNAVAILABLE = (
+    "sampling metrics unavailable"
+)
+_CONSENSUS_REJECTION_REASON_NO_LS_PEAKS = "no_ls_peaks"
+_CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK = (
+    "no_physically_plausible_ls_peak"
+)
+_CONSENSUS_REJECTION_REASON_CANDIDATE_FREQUENCY_TOO_LOW = (
+    "candidate_frequency_too_low"
+)
+_CONSENSUS_REJECTION_REASON_LS_ACF_DISAGREEMENT = "ls_acf_disagreement"
+_CONSENSUS_REJECTION_REASON_GP_LS_DISAGREEMENT = "gp_ls_frequency_disagreement"
+_CONSENSUS_REJECTION_REASON_GP_VALIDATION_FAILED = "gp_validation_failed"
+_CONSENSUS_REJECTION_REASON_PREFIX_TOO_FEW_POINTS = "too_few_points ("
+_CONSENSUS_REJECTION_REASON_PREFIX_MAX_GAP_FRACTION = "max_gap_fraction ("
+_CONSENSUS_REJECTION_REASON_PREFIX_DUTY_CYCLE = "duty_cycle ("
+
+# Set to True to enable lightweight structural validation at key consensus
+# checkpoints inside _consensus_standard_fit.  Off by default to avoid
+# performance overhead in production.  Can be toggled at runtime by setting
+# pgmuvi.lightcurve._CONSENSUS_DEBUG_VALIDATE = True.
+_CONSENSUS_DEBUG_VALIDATE = False
+
+_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES = frozenset(
+    {
+        _ACF_STATUS_AGREEMENT,
+        _ACF_STATUS_HARMONIC,
+        _ACF_STATUS_DISAGREEMENT,
+        _ACF_STATUS_UNAVAILABLE,
+    }
+)
+_CONSENSUS_ALLOWED_BAND_STATUSES = frozenset(
+    {
+        _CONSENSUS_BAND_STATUS_PENDING,
+        _CONSENSUS_BAND_STATUS_ACCEPTED,
+        _CONSENSUS_BAND_STATUS_REJECTED,
+    }
+)
+_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES = frozenset(
+    {
+        _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED,
+        _CONSENSUS_GP_VALIDATION_STATUS_SKIPPED,
+        _CONSENSUS_GP_VALIDATION_STATUS_FAILED,
+        _CONSENSUS_GP_VALIDATION_STATUS_SUCCESS,
+        _CONSENSUS_GP_VALIDATION_STATUS_REJECTED,
+    }
+)
+_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED = tuple(
+    sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES)
+)
+_CONSENSUS_GP_VALIDATION_STATUSES_CLEAR_REASON = frozenset(
+    {
+        _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED,
+        _CONSENSUS_GP_VALIDATION_STATUS_SUCCESS,
+    }
+)
+_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS = frozenset(
+    {
+        _CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED,
+        _CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED,
+        _CONSENSUS_GP_VALIDATION_REASON_EXCEPTION,
+    }
+)
+_CONSENSUS_ALLOWED_REJECTION_REASONS = frozenset(
+    {
+        _CONSENSUS_REJECTION_REASON_SAMPLING_METRICS_UNAVAILABLE,
+        _CONSENSUS_REJECTION_REASON_NO_LS_PEAKS,
+        _CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK,
+        _CONSENSUS_REJECTION_REASON_CANDIDATE_FREQUENCY_TOO_LOW,
+        _CONSENSUS_REJECTION_REASON_LS_ACF_DISAGREEMENT,
+        _CONSENSUS_REJECTION_REASON_GP_LS_DISAGREEMENT,
+        _CONSENSUS_REJECTION_REASON_GP_VALIDATION_FAILED,
+    }
+)
+_CONSENSUS_ALLOWED_REJECTION_REASON_PREFIXES = (
+    _CONSENSUS_REJECTION_REASON_PREFIX_TOO_FEW_POINTS,
+    _CONSENSUS_REJECTION_REASON_PREFIX_MAX_GAP_FRACTION,
+    _CONSENSUS_REJECTION_REASON_PREFIX_DUTY_CYCLE,
+)
+
+# Fit-history schema registry.
+_FIT_HISTORY_SCHEMA_VERSION = 2
+_FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
+
+# Allowed gp_validation_reason values for each gp_validation_status.  Used by
+# _consensus_validate_result_structure to enforce the reason/status invariant.
+_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS = {
+    _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED: (None,),
+    _CONSENSUS_GP_VALIDATION_STATUS_SUCCESS: (None,),
+    _CONSENSUS_GP_VALIDATION_STATUS_SKIPPED: (
+        None,
+        _CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED,
+    ),
+    _CONSENSUS_GP_VALIDATION_STATUS_REJECTED: (
+        None,
+        _CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED,
+    ),
+    _CONSENSUS_GP_VALIDATION_STATUS_FAILED: (
+        None,
+        _CONSENSUS_GP_VALIDATION_REASON_EXCEPTION,
+    ),
+}
+_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS_SORTED = {
+    status: tuple(
+        sorted(val for val in allowed_reasons if val is not None)
+    )
+    for (
+        status,
+        allowed_reasons,
+    ) in _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS.items()
+}
+_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES_SORTED = tuple(
+    sorted(_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES)
+)
+_CONSENSUS_ALLOWED_BAND_STATUSES_SORTED = tuple(
+    sorted(_CONSENSUS_ALLOWED_BAND_STATUSES)
+)
+_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED = tuple(
+    sorted(_CONSENSUS_ALLOWED_REJECTION_REASONS)
+)
+
+def _consensus_schema_field(
+    *,
+    default=None,
+    default_factory=None,
+    nullable=True,
+    container_type=None,
+    allowed_values=None,
+    deprecated_alias=False,
+    canonical_alias_for=None,
+):
+    """Build immutable schema metadata for one diagnostics field.
+
+    Parameters
+    ----------
+    default : object, optional
+        Scalar default value used when ``default_factory`` is not set.
+    default_factory : {"list", "dict"} or None, optional
+        Factory identifier for container defaults. When set, a fresh container
+        is created per-record at initialization.
+    nullable : bool, optional
+        Whether ``None`` is considered a valid value for the field.
+    container_type : {"list", "dict"} or None, optional
+        Expected container type for validator type checks.
+    allowed_values : iterable or None, optional
+        Optional categorical domain for validator membership checks.
+    deprecated_alias : bool, optional
+        Whether this field is a deprecated alias retained for compatibility.
+    canonical_alias_for : str or None, optional
+        Canonical field name referenced by a deprecated alias.
+
+    Returns
+    -------
+    MappingProxyType
+        Immutable field metadata mapping.
+    """
+    if default is not None and default_factory is not None:
+        raise ValueError(
+            "Consensus schema field cannot define both default and "
+            "default_factory."
+        )
+    if default_factory is not None and default_factory not in {"list", "dict"}:
+        raise ValueError(
+            "Consensus schema field default_factory must be one of "
+            "{'list', 'dict'}."
+        )
+    if container_type is not None and container_type not in {"list", "dict"}:
+        raise ValueError(
+            "Consensus schema field container_type must be one of "
+            "{'list', 'dict'} or None."
+        )
+    if allowed_values is None:
+        allowed_values_tuple = None
+    else:
+        allowed_values_tuple = tuple(allowed_values)
+    return MappingProxyType(
+        {
+            "default": default,
+            "default_factory": default_factory,
+            "nullable": bool(nullable),
+            "container_type": container_type,
+            "allowed_values": allowed_values_tuple,
+            "deprecated_alias": bool(deprecated_alias),
+            "canonical_alias_for": canonical_alias_for,
+        }
+    )
+
+
+def _consensus_schema_default_record(schema_fields):
+    """Instantiate a mutable diagnostics record from immutable schema metadata.
+
+    Parameters
+    ----------
+    schema_fields : Mapping[str, Mapping]
+        Canonical schema field definitions where each value is a metadata
+        mapping produced by :func:`_consensus_schema_field`.
+
+    Returns
+    -------
+    dict
+        Mutable diagnostics record containing one initialized value per schema
+        field key.
+    """
+    record = {}
+    for key, metadata in schema_fields.items():
+        default_factory = metadata.get("default_factory")
+        if default_factory == "list":
+            record[key] = []
+        elif default_factory == "dict":
+            record[key] = {}
+        else:
+            record[key] = metadata.get("default")
+    return record
+
+
+_CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
+    {
+        "fit_strategy": _consensus_schema_field(default="consensus", nullable=False),
+        "consensus_success": _consensus_schema_field(default=False, nullable=False),
+        "consensus_frequency": _consensus_schema_field(default=None, nullable=True),
+        "consensus_period": _consensus_schema_field(default=None, nullable=True),
+        "consensus_frequency_width": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_frequency_scatter": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "accepted_bands": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "rejected_bands": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "rejection_summary": _consensus_schema_field(
+            default_factory="dict",
+            nullable=False,
+            container_type="dict",
+            deprecated_alias=True,
+            canonical_alias_for="rejection_reasons",
+        ),
+        "per_band_diagnostics": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "n_total_bands": _consensus_schema_field(default=0, nullable=False),
+        "n_accepted_bands": _consensus_schema_field(default=0, nullable=False),
+        "n_rejected_bands": _consensus_schema_field(default=0, nullable=False),
+        "use_acf_validation": _consensus_schema_field(default=False, nullable=False),
+        "use_gp_validation": _consensus_schema_field(default=False, nullable=False),
+        "gp_validation_requested": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "gp_validation_performed": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "trusted_candidate_count": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "candidate_count": _consensus_schema_field(default=None, nullable=True),
+        "consensus_generation_method": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "rejection_reasons": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "per_band_dominant_periods": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "per_band_dominant_frequencies": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "median_frequency": _consensus_schema_field(default=None, nullable=True),
+        "mad_frequency_scatter": _consensus_schema_field(default=None, nullable=True),
+        "consensus_inlier_bands": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "consensus_outlier_bands": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "final_consensus_frequency": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "final_consensus_period": _consensus_schema_field(default=None, nullable=True),
+        "robust_frequency_width": _consensus_schema_field(default=None, nullable=True),
+        "final_constraint_bounds": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "controls": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
+        ),
+        "mode": _consensus_schema_field(default=None, nullable=True),
+        "consensus_constraints_applied": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "consensus_constraint_bounds": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_constraint_target_key": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_scale_constraint_bounds": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_scale_constraint_target_key": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "default_constraints_applied_before_consensus": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "constraints_marked_set_after_consensus": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+    }
+)
+_CONSENSUS_TOP_LEVEL_SCHEMA = MappingProxyType(
+    {
+        "fields": _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS,
+        "required_keys": tuple(_CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS.keys()),
+        "deprecated_alias_fields": tuple(
+            key
+            for key, metadata in _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS.items()
+            if metadata["deprecated_alias"]
+        ),
+    }
+)
+
+_CONSENSUS_BAND_SCHEMA_FIELDS = MappingProxyType(
+    {
+        "band": _consensus_schema_field(default="", nullable=False),
+        "status": _consensus_schema_field(
+            default=_CONSENSUS_BAND_STATUS_PENDING,
+            nullable=False,
+            allowed_values=_CONSENSUS_ALLOWED_BAND_STATUSES_SORTED,
+        ),
+        "rejection_reason": _consensus_schema_field(default=None, nullable=True),
+        "rejection_reasons": _consensus_schema_field(
+            default_factory="list", nullable=False, container_type="list"
+        ),
+        "metrics": _consensus_schema_field(default=None, nullable=True),
+        "dominant_frequency": _consensus_schema_field(default=None, nullable=True),
+        "dominant_period": _consensus_schema_field(default=None, nullable=True),
+        "ls_significant": _consensus_schema_field(default=None, nullable=True),
+        "ls_peak_power": _consensus_schema_field(default=None, nullable=True),
+        "ls_peak_prominence": _consensus_schema_field(default=None, nullable=True),
+        "ls_peak_area_fraction": _consensus_schema_field(default=None, nullable=True),
+        "acf_frequency": _consensus_schema_field(default=None, nullable=True),
+        "acf_period": _consensus_schema_field(default=None, nullable=True),
+        "acf_supported": _consensus_schema_field(default=None, nullable=True),
+        "acf_comparison_status": _consensus_schema_field(
+            default=None,
+            nullable=True,
+            allowed_values=_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES_SORTED,
+        ),
+        "acf_period_ratio": _consensus_schema_field(default=None, nullable=True),
+        "acf_harmonic_order": _consensus_schema_field(default=None, nullable=True),
+        "acf_error": _consensus_schema_field(default=None, nullable=True),
+        "selected_from": _consensus_schema_field(default=None, nullable=True),
+        "gp_validation_used": _consensus_schema_field(default=False, nullable=False),
+        "gp_dominant_frequency": _consensus_schema_field(default=None, nullable=True),
+        "gp_dominant_period": _consensus_schema_field(default=None, nullable=True),
+        "gp_frequency_difference": _consensus_schema_field(default=None, nullable=True),
+        "gp_fractional_frequency_difference": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "gp_frequency_tolerance": _consensus_schema_field(default=None, nullable=True),
+        "gp_validation_error": _consensus_schema_field(default=None, nullable=True),
+        "gp_validation_status": _consensus_schema_field(
+            default=_CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED,
+            nullable=False,
+            allowed_values=_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED,
+        ),
+        "gp_validation_reason": _consensus_schema_field(
+            default=None,
+            nullable=True,
+            allowed_values=tuple(sorted(_CONSENSUS_ALLOWED_GP_VALIDATION_REASONS)),
+        ),
+    }
+)
+_CONSENSUS_BAND_SCHEMA = MappingProxyType(
+    {
+        "fields": _CONSENSUS_BAND_SCHEMA_FIELDS,
+        "required_keys": tuple(_CONSENSUS_BAND_SCHEMA_FIELDS.keys()),
+        "deprecated_alias_fields": tuple(),
+    }
+)
+
+# Required-key sets are derived from the canonical schema definitions.
+_CONSENSUS_REQUIRED_RESULT_KEYS = frozenset(
+    _CONSENSUS_TOP_LEVEL_SCHEMA["required_keys"]
+)
+_CONSENSUS_REQUIRED_BAND_KEYS = frozenset(_CONSENSUS_BAND_SCHEMA["required_keys"])
 
 
 def _reraise_with_note(e, note):
@@ -1692,16 +2189,102 @@ class PeriodSummaryResult:
             f"Cannot JSON-serialize object of type {type(obj).__name__}"
         )
 
-    def write_json(self, filename, include_psd=False):
+    def write_json(
+        self,
+        filename,
+        include_psd=False,
+        include_fit_history=False,
+        fit_history=None,
+    ):
+        """Write a JSON period summary with optional PSD and fit provenance."""
         d = self.as_dict()
         # Handle freq_grid/psd before general serialization: omit them
         # unless the caller explicitly requests PSD data.
         if not include_psd or d.get("freq_grid") is None:
             d = {**d, "freq_grid": None, "psd": None}
+        if include_fit_history:
+            d["fit_history"] = Lightcurve._sanitize_fit_history_value(
+                [] if fit_history is None else fit_history
+            )
         data = self._json_serialize(d)
         with open(filename, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, allow_nan=False)
 
+
+class FitFailureSummary:
+    """Lightweight structured summary for failed fit attempts."""
+
+    def __init__(self, status="failed", reason=None, message="", diagnostics=None):
+        self.status = status
+        self.reason = reason
+        self.message = message
+        self.diagnostics = dict(diagnostics or {})
+
+    def _json_serialize(self, obj):
+        if obj is None or isinstance(obj, (bool, str, int)):
+            return obj
+        if isinstance(obj, float):
+            return None if not math.isfinite(obj) else obj
+        if isinstance(obj, dict):
+            return {str(k): self._json_serialize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._json_serialize(item) for item in obj]
+        if isinstance(obj, np.ndarray):
+            return self._json_serialize(obj.tolist())
+        if isinstance(obj, np.floating):
+            scalar = obj.item()
+            return None if not math.isfinite(scalar) else scalar
+        if isinstance(obj, np.integer):
+            return obj.item()
+        raise TypeError(
+            f"Cannot JSON-serialize object of type {type(obj).__name__}"
+        )
+
+    def to_dict(self, include_fit_history=False, fit_history=None):
+        """Return a JSON-safe failure-summary dict with optional fit history."""
+        payload = {
+            "status": self.status,
+            "reason": self.reason,
+            "message": self.message,
+            "diagnostics": self.diagnostics,
+        }
+        if include_fit_history:
+            payload["fit_history"] = Lightcurve._sanitize_fit_history_value(
+                [] if fit_history is None else fit_history
+            )
+        return self._json_serialize(payload)
+
+    def to_text(self):
+        lines = [
+            "FIT FAILURE SUMMARY",
+            "===================",
+            f"Status : {self.status}",
+            f"Reason : {self.reason or 'N/A'}",
+            f"Message: {self.message or 'N/A'}",
+        ]
+        if self.diagnostics:
+            lines.append("Diagnostics:")
+            for key in sorted(self.diagnostics):
+                lines.append(f"  - {key}: {self.to_dict()['diagnostics'].get(key)}")
+        return "\n".join(lines)
+
+    def write_json(
+        self,
+        filename,
+        include_fit_history=False,
+        fit_history=None,
+    ):
+        """Write failure summary JSON with optional fit-history provenance."""
+        with open(filename, "w", encoding="utf-8") as fh:
+            json.dump(
+                self.to_dict(
+                    include_fit_history=include_fit_history,
+                    fit_history=fit_history,
+                ),
+                fh,
+                indent=2,
+                allow_nan=False,
+            )
 
 class Lightcurve(InputHelpers, gpytorch.Module):
     """A class for storing, manipulating and fitting light curves
@@ -1933,6 +2516,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.__PRIORS_SET = False
         self.__FITTED_MAP = False
         self.__FITTED_MCMC = False
+        self.is_fitted = False
+        self.fit_failed = False
+        self.failure_reason = None
+        self.failure_diagnostics = None
+        self.failure_summary = None
+        self.fit_history = []
 
         # ------------------------------------------------------------------
         # Sampling quality check
@@ -2731,6 +3320,2489 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             name=self.name,
             band=new_band,
         )
+
+    @staticmethod
+    def _sanitize_fit_history_value(value):
+        """Return a JSON-safe value for fit-history bookkeeping."""
+        return Lightcurve._consensus_make_json_safe(value)
+
+    @staticmethod
+    def _fit_configuration_safe_repr(value, *, max_length=240):
+        """Return a bounded repr/str fallback for fit-configuration display."""
+        try:
+            _text = repr(value)
+        except Exception:
+            try:
+                _text = str(value)
+            except Exception:
+                _type = type(value)
+                _text = f"<{_type.__module__}.{_type.__name__}>"
+        if not isinstance(_text, str):
+            try:
+                _text = str(_text)
+            except Exception:
+                _text = "<unrepresentable>"
+        if len(_text) > max_length:
+            return _text[: max_length - 3] + "..."
+        return _text
+
+    @staticmethod
+    def _fit_configuration_make_unserializable_placeholder(
+        value,
+        *,
+        type_name=None,
+        module_name=None,
+        repr_text=None,
+        extra_fields=None,
+    ):
+        """Return an explicit placeholder for unsupported fit-config objects."""
+        _type = type(value)
+        _placeholder = {
+            "__unserializable__": True,
+            "type": type_name or _type.__name__,
+            "module": module_name or _type.__module__,
+            "repr": repr_text
+            if repr_text is not None
+            else Lightcurve._fit_configuration_safe_repr(value),
+        }
+        if isinstance(extra_fields, dict):
+            for _key, _val in extra_fields.items():
+                if _val is not None:
+                    _placeholder[_key] = _val
+        return _placeholder
+
+    @staticmethod
+    def _fit_configuration_make_truncation_marker(type_name, **metadata):
+        """Return a structured truncation marker for large/deep values."""
+        _marker = {
+            "__truncated__": True,
+            "type": type_name,
+        }
+        for _key, _val in metadata.items():
+            if _val is not None:
+                _marker[_key] = _val
+        return _marker
+
+    @staticmethod
+    def _fit_configuration_sort_key(value):
+        """Return a deterministic ordering key for unordered containers."""
+        _type = type(value)
+        return (
+            f"{_type.__module__}.{_type.__name__}:"
+            f"{Lightcurve._fit_configuration_safe_repr(value, max_length=120)}"
+        )
+
+    @staticmethod
+    def _sanitize_fit_configuration_value(
+        value,
+        *,
+        max_items=20,
+        max_string_length=240,
+        max_depth=8,
+        _depth=0,
+        _seen=None,
+    ):
+        """Return a compact, JSON-safe representation of a fit-configuration value.
+
+        Fit-configuration snapshots are stored inside fit-history entries and
+        are intended to be serializable (via ``json.dumps``), portable across
+        processes, and compact enough to display in a notebook.  Raw Python
+        objects fail these requirements in several ways:
+
+        * **Tensors and arrays** hold large numerical payloads that should not
+          be stored verbatim; they also contain device/dtype metadata that is
+          not JSON-native.  Arrays up to ``max_items`` elements are expanded;
+          larger ones are replaced by a summary dict with a ``"preview"`` list.
+        * **Classes, callables, and opaque runtime objects** are
+          environment-specific references that cannot be round-tripped through
+          JSON; they are replaced by explicit placeholder dicts so downstream
+          tooling can detect them.
+        * **Constraint / prior objects** from gpytorch / pyro carry internal
+          state that is non-serializable; they are reduced to readable,
+          structured summaries instead of raw repr dumps.
+        * **Non-finite floats** (NaN, ±Inf) are not valid JSON values and are
+          converted to explicit marker dicts rather than leaking through.
+        * **Circular references** would cause infinite recursion and are
+          detected via an identity set; they are replaced by a sentinel string.
+        * **Sets and tuples** are converted to JSON arrays (lists), with sets
+          sorted deterministically.
+
+        The output is deterministic for a given input type: the same Python
+        type always produces the same JSON-safe representation.
+
+        This sanitizer is intentionally stricter than the general
+        ``_sanitize_fit_history_value`` helper: fit-configuration snapshots
+        must remain compact and human-readable, not just technically safe.
+
+        Parameters
+        ----------
+        value : object
+            The value to sanitize.  Any Python object is accepted.
+        max_items : int, optional
+            Maximum number of elements to expand for sequences, dicts,
+            arrays, and tensors before switching to a summary representation.
+            Defaults to 20.
+        _depth : int, optional
+            Internal recursion-depth guard.  Do not pass from user code.
+        _seen : set or None, optional
+            Internal identity-set for circular-reference detection.
+            Do not pass from user code.
+
+        Returns
+        -------
+        bool | int | str | float | list | dict | None
+            A JSON-safe value.  Scalars remain scalars where possible; large
+            strings and containers become explicit truncation markers; opaque
+            unsupported objects become explicit placeholder dicts.
+        """
+        if _seen is None:
+            _seen = set()
+        if _depth > max_depth:
+            return Lightcurve._fit_configuration_make_truncation_marker(
+                type(value).__name__,
+                reason="max_depth",
+                max_depth=max_depth,
+            )
+        _added_to_seen = False
+        try:
+            if value is None:
+                return None
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                if len(value) <= max_string_length:
+                    return value
+                return Lightcurve._fit_configuration_make_truncation_marker(
+                    "str",
+                    length=len(value),
+                    preview=value[:max_string_length],
+                    truncated_chars=len(value) - max_string_length,
+                )
+            if isinstance(value, float):
+                if math.isfinite(value):
+                    return value
+                if math.isnan(value):
+                    _value_name = "nan"
+                elif value > 0:
+                    _value_name = "inf"
+                else:
+                    _value_name = "-inf"
+                return {
+                    "__non_finite__": True,
+                    "value": _value_name,
+                }
+            if isinstance(value, np.generic):
+                return Lightcurve._sanitize_fit_configuration_value(
+                    value.item(),
+                    max_items=max_items,
+                    max_string_length=max_string_length,
+                    max_depth=max_depth,
+                    _depth=_depth + 1,
+                    _seen=_seen,
+                )
+            if isinstance(value, Path):
+                return str(value)
+            if isinstance(value, enum.Enum):
+                return f"{type(value).__name__}.{value.name}"
+            if (
+                type(value).__module__ == "torch"
+                and type(value).__name__ in {"device", "dtype"}
+            ):
+                return str(value)
+            if isinstance(value, Interval):
+                return {
+                    "type": type(value).__name__,
+                    "module": type(value).__module__,
+                    "lower": Lightcurve._sanitize_fit_configuration_value(
+                        value.lower_bound,
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    ),
+                    "upper": Lightcurve._sanitize_fit_configuration_value(
+                        value.upper_bound,
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    ),
+                }
+            if isinstance(value, gpytorch.priors.Prior):
+                return {
+                    "type": type(value).__name__,
+                    "module": type(value).__module__,
+                    "repr": Lightcurve._fit_configuration_safe_repr(value),
+                }
+            if dataclasses.is_dataclass(value) and not isinstance(value, type):
+                try:
+                    _fields = dataclasses.asdict(value)
+                except Exception:
+                    return (
+                        Lightcurve._fit_configuration_make_unserializable_placeholder(
+                            value
+                        )
+                    )
+                return {
+                    "type": type(value).__name__,
+                    "module": type(value).__module__,
+                    "fields": Lightcurve._sanitize_fit_configuration_value(
+                        _fields,
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    ),
+                }
+
+            _obj_id = id(value)
+            if _obj_id in _seen:
+                return Lightcurve._fit_configuration_make_truncation_marker(
+                    type(value).__name__,
+                    reason="recursive_reference",
+                )
+            if isinstance(value, dict | list | tuple | set | np.ndarray) or (
+                torch.is_tensor(value)
+            ):
+                _seen.add(_obj_id)
+                _added_to_seen = True
+
+            if isinstance(value, np.ndarray):
+                _size = int(value.size)
+                if _size <= max_items:
+                    return Lightcurve._sanitize_fit_configuration_value(
+                        value.tolist(),
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                _flat_preview = value.reshape(-1)[:max_items].tolist()
+                return {
+                    "__truncated__": True,
+                    "type": "ndarray",
+                    "dtype": str(value.dtype),
+                    "shape": list(value.shape),
+                    "size": _size,
+                    "preview": [
+                        Lightcurve._sanitize_fit_configuration_value(
+                            v,
+                            max_items=max_items,
+                            max_string_length=max_string_length,
+                            max_depth=max_depth,
+                            _depth=_depth + 1,
+                            _seen=_seen,
+                        )
+                        for v in _flat_preview
+                    ],
+                    "truncated_items": max(_size - max_items, 0),
+                }
+
+            if torch.is_tensor(value):
+                _numel = int(value.numel())
+                if _numel == 1:
+                    return Lightcurve._sanitize_fit_configuration_value(
+                        value.item(),
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                if _numel <= max_items:
+                    return Lightcurve._sanitize_fit_configuration_value(
+                        value.detach().cpu().tolist(),
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                _flat_preview = value.detach().cpu().reshape(-1)[:max_items].tolist()
+                return {
+                    "__truncated__": True,
+                    "type": "tensor",
+                    "dtype": str(value.dtype),
+                    "shape": list(value.shape),
+                    "numel": _numel,
+                    "device": str(value.device),
+                    "preview": [
+                        Lightcurve._sanitize_fit_configuration_value(
+                            v,
+                            max_items=max_items,
+                            max_string_length=max_string_length,
+                            max_depth=max_depth,
+                            _depth=_depth + 1,
+                            _seen=_seen,
+                        )
+                        for v in _flat_preview
+                    ],
+                    "truncated_items": max(_numel - max_items, 0),
+                }
+
+            if isinstance(value, dict):
+                _items = sorted(value.items(), key=lambda item: str(item[0]))
+                _truncated = _depth > 0 and len(_items) > max_items
+                if _truncated:
+                    _items = _items[:max_items]
+                _out = {
+                    str(k): Lightcurve._sanitize_fit_configuration_value(
+                        v,
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                    for k, v in _items
+                }
+                if _truncated:
+                    return Lightcurve._fit_configuration_make_truncation_marker(
+                        "dict",
+                        length=len(value),
+                        preview=_out,
+                        truncated_items=int(len(value) - max_items),
+                    )
+                return _out
+
+            if isinstance(value, list | tuple | set):
+                _seq = list(value)
+                if isinstance(value, set):
+                    _seq = sorted(_seq, key=Lightcurve._fit_configuration_sort_key)
+                _truncated = len(_seq) > max_items
+                _seq = _seq[:max_items] if _truncated else _seq
+                _out = [
+                    Lightcurve._sanitize_fit_configuration_value(
+                        v,
+                        max_items=max_items,
+                        max_string_length=max_string_length,
+                        max_depth=max_depth,
+                        _depth=_depth + 1,
+                        _seen=_seen,
+                    )
+                    for v in _seq
+                ]
+                if _truncated:
+                    return Lightcurve._fit_configuration_make_truncation_marker(
+                        type(value).__name__,
+                        length=len(value),
+                        preview=_out,
+                        truncated_items=int(len(value) - max_items),
+                    )
+                return _out
+
+            if isinstance(value, type):
+                return Lightcurve._fit_configuration_make_unserializable_placeholder(
+                    value,
+                    type_name="type",
+                    module_name=getattr(value, "__module__", type(value).__module__),
+                    extra_fields={
+                        "qualname": getattr(value, "__qualname__", None),
+                    },
+                )
+            if callable(value):
+                return Lightcurve._fit_configuration_make_unserializable_placeholder(
+                    value,
+                    type_name="callable",
+                    module_name=getattr(value, "__module__", type(value).__module__),
+                    extra_fields={
+                        "qualname": getattr(value, "__qualname__", None)
+                        or getattr(value, "__name__", None),
+                    },
+                )
+        except Exception:
+            return Lightcurve._fit_configuration_make_unserializable_placeholder(
+                value
+            )
+        finally:
+            if _added_to_seen:
+                _seen.discard(_obj_id)
+
+        return Lightcurve._fit_configuration_make_unserializable_placeholder(value)
+
+    @staticmethod
+    def _collect_fit_configuration_snapshot(
+        *,
+        fit_kwargs=None,
+        context=None,
+    ):
+        """Return a compact, JSON-safe reproducibility snapshot for a fit call.
+
+        This helper is called once per outermost :meth:`fit` invocation,
+        before GP training begins, and the result is stored in the fit-history
+        entry under the ``"fit_configuration"`` key.  It is intentionally
+        best-effort: all exceptions are caught so that history recording is
+        never blocked by serialization failures.
+
+        Data sources
+        ------------
+        The snapshot draws from two sources:
+
+        * **fit_kwargs** — the raw keyword arguments passed by the user to
+          :meth:`fit`.  These capture what the user explicitly requested.
+        * **context** — normalized/resolved values computed by :meth:`fit`
+          before training begins.  These reflect what the code will actually
+          use (e.g. a resolved model class name rather than the raw ``"model"``
+          shorthand string the user passed).
+
+        When both sources contain a value for the same concept, ``context``
+        takes precedence because it holds the authoritative internal value.
+
+        The distinction matters for auditing: ``user_kwargs`` stores what the
+        caller wrote; all other fields store what the library understood.
+
+        Parameters
+        ----------
+        fit_kwargs : dict, optional
+            The raw ``**kwargs`` dict passed to :meth:`fit`.
+        context : dict, optional
+            Normalized / resolved values assembled by :meth:`fit` before
+            calling :meth:`_fit_core` (e.g. resolved model class name,
+            resolved training_iter, resolved backend string).
+
+        Returns
+        -------
+        dict or None
+            A JSON-safe snapshot dict (see schema below), or ``None`` if
+            all recovery paths fail.
+        """
+        # ----------------------------------------------------------------
+        # Schema of the returned dictionary
+        # ----------------------------------------------------------------
+        # The snapshot is a flat dict.  All values are JSON-safe after the
+        # final _sanitize_fit_configuration_value pass.  Unresolvable values
+        # are None.
+        #
+        # {
+        #   "fit_strategy"    : str | None  — routing key ("standard", …)
+        #   "model_class"     : str | None  — resolved class name, NOT the
+        #                                     raw "model" kwarg the user passed
+        #   "backend"         : str | None  — "cpu" or "cuda"
+        #   "training_iter"   : int | None
+        #   "learning_rate"   : float | None
+        #   "optimizer"       : str | None  — callable reduced to its name
+        #   "num_mixtures"    : int | None
+        #   "use_best_band_init" : bool | None
+        #   "use_gp_validation"  : bool | None
+        #   "constraint_set"  : str | None  — human-readable label
+        #   "prior_set"       : str | None
+        #   "max_samples"     : int | None
+        #   "max_samples_per_band" : int | None
+        #   "min_period"      : float | None
+        #   "max_period"      : float | None
+        #   "frequency_bounds": [min, max] | None  — from explicit kwarg or
+        #                        assembled from min_frequency/max_frequency
+        #   "period_bounds"   : [min, max] | None
+        #   "wavelength_bounds": [min, max] | None
+        #   "xtransform"      : str | None
+        #   "ytransform"      : str | None
+        #   "normalize"       : bool | None
+        #   "detrend"         : bool | None
+        #   "consensus_configuration" : dict | None  (non-None only if any
+        #       consensus kwarg was set); contains: constrain_consensus,
+        #       consensus_method, consensus_sigma_clip, consensus_sigma,
+        #       consensus_tolerance, consensus_max_harmonic,
+        #       min_consensus_inliers, use_gp_validation
+        #   "min_consensus_inliers" : int | None
+        #   "outlier_thresholds" : dict | None  (non-None only if any outlier
+        #       kwarg was set); contains: outlier_sigma_threshold,
+        #       outlier_threshold, max_outlier_fraction
+        #   "random_initialization_flags" : dict | None  (non-None only if
+        #       any init-randomness kwarg was set); contains: use_mls_init,
+        #       use_best_band_init, random_init, use_random_init,
+        #       randomize_initialization
+        #   "user_kwargs"     : dict | None  — raw user kwargs that do not
+        #       map to any canonical key above; sanitized but otherwise
+        #       uninterpreted; MUST NOT be used for logic
+        # }
+        #
+        # MUST NOT appear here: raw tensors, ndarrays, callables, live GP
+        # objects, non-finite floats.  Enforced by the final sanitization
+        # pass below.
+        # ----------------------------------------------------------------
+        _snapshot = {
+            "fit_strategy": None,
+            "model_class": None,
+            "backend": None,
+            "training_iter": None,
+            "learning_rate": None,
+            "optimizer": None,
+            "num_mixtures": None,
+            "use_best_band_init": None,
+            "use_gp_validation": None,
+            "constraint_set": None,
+            "prior_set": None,
+            "max_samples": None,
+            "max_samples_per_band": None,
+            "min_period": None,
+            "max_period": None,
+            "frequency_bounds": None,
+            "period_bounds": None,
+            "wavelength_bounds": None,
+            "xtransform": None,
+            "ytransform": None,
+            "normalize": None,
+            "detrend": None,
+            "consensus_configuration": None,
+            "outlier_thresholds": None,
+            "min_consensus_inliers": None,
+            "random_initialization_flags": None,
+            "user_kwargs": None,
+        }
+
+        try:
+            _kwargs = fit_kwargs if isinstance(fit_kwargs, dict) else {}
+            _context = context if isinstance(context, dict) else {}
+            _resolved = {**_kwargs, **_context}
+
+            def _pick(*keys):
+                for _k in keys:
+                    if _k in _resolved and _resolved[_k] is not None:
+                        return _resolved[_k]
+                return None
+
+            _model_value = _pick("model_class", "model")
+            if _model_value is not None:
+                if isinstance(_model_value, str):
+                    _snapshot["model_class"] = _model_value
+                else:
+                    _snapshot["model_class"] = _model_value.__class__.__name__
+
+            _backend = _pick("backend")
+            if _backend is None and "cuda" in _resolved:
+                _backend = "cuda" if bool(_resolved.get("cuda")) else "cpu"
+            _snapshot["backend"] = _backend
+
+            _snapshot["fit_strategy"] = _pick("fit_strategy")
+            _snapshot["training_iter"] = _pick("training_iter")
+            _snapshot["learning_rate"] = _pick("learning_rate", "lr")
+            _snapshot["optimizer"] = _pick("optimizer", "optim")
+            _snapshot["num_mixtures"] = _pick("num_mixtures")
+            _snapshot["use_best_band_init"] = _pick("use_best_band_init")
+            _snapshot["use_gp_validation"] = _pick("use_gp_validation")
+            _snapshot["constraint_set"] = _pick("constraint_set")
+            _snapshot["prior_set"] = _pick("prior_set")
+            _snapshot["max_samples"] = _pick("max_samples")
+            _snapshot["max_samples_per_band"] = _pick("max_samples_per_band")
+            _snapshot["min_period"] = _pick("min_period")
+            _snapshot["max_period"] = _pick("max_period")
+            _snapshot["xtransform"] = _pick("xtransform")
+            _snapshot["ytransform"] = _pick("ytransform")
+            _snapshot["normalize"] = _pick("normalize")
+            _snapshot["detrend"] = _pick("detrend")
+            _snapshot["min_consensus_inliers"] = _pick("min_consensus_inliers")
+
+            _freq_bounds = _pick("frequency_bounds")
+            if _freq_bounds is None:
+                _min_freq = _pick("min_frequency", "min_freq")
+                _max_freq = _pick("max_frequency", "max_freq")
+                if _min_freq is not None or _max_freq is not None:
+                    _freq_bounds = [_min_freq, _max_freq]
+            _snapshot["frequency_bounds"] = _freq_bounds
+
+            _period_bounds = _pick("period_bounds")
+            if _period_bounds is None:
+                _min_period = _pick("min_period")
+                _max_period = _pick("max_period")
+                if _min_period is not None or _max_period is not None:
+                    _period_bounds = [_min_period, _max_period]
+            _snapshot["period_bounds"] = _period_bounds
+
+            _wavelength_bounds = _pick("wavelength_bounds")
+            if _wavelength_bounds is None:
+                _min_w = _pick("min_wavelength", "min_lambda")
+                _max_w = _pick("max_wavelength", "max_lambda")
+                if _min_w is not None or _max_w is not None:
+                    _wavelength_bounds = [_min_w, _max_w]
+            _snapshot["wavelength_bounds"] = _wavelength_bounds
+
+            _consensus_config_keys = [
+                "constrain_consensus",
+                "consensus_method",
+                "consensus_sigma_clip",
+                "consensus_sigma",
+                "consensus_tolerance",
+                "consensus_max_harmonic",
+                "min_consensus_inliers",
+                "use_gp_validation",
+            ]
+            _consensus_configuration = {
+                _k: _resolved.get(_k) for _k in _consensus_config_keys
+            }
+            if any(_v is not None for _v in _consensus_configuration.values()):
+                _snapshot["consensus_configuration"] = _consensus_configuration
+
+            _outlier_threshold_keys = [
+                "outlier_sigma_threshold",
+                "outlier_threshold",
+                "max_outlier_fraction",
+            ]
+            _outlier_thresholds = {
+                _k: _resolved.get(_k) for _k in _outlier_threshold_keys
+            }
+            if any(_v is not None for _v in _outlier_thresholds.values()):
+                _snapshot["outlier_thresholds"] = _outlier_thresholds
+
+            _random_init_keys = [
+                "use_mls_init",
+                "use_best_band_init",
+                "random_init",
+                "use_random_init",
+                "randomize_initialization",
+            ]
+            _random_flags = {_k: _resolved.get(_k) for _k in _random_init_keys}
+            if any(_v is not None for _v in _random_flags.values()):
+                _snapshot["random_initialization_flags"] = _random_flags
+
+            _canonical_keys = set(_snapshot).union(
+                {
+                    "model",
+                    "cuda",
+                    "lr",
+                    "optim",
+                    "min_frequency",
+                    "max_frequency",
+                    "min_freq",
+                    "max_freq",
+                    "min_wavelength",
+                    "max_wavelength",
+                    "min_lambda",
+                    "max_lambda",
+                }
+            )
+            _user_kwargs = {
+                _k: _v for _k, _v in _kwargs.items() if _k not in _canonical_keys
+            }
+            _snapshot["user_kwargs"] = _user_kwargs if _user_kwargs else None
+        except Exception:
+            pass
+
+        try:
+            return Lightcurve._sanitize_fit_configuration_value(_snapshot)
+        except Exception:
+            try:
+                return {
+                    _k: Lightcurve._sanitize_fit_configuration_value(_v)
+                    for _k, _v in _snapshot.items()
+                }
+            except Exception:
+                return None
+
+    @staticmethod
+    def _validate_fit_configuration_snapshot(snapshot):
+        """Raise if the fit-configuration snapshot is not safe to store.
+
+        This is a lightweight defensive check applied after
+        :meth:`_collect_fit_configuration_snapshot` produces a snapshot and
+        before it is embedded in a fit-history entry.  It is not a full schema
+        validator; its purpose is to catch gross serialization failures early
+        so that bugs surface as loud errors during development rather than
+        silent corruption of history records.
+
+        In production code the caller wraps this in a ``try/except`` so that
+        a validation failure never prevents history from being recorded.
+
+        Checks performed
+        ----------------
+        1. The snapshot is a non-empty ``dict``.
+        2. A minimum set of required top-level keys is present.
+        3. No raw tensors, ndarrays, non-finite floats, or callable objects
+           remain anywhere in the nested structure.
+        4. The snapshot is JSON-serializable via ``json.dumps(..., allow_nan=False)``.
+        5. Explicit warnings are emitted for placeholder objects, truncation
+           markers, non-finite replacements, and unusually deep nesting.
+
+        Parameters
+        ----------
+        snapshot : object
+            The value returned by
+            :meth:`_collect_fit_configuration_snapshot`.
+
+        Raises
+        ------
+        TypeError
+            If ``snapshot`` is not a dict.
+        RuntimeError
+            If required keys are absent, prohibited types are found, or the
+            snapshot is not JSON-serializable.
+        """
+        _REQUIRED_KEYS = frozenset(
+            {
+                "fit_strategy",
+                "model_class",
+                "training_iter",
+                "backend",
+                "user_kwargs",
+            }
+        )
+        if not isinstance(snapshot, dict):
+            raise TypeError(
+                f"fit_configuration snapshot must be a dict, "
+                f"got {type(snapshot).__name__!r}"
+            )
+        _missing = _REQUIRED_KEYS - snapshot.keys()
+        if _missing:
+            raise RuntimeError(
+                f"fit_configuration snapshot is missing required keys: "
+                f"{sorted(_missing)}"
+            )
+
+        def _warn(message):
+            warnings.warn(message, UserWarning, stacklevel=2)
+
+        def _walk(value, path="fit_configuration", depth=0):
+            if torch.is_tensor(value):
+                raise RuntimeError(
+                    f"fit_configuration snapshot contains a raw tensor at "
+                    f"{path}; sanitize first"
+                )
+            if isinstance(value, np.ndarray):
+                raise RuntimeError(
+                    f"fit_configuration snapshot contains a raw ndarray at "
+                    f"{path}; sanitize first"
+                )
+            if callable(value):
+                raise RuntimeError(
+                    f"fit_configuration snapshot contains a callable at "
+                    f"{path}; store a structured placeholder instead"
+                )
+            if isinstance(value, float) and not math.isfinite(value):
+                raise RuntimeError(
+                    f"fit_configuration snapshot contains a non-finite float at "
+                    f"{path}; sanitize first"
+                )
+            if depth == 7 and isinstance(value, dict | list):
+                _warn(
+                    "fit_configuration snapshot is deeply nested at "
+                    f"{path}; review whether this structure is scientifically "
+                    "necessary for provenance."
+                )
+            if isinstance(value, dict):
+                if value.get("__unserializable__") is True:
+                    _warn(
+                        "fit_configuration snapshot contains an unsupported "
+                        f"object placeholder at {path} "
+                        f"({value.get('module')}.{value.get('type')})."
+                    )
+                if value.get("__truncated__") is True:
+                    _warn(
+                        "fit_configuration snapshot contains truncated data at "
+                        f"{path} ({value.get('type')})."
+                    )
+                if value.get("__non_finite__") is True:
+                    _warn(
+                        "fit_configuration snapshot replaced a non-finite value "
+                        f"at {path} ({value.get('value')})."
+                    )
+                for _key, _val in value.items():
+                    _child_path = f"{path}.{_key}"
+                    _walk(_val, path=_child_path, depth=depth + 1)
+                return
+            if isinstance(value, list):
+                for _idx, _val in enumerate(value):
+                    _walk(_val, path=f"{path}[{_idx}]", depth=depth + 1)
+
+        _walk(snapshot)
+        try:
+            json.dumps(snapshot, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"fit_configuration snapshot is not JSON-serializable: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _fit_history_package_directory():
+        """Return the installed package directory used for provenance lookup."""
+        try:
+            return Path(__file__).resolve().parent
+        except Exception:
+            return None
+
+    @staticmethod
+    def _collect_git_provenance():
+        """Return best-effort git provenance for the installed package."""
+        provenance = {
+            "git_commit_hash": None,
+            "git_branch": None,
+            "git_dirty_worktree": None,
+            "git_remote_url": None,
+        }
+
+        def _run_git_command(args, cwd):
+            try:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=str(cwd),
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                    check=False,
+                )
+            except Exception:
+                return None
+            if result.returncode != 0:
+                return None
+            return result.stdout.strip() or None
+
+        try:
+            package_dir = Lightcurve._fit_history_package_directory()
+            if package_dir is None:
+                return provenance
+
+            repo_root = _run_git_command(["rev-parse", "--show-toplevel"], package_dir)
+            if repo_root is None:
+                return provenance
+
+            repo_root_path = Path(repo_root)
+            provenance["git_commit_hash"] = _run_git_command(
+                ["rev-parse", "HEAD"],
+                repo_root_path,
+            )
+            provenance["git_branch"] = _run_git_command(
+                ["rev-parse", "--abbrev-ref", "HEAD"],
+                repo_root_path,
+            )
+            _dirty = _run_git_command(
+                ["status", "--porcelain"],
+                repo_root_path,
+            )
+            provenance["git_dirty_worktree"] = (
+                bool(_dirty) if _dirty is not None else None
+            )
+            provenance["git_remote_url"] = _run_git_command(
+                ["config", "--get", "remote.origin.url"],
+                repo_root_path,
+            )
+        except Exception:
+            return provenance
+        return provenance
+
+    @staticmethod
+    def _collect_rng_provenance():
+        """Return best-effort RNG-state and determinism provenance.
+
+        Canonical field names:
+        ``numpy_rng_state_token``, ``python_rng_state_token``,
+        and ``torch_initial_seed``.
+
+        Backward-compatible aliases:
+        ``numpy_random_seed``, ``python_random_seed``,
+        and ``torch_random_seed``.
+
+        NumPy and Python's stdlib random module do not generally expose the
+        original user-provided seed once the RNG has advanced, so the NumPy and
+        Python values recorded here are current RNG-state tokens rather than
+        guaranteed original seeds.
+        """
+        provenance = {
+            "numpy_rng_state_token": None,
+            "numpy_random_seed": None,
+            "torch_initial_seed": None,
+            "torch_random_seed": None,
+            "python_rng_state_token": None,
+            "python_random_seed": None,
+            "torch_deterministic_algorithms": None,
+            "torch_cudnn_deterministic": None,
+            "torch_cudnn_benchmark": None,
+        }
+
+        try:
+            _np_state = np.random.get_state()
+            if len(_np_state) > 1 and len(_np_state[1]) > 0:
+                _numpy_state_token = int(_np_state[1][0])
+                provenance["numpy_rng_state_token"] = _numpy_state_token
+                provenance["numpy_random_seed"] = _numpy_state_token
+        except Exception:
+            pass
+
+        try:
+            _py_state = random.getstate()
+            if len(_py_state) > 1 and len(_py_state[1]) > 0:
+                _python_state_token = int(_py_state[1][0])
+                provenance["python_rng_state_token"] = _python_state_token
+                provenance["python_random_seed"] = _python_state_token
+        except Exception:
+            pass
+
+        try:
+            _torch_initial_seed = int(torch.initial_seed())
+            provenance["torch_initial_seed"] = _torch_initial_seed
+            provenance["torch_random_seed"] = _torch_initial_seed
+        except Exception:
+            pass
+
+        try:
+            provenance["torch_deterministic_algorithms"] = bool(
+                torch.are_deterministic_algorithms_enabled()
+            )
+        except Exception:
+            pass
+
+        try:
+            provenance["torch_cudnn_deterministic"] = bool(
+                torch.backends.cudnn.deterministic
+            )
+        except Exception:
+            pass
+
+        try:
+            provenance["torch_cudnn_benchmark"] = bool(torch.backends.cudnn.benchmark)
+        except Exception:
+            pass
+
+        return provenance
+
+    @staticmethod
+    def _collect_environment_provenance():
+        """Return consolidated environment provenance for fit-history entries."""
+        env = {"python_version": sys.version.split()[0]}
+        try:
+            from . import __version__ as _pgmuvi_version
+        except Exception:
+            _pgmuvi_version = None
+        env["pgmuvi_version"] = _pgmuvi_version
+
+        if "torch" in globals():
+            env["torch_version"] = getattr(torch, "__version__", None)
+        else:
+            env["torch_version"] = None
+
+        if "gpytorch" in globals():
+            env["gpytorch_version"] = getattr(gpytorch, "__version__", None)
+        else:
+            env["gpytorch_version"] = None
+
+        env["git"] = Lightcurve._collect_git_provenance()
+        env["rng"] = Lightcurve._collect_rng_provenance()
+        return env
+
+    @staticmethod
+    def _fit_history_environment_metadata():
+        """Return lightweight environment provenance for fit-history entries."""
+        return Lightcurve._sanitize_fit_history_value(
+            Lightcurve._collect_environment_provenance()
+        )
+
+    def _append_fit_history(
+        self,
+        *,
+        timestamp_utc=None,
+        model_class=None,
+        fit_strategy=None,
+        success=None,
+        failed=None,
+        exception_type=None,
+        exception_message=None,
+        training_iter=None,
+        num_mixtures=None,
+        elapsed_seconds=None,
+        backend=None,
+        constrained=None,
+        constrained_fit=None,
+        constraint_set=None,
+        bands=None,
+        uses_frequency_space=None,
+        uses_period_space=None,
+        fit_configuration=None,
+        environment=None,
+        notes=None,
+    ):
+        """Append a JSON-safe fit-history entry.
+
+        This helper is intentionally defensive and must never raise.
+
+        Parameters
+        ----------
+        bands : list of str, optional
+            Unique band labels present in the lightcurve at fit time.
+        constrained_fit : bool, optional
+            Explicit flag for whether the fit used a constraint set.
+            If not provided, falls back to ``constrained``.
+        constraint_set : str, optional
+            Name or description of the constraint set used, if any.
+        uses_frequency_space : bool, optional
+            Whether the model is parameterized in frequency space.
+        uses_period_space : bool, optional
+            Whether the model is parameterized in period space.
+        """
+        try:
+            if not hasattr(self, "fit_history") or not isinstance(
+                self.fit_history, list
+            ):
+                self.fit_history = []
+
+            _context = getattr(self, "_fit_history_context", {})
+            if not isinstance(_context, dict):
+                _context = {}
+
+            if timestamp_utc is None:
+                timestamp_utc = datetime.datetime.now(
+                    datetime.UTC
+                ).isoformat()
+
+            _constrained_resolved = (
+                constrained
+                if constrained is not None
+                else _context.get("constrained")
+            )
+            # constrained_fit is a structured alias for constrained, falling
+            # back to the ``constrained`` value if not explicitly provided.
+            _constrained_fit_resolved = (
+                constrained_fit
+                if constrained_fit is not None
+                else _context.get("constrained_fit", _constrained_resolved)
+            )
+
+            _entry = {
+                "fit_history_schema_version": _FIT_HISTORY_SCHEMA_VERSION,
+                "timestamp_utc": timestamp_utc,
+                "model_class": (
+                    model_class
+                    if model_class is not None
+                    else _context.get("model_class")
+                ),
+                "fit_strategy": (
+                    fit_strategy
+                    if fit_strategy is not None
+                    else _context.get("fit_strategy")
+                ),
+                "success": success,
+                "failed": failed,
+                "exception_type": exception_type,
+                "exception_message": exception_message,
+                "training_iter": (
+                    training_iter
+                    if training_iter is not None
+                    else _context.get("training_iter")
+                ),
+                "num_mixtures": (
+                    num_mixtures
+                    if num_mixtures is not None
+                    else _context.get("num_mixtures")
+                ),
+                "elapsed_seconds": elapsed_seconds,
+                "backend": (
+                    backend if backend is not None else _context.get("backend")
+                ),
+                "constrained": _constrained_resolved,
+                "constrained_fit": _constrained_fit_resolved,
+                "constraint_set": (
+                    constraint_set
+                    if constraint_set is not None
+                    else _context.get("constraint_set")
+                ),
+                "bands": (
+                    bands if bands is not None else _context.get("bands")
+                ),
+                "uses_frequency_space": (
+                    uses_frequency_space
+                    if uses_frequency_space is not None
+                    else _context.get("uses_frequency_space")
+                ),
+                "uses_period_space": (
+                    uses_period_space
+                    if uses_period_space is not None
+                    else _context.get("uses_period_space")
+                ),
+                "fit_configuration": (
+                    fit_configuration
+                    if fit_configuration is not None
+                    else _context.get("fit_configuration")
+                ),
+                "environment": (
+                    environment
+                    if environment is not None
+                    else _context.get(
+                        "environment", self._fit_history_environment_metadata()
+                    )
+                ),
+                "notes": notes,
+            }
+
+            _entry = {
+                key: self._sanitize_fit_history_value(val)
+                for key, val in _entry.items()
+            }
+            self._validate_fit_history_entry(_entry)
+            self.fit_history.append(_entry)
+        except Exception:
+            return
+
+    @staticmethod
+    def _validate_fit_history_entry(entry):
+        """Sanitize a fit-history entry dict in-place; never raises.
+
+        Coerces field values to the expected types when possible.  Invalid
+        values are replaced conservatively (``None`` or empty list) rather
+        than raising.  This lets manually constructed or legacy entries be
+        consumed safely by :meth:`get_fit_history_summary`.
+
+        Parameters
+        ----------
+        entry : dict
+            A fit-history record to sanitize.
+
+        Returns
+        -------
+        dict
+            The same dict, mutated in-place and returned.
+        """
+        if not isinstance(entry, dict):
+            return entry
+        try:
+            # elapsed_seconds: must be a finite float or None.
+            _elapsed = entry.get("elapsed_seconds")
+            if _elapsed is not None:
+                try:
+                    _f = float(_elapsed)
+                    entry["elapsed_seconds"] = (
+                        None if not math.isfinite(_f) else _f
+                    )
+                except (TypeError, ValueError):
+                    entry["elapsed_seconds"] = None
+
+            # constrained_fit: coerce truthy/falsy values to bool.
+            _cf = entry.get("constrained_fit")
+            if _cf is not None and not isinstance(_cf, bool):
+                try:
+                    entry["constrained_fit"] = bool(_cf)
+                except (TypeError, ValueError):
+                    entry["constrained_fit"] = None
+
+            # bands: normalize to a list of unique strings (insertion order).
+            _bands = entry.get("bands")
+            if _bands is not None:
+                if not isinstance(_bands, list):
+                    try:
+                        _bands = list(_bands)
+                    except (TypeError, ValueError):
+                        _bands = []
+                _seen: set[str] = set()
+                _normalized: list[str] = []
+                for _b in _bands:
+                    try:
+                        _bs = str(_b)
+                        if _bs not in _seen:
+                            _seen.add(_bs)
+                            _normalized.append(_bs)
+                    except Exception:
+                        pass
+                entry["bands"] = _normalized
+
+            # timestamp_utc: coerce to string if not already one.
+            _ts = entry.get("timestamp_utc")
+            if _ts is not None and not isinstance(_ts, str):
+                try:
+                    entry["timestamp_utc"] = str(_ts)
+                except Exception:
+                    entry["timestamp_utc"] = None
+
+            # fit_configuration: ensure compact JSON-safe dict or None.
+            # _validate_fit_configuration_snapshot is called defensively;
+            # any validation failure is silenced here because history
+            # recording must never raise.
+            _cfg = entry.get("fit_configuration")
+            if _cfg is not None:
+                _cfg_sanitized = Lightcurve._sanitize_fit_configuration_value(
+                    _cfg
+                )
+                entry["fit_configuration"] = _cfg_sanitized
+                try:
+                    Lightcurve._validate_fit_configuration_snapshot(
+                        _cfg_sanitized
+                    )
+                except (TypeError, RuntimeError):
+                    pass
+        except Exception:
+            pass
+        return entry
+
+    @staticmethod
+    def _normalize_imported_fit_history_entry(entry):
+        """Return a sanitized copy of an imported fit-history entry.
+
+        Parameters
+        ----------
+        entry : dict
+            Candidate imported history entry.
+
+        Returns
+        -------
+        dict or None
+            Sanitized entry dict, or ``None`` if the input is not a valid
+            entry-shaped mapping.
+        """
+        if not isinstance(entry, dict):
+            return None
+        _entry_copy = copy.deepcopy(entry)
+        _normalized = {
+            key: Lightcurve._sanitize_fit_history_value(value)
+            for key, value in _entry_copy.items()
+        }
+
+        _raw_version = _normalized.get("fit_history_schema_version")
+        _version = None
+        if _raw_version is not None:
+            try:
+                _candidate = int(_raw_version)
+                if _candidate > 0:
+                    _version = _candidate
+            except (TypeError, ValueError):
+                _version = None
+        if _version is None:
+            _version = 1
+        _normalized["fit_history_schema_version"] = _version
+
+        # Ensure common keys exist in legacy entries so downstream summary and
+        # reporting paths are stable.
+        _normalized.setdefault("timestamp_utc", None)
+        _normalized.setdefault("success", None)
+        _normalized.setdefault("failed", None)
+        _normalized.setdefault("fit_configuration", None)
+        _normalized.setdefault("environment", None)
+        _normalized.setdefault("notes", None)
+
+        Lightcurve._validate_fit_history_entry(_normalized)
+        return _normalized
+
+    def _validate_imported_fit_history(self, payload):
+        """Validate imported fit-history payload and return normalized entries.
+
+        Parameters
+        ----------
+        payload : dict or list
+            Parsed JSON payload produced by :meth:`export_fit_history_json`,
+            or a legacy raw list of fit-history entries.
+
+        Returns
+        -------
+        tuple
+            ``(entries, diagnostics)`` where ``entries`` is a normalized list
+            of fit-history dicts and ``diagnostics`` is a list of warning
+            strings collected during validation.
+        """
+        _diagnostics = []
+        _raw_entries = None
+
+        if isinstance(payload, dict):
+            _raw_entries = payload.get("fit_history", [])
+            _supported_versions = payload.get("fit_history_supported_schema_versions")
+            if _supported_versions is not None and not isinstance(
+                _supported_versions, list
+            ):
+                _diagnostics.append(
+                    "fit_history_supported_schema_versions is malformed; ignoring."
+                )
+        elif isinstance(payload, list):
+            _raw_entries = payload
+        else:
+            _diagnostics.append(
+                "Imported payload is neither a dict nor a list; nothing loaded."
+            )
+            return [], _diagnostics
+
+        if not isinstance(_raw_entries, list):
+            _diagnostics.append("fit_history is not a list; nothing loaded.")
+            return [], _diagnostics
+
+        _normalized_entries = []
+        for _idx, _entry in enumerate(_raw_entries):
+            _normalized = self._normalize_imported_fit_history_entry(_entry)
+            if _normalized is None:
+                _diagnostics.append(
+                    f"Skipping malformed entry at index {_idx}: not a mapping."
+                )
+                continue
+            _entry_version = _normalized.get("fit_history_schema_version")
+            if _entry_version not in _FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS:
+                _diagnostics.append(
+                    "Entry at index "
+                    f"{_idx} has schema version {_entry_version}; importing "
+                    "with best-effort normalization."
+                )
+            _normalized_entries.append(_normalized)
+
+        return _normalized_entries, _diagnostics
+
+    def export_fit_history_json(self, path, include_text_summary=True):
+        """Export fit-history provenance to a human-readable JSON file.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Destination file path.
+        include_text_summary : bool, optional
+            If ``True``, include plain-text summary blocks in the exported
+            payload.
+        """
+        _path = Path(path)
+        _history = self.get_fit_history()
+        _normalized_history = []
+        _diagnostics = []
+        for _idx, _entry in enumerate(_history):
+            _normalized = self._normalize_imported_fit_history_entry(_entry)
+            if _normalized is None:
+                _diagnostics.append(
+                    f"Skipped malformed in-memory history entry at index {_idx}."
+                )
+                continue
+            _normalized_history.append(_normalized)
+
+        _payload = {
+            "exported_at_utc": datetime.datetime.now(datetime.UTC).isoformat(),
+            "fit_history_schema_version": _FIT_HISTORY_SCHEMA_VERSION,
+            "fit_history_supported_schema_versions": sorted(
+                _FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS
+            ),
+            "fit_history_entry_count": len(_normalized_history),
+            "fit_history": _normalized_history,
+            "fit_history_summary": self._sanitize_fit_history_value(
+                self.get_fit_history_summary()
+            ),
+            "latest_fit_configuration": self._sanitize_fit_history_value(
+                self.get_last_fit_configuration()
+            ),
+        }
+        if _diagnostics:
+            _payload["export_warnings"] = _diagnostics
+        if include_text_summary:
+            _payload["fit_history_text_summary"] = self.fit_history_to_text()
+            _payload["fit_history_summary_text"] = self.print_fit_history_summary(
+                print_summary=False
+            )
+            _payload["latest_fit_configuration_text"] = self.fit_configuration_to_text(
+                fit_configuration=self.get_last_fit_configuration()
+            )
+
+        _payload = self._sanitize_fit_history_value(_payload)
+        _path.parent.mkdir(parents=True, exist_ok=True)
+        with _path.open("w", encoding="utf-8") as _f:
+            json.dump(_payload, _f, ensure_ascii=False, indent=2, sort_keys=True)
+
+    def load_fit_history_json(self, path, merge=False):
+        """Load fit-history provenance exported as JSON.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Source JSON file path.
+        merge : bool, optional
+            If ``False`` (default), replace current history with imported
+            entries. If ``True``, append imported entries.
+
+        Returns
+        -------
+        int
+            Number of imported entries accepted into history.
+        """
+        _path = Path(path)
+        with _path.open("r", encoding="utf-8") as _f:
+            _payload = json.load(_f)
+
+        _entries, _diagnostics = self._validate_imported_fit_history(_payload)
+        for _message in _diagnostics:
+            warnings.warn(_message, UserWarning, stacklevel=2)
+
+        if merge:
+            _current = self.get_fit_history()
+            _merged = [copy.deepcopy(_entry) for _entry in _current]
+            _merged.extend(copy.deepcopy(_entry) for _entry in _entries)
+            self.fit_history = _merged
+        else:
+            self.fit_history = [copy.deepcopy(_entry) for _entry in _entries]
+
+        return len(_entries)
+
+    def get_fit_history(self):
+        """Return a deep copy of fit-history entries."""
+        if not hasattr(self, "fit_history") or not isinstance(self.fit_history, list):
+            return []
+        return copy.deepcopy(self.fit_history)
+
+    def clear_fit_history(self):
+        """Clear all fit-history entries."""
+        if not hasattr(self, "fit_history") or not isinstance(self.fit_history, list):
+            self.fit_history = []
+            return
+        self.fit_history.clear()
+
+    def get_fit_history_summary(self):
+        """Return aggregate statistics for fit-history entries.
+
+        Returns a dict suitable for JSON serialisation.  All scalar counts
+        are plain Python ``int`` or ``float``; timestamps are ISO-8601
+        strings or ``None``.
+
+        The returned dict includes both a nested structure for backward
+        compatibility (``counts_by_parameterization``, ``counts_by_constraint_mode``,
+        ``unique_bands_used``) and flat convenience keys
+        (``frequency_space_attempts``, ``period_space_attempts``,
+        ``constrained_fits``, ``unconstrained_fits``, ``unique_bands``,
+        ``counts_by_fit_strategy``) added to support the enhanced summary
+        specification.
+
+        Missing fields in older history entries are silently ignored; such
+        entries contribute to ``total_attempts`` but not to per-category
+        counts where the relevant field is absent.
+        """
+        _history = self.get_fit_history()
+        _total = len(_history)
+        _successful = sum(1 for entry in _history if entry.get("success") is True)
+        _failed = sum(1 for entry in _history if entry.get("failed") is True)
+        _success_fraction = (_successful / _total) if _total > 0 else 0.0
+
+        _last_success_ts = None
+        _last_failure_ts = None
+        _earliest_ts = None
+        _latest_ts = None
+        _runtime_seconds = []
+        _counts_by_backend = {}
+        _counts_by_model_class = {}
+        _counts_by_fit_strategy = {}
+        _counts_by_parameterization = {
+            "frequency_space": 0,
+            "period_space": 0,
+            "unknown": 0,
+        }
+        _counts_by_constraint_mode = {
+            "constrained": 0,
+            "unconstrained": 0,
+            "unknown": 0,
+        }
+        for entry in _history:
+            _ts = entry.get("timestamp_utc")
+            if entry.get("success") is True:
+                _last_success_ts = _ts
+            if entry.get("failed") is True:
+                _last_failure_ts = _ts
+
+            if isinstance(_ts, str):
+                try:
+                    _parsed = datetime.datetime.fromisoformat(_ts)
+                except ValueError:
+                    _parsed = None
+                if _parsed is not None:
+                    if _earliest_ts is None or _parsed < _earliest_ts:
+                        _earliest_ts = _parsed
+                    if _latest_ts is None or _parsed > _latest_ts:
+                        _latest_ts = _parsed
+
+            _elapsed = entry.get("elapsed_seconds")
+            if isinstance(_elapsed, int | float) and math.isfinite(float(_elapsed)):
+                _runtime_seconds.append(float(_elapsed))
+
+            _backend = str(entry.get("backend") or "unknown")
+            _counts_by_backend[_backend] = _counts_by_backend.get(_backend, 0) + 1
+
+            _model_class = str(entry.get("model_class") or "unknown")
+            _counts_by_model_class[_model_class] = (
+                _counts_by_model_class.get(_model_class, 0) + 1
+            )
+
+            # fit_strategy counts — entries without a strategy go under "unknown"
+            _fit_strategy_key = str(entry.get("fit_strategy") or "unknown")
+            _counts_by_fit_strategy[_fit_strategy_key] = (
+                _counts_by_fit_strategy.get(_fit_strategy_key, 0) + 1
+            )
+
+            # Parameterization space: prefer the explicit flag stored in the
+            # entry; fall back to inference from model class / fit strategy for
+            # older entries that predate the ``uses_frequency_space`` field.
+            _uses_freq = entry.get("uses_frequency_space")
+            _uses_period = entry.get("uses_period_space")
+            if _uses_freq is True:
+                _param_space = "frequency_space"
+            elif _uses_period is True:
+                _param_space = "period_space"
+            else:
+                # Inference from model class / fit strategy for legacy entries
+                _model_l = _model_class.lower()
+                _fit_strategy_l = _fit_strategy_key.lower()
+                if (
+                    "spectralmixture" in _model_l
+                    or "separable" in _model_l
+                    or _fit_strategy_l == "consensus"
+                ):
+                    _param_space = "frequency_space"
+                elif "periodic" in _model_l or "quasiperiodic" in _model_l:
+                    _param_space = "period_space"
+                else:
+                    _param_space = "unknown"
+            _counts_by_parameterization[_param_space] += 1
+
+            # Constraint mode: ``constrained_fit`` takes precedence over the
+            # older ``constrained`` field so that both legacy and new entries
+            # are handled correctly.
+            _constrained = entry.get("constrained_fit")
+            if _constrained is None:
+                _constrained = entry.get("constrained")
+            if _constrained is True:
+                _counts_by_constraint_mode["constrained"] += 1
+            elif _constrained is False:
+                _counts_by_constraint_mode["unconstrained"] += 1
+            else:
+                _counts_by_constraint_mode["unknown"] += 1
+
+        _total_runtime_seconds = float(sum(_runtime_seconds))
+        _mean_runtime_seconds: float | None = (
+            _total_runtime_seconds / len(_runtime_seconds)
+            if _runtime_seconds
+            else None
+        )
+
+        # Collect unique bands from history entries; entries that predate the
+        # ``bands`` field contribute nothing to the set.  If no history entry
+        # recorded band information, fall back to the current self.band array.
+        _bands_from_history: set[str] = set()
+        for _he in _history:
+            _he_bands = _he.get("bands")
+            if isinstance(_he_bands, list):
+                for _hb in _he_bands:
+                    if _hb is not None:
+                        try:
+                            _bands_from_history.add(str(_hb))
+                        except Exception:
+                            pass
+        if _bands_from_history:
+            _unique_bands = sorted(_bands_from_history)
+        elif self.band is not None:
+            _unique_bands = sorted(
+                {str(b) for b in np.asarray(self.band, dtype=np.str_)}
+            )
+        else:
+            _unique_bands = []
+
+        return {
+            "total_attempts": _total,
+            "successful_fits": _successful,
+            "failed_fits": _failed,
+            "success_fraction": _success_fraction,
+            "last_success_timestamp": _last_success_ts,
+            "last_failure_timestamp": _last_failure_ts,
+            "counts_by_backend": _counts_by_backend,
+            "counts_by_model_class": _counts_by_model_class,
+            # counts_by_fit_strategy is new; absent in earlier summaries
+            "counts_by_fit_strategy": _counts_by_fit_strategy,
+            "counts_by_parameterization": _counts_by_parameterization,
+            "counts_by_constraint_mode": _counts_by_constraint_mode,
+            "total_runtime_seconds": _total_runtime_seconds,
+            "mean_runtime_seconds": _mean_runtime_seconds,
+            "earliest_timestamp": (
+                _earliest_ts.isoformat() if _earliest_ts is not None else None
+            ),
+            "latest_timestamp": (
+                _latest_ts.isoformat() if _latest_ts is not None else None
+            ),
+            # ``unique_bands_used`` is the canonical name; ``unique_bands`` is
+            # a flat alias included for the enhanced summary specification.
+            "unique_bands_used": _unique_bands,
+            "unique_bands": _unique_bands,
+            # Flat convenience scalars derived from the nested dicts above.
+            # Kept consistent with ``counts_by_parameterization`` so callers
+            # can use whichever form they prefer.
+            "frequency_space_attempts": (
+                _counts_by_parameterization["frequency_space"]
+            ),
+            "period_space_attempts": _counts_by_parameterization["period_space"],
+            "constrained_fits": _counts_by_constraint_mode["constrained"],
+            "unconstrained_fits": _counts_by_constraint_mode["unconstrained"],
+        }
+
+    @staticmethod
+    def _fit_history_abbreviate_message(message, max_len=56):
+        """Return a compact one-line failure reason for table display."""
+        if message is None:
+            return ""
+        text = " ".join(str(message).split())
+        if len(text) <= max_len:
+            return text
+        return f"{text[: max_len - 1]}…"
+
+    def fit_history_to_text(
+        self,
+        max_entries=None,
+        success_only=False,
+        failed_only=False,
+    ):
+        """Return a human-readable table of fit-history entries.
+
+        This helper is designed for notebook usage and concise run logs,
+        providing a quick provenance trail for scientific reproducibility.
+        """
+        if success_only and failed_only:
+            raise ValueError("success_only and failed_only cannot both be True.")
+        if max_entries is not None:
+            if isinstance(max_entries, bool) or not isinstance(
+                max_entries, (int, np.integer)
+            ):
+                raise ValueError("max_entries must be an integer or None.")
+            if int(max_entries) < 1:
+                raise ValueError("max_entries must be >= 1 when provided.")
+
+        history = self.get_fit_history()
+        if success_only:
+            history = [entry for entry in history if entry.get("success") is True]
+        if failed_only:
+            history = [entry for entry in history if entry.get("failed") is True]
+        if max_entries is not None:
+            history = history[-int(max_entries) :]
+
+        if not history:
+            return "No fit-history entries."
+
+        timestamp_w = 19
+        model_w = max(
+            12,
+            min(
+                28,
+                max(
+                    len(str(entry.get("model_class") or "N/A"))
+                    for entry in history
+                ),
+            ),
+        )
+        success_w = 7
+        runtime_w = 10
+        reason_w = 28
+
+        header = (
+            f"{'#':>3}  {'Timestamp':<{timestamp_w}}  {'Model':<{model_w}}  "
+            f"{'Success':<{success_w}}  {'Runtime(s)':>{runtime_w}}  "
+            f"{'Failure reason':<{reason_w}}"
+        )
+        sep = "-" * len(header)
+        lines = [sep, header, sep]
+
+        for idx, entry in enumerate(history, start=1):
+            timestamp = str(entry.get("timestamp_utc") or "N/A")[:timestamp_w]
+            model = str(entry.get("model_class") or "N/A")
+            model = model[:model_w]
+
+            success_val = entry.get("success")
+            if success_val is True:
+                success_str = "True"
+            elif success_val is False:
+                success_str = "False"
+            else:
+                success_str = "N/A"
+
+            elapsed = entry.get("elapsed_seconds")
+            if isinstance(elapsed, int | float) and math.isfinite(float(elapsed)):
+                runtime_str = f"{float(elapsed):.3g}"
+            else:
+                runtime_str = "N/A"
+
+            failure_reason = ""
+            if entry.get("failed") is True:
+                failure_reason = self._fit_history_abbreviate_message(
+                    entry.get("exception_message")
+                )
+            failure_reason = failure_reason[:reason_w]
+
+            lines.append(
+                f"{idx:>3}  {timestamp:<{timestamp_w}}  {model:<{model_w}}  "
+                f"{success_str:<{success_w}}  {runtime_str:>{runtime_w}}  "
+                f"{failure_reason:<{reason_w}}"
+            )
+
+        lines.append(sep)
+        return "\n".join(lines)
+
+    def get_last_fit_configuration(self):
+        """Return a deep copy of the most recent fit-configuration snapshot.
+
+        The snapshot is the dict stored under the ``"fit_configuration"`` key
+        of the last fit-history entry.  It captures the fit strategy, model
+        class, training hyperparameters, and user-supplied kwargs as they
+        were resolved at the start of the last :meth:`fit` call.
+
+        See :meth:`_collect_fit_configuration_snapshot` for the full schema
+        of the returned dict.
+
+        A deep copy is returned so that callers cannot accidentally mutate
+        the stored history entry.
+
+        Returns
+        -------
+        dict or None
+            A deep copy of the most recent fit-configuration dict, or
+            ``None`` if no fit history exists or the last entry does not
+            contain a configuration record.
+
+        See Also
+        --------
+        fit_configuration_to_text : Human-readable rendering of the snapshot.
+        get_fit_history : Full raw history list.
+        """
+        _history = self.get_fit_history()
+        if not _history:
+            return None
+        _cfg = _history[-1].get("fit_configuration")
+        if _cfg is None:
+            return None
+        return copy.deepcopy(_cfg)
+
+    @staticmethod
+    def _fit_configuration_display_value(value):
+        """Return a concise scalar display string for fit-configuration text."""
+        if value is None:
+            return "None"
+        if isinstance(value, bool):
+            return "True" if value else "False"
+        if isinstance(value, float):
+            return f"{value:.6g}" if math.isfinite(value) else "None"
+        if isinstance(value, int | str):
+            return str(value)
+        if isinstance(value, dict):
+            if value.get("__unserializable__") is True:
+                _module = value.get("module") or "unknown"
+                _type = value.get("type") or "object"
+                _qualname = value.get("qualname")
+                _repr = value.get("repr")
+                _head = f"[UNSERIALIZABLE] {_module}.{_type}"
+                if _qualname:
+                    _head += f" ({_qualname})"
+                if _repr:
+                    _head += f"\nrepr: {_repr}"
+                return _head
+            if value.get("__non_finite__") is True:
+                return f"[NON-FINITE] {value.get('value')}"
+            if value.get("__truncated__") is True:
+                _payload = {
+                    _k: _v
+                    for _k, _v in value.items()
+                    if _k != "__truncated__"
+                }
+                return "[TRUNCATED]\n" + json.dumps(
+                    _payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+            if "shape" in value and ("type" in value or "dtype" in value):
+                return json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+        if isinstance(value, list):
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        return Lightcurve._fit_configuration_safe_repr(value)
+
+    def fit_configuration_to_text(self, fit_configuration=None):
+        """Return a multi-section, human-readable fit-configuration summary.
+
+        Renders the fit-configuration snapshot as a formatted string split
+        into three clearly labelled sections that mirror the separation
+        maintained inside the snapshot:
+
+        * **USER INPUTS** — non-canonical kwargs the caller passed explicitly
+          to :meth:`fit` that do not map to any known internal key.
+        * **RESOLVED INTERNAL SETTINGS** — the canonical values the library
+          actually used: model class, fit strategy, training hyperparameters,
+          constraint/prior sets, bounds.
+        * **RUNTIME METADATA** — derived settings assembled internally:
+          backend, consensus configuration, outlier thresholds,
+          initialization flags.
+
+        Output is stable-ordered and consistently indented so that it can be
+        read comfortably in a Jupyter notebook or terminal session.  Long
+        arrays and large dicts are summarized rather than dumped verbatim.
+
+        Parameters
+        ----------
+        fit_configuration : dict, optional
+            A snapshot dict to render.  When not provided, the most recent
+            snapshot from fit history is used via
+            :meth:`get_last_fit_configuration`.
+
+        Returns
+        -------
+        str
+            The formatted summary string.  Returns a short message when no
+            configuration is available.
+
+        See Also
+        --------
+        get_last_fit_configuration : Retrieve the raw snapshot dict.
+        """
+        _cfg = fit_configuration
+        if _cfg is None:
+            _cfg = self.get_last_fit_configuration()
+        if _cfg is None:
+            return "No fit configuration available."
+
+        _cfg = self._sanitize_fit_configuration_value(_cfg)
+        _sep = "-" * 50
+        _lines = [_sep, "Fit Configuration", _sep]
+
+        def _fv(val):
+            return self._fit_configuration_display_value(val)
+
+        def _section(title):
+            _lines.append("")
+            _lines.append(f"  {title}")
+            _lines.append("  " + "-" * 48)
+
+        def _row(label, val, indent=4):
+            if val is None:
+                return
+            _text = _fv(val)
+            if "\n" not in _text:
+                _lines.append(f"{'':>{indent}}{label:<28}: {_text}")
+                return
+            _lines.append(f"{'':>{indent}}{label:<28}:")
+            for _line in _text.splitlines():
+                _lines.append(f"{'':>{indent + 2}}{_line}")
+
+        def _dict_rows(label, dct, indent=4):
+            """Append a labelled sub-section for a nested dict."""
+            if not isinstance(dct, dict):
+                return
+            _visible = {k: v for k, v in dct.items() if v is not None}
+            if not _visible:
+                return
+            _lines.append(f"{'':>{indent}}{label}:")
+            for _k, _v in sorted(_visible.items()):
+                _text = _fv(_v)
+                if "\n" not in _text:
+                    _lines.append(
+                        f"{'':>{indent + 2}}{_k:<26}: {_text}"
+                    )
+                    continue
+                _lines.append(f"{'':>{indent + 2}}{_k:<26}:")
+                for _line in _text.splitlines():
+                    _lines.append(f"{'':>{indent + 4}}{_line}")
+
+        # ---- USER INPUTS ---------------------------------------------------
+        _section("USER INPUTS")
+        _user_kw = _cfg.get("user_kwargs")
+        if isinstance(_user_kw, dict) and _user_kw:
+            for _k, _v in sorted(_user_kw.items()):
+                _row(_k, _v)
+        else:
+            _lines.append("    (no non-canonical user kwargs recorded)")
+
+        # ---- RESOLVED INTERNAL SETTINGS ------------------------------------
+        _section("RESOLVED INTERNAL SETTINGS")
+        _row("fit_strategy", _cfg.get("fit_strategy"))
+        _row("model_class", _cfg.get("model_class"))
+        _row("training_iter", _cfg.get("training_iter"))
+        _row("num_mixtures", _cfg.get("num_mixtures"))
+        _row("learning_rate", _cfg.get("learning_rate"))
+        _row("optimizer", _cfg.get("optimizer"))
+        _row("constraint_set", _cfg.get("constraint_set"))
+        _row("prior_set", _cfg.get("prior_set"))
+        _row("use_best_band_init", _cfg.get("use_best_band_init"))
+        _row("use_gp_validation", _cfg.get("use_gp_validation"))
+        _row("min_period", _cfg.get("min_period"))
+        _row("max_period", _cfg.get("max_period"))
+        _row("frequency_bounds", _cfg.get("frequency_bounds"))
+        _row("period_bounds", _cfg.get("period_bounds"))
+        _row("wavelength_bounds", _cfg.get("wavelength_bounds"))
+        _row("min_consensus_inliers", _cfg.get("min_consensus_inliers"))
+        _row("normalize", _cfg.get("normalize"))
+        _row("detrend", _cfg.get("detrend"))
+        _row("xtransform", _cfg.get("xtransform"))
+        _row("ytransform", _cfg.get("ytransform"))
+        _row("max_samples", _cfg.get("max_samples"))
+        _row("max_samples_per_band", _cfg.get("max_samples_per_band"))
+
+        # ---- RUNTIME METADATA ----------------------------------------------
+        _section("RUNTIME METADATA")
+        _row("backend", _cfg.get("backend"))
+        _dict_rows(
+            "consensus_configuration",
+            _cfg.get("consensus_configuration"),
+        )
+        _dict_rows("outlier_thresholds", _cfg.get("outlier_thresholds"))
+        _rand_flags = _cfg.get("random_initialization_flags")
+        _dict_rows("random_initialization_flags", _rand_flags)
+
+        _lines.append("")
+        _lines.append(_sep)
+        return "\n".join(_lines)
+
+    def print_fit_history(
+        self,
+        max_entries=None,
+        success_only=False,
+        failed_only=False,
+    ):
+        """Print a formatted fit-history table and return the rendered text."""
+        text = self.fit_history_to_text(
+            max_entries=max_entries,
+            success_only=success_only,
+            failed_only=failed_only,
+        )
+        print(text)
+        return text
+
+    def print_fit_history_summary(
+        self,
+        print_summary=True,
+        indent=2,
+    ):
+        """Return (and optionally print) a human-readable fit-history summary.
+
+        This method calls :meth:`get_fit_history_summary` internally and
+        formats the result as a multi-line textual report suitable for
+        notebook output.  The report aligns category counts in columns and
+        handles all missing or ``None`` values gracefully.
+
+        Parameters
+        ----------
+        print_summary : bool, optional
+            If ``True`` (the default), the formatted string is printed to
+            stdout in addition to being returned.
+        indent : int, optional
+            Number of spaces to use for indented lines (default 2).
+
+        Returns
+        -------
+        str
+            The formatted summary string.
+        """
+        _s = self.get_fit_history_summary()
+        _pad = " " * max(0, int(indent))
+        _sep = "-" * 50
+        _lines: list[str] = [_sep, "Fit History Summary", _sep, ""]
+
+        # --- top-level counts -------------------------------------------
+        _total = _s.get("total_attempts", 0)
+        _ok = _s.get("successful_fits", 0)
+        _fail = _s.get("failed_fits", 0)
+        _lines.append(f"Total fits   : {_total}")
+        _lines.append(f"  Successful : {_ok}")
+        _lines.append(f"  Failed     : {_fail}")
+
+        # --- runtime -------------------------------------------------------
+        _tot_rt = _s.get("total_runtime_seconds")
+        _mean_rt = _s.get("mean_runtime_seconds")
+        _lines.append("")
+        if isinstance(_tot_rt, int | float):
+            _lines.append(f"Total runtime : {_tot_rt:.3g} s")
+        else:
+            _lines.append("Total runtime : N/A")
+        if isinstance(_mean_rt, int | float):
+            _lines.append(f"Mean runtime  : {_mean_rt:.3g} s")
+        else:
+            _lines.append("Mean runtime  : N/A")
+
+        # --- timestamps ----------------------------------------------------
+        _earliest = _s.get("earliest_timestamp")
+        _latest = _s.get("latest_timestamp")
+        _lines.append("")
+        _lines.append("Time span:")
+        _lines.append(
+            f"{_pad}Earliest fit : {_earliest or 'N/A'}"
+        )
+        _lines.append(
+            f"{_pad}Latest fit   : {_latest or 'N/A'}"
+        )
+
+        def _format_counts(section_title, counts_dict):
+            """Append a left-aligned section of key : count rows."""
+            _lines.append("")
+            _lines.append(f"{section_title}:")
+            if counts_dict:
+                _max_key = max(len(str(k)) for k in counts_dict)
+                for _k, _v in sorted(
+                    counts_dict.items(), key=lambda kv: -kv[1]
+                ):
+                    _lines.append(
+                        f"{_pad}{_k!s:<{_max_key}} : {_v}"
+                    )
+            else:
+                _lines.append(f"{_pad}(none recorded)")
+
+        _format_counts("Fit strategies", _s.get("counts_by_fit_strategy", {}))
+        _format_counts("Backends", _s.get("counts_by_backend", {}))
+        _format_counts("Models", _s.get("counts_by_model_class", {}))
+
+        # --- parameterization -----------------------------------------------
+        _pcounts = _s.get("counts_by_parameterization", {})
+        _freq_n = _pcounts.get("frequency_space", 0)
+        _per_n = _pcounts.get("period_space", 0)
+        _lines.append("")
+        _lines.append("Parameterization:")
+        _lines.append(f"{_pad}Frequency-space fits : {_freq_n}")
+        _lines.append(f"{_pad}Period-space fits    : {_per_n}")
+
+        # --- constraints ---------------------------------------------------
+        _ccounts = _s.get("counts_by_constraint_mode", {})
+        _con_n = _ccounts.get("constrained", 0)
+        _unc_n = _ccounts.get("unconstrained", 0)
+        _unk_n = _ccounts.get("unknown", 0)
+        _lines.append("")
+        _lines.append("Constraints:")
+        _lines.append(f"{_pad}Constrained fits   : {_con_n}")
+        _lines.append(f"{_pad}Unconstrained fits : {_unc_n}")
+        if _unk_n:
+            _lines.append(f"{_pad}Unknown            : {_unk_n}")
+
+        # --- bands ---------------------------------------------------------
+        _bands = _s.get("unique_bands") or []
+        _lines.append("")
+        _lines.append("Bands encountered:")
+        if _bands:
+            for _band in _bands:
+                _lines.append(f"{_pad}{_band}")
+        else:
+            _lines.append(f"{_pad}(none recorded)")
+
+        _lines.append("")
+        _lines.append(_sep)
+
+        _text = "\n".join(_lines)
+        if print_summary:
+            print(_text)
+        return _text
+
+    def generate_reproducibility_report(
+        self,
+        latest_only=False,
+        include_history=True,
+        include_configurations=True,
+        include_environment=True,
+    ):
+        """Return a long-form human-readable reproducibility report."""
+        _sep = "-" * 50
+        _lines = [_sep, "PGMUVI Reproducibility Report", _sep, ""]
+
+        _history = self.get_fit_history()
+        _working_history = list(_history)
+        if latest_only:
+            _working_history = _working_history[-1:] if _working_history else []
+
+        _normalized_history = []
+        _normalization_warnings = []
+        for _idx, _entry in enumerate(_working_history):
+            _normalized = self._normalize_imported_fit_history_entry(_entry)
+            if _normalized is None:
+                _normalization_warnings.append(
+                    f"history[{_idx}] is malformed and was skipped."
+                )
+                continue
+            _normalized_history.append(_normalized)
+
+        try:
+            _summary = self.get_fit_history_summary()
+        except Exception:
+            _summary = {
+                "total_attempts": len(_normalized_history),
+                "successful_fits": sum(
+                    1 for _entry in _normalized_history if _entry.get("success") is True
+                ),
+                "failed_fits": sum(
+                    1 for _entry in _normalized_history if _entry.get("failed") is True
+                ),
+                "counts_by_fit_strategy": {},
+                "counts_by_model_class": {},
+                "counts_by_backend": {},
+                "total_runtime_seconds": 0.0,
+                "mean_runtime_seconds": None,
+                "unique_bands": [],
+            }
+            _normalization_warnings.append(
+                "Could not compute canonical fit-history summary; using "
+                "best-effort summary from normalized entries."
+            )
+            for _entry in _normalized_history:
+                _strategy = str(_entry.get("fit_strategy") or "unknown")
+                _summary["counts_by_fit_strategy"][_strategy] = (
+                    _summary["counts_by_fit_strategy"].get(_strategy, 0) + 1
+                )
+                _model = str(_entry.get("model_class") or "unknown")
+                _summary["counts_by_model_class"][_model] = (
+                    _summary["counts_by_model_class"].get(_model, 0) + 1
+                )
+                _backend = str(_entry.get("backend") or "unknown")
+                _summary["counts_by_backend"][_backend] = (
+                    _summary["counts_by_backend"].get(_backend, 0) + 1
+                )
+                _elapsed = _entry.get("elapsed_seconds")
+                if isinstance(_elapsed, int | float) and math.isfinite(float(_elapsed)):
+                    _summary["total_runtime_seconds"] += float(_elapsed)
+                _entry_bands = _entry.get("bands")
+                if isinstance(_entry_bands, list):
+                    for _band in _entry_bands:
+                        if _band is not None:
+                            _summary["unique_bands"].append(str(_band))
+            if _summary["total_attempts"] > 0:
+                _summary["mean_runtime_seconds"] = (
+                    _summary["total_runtime_seconds"] / _summary["total_attempts"]
+                )
+            _summary["unique_bands"] = sorted(set(_summary["unique_bands"]))
+        if latest_only:
+            _total = len(_normalized_history)
+            _successful = sum(
+                1 for _entry in _normalized_history if _entry.get("success") is True
+            )
+            _failed = sum(
+                1 for _entry in _normalized_history if _entry.get("failed") is True
+            )
+            _summary = dict(_summary)
+            _summary["total_attempts"] = _total
+            _summary["successful_fits"] = _successful
+            _summary["failed_fits"] = _failed
+
+            _counts_by_fit_strategy = {}
+            _counts_by_model = {}
+            _counts_by_backend = {}
+            _runtime = []
+            _bands = set()
+            for _entry in _normalized_history:
+                _strategy = str(_entry.get("fit_strategy") or "unknown")
+                _counts_by_fit_strategy[_strategy] = (
+                    _counts_by_fit_strategy.get(_strategy, 0) + 1
+                )
+                _model = str(_entry.get("model_class") or "unknown")
+                _counts_by_model[_model] = _counts_by_model.get(_model, 0) + 1
+                _backend = str(_entry.get("backend") or "unknown")
+                _counts_by_backend[_backend] = _counts_by_backend.get(_backend, 0) + 1
+                _elapsed = _entry.get("elapsed_seconds")
+                if isinstance(_elapsed, int | float) and math.isfinite(float(_elapsed)):
+                    _runtime.append(float(_elapsed))
+                _entry_bands = _entry.get("bands")
+                if isinstance(_entry_bands, list):
+                    for _band in _entry_bands:
+                        if _band is not None:
+                            _bands.add(str(_band))
+
+            _summary["counts_by_fit_strategy"] = _counts_by_fit_strategy
+            _summary["counts_by_model_class"] = _counts_by_model
+            _summary["counts_by_backend"] = _counts_by_backend
+            _summary["total_runtime_seconds"] = float(sum(_runtime))
+            _summary["mean_runtime_seconds"] = (
+                float(sum(_runtime)) / len(_runtime) if _runtime else None
+            )
+            _summary["unique_bands"] = sorted(_bands)
+
+        _latest_entry = _normalized_history[-1] if _normalized_history else None
+        _latest_cfg = None
+        if _latest_entry is not None:
+            _latest_cfg = self._sanitize_fit_history_value(
+                _latest_entry.get("fit_configuration")
+            )
+        if _latest_cfg is None:
+            try:
+                _latest_cfg = self.get_last_fit_configuration()
+            except Exception:
+                _latest_cfg = None
+
+        if include_environment:
+            _lines.append("Environment")
+            _lines.append("-----------")
+            _env = {}
+            if _latest_entry is not None and isinstance(
+                _latest_entry.get("environment"), dict
+            ):
+                _env = _latest_entry.get("environment", {})
+            _git = _env.get("git") if isinstance(_env, dict) else None
+            _python_version = (
+                _env.get("python_version") if isinstance(_env, dict) else None
+            )
+            _torch_version = (
+                _env.get("torch_version") if isinstance(_env, dict) else None
+            )
+            _git_commit = (
+                _git.get("git_commit_hash") if isinstance(_git, dict) else None
+            )
+            _git_dirty = (
+                _git.get("git_dirty_worktree") if isinstance(_git, dict) else None
+            )
+            _lines.append(f"Python version: {_python_version or 'N/A'}")
+            _lines.append(f"Torch version: {_torch_version or 'N/A'}")
+            _lines.append(f"Git commit: {_git_commit or 'N/A'}")
+            _lines.append(
+                "Git dirty tree: "
+                + ("N/A" if _git_dirty is None else str(bool(_git_dirty)))
+            )
+            _lines.append("")
+
+        _lines.append("Fit Summary")
+        _lines.append("-----------")
+        _lines.append(f"Total fits: {_summary.get('total_attempts', 0)}")
+        _lines.append(f"Successful fits: {_summary.get('successful_fits', 0)}")
+        _lines.append(f"Failed fits: {_summary.get('failed_fits', 0)}")
+        _lines.append("")
+
+        _lines.append("Strategies")
+        _lines.append("----------")
+        _strategy_counts = _summary.get("counts_by_fit_strategy", {}) or {}
+        if _strategy_counts:
+            for _key, _value in sorted(_strategy_counts.items()):
+                _lines.append(f"{_key}: {_value}")
+        else:
+            _lines.append("(none recorded)")
+        _lines.append("")
+
+        _lines.append("Models")
+        _lines.append("------")
+        _model_counts = _summary.get("counts_by_model_class", {}) or {}
+        if _model_counts:
+            for _key, _value in sorted(_model_counts.items()):
+                _lines.append(f"{_key}: {_value}")
+        else:
+            _lines.append("(none recorded)")
+        _lines.append("")
+
+        _lines.append("Runtime Statistics")
+        _lines.append("------------------")
+        _total_runtime = _summary.get("total_runtime_seconds")
+        _mean_runtime = _summary.get("mean_runtime_seconds")
+        if isinstance(_total_runtime, int | float):
+            _lines.append(f"Total runtime (s): {float(_total_runtime):.6g}")
+        else:
+            _lines.append("Total runtime (s): N/A")
+        if isinstance(_mean_runtime, int | float):
+            _lines.append(f"Mean runtime (s): {float(_mean_runtime):.6g}")
+        else:
+            _lines.append("Mean runtime (s): N/A")
+        _lines.append("")
+
+        _lines.append("Bands")
+        _lines.append("-----")
+        _bands = _summary.get("unique_bands", []) or []
+        if _bands:
+            _lines.append(", ".join(str(_b) for _b in _bands))
+        else:
+            _lines.append("(none recorded)")
+        _lines.append("")
+
+        if include_configurations:
+            _lines.append("Latest Fit Configuration")
+            _lines.append("------------------------")
+            if _latest_cfg is None:
+                _lines.append("No fit configuration available.")
+            else:
+                _lines.append(
+                    self.fit_configuration_to_text(fit_configuration=_latest_cfg)
+                )
+            _lines.append("")
+
+        if include_history:
+            _lines.append("History Summary")
+            _lines.append("---------------")
+            if _normalized_history:
+                _lines.append(
+                    self.fit_history_to_text(
+                        max_entries=1 if latest_only else None,
+                    )
+                )
+            else:
+                _lines.append("No fit-history entries.")
+            _lines.append("")
+
+        _lines.append("Warnings / Truncations")
+        _lines.append("----------------------")
+        if _normalization_warnings:
+            _lines.extend(_normalization_warnings)
+        else:
+            _lines.append("(none)")
+        _lines.append(_sep)
+        return "\n".join(_lines)
+
+    def _fit_history_plot_annotation_text(self):
+        """Return a compact provenance string for optional plot annotations."""
+        history = self.get_fit_history()
+        if not history:
+            return ""
+        entry = history[-1]
+        model = str(entry.get("model_class") or "N/A")
+        timestamp = str(entry.get("timestamp_utc") or "N/A")
+        runtime = entry.get("elapsed_seconds")
+        if isinstance(runtime, int | float) and math.isfinite(float(runtime)):
+            runtime_str = f"{float(runtime):.3g}s"
+        else:
+            runtime_str = "N/A"
+        return (
+            f"model: {model}\n"
+            f"runtime: {runtime_str}\n"
+            f"timestamp: {timestamp}"
+        )
+
+    @staticmethod
+    def _fit_history_provenance_position(provenance_location="lower left"):
+        """Return axes-relative coordinates and alignment for provenance text."""
+        _positions = {
+            "lower left": (0.02, 0.02, "left", "bottom"),
+            "lower right": (0.98, 0.02, "right", "bottom"),
+            "upper left": (0.02, 0.98, "left", "top"),
+            "upper right": (0.98, 0.98, "right", "top"),
+        }
+        if provenance_location not in _positions:
+            raise ValueError(
+                "provenance_location must be one of "
+                "'lower left', 'lower right', 'upper left', 'upper right'."
+            )
+        return _positions[provenance_location]
+
+    def _plot_fit_history_provenance(
+        self,
+        ax,
+        *,
+        provenance_location="lower left",
+    ):
+        """Annotate an axes with compact fit-history provenance, if available."""
+        _prov = self._fit_history_plot_annotation_text()
+        if not _prov:
+            return None
+        _x, _y, _ha, _va = self._fit_history_provenance_position(
+            provenance_location=provenance_location
+        )
+        return ax.text(
+            _x,
+            _y,
+            _prov,
+            transform=ax.transAxes,
+            ha=_ha,
+            va=_va,
+            fontsize=7,
+            family="monospace",
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7),
+        )
+
+    def _reset_fit_state(
+        self,
+        *,
+        clear_failure=False,
+        clear_model_state=False,
+        clear_consensus=False,
+    ):
+        """Reset cached fit artifacts to prevent stale-state leakage."""
+        self.__FITTED_MAP = False
+        self.__FITTED_MCMC = False
+        self.is_fitted = False
+        self.gp_model = None
+
+        for attr_name in (
+            "results",
+            "mcmc_results",
+            "posterior_samples",
+            "x_fine_transformed",
+            "expanded_test_x",
+            "consensus_failure_summary",
+            "_period_summary_cache",
+            "_last_consensus_fit_info",
+            "optimizer",
+        ):
+            if hasattr(self, attr_name):
+                setattr(self, attr_name, None)
+
+        if clear_consensus and hasattr(self, "consensus_diagnostics"):
+            self.consensus_diagnostics = None
+
+        if clear_model_state:
+            for attr_name in ("model", "likelihood", "_model_pars"):
+                if hasattr(self, attr_name):
+                    setattr(self, attr_name, None)
+
+        if clear_failure:
+            self.fit_failed = False
+            self.failure_reason = None
+            self.failure_diagnostics = None
+            self.failure_summary = None
+
+    def _record_failure_state(
+        self,
+        *,
+        reason,
+        message,
+        diagnostics=None,
+        clear_model_state=False,
+        clear_consensus=False,
+    ):
+        """Set canonical failed-fit state and return a failure summary object."""
+        _diagnostics = self._consensus_make_json_safe(dict(diagnostics or {}))
+        _diagnostics.setdefault("status", "failed")
+        _diagnostics.setdefault("reason", reason)
+
+        self._reset_fit_state(
+            clear_failure=False,
+            clear_model_state=clear_model_state,
+            clear_consensus=clear_consensus,
+        )
+        self.fit_failed = True
+        self.is_fitted = False
+        self.failure_reason = reason
+        self.failure_diagnostics = _diagnostics
+        self.failure_summary = FitFailureSummary(
+            status="failed",
+            reason=reason,
+            message=message,
+            diagnostics=_diagnostics,
+        )
+        self.consensus_failure_summary = self.failure_summary
+        self._append_fit_history(
+            success=False,
+            failed=True,
+            exception_type="ConsensusFitError",
+            exception_message=message,
+            notes={"reason": reason, "source": "_record_failure_state"},
+        )
+        self._fit_history_recorded = True
+        return self.failure_summary
+
+    def get_failure_summary(self):
+        """Return the most recent failure summary object, if available."""
+        return self.failure_summary
+
+    def _raise_if_fit_failed(self, action_message):
+        """Raise a clean error for plot/summary requests after fit failure."""
+        if not self.fit_failed:
+            return
+
+        _base_message = (
+            "Cannot generate "
+            f"{action_message}: the most recent consensus fit failed"
+        )
+        _reason_messages = {
+            "no_accepted_bands": (
+                "because the bands did not support a common periodicity."
+            ),
+            "insufficient_consensus_inliers": (
+                "because too few reliable bands survived the consensus filtering stage."
+            ),
+            "frequency_aggregation_error": (
+                "because robust frequency aggregation could not build a "
+                "stable consensus."
+            ),
+            "invalid_consensus_frequency": (
+                "because the inferred consensus frequency was not physically valid."
+            ),
+        }
+        _tail = _reason_messages.get(
+            self.failure_reason,
+            "because the data did not support a coherent shared period.",
+        )
+        _message = f"{_base_message} {_tail}"
+        exc = ConsensusFitError(
+            _message,
+            failure_diagnostics=self.failure_diagnostics or {"status": "failed"},
+        )
+        exc.failure_summary = self.failure_summary
+        self._append_fit_history(
+            success=False,
+            failed=True,
+            exception_type=exc.__class__.__name__,
+            exception_message=_message,
+            notes={
+                "reason": self.failure_reason,
+                "source": "_raise_if_fit_failed",
+                "action": action_message,
+            },
+        )
+        raise exc
 
     def transform_x(self, values):
         if self.xtransform is None:
@@ -4841,7 +7913,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._validate_n_lags(n_lags)
             if max_lag is None:
                 max_lag = self._default_max_lag(t)
-            edges = torch.linspace(0.0, max_lag, n_lags + 1, device=t.device)
+            edges = torch.linspace(0.0, max_lag, n_lags + 1, dtype=t.dtype, device=t.device)
             n_bins = n_lags
 
         mean = y.mean() if subtract_mean else 0.0
@@ -5626,7 +8698,178 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return model_str, diagnostics
 
-    def fit(
+    def fit(self, *args, **kwargs):
+        """Fit wrapper that records lightweight in-memory fit history."""
+        # Nested fit() calls (e.g. from _consensus_standard_fit) delegate
+        # to _fit_core directly so that only the outermost call records a
+        # single canonical history entry.
+        _nesting = getattr(self, "_fit_nesting_depth", 0)
+        if _nesting > 0:
+            self._fit_nesting_depth = _nesting + 1
+            try:
+                return self._fit_core(*args, **kwargs)
+            finally:
+                self._fit_nesting_depth -= 1
+
+        self._fit_nesting_depth = 1
+        _fit_start = time.perf_counter()
+        _model_arg = kwargs.get("model")
+        _fit_strategy = kwargs.get("fit_strategy")
+        _training_iter = kwargs.get("training_iter")
+        _num_mixtures = kwargs.get("num_mixtures")
+        _backend = "cuda" if bool(kwargs.get("cuda", False)) else "cpu"
+        _constraint_set = kwargs.get("constraint_set")
+        _constrain_consensus = kwargs.get("constrain_consensus")
+        if _constraint_set is not None or _constrain_consensus is True:
+            _constrained = True
+        elif _constrain_consensus is False:
+            _constrained = False
+        else:
+            _constrained = None
+
+        _model_class = None
+        if _model_arg is not None:
+            _model_class = (
+                _model_arg
+                if isinstance(_model_arg, str)
+                else _model_arg.__class__.__name__
+            )
+
+        # Capture the unique bands present at call time for provenance.
+        try:
+            _bands = (
+                sorted({str(b) for b in np.asarray(self.band, dtype=np.str_)})
+                if self.band is not None
+                else None
+            )
+        except Exception:
+            _bands = None
+
+        # Infer parameterisation space from the model argument.  This is a
+        # best-effort guess; the resolved class is used in the success branch.
+        _model_class_lower = str(_model_class or "").lower()
+        _fit_strategy_lower = str(_fit_strategy or "").lower()
+        if (
+            "spectralmixture" in _model_class_lower
+            or "separable" in _model_class_lower
+            or _fit_strategy_lower == "consensus"
+            or _model_arg in ("2D", "1D", "2d", "1d")
+        ):
+            _uses_frequency_space: bool | None = True
+            _uses_period_space: bool | None = False
+        elif (
+            "periodic" in _model_class_lower
+            or "quasiperiodic" in _model_class_lower
+        ):
+            _uses_frequency_space = False
+            _uses_period_space = True
+        else:
+            _uses_frequency_space = None
+            _uses_period_space = None
+
+        _fit_configuration = self._collect_fit_configuration_snapshot(
+            fit_kwargs=kwargs,
+            context={
+                "model_class": _model_class,
+                "fit_strategy": _fit_strategy,
+                "training_iter": _training_iter,
+                "num_mixtures": _num_mixtures,
+                "backend": _backend,
+                "constraint_set": (
+                    str(_constraint_set) if _constraint_set is not None else None
+                ),
+            },
+        )
+
+        self._fit_history_context = {
+            "model_class": _model_class,
+            "fit_strategy": _fit_strategy,
+            "training_iter": _training_iter,
+            "num_mixtures": _num_mixtures,
+            "backend": _backend,
+            "constrained": _constrained,
+            "constrained_fit": _constrained,
+            "constraint_set": (
+                str(_constraint_set) if _constraint_set is not None else None
+            ),
+            "bands": _bands,
+            "uses_frequency_space": _uses_frequency_space,
+            "uses_period_space": _uses_period_space,
+            "fit_configuration": _fit_configuration,
+            "environment": self._fit_history_environment_metadata(),
+        }
+        self._fit_history_recorded = False
+
+        try:
+            result = self._fit_core(*args, **kwargs)
+        except Exception as exc:
+            if not bool(getattr(self, "_fit_history_recorded", False)):
+                self._append_fit_history(
+                    success=False,
+                    failed=True,
+                    exception_type=exc.__class__.__name__,
+                    exception_message=str(exc),
+                    elapsed_seconds=time.perf_counter() - _fit_start,
+                    notes={"source": "fit_exception"},
+                )
+            raise
+        else:
+            _model_obj = getattr(self, "model", None)
+            _resolved_model_class = (
+                _model_obj.__class__.__name__
+                if _model_obj is not None
+                else _model_class
+            )
+            _resolved_backend = (
+                "cuda"
+                if bool(getattr(self, "_cuda", False))
+                else _backend
+            )
+            # Refine parameterisation inference from the resolved class name.
+            _resolved_class_lower = str(_resolved_model_class or "").lower()
+            if (
+                "spectralmixture" in _resolved_class_lower
+                or "separable" in _resolved_class_lower
+            ):
+                _resolved_freq = True
+                _resolved_period = False
+            elif (
+                "periodic" in _resolved_class_lower
+                or "quasiperiodic" in _resolved_class_lower
+            ):
+                _resolved_freq = False
+                _resolved_period = True
+            else:
+                _resolved_freq = _uses_frequency_space
+                _resolved_period = _uses_period_space
+            self._append_fit_history(
+                model_class=_resolved_model_class,
+                fit_strategy=_fit_strategy,
+                success=True,
+                failed=False,
+                training_iter=_training_iter,
+                num_mixtures=_num_mixtures,
+                elapsed_seconds=time.perf_counter() - _fit_start,
+                backend=_resolved_backend,
+                constrained=_constrained,
+                constrained_fit=_constrained,
+                constraint_set=(
+                    str(_constraint_set)
+                    if _constraint_set is not None
+                    else None
+                ),
+                bands=_bands,
+                uses_frequency_space=_resolved_freq,
+                uses_period_space=_resolved_period,
+                notes={"source": "fit_success"},
+            )
+            self._fit_history_recorded = True
+            return result
+        finally:
+            self._fit_nesting_depth = 0
+            self._fit_history_context = {}
+
+    def _fit_core(
         self,
         model=None,
         likelihood=None,
@@ -5646,6 +8889,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lr=0.1,
         stopavg=30,
         variance=False,
+        fit_strategy=None,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -5792,6 +9036,25 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
+        fit_strategy : {"consensus", "consensus_multicomp",
+                        "consensus_relaxed"} or None, optional
+            Optional fitting-strategy selector.  The default ``None`` keeps the
+            existing general ``fit`` workflow unchanged.  When set to one of
+            the listed strategy names, ``fit`` dispatches to the corresponding
+            internal consensus-fit pathway.
+            ``"consensus"`` runs a deterministic multi-band consensus workflow
+            (2D light curves only) that:
+            (i) computes per-band sampling diagnostics,
+            (ii) extracts one dominant LS frequency per acceptable band,
+            (iii) aggregates frequencies with median/MAD outlier rejection,
+            and (iv) uses the resulting consensus to seed and optionally
+            constrain the spectral-mixture fit.
+            ``"consensus_multicomp"`` and ``"consensus_relaxed"`` are currently
+            placeholders and still raise ``NotImplementedError``.
+            Additional ``"consensus"`` controls accepted via ``**kwargs``:
+            ``min_points_per_band``, ``max_gap_fraction``,
+            ``min_duty_cycle``, ``outlier_sigma``, ``use_acf``,
+            ``constrain_consensus``, and ``consensus_width_factor``.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -5817,6 +9080,37 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # mutation (MLS init / fallback default).  Used later to decide
         # whether to substitute the stored _model_num_mixtures.
         _num_mixtures_arg = num_mixtures
+        self._reset_fit_state(
+            clear_failure=True,
+            clear_model_state=False,
+            clear_consensus=bool(fit_strategy is not None),
+        )
+
+        # Dispatch alternative fit strategies before any stateful setup from
+        # the default/general fit pathway mutates this Lightcurve instance.
+        if fit_strategy is not None:
+            return self._consensus_fit(
+                fit_strategy=fit_strategy,
+                model=model,
+                likelihood=likelihood,
+                num_mixtures=num_mixtures,
+                guess=guess,
+                periods=periods,
+                use_mls_init=use_mls_init,
+                use_best_band_init=use_best_band_init,
+                constraint_set=constraint_set,
+                grid_size=grid_size,
+                cuda=cuda,
+                training_iter=training_iter,
+                max_cg_iterations=max_cg_iterations,
+                optim=optim,
+                miniter=miniter,
+                stop=stop,
+                lr=lr,
+                stopavg=stopavg,
+                variance=variance,
+                **kwargs,
+            )
 
         if not hasattr(self, "likelihood"):
             self.set_likelihood(likelihood, variance=variance, **kwargs)
@@ -6296,8 +9590,3935 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 stopavg=stopavg,
             )
         self.__FITTED_MAP = True
+        self.is_fitted = True
+        self.fit_failed = False
+        self.failure_reason = None
+        self.failure_diagnostics = None
+        self.failure_summary = None
 
         return self.results
+
+    def _consensus_fit(self, fit_strategy, **fit_kwargs):
+        """Dispatch consensus fit strategies to their internal handlers."""
+        try:
+            if fit_strategy == "consensus":
+                return self._consensus_standard_fit(**fit_kwargs)
+            if fit_strategy == "consensus_multicomp":
+                return self._consensus_multicomp_fit(**fit_kwargs)
+            if fit_strategy == "consensus_relaxed":
+                return self._consensus_relaxed_fit(**fit_kwargs)
+            msg = (
+                "Invalid fit_strategy. Expected None or one of: "
+                "'consensus', 'consensus_multicomp', 'consensus_relaxed'. "
+                f"Got {fit_strategy!r}."
+            )
+            raise ValueError(msg)
+        except ConsensusFitError as exc:
+            _failure_diagnostics = getattr(exc, "failure_diagnostics", None) or {}
+            _failure_reason = _failure_diagnostics.get("reason") or "consensus_failure"
+            _failure_message = str(exc)
+            failure_summary = self._record_failure_state(
+                reason=_failure_reason,
+                message=_failure_message,
+                diagnostics=_failure_diagnostics,
+                clear_model_state=False,
+                clear_consensus=False,
+            )
+            exc.failure_diagnostics = self.failure_diagnostics
+            exc.failure_summary = failure_summary
+            raise
+
+    def _consensus_resolve_time_spectral_mixture_keys(self):
+        """Resolve time-kernel spectral-mixture parameter keys for consensus fit."""
+        if (
+            not hasattr(self, "model")
+            or self.model is None
+            or not hasattr(self, "_model_pars")
+        ):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before resolving "
+                "consensus SM keys."
+            )
+
+        _available = [
+            k for k in self._model_pars if isinstance(k, str)
+        ]
+
+        def _resolve_param_key(param_name):
+            candidates = set()
+            raw_token = "raw_"
+            for key, meta in self._model_pars.items():
+                if not isinstance(key, str):
+                    continue
+                if key.startswith(raw_token) or f".{raw_token}" in key:
+                    continue
+                if key.endswith(f".{param_name}"):
+                    candidates.add(key)
+                if key == param_name and isinstance(meta, dict):
+                    resolved = (
+                        meta.get("constrained_full_name")
+                        or meta.get("full_name")
+                    )
+                    if isinstance(resolved, str):
+                        candidates.add(resolved)
+                if isinstance(meta, dict):
+                    resolved = meta.get("constrained_full_name")
+                    if (
+                        isinstance(resolved, str)
+                        and resolved.endswith(f".{param_name}")
+                    ):
+                        candidates.add(resolved)
+
+            if not candidates:
+                _avail_str = ", ".join(_available[:20]) or "(none)"
+                raise RuntimeError(
+                    f"Could not resolve a time-kernel '{param_name}' key from "
+                    f"_model_pars. Available keys: {_avail_str}. "
+                    "Ensure the model uses a spectral-mixture time kernel "
+                    "(e.g. model='2D' or time_kernel_type='spectral_mixture')."
+                )
+
+            def _candidate_rank(candidate):
+                if candidate == f"covar_module.{param_name}":
+                    return (0, len(candidate), candidate)
+                if (
+                    candidate.startswith("covar_module.")
+                    and ".kernels.0." in candidate
+                ):
+                    return (1, len(candidate), candidate)
+                if candidate.startswith("covar_module."):
+                    return (2, len(candidate), candidate)
+                return (3, len(candidate), candidate)
+
+            ordered = sorted(
+                candidates,
+                key=_candidate_rank,
+            )
+            return ordered[0]
+
+        return {
+            "mixture_means": _resolve_param_key("mixture_means"),
+            "mixture_scales": _resolve_param_key("mixture_scales"),
+        }
+
+    def _consensus_clear_model_state(self):
+        """Clear stale model-related state before a fresh consensus model build.
+
+        Removes ``self.model``, ``self.likelihood``, and ``self._model_pars``
+        and resets the likelihood-set flag and the constraints-set flag so
+        that the subsequent :meth:`set_model` call always starts from a clean
+        slate and default constraints are reapplied to the new model.
+        Light-curve data and fit history are never touched.
+        """
+        for _attr in ("model", "likelihood", "_model_pars"):
+            try:
+                setattr(self, _attr, None)
+            except Exception:
+                pass
+        # Reset the likelihood-set guard so set_model will call set_likelihood
+        # again for the new model build.
+        try:
+            self.__SET_LIKELIHOOD_CALLED = False
+        except Exception:
+            pass
+        # Reset the constraints-set flag so that the new model always has
+        # fresh constraints applied (either by set_default_constraints in the
+        # consensus path or by _fit_core).
+        try:
+            self.__CONTRAINTS_SET = False
+        except Exception:
+            pass
+
+    def _consensus_validate_final_model_supports_sm_time_kernel(
+        self, model_name, time_kernel_type
+    ):
+        """Validate that the built model exposes SM time-kernel parameters.
+
+        Parameters
+        ----------
+        model_name : str or None
+            The model identifier passed to the current fit call.
+        time_kernel_type : str or None
+            The time-kernel type passed to the current fit call.
+
+        Raises
+        ------
+        ConsensusFitError
+            If the model does not expose ``mixture_means`` / ``mixture_scales``
+            in ``_model_pars``.
+        """
+        try:
+            self._consensus_resolve_time_spectral_mixture_keys()
+        except RuntimeError as exc:
+            _model_str = repr(model_name)
+            _tkt_str = repr(time_kernel_type)
+            _msg = (
+                "Consensus constraints require a spectral-mixture time kernel, "
+                f"but the model {_model_str} built with "
+                f"time_kernel_type={_tkt_str} does not expose the required "
+                "mixture_means / mixture_scales parameters. "
+                "Pass time_kernel_type='spectral_mixture' or use model='2D'."
+            )
+            _exc = ConsensusFitError(_msg)
+            _exc.failure_diagnostics = {
+                "reason": "model_incompatible_with_sm_constraints",
+                "model": model_name,
+                "time_kernel_type": time_kernel_type,
+                "detail": str(exc),
+            }
+            raise _exc from exc
+
+    def _consensus_validate_applied_sm_constraints(
+        self, keys, consensus_frequencies, frequency_bounds
+    ):
+        """Verify that consensus constraints were actually applied to the model.
+
+        Inspects the registered constraint on the ``mixture_means`` parameter
+        and confirms that an ``Interval`` constraint (with finite upper bound)
+        is registered.  Raises :exc:`ConsensusFitError` if the constraint is
+        missing or looks like a default ``GreaterThan``/``Positive`` (infinite
+        upper bound), which would indicate that default constraints overwrote
+        the consensus constraints.
+
+        Parameters
+        ----------
+        keys : dict
+            Resolved SM parameter keys as returned by
+            :meth:`_consensus_resolve_time_spectral_mixture_keys`.
+        consensus_frequencies : array-like
+            The consensus frequency or frequencies (used in error messages).
+        frequency_bounds : tuple of (float, float) or None
+            The ``(lower, upper)`` bounds that were passed to
+            :meth:`set_constraint`.  If ``None``, validation is skipped.
+
+        Raises
+        ------
+        ConsensusFitError
+            If the constraint is not found or its upper bound is infinite
+            (indicating the consensus Interval constraint was not applied).
+        """
+        if frequency_bounds is None:
+            return
+        _model_pars = getattr(self, "_model_pars", None)
+        _available_keys = (
+            sorted(_model_pars.keys())
+            if isinstance(_model_pars, dict)
+            else f"<non-dict:{type(_model_pars).__name__}>"
+        )
+        _mm_key = keys.get("mixture_means")
+        if _mm_key is None:
+            _msg = (
+                "Consensus constraint validation failed: resolved keys do not "
+                "contain 'mixture_means' while frequency bounds were provided. "
+                f"resolved_keys={sorted(keys.keys())}, "
+                f"available_model_parameter_keys={_available_keys}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+            raise ConsensusFitError(_msg)
+        if not isinstance(_model_pars, dict) or _mm_key not in _model_pars:
+            _msg = (
+                "Consensus constraint validation failed: mixture_means key "
+                f"{_mm_key!r} is missing from model parameters. "
+                f"available_model_parameter_keys={_available_keys}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+            raise ConsensusFitError(_msg)
+        _mm_meta = _model_pars[_mm_key]
+        if not isinstance(_mm_meta, dict):
+            _msg = (
+                "Consensus constraint validation failed: metadata for "
+                f"{_mm_key!r} must be a dict, got "
+                f"{type(_mm_meta).__name__}. "
+                f"available_model_parameter_keys={_available_keys}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+            raise ConsensusFitError(_msg)
+        _module = _mm_meta.get("module")
+        if _module is None:
+            _msg = (
+                "Consensus constraint validation failed: no module found in "
+                f"metadata for { _mm_key!r}. metadata_keys={sorted(_mm_meta.keys())}, "
+                f"available_model_parameter_keys={_available_keys}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+            raise ConsensusFitError(_msg)
+        _module_name = _module.__class__.__name__
+        _raw_name = (
+            f"raw_{_mm_key.split('.')[-1]}"
+            if "raw_" not in _mm_key
+            else _mm_key.split(".")[-1]
+        )
+        # GPyTorch stores constraints with a "_constraint" suffix in
+        # named_constraints(), so the registered name is:
+        #   raw_mixture_means_constraint
+        _constraint_key = _raw_name + "_constraint"
+        try:
+            _registered = dict(_module.named_constraints())
+        except Exception as exc:
+            _msg = (
+                "Consensus constraint validation failed: unable to inspect "
+                "registered constraints via named_constraints(). "
+                f"mixture_means_key={_mm_key!r}, module_class={_module_name}, "
+                f"expected_raw_constraint={_constraint_key!r}, "
+                f"expected_frequency_bounds={frequency_bounds}, "
+                f"detail={exc!r}."
+            )
+            raise ConsensusFitError(_msg) from exc
+        _found = _registered.get(_constraint_key)
+        if _found is None:
+            _registered_names = sorted(_registered.keys())
+            raise ConsensusFitError(
+                "Consensus constraint validation failed: no constraint found "
+                f"for raw parameter {_constraint_key!r} on module "
+                f"{_module_name}. The consensus constraint was not registered. "
+                "This may indicate that default constraints overwrote the "
+                "consensus constraints. "
+                f"registered_constraint_names={_registered_names}, "
+                f"mixture_means_key={_mm_key!r}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+        # Verify the constraint is an Interval (finite upper bound), not just
+        # a GreaterThan or Positive (infinite upper bound). Default constraints
+        # set by set_default_constraints use GreaterThan; the consensus
+        # constraint sets an Interval with finite bounds. If the upper bound
+        # is infinite, the consensus constraint was overwritten.
+        _freqs_arr = np.asarray(consensus_frequencies, dtype=float).ravel()
+        if _freqs_arr.size == 0 or not np.all(np.isfinite(_freqs_arr)):
+            raise ConsensusFitError(
+                "Consensus constraint validation failed: consensus_frequencies "
+                "must be non-empty and finite for validation. "
+                f"got={_freqs_arr.tolist()}, mixture_means_key={_mm_key!r}, "
+                f"expected_frequency_bounds={frequency_bounds}."
+            )
+        _target_freq = float(np.median(_freqs_arr))
+        try:
+            import math as _math
+            _lower_raw = getattr(_found, "lower_bound", None)
+            _upper_raw = getattr(_found, "upper_bound", None)
+            if _lower_raw is None or _upper_raw is None:
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: registered "
+                    "constraint does not expose usable lower/upper bounds. "
+                    f"constraint_type={type(_found).__name__}, "
+                    f"module_class={_module_name}, mixture_means_key={_mm_key!r}, "
+                    f"expected_frequency_bounds={frequency_bounds}, "
+                    f"consensus_frequency={_target_freq:.6g}."
+                )
+            _upper = float(_upper_raw)
+            _lower = float(_lower_raw)
+            if _math.isinf(_upper):
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: the registered "
+                    f"mixture_means constraint on module {_module_name} has "
+                    "an infinite upper bound, indicating it is not the expected "
+                    "finite consensus Interval constraint. "
+                    f"mixture_means_key={_mm_key!r}, "
+                    f"expected_frequency_bounds={frequency_bounds}, "
+                    f"registered_bounds=[{_lower:.6g}, {_upper:.6g}], "
+                    f"consensus_frequency={_target_freq:.6g}."
+                )
+            if not (_lower < _upper):
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: the registered "
+                    "mixture_means constraint has invalid bounds "
+                    f"[{_lower:.6g}, {_upper:.6g}] (lower >= upper). "
+                    f"mixture_means_key={_mm_key!r}, module_class={_module_name}, "
+                    f"expected_frequency_bounds={frequency_bounds}, "
+                    f"consensus_frequency={_target_freq:.6g}."
+                )
+            if not (_lower <= _target_freq <= _upper):
+                raise ConsensusFitError(
+                    "Consensus constraint validation failed: consensus "
+                    "frequency lies outside the registered mixture_means "
+                    "constraint bounds. "
+                    f"mixture_means_key={_mm_key!r}, module_class={_module_name}, "
+                    f"expected_frequency_bounds={frequency_bounds}, "
+                    f"registered_bounds=[{_lower:.6g}, {_upper:.6g}], "
+                    f"consensus_frequency={_target_freq:.6g}."
+                )
+        except ConsensusFitError:
+            raise
+        except Exception as exc:
+            raise ConsensusFitError(
+                "Consensus constraint validation failed: unable to parse "
+                "registered constraint bounds. "
+                f"mixture_means_key={_mm_key!r}, module_class={_module_name}, "
+                f"constraint_type={type(_found).__name__}, "
+                f"expected_frequency_bounds={frequency_bounds}, "
+                f"consensus_frequency={_target_freq:.6g}, detail={exc!r}."
+            ) from exc
+
+    def _consensus_build_spectral_mixture_initialization(
+        self,
+        frequencies,
+        scales=None,
+        dtype=None,
+        device=None,
+    ):
+        """Convert consensus frequency estimates to spectral-mixture init tensors.
+
+        Converts consensus frequency estimates into properly-shaped tensors for
+        spectral-mixture kernel initialization.
+
+        Parameters
+        ----------
+        frequencies : float or list or numpy.ndarray or torch.Tensor
+            Consensus frequency estimate(s). Values are converted to a 1-D
+            tensor and must be non-empty, finite, and strictly positive.
+        scales : float or list or numpy.ndarray or torch.Tensor or None, optional
+            Optional spectral-mixture scale value(s). If a scalar is provided,
+            it is broadcast to all mixtures. If array-like, it must have the
+            same number of elements as ``frequencies``.
+        dtype : torch.dtype or None, optional
+            Tensor dtype for returned initialization tensors. If ``None``,
+            inferred from ``self.xdata`` when available; otherwise uses
+            ``torch.float32``.
+        device : torch.device or str or None, optional
+            Device for returned initialization tensors. If ``None``, inferred
+            from ``self.xdata`` when available; otherwise uses CPU.
+
+        Returns
+        -------
+        dict
+            Initialization dictionary containing ``mixture_means`` with shape
+            ``(1, n_mixtures, 1)``, ``mixture_scales`` (same shape when scales
+            are provided, otherwise ``None``), and ``num_mixtures``.
+
+        Raises
+        ------
+        ValueError
+            If frequencies or scales fail validation checks.
+        """
+        xdata_tensor = (
+            self.xdata
+            if hasattr(self, "xdata") and isinstance(self.xdata, torch.Tensor)
+            else None
+        )
+        if dtype is None:
+            dtype = (
+                xdata_tensor.dtype
+                if xdata_tensor is not None
+                else torch.float32
+            )
+        if device is None:
+            device = (
+                xdata_tensor.device
+                if xdata_tensor is not None
+                else torch.device("cpu")
+            )
+
+        freq_tensor = torch.as_tensor(frequencies, dtype=dtype, device=device)
+        freq_tensor = freq_tensor.reshape(-1)
+
+        if freq_tensor.numel() == 0:
+            raise ValueError("frequencies must not be empty.")
+        if not torch.all(torch.isfinite(freq_tensor)):
+            raise ValueError("frequencies must contain only finite values.")
+        if not torch.all(freq_tensor > 0):
+            raise ValueError("frequencies must be strictly positive.")
+
+        n_mixtures = freq_tensor.numel()
+        mixture_means = freq_tensor.reshape(1, n_mixtures, 1)
+        init = {
+            "mixture_means": mixture_means,
+            "mixture_scales": None,
+            "num_mixtures": int(n_mixtures),
+        }
+
+        if scales is not None:
+            scales_tensor = torch.as_tensor(scales, dtype=dtype, device=device)
+            scales_tensor = scales_tensor.reshape(-1)
+            if scales_tensor.numel() == 0:
+                raise ValueError("scales must not be empty when provided.")
+            if not torch.all(torch.isfinite(scales_tensor)):
+                raise ValueError("scales must contain only finite values.")
+            if not torch.all(scales_tensor > 0):
+                raise ValueError("scales must be strictly positive.")
+
+            if scales_tensor.numel() == 1 and n_mixtures > 1:
+                scales_tensor = scales_tensor.expand(n_mixtures)
+            elif scales_tensor.numel() != n_mixtures:
+                raise ValueError(
+                    "scales must be a scalar or have the same number of elements "
+                    "as frequencies."
+                )
+
+            init["mixture_scales"] = scales_tensor.reshape(1, n_mixtures, 1)
+
+        return init
+
+    def _consensus_build_guess(
+        self,
+        frequencies,
+        scales=None,
+        dtype=None,
+        device=None,
+    ):
+        """Build a model-key-aware spectral-mixture init dictionary."""
+        keys = self._consensus_resolve_time_spectral_mixture_keys()
+        init = self._consensus_build_spectral_mixture_initialization(
+            frequencies=frequencies,
+            scales=scales,
+            dtype=dtype,
+            device=device,
+        )
+
+        expected_num_mixtures = getattr(self, "_fit_num_mixtures_effective", None)
+        if (
+            expected_num_mixtures is not None
+            and int(expected_num_mixtures) != init["num_mixtures"]
+        ):
+            raise ValueError(
+                "The number of consensus frequencies does not match the model's "
+                f"number of mixtures ({init['num_mixtures']} != "
+                f"{int(expected_num_mixtures)})."
+            )
+
+        guess = {
+            keys["mixture_means"]: init["mixture_means"],
+        }
+        if init["mixture_scales"] is not None:
+            guess[keys["mixture_scales"]] = init["mixture_scales"]
+
+        return guess
+
+    def _consensus_iter_band_lightcurves(self):
+        """Yield per-band 1D light curves using stored band-label metadata.
+
+        Yields
+        ------
+        tuple[str, Lightcurve]
+            Pairs of ``(band_label, band_lightcurve_1d)``. Each returned light
+            curve contains only time (1-D xdata), flux, and optional flux
+            uncertainty for that band.
+
+        Raises
+        ------
+        ValueError
+            If this light curve is not 2-D, or if per-row band labels are not
+            available/consistent.
+        """
+        if self.ndim <= 1:
+            raise ValueError(
+                "fit_strategy='consensus' requires a 2D (multiband) Lightcurve."
+            )
+        if self.band is None:
+            raise ValueError(
+                "fit_strategy='consensus' requires per-row band labels in "
+                "Lightcurve.band for multiband splitting."
+            )
+        if len(self.band) != len(self._xdata_raw):
+            raise ValueError(
+                "fit_strategy='consensus' requires one band label per "
+                "observation row for 2D light curves."
+            )
+
+        band_arr = np.asarray(self.band, dtype=str)
+        unique_bands = list(dict.fromkeys(band_arr.tolist()))
+
+        for band_label in unique_bands:
+            mask_np = band_arr == band_label
+            mask = torch.as_tensor(
+                mask_np,
+                dtype=torch.bool,
+                device=self._xdata_raw.device,
+            )
+            t = self._xdata_raw[mask, 0].clone()
+            y = self._ydata_raw[mask].clone()
+            yerr = (
+                self._yerr_raw[mask].clone()
+                if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
+                else None
+            )
+            lc_band = Lightcurve(
+                t,
+                y,
+                yerr=yerr,
+                xtransform=self.xtransform,
+                ytransform=self.ytransform,
+                name=self.name,
+                band=np.asarray([band_label], dtype=np.str_),
+            )
+            yield str(band_label), lc_band
+
+    def _consensus_resolve_controls(
+        self,
+        metrics_by_band,
+        min_points_per_band=None,
+        max_gap_fraction=None,
+        min_duty_cycle=None,
+        outlier_sigma=None,
+        consensus_width_factor=None,
+    ):
+        """Resolve consensus-control defaults from per-band sampling metrics.
+
+        Any control set explicitly by the caller is used as-is. Missing controls
+        are derived conservatively from the observed per-band sampling metrics.
+        """
+        valid_metrics = [
+            m
+            for m in metrics_by_band.values()
+            if isinstance(m, dict) and "error" not in m
+        ]
+
+        if valid_metrics:
+            n_points_vals = np.asarray(
+                [float(m.get("n_points", np.nan)) for m in valid_metrics],
+                dtype=float,
+            )
+            gap_vals = np.asarray(
+                [float(m.get("max_gap_fraction", np.nan)) for m in valid_metrics],
+                dtype=float,
+            )
+            duty_vals = np.asarray(
+                [float(m.get("duty_cycle", np.nan)) for m in valid_metrics],
+                dtype=float,
+            )
+        else:
+            n_points_vals = np.asarray([8.0], dtype=float)
+            gap_vals = np.asarray([0.4], dtype=float)
+            duty_vals = np.asarray([0.1], dtype=float)
+
+        if min_points_per_band is None:
+            min_points_per_band = int(
+                np.clip(np.nanpercentile(n_points_vals, 25), 8, 25)
+            )
+        if max_gap_fraction is None:
+            max_gap_fraction = float(
+                np.clip(np.nanmedian(gap_vals) * 1.5, 0.25, 0.8)
+            )
+        if min_duty_cycle is None:
+            min_duty_cycle = float(np.clip(np.nanmedian(duty_vals) * 0.5, 0.02, 0.3))
+        if outlier_sigma is None:
+            outlier_sigma = 3.5
+        if consensus_width_factor is None:
+            consensus_width_factor = 3.0
+
+        if min_points_per_band < 2:
+            raise ValueError("min_points_per_band must be >= 2.")
+        if not (0 < max_gap_fraction <= 1):
+            raise ValueError("max_gap_fraction must be in the interval (0, 1].")
+        if not (0 <= min_duty_cycle <= 1):
+            raise ValueError("min_duty_cycle must be in the interval [0, 1].")
+        if not (np.isfinite(outlier_sigma) and outlier_sigma > 0):
+            raise ValueError("outlier_sigma must be positive and finite.")
+        if not (
+            np.isfinite(consensus_width_factor) and consensus_width_factor > 0
+        ):
+            raise ValueError(
+                "consensus_width_factor must be positive and finite."
+            )
+
+        return {
+            "min_points_per_band": int(min_points_per_band),
+            "max_gap_fraction": float(max_gap_fraction),
+            "min_duty_cycle": float(min_duty_cycle),
+            "outlier_sigma": float(outlier_sigma),
+            "consensus_width_factor": float(consensus_width_factor),
+        }
+
+    @staticmethod
+    def _consensus_reject_bad_bands(
+        metrics,
+        min_points_per_band,
+        max_gap_fraction,
+        min_duty_cycle,
+    ):
+        """Return a list of deterministic rejection reasons from sampling metrics."""
+        reasons = []
+        if not isinstance(metrics, dict):
+            return [_CONSENSUS_REJECTION_REASON_SAMPLING_METRICS_UNAVAILABLE]
+        if "error" in metrics:
+            reasons.append(str(metrics["error"]))
+            return reasons
+
+        n_points = float(metrics.get("n_points", np.nan))
+        if not (np.isfinite(n_points) and n_points >= min_points_per_band):
+            reasons.append(
+                f"{_CONSENSUS_REJECTION_REASON_PREFIX_TOO_FEW_POINTS}"
+                f"{n_points:g} < {int(min_points_per_band)})"
+            )
+
+        gap_fraction = float(metrics.get("max_gap_fraction", np.nan))
+        if not (np.isfinite(gap_fraction) and gap_fraction <= max_gap_fraction):
+            reasons.append(
+                f"{_CONSENSUS_REJECTION_REASON_PREFIX_MAX_GAP_FRACTION}"
+                f"{gap_fraction:.3g} > {max_gap_fraction:.3g})"
+            )
+
+        duty_cycle = float(metrics.get("duty_cycle", np.nan))
+        if not (np.isfinite(duty_cycle) and duty_cycle >= min_duty_cycle):
+            reasons.append(
+                f"{_CONSENSUS_REJECTION_REASON_PREFIX_DUTY_CYCLE}"
+                f"{duty_cycle:.3g} < {min_duty_cycle:.3g})"
+            )
+
+        return reasons
+
+    @staticmethod
+    def _consensus_extract_acf_candidate(acf_result):
+        """Extract the strongest non-zero-lag ACF peak as a frequency candidate.
+
+        ACF peaks are located in lag space [days].  The dominant lag is then
+        converted to a frequency [1/day] which is the primary quantity used
+        by the consensus machinery.
+
+        Convention
+        ----------
+        INTERNAL : frequency [1/day]  (``"frequency"`` key in returned dict)
+        USER-FACING : period [day]    (``"period"`` key — display/diagnostics only)
+
+        Parameters
+        ----------
+        acf_result : ACFResult or None
+            Output from :meth:`acf(method="data")`. If unavailable or invalid,
+            no candidate is returned.
+
+        Returns
+        -------
+        dict or None
+            ``{"frequency": ..., "period": ...}`` where ``"frequency"``
+            [1/day] is the primary consensus quantity and ``"period"`` [day]
+            is retained for backward-compatible display only.  Returns ``None``
+            when no robust candidate can be derived.
+
+        Notes
+        -----
+        If ``scipy.signal.find_peaks`` is unavailable, this helper degrades
+        gracefully and returns ``None`` so consensus vetting can continue in
+        LS-only mode.
+        """
+        if acf_result is None:
+            return None
+        lag = acf_result.lag.detach().cpu().numpy()
+        acf_vals = acf_result.acf.detach().cpu().numpy()
+        if lag.size < 3 or acf_vals.size < 3:
+            return None
+
+        # Drop the zero-lag bin; all positive lags remain.
+        lag = lag[1:]
+        acf_vals = acf_vals[1:]
+        valid = np.isfinite(lag) & np.isfinite(acf_vals) & (lag > 0)
+        if not np.any(valid):
+            return None
+        lag = lag[valid]
+        acf_vals = acf_vals[valid]
+        if lag.size < 3:
+            return None
+
+        if _scipy_find_peaks is None:
+            peaks = np.asarray([], dtype=int)
+        else:
+            peaks, _ = _scipy_find_peaks(acf_vals)
+
+        if peaks.size == 0:
+            return None
+
+        best_idx = peaks[np.argmax(acf_vals[peaks])]
+        # acf_lag is the dominant ACF lag [days]; convert to frequency for
+        # consensus logic.  "period" is kept only for user-facing display.
+        acf_lag = float(lag[best_idx])
+        if not (np.isfinite(acf_lag) and acf_lag > 0):
+            return None
+        candidate_frequency = float(1.0 / acf_lag)
+        return {
+            "frequency": candidate_frequency,
+            "period": acf_lag,  # display-only; primary key is "frequency"
+        }
+
+    @staticmethod
+    def _consensus_fractional_frequency_difference(f1, f2):
+        """Return the standard consensus fractional frequency difference.
+
+        Definition
+        ----------
+        ``abs(f1 - f2) / min(f1, f2)``
+        The smaller-frequency normalisation keeps agreement checks symmetric in
+        frequency space while measuring mismatch relative to the slower
+        timescale represented by the pair.
+
+        Parameters
+        ----------
+        f1 : float
+            First positive frequency [1/day].
+        f2 : float
+            Second positive frequency [1/day].
+
+        Returns
+        -------
+        float
+            Fractional frequency difference for consensus agreement tests.
+
+        Raises
+        ------
+        ValueError
+            If either frequency is not finite and strictly positive.
+        """
+        f1_val = float(f1)
+        f2_val = float(f2)
+        if not (
+            np.isfinite(f1_val)
+            and np.isfinite(f2_val)
+            and f1_val > 0
+            and f2_val > 0
+        ):
+            raise ValueError(
+                "fractional frequency difference requires finite, positive "
+                "frequencies."
+            )
+        return abs(f1_val - f2_val) / min(f1_val, f2_val)
+
+    @staticmethod
+    def _consensus_compare_ls_acf(
+        ls_frequency,
+        acf_frequency,
+        harmonic_tolerance=0.15,
+    ):
+        """Compare LS and ACF dominant frequencies for consistency checks.
+
+        All internal comparisons are performed in frequency space [1/day].
+        ACF is treated as an independent periodicity diagnostic. Bands where
+        LS and ACF strongly disagree are rejected because the dominant LS peak
+        is less likely to reflect the shared physical timescale.
+
+        The ``ratio`` returned is ``larger_frequency / smaller_frequency``.
+        Because both inputs represent the same physical cycle rate, a harmonic
+        relationship in frequency space (f1 = n * f2) yields the same integer
+        ratio as the equivalent period-space check, so harmonic detection is
+        unaffected by the convention change.
+
+        Parameters
+        ----------
+        ls_frequency : float
+            Dominant frequency [1/day] derived from Lomb-Scargle for a band.
+        acf_frequency : float
+            Dominant frequency [1/day] derived from ACF for the same band.
+        harmonic_tolerance : float, optional
+            Relative tolerance used to classify direct or harmonic agreement.
+
+        Returns
+        -------
+        dict
+            Comparison summary with keys:
+            ``status`` (``"agreement"``, ``"harmonic"``,
+            ``"disagreement"``, or ``"unavailable"``),
+            ``ratio`` (larger/smaller frequency ratio), and
+            ``harmonic_order`` (integer harmonic when applicable).
+        """
+        ls_val = float(ls_frequency) if ls_frequency is not None else np.nan
+        acf_val = float(acf_frequency) if acf_frequency is not None else np.nan
+
+        if not (
+            np.isfinite(ls_val)
+            and np.isfinite(acf_val)
+            and ls_val > 0
+            and acf_val > 0
+        ):
+            return {
+                "status": _ACF_STATUS_UNAVAILABLE,
+                "ratio": None,
+                "harmonic_order": None,
+            }
+
+        larger = max(ls_val, acf_val)
+        smaller = min(ls_val, acf_val)
+        ratio = larger / smaller
+
+        if not (np.isfinite(ratio) and ratio > 0):
+            return {
+                "status": _ACF_STATUS_UNAVAILABLE,
+                "ratio": None,
+                "harmonic_order": None,
+            }
+
+        if abs(ratio - 1.0) <= harmonic_tolerance:
+            return {
+                "status": _ACF_STATUS_AGREEMENT,
+                "ratio": float(ratio),
+                "harmonic_order": 1,
+            }
+
+        for harmonic_order in (2, 3, 4):
+            harmonic_target = float(harmonic_order)
+            if (
+                abs(ratio - harmonic_target) / harmonic_target
+                <= harmonic_tolerance
+            ):
+                return {
+                    "status": _ACF_STATUS_HARMONIC,
+                    "ratio": float(ratio),
+                    "harmonic_order": int(harmonic_order),
+                }
+
+        return {
+            "status": _ACF_STATUS_DISAGREEMENT,
+            "ratio": float(ratio),
+            "harmonic_order": None,
+        }
+
+    @staticmethod
+    def _consensus_make_json_safe(value):
+        """Return a JSON-safe copy of a consensus diagnostic value.
+
+        Consensus diagnostics are consumed by plotting, inspection utilities,
+        and future JSON export/recovery workflows. Keeping values JSON-safe at
+        creation time avoids late serialization failures caused by NaN/Inf,
+        tensors, numpy objects, Interval objects, or set/tuple containers.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool | int | str):
+            return value
+        if isinstance(value, float):
+            return value if np.isfinite(value) else None
+        if isinstance(value, np.generic):
+            return Lightcurve._consensus_make_json_safe(value.item())
+        if isinstance(value, np.ndarray):
+            return [
+                Lightcurve._consensus_make_json_safe(v)
+                for v in value.tolist()
+            ]
+        if torch.is_tensor(value):
+            if value.numel() == 1:
+                return Lightcurve._consensus_make_json_safe(value.item())
+            return Lightcurve._consensus_make_json_safe(
+                value.detach().cpu().tolist()
+            )
+        if isinstance(value, Interval):
+            lower = None if value.lower_bound is None else value.lower_bound
+            upper = None if value.upper_bound is None else value.upper_bound
+            return {
+                "lower": Lightcurve._consensus_make_json_safe(lower),
+                "upper": Lightcurve._consensus_make_json_safe(upper),
+            }
+        if isinstance(value, dict):
+            return {
+                str(key): Lightcurve._consensus_make_json_safe(val)
+                for key, val in value.items()
+            }
+        if isinstance(value, list | tuple | set):
+            return [
+                Lightcurve._consensus_make_json_safe(v)
+                for v in list(value)
+            ]
+        return str(value)
+
+    @staticmethod
+    def _consensus_normalize_rejection_reasons(reasons):
+        """Normalize rejection reasons into an ordered, de-duplicated list."""
+        if reasons is None:
+            return []
+        if isinstance(reasons, str):
+            items = [reasons]
+        elif isinstance(reasons, list | tuple | set):
+            items = list(reasons)
+        else:
+            items = [str(reasons)]
+        normalized = []
+        for reason in items:
+            reason_str = str(reason).strip()
+            if reason_str and reason_str not in normalized:
+                normalized.append(reason_str)
+        return normalized
+
+    @staticmethod
+    def _consensus_set_gp_validation_status(
+        record,
+        status,
+        *,
+        reason=None,
+    ):
+        """Set a validated GP-validation status on a band record.
+
+        Parameters
+        ----------
+        record : dict
+            Per-band consensus diagnostic record.
+        status : str
+            GP-validation status to store.  Must be one of the values defined
+            by the ``_CONSENSUS_GP_VALIDATION_STATUS_*`` constants (currently
+            ``_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES``).
+        reason : str or None, optional
+            Optional GP-validation reason string stored in
+            ``record["gp_validation_reason"]``. If ``None``, existing reason
+            values are preserved and no new key is created. This argument is
+            keyword-only.
+
+        Raises
+        ------
+        ValueError
+            If ``status`` is not an allowed GP-validation status.
+        """
+        if status not in _CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES:
+            raise ValueError(
+                f"Invalid gp_validation_status {status!r}. "
+                "Allowed values are: "
+                f"{_CONSENSUS_ALLOWED_GP_VALIDATION_STATUSES_SORTED}"
+            )
+        record["gp_validation_status"] = status
+        if reason is not None:
+            record["gp_validation_reason"] = reason
+        elif status in _CONSENSUS_GP_VALIDATION_STATUSES_CLEAR_REASON:
+            # Clear any stale reason that may have been set by an earlier
+            # status transition so these terminal/clean statuses never carry
+            # leftover failure/rejection/skip reason strings.
+            record["gp_validation_reason"] = None
+
+    @staticmethod
+    def _consensus_set_band_status(
+        record,
+        status,
+        rejection_reasons=None,
+    ):
+        """Set a validated band-level consensus status and rejection payload.
+
+        The helper is the canonical state transition surface for
+        ``record["status"]``, ``record["rejection_reasons"]``, and
+        ``record["rejection_reason"]``.
+
+        Invariants enforced by this helper:
+
+        - ``status`` must be in ``_CONSENSUS_ALLOWED_BAND_STATUSES``.
+        - ``status == "accepted"``:
+          ``rejection_reasons`` must be empty and ``rejection_reason`` is
+          forced to ``None``.
+        - ``status == "rejected"``:
+          ``rejection_reasons`` must be non-empty.
+        - ``status == "pending"``:
+          no rejection reasons are allowed.
+        - ``rejection_reasons`` are normalized to ``list[str]`` and
+          de-duplicated while preserving input order.
+        - every rejection reason must satisfy
+          :meth:`_consensus_is_allowed_rejection_reason`.
+        - ``rejection_reason`` is always synchronized to the first entry in
+          ``rejection_reasons`` (or ``None`` when empty), so stale values are
+          never retained.
+
+        Parameters
+        ----------
+        record : dict
+            Per-band consensus diagnostics record.
+        status : str
+            New band status.
+        rejection_reasons : sequence[str] or str or None, optional
+            Rejection reasons to attach for rejected status.
+
+        Raises
+        ------
+        ValueError
+            If status is unknown, any reason is invalid, or the status/reason
+            combination violates the invariants listed above.
+        """
+        if status not in _CONSENSUS_ALLOWED_BAND_STATUSES:
+            raise ValueError(
+                f"Invalid band status {status!r}. Allowed values are: "
+                f"{_CONSENSUS_ALLOWED_BAND_STATUSES_SORTED}"
+            )
+
+        normalized_reasons = Lightcurve._consensus_normalize_rejection_reasons(
+            rejection_reasons
+        )
+        for reason in normalized_reasons:
+            if not Lightcurve._consensus_is_allowed_rejection_reason(reason):
+                raise ValueError(
+                    f"Unknown rejection reason {reason!r}. Expected one of "
+                    f"{_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED} or a known "
+                    "sampling-metrics reason prefix."
+                )
+
+        if status == _CONSENSUS_BAND_STATUS_REJECTED:
+            if not normalized_reasons:
+                raise ValueError(
+                    "Band status 'rejected' requires at least one "
+                    "rejection reason."
+                )
+        else:
+            if normalized_reasons:
+                raise ValueError(
+                    f"Band status {status!r} cannot carry rejection reasons "
+                    f"{normalized_reasons!r}."
+                )
+
+        record["status"] = status
+        record["rejection_reasons"] = normalized_reasons
+        record["rejection_reason"] = (
+            normalized_reasons[0] if normalized_reasons else None
+        )
+
+    @staticmethod
+    def _consensus_set_acf_comparison_status(
+        record,
+        status,
+        *,
+        period_ratio=None,
+        harmonic_order=None,
+    ):
+        """Set validated ACF-vs-LS comparison status and metadata.
+
+        This helper is the canonical state transition surface for
+        ``acf_comparison_status``, ``acf_period_ratio``, and
+        ``acf_harmonic_order``.
+
+        State-machine semantics:
+
+        - ``status is None``: no ACF comparison metadata is allowed.
+        - ``status == "agreement"``: ``period_ratio`` is required;
+          ``harmonic_order`` is optional.
+        - ``status == "harmonic"``: both ``period_ratio`` and
+          ``harmonic_order`` are required.
+        - ``status == "disagreement"``: ``period_ratio`` is required;
+          ``harmonic_order`` is optional.
+        - ``status == "unavailable"``: no comparison metadata is allowed.
+
+        For statuses where metadata is disallowed, stale values are always
+        cleared to ``None``.
+
+        Parameters
+        ----------
+        record : dict
+            Per-band consensus diagnostics record.
+        status : str or None
+            ACF comparison status.
+        period_ratio : float, optional
+            Frequency-ratio style comparison statistic.
+        harmonic_order : int, optional
+            Harmonic order metadata when available.
+
+        Raises
+        ------
+        ValueError
+            If status is unknown or metadata does not satisfy allowed
+            combinations.
+        """
+        if (
+            status is not None
+            and status not in _CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES
+        ):
+            raise ValueError(
+                f"Invalid acf_comparison_status {status!r}. Allowed values are: "
+                f"{_CONSENSUS_ALLOWED_ACF_COMPARISON_STATUSES_SORTED} or None."
+            )
+
+        ratio_val = None
+        if period_ratio is not None:
+            ratio_val = float(period_ratio)
+            if not (np.isfinite(ratio_val) and ratio_val > 0):
+                raise ValueError(
+                    "acf_period_ratio must be finite and strictly positive "
+                    "when provided."
+                )
+
+        order_val = None
+        if harmonic_order is not None:
+            try:
+                order_val = int(harmonic_order)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "acf_harmonic_order must be an integer when provided."
+                ) from exc
+            if order_val <= 0:
+                raise ValueError(
+                    "acf_harmonic_order must be a positive integer when "
+                    "provided."
+                )
+
+        if status is None:
+            if ratio_val is not None or order_val is not None:
+                raise ValueError(
+                    "acf_comparison_status=None does not permit "
+                    "acf_period_ratio/acf_harmonic_order metadata."
+                )
+            ratio_val = None
+            order_val = None
+        elif status in (_ACF_STATUS_AGREEMENT, _ACF_STATUS_DISAGREEMENT):
+            if ratio_val is None:
+                raise ValueError(
+                    f"acf_comparison_status={status!r} requires "
+                    "'acf_period_ratio'."
+                )
+        elif status == _ACF_STATUS_HARMONIC:
+            if ratio_val is None:
+                raise ValueError(
+                    "acf_comparison_status='harmonic' requires "
+                    "'acf_period_ratio'."
+                )
+            if order_val is None:
+                raise ValueError(
+                    "acf_comparison_status='harmonic' requires "
+                    "'acf_harmonic_order'."
+                )
+        elif status == _ACF_STATUS_UNAVAILABLE:
+            if ratio_val is not None or order_val is not None:
+                raise ValueError(
+                    "acf_comparison_status='unavailable' does not permit "
+                    "acf_period_ratio/acf_harmonic_order metadata."
+                )
+            ratio_val = None
+            order_val = None
+
+        record["acf_comparison_status"] = status
+        record["acf_period_ratio"] = ratio_val
+        record["acf_harmonic_order"] = order_val
+
+    def _consensus_initialize_band_record(
+        self,
+        band_label,
+        *,
+        metrics=None,
+        gp_validation_requested=False,
+    ):
+        """Create a canonical per-band consensus diagnostic record.
+
+        A stable schema is required so every downstream consumer can assume all
+        keys exist for every band, including early-return failure paths.
+        Initial ``gp_validation_status`` is always ``"not_requested"`` and is
+        changed later only when the GP-validation stage runs.
+        """
+        # "not_requested" means GP validation was not invoked for this record.
+        # Records are upgraded to "skipped"/"failed"/"rejected"/"success" later
+        # only when the GP-validation stage is actually executed.
+        record = _consensus_schema_default_record(_CONSENSUS_BAND_SCHEMA_FIELDS)
+        record["band"] = str(band_label)
+        record["metrics"] = self._consensus_make_json_safe(metrics)
+        self._consensus_set_gp_validation_status(
+            record, _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED
+        )
+        return record
+
+    @staticmethod
+    def _consensus_is_allowed_rejection_reason(reason):
+        """Return True if a rejection reason is canonical or known free-form."""
+        if reason in _CONSENSUS_ALLOWED_REJECTION_REASONS:
+            return True
+        return any(
+            reason.startswith(prefix)
+            for prefix in _CONSENSUS_ALLOWED_REJECTION_REASON_PREFIXES
+        )
+
+    def _consensus_add_rejection_reasons(self, record, reasons):
+        """Append rejection reasons to a band record without duplicates."""
+        merged = self._consensus_normalize_rejection_reasons(
+            record.get("rejection_reasons", [])
+        )
+        for reason in self._consensus_normalize_rejection_reasons(reasons):
+            if reason not in merged:
+                merged.append(reason)
+        if merged:
+            self._consensus_set_band_status(
+                record,
+                _CONSENSUS_BAND_STATUS_REJECTED,
+                merged,
+            )
+
+    def _consensus_set_top_level_rejection_reasons(
+        self,
+        diagnostics,
+        rejection_reasons,
+    ):
+        """Canonicalize top-level consensus rejection reasons bookkeeping.
+
+        This helper centralizes canonicalization for
+        ``diagnostics["rejection_reasons"]`` and enforces stable structure:
+
+        - input is normalized to a plain ``dict`` (non-dict inputs become ``{}``)
+        - each key must be a canonical rejection reason or a known
+          sampling-metrics reason prefix variant
+        - each value is normalized to a list of string band labels
+        - duplicate band labels are removed while preserving order
+
+        Parameters
+        ----------
+        diagnostics : dict
+            Top-level consensus diagnostics dictionary to mutate.
+        rejection_reasons : dict or object
+            Candidate reason-to-band mapping. Expected shape is
+            ``{reason_key: [band_label, ...], ...}``; non-dict inputs are
+            normalized to an empty mapping.
+
+        Raises
+        ------
+        ValueError
+            If any rejection-reason key is not recognized.
+        """
+        canonical = {}
+        if isinstance(rejection_reasons, dict):
+            source = rejection_reasons
+        else:
+            source = {}
+
+        for reason, bands in source.items():
+            reason_str = str(reason).strip()
+            if not reason_str:
+                raise ValueError(
+                    "Top-level rejection_reasons contains an empty reason key."
+                )
+            if not self._consensus_is_allowed_rejection_reason(reason_str):
+                raise ValueError(
+                    f"Unknown top-level rejection reason {reason_str!r}; expected "
+                    f"one of {_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED} or a "
+                    "known sampling-metrics reason prefix."
+                )
+
+            if bands is None:
+                band_items = []
+            elif isinstance(bands, list | tuple | set):
+                band_items = list(bands)
+            else:
+                band_items = [bands]
+
+            normalized_bands = []
+            for band in band_items:
+                band_str = str(band).strip()
+                if band_str and band_str not in normalized_bands:
+                    normalized_bands.append(band_str)
+            canonical[reason_str] = normalized_bands
+
+        diagnostics["rejection_reasons"] = canonical
+
+    @staticmethod
+    def _consensus_initialize_result_structure(*, fit_strategy="consensus"):
+        """Create a canonical top-level consensus diagnostics schema.
+
+        A stable schema is required so downstream consumers can reliably inspect
+        consensus outputs regardless of whether the workflow succeeds, fails
+        early, or fails after partial candidate construction.
+
+        This consistency is important for:
+
+        - JSON serialization/export pipelines (fixed key presence),
+        - notebooks and plotting/reporting code (reduced key-guard logic),
+        - regression tests (deterministic structure assertions),
+        - future consensus-recovery/fallback workflows (portable diagnostics).
+        """
+        result = _consensus_schema_default_record(_CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS)
+        result["fit_strategy"] = fit_strategy
+        return result
+
+    def _consensus_build_rejection_summary(
+        self,
+        *,
+        per_band_diagnostics,
+        rejected_bands,
+        rejection_reasons=None,
+    ):
+        """Build deterministic reason->bands rejection summary."""
+        summary = {}
+        per_band_diagnostics = per_band_diagnostics or {}
+        rejection_reasons = rejection_reasons or {}
+        for band in rejected_bands or []:
+            reasons = []
+            band_record = per_band_diagnostics.get(band, {})
+            if isinstance(band_record, dict):
+                reasons.extend(
+                    self._consensus_normalize_rejection_reasons(
+                        band_record.get("rejection_reasons")
+                    )
+                )
+                reasons.extend(
+                    self._consensus_normalize_rejection_reasons(
+                        band_record.get("rejection_reason")
+                    )
+                )
+            reasons.extend(
+                self._consensus_normalize_rejection_reasons(
+                    rejection_reasons.get(band)
+                )
+            )
+            normalized = self._consensus_normalize_rejection_reasons(reasons)
+            if not normalized:
+                normalized = ["unspecified_rejection"]
+            for reason in normalized:
+                summary.setdefault(str(reason), set()).add(str(band))
+
+        return {
+            reason: sorted(bands)
+            for reason, bands in sorted(summary.items(), key=lambda kv: kv[0])
+        }
+
+    def _consensus_finalize_result_structure(self, diagnostics, *, validate=True):
+        """Normalize and finalize top-level consensus diagnostics."""
+        canonical = self._consensus_initialize_result_structure(
+            fit_strategy=(diagnostics or {}).get("fit_strategy", "consensus")
+        )
+        if diagnostics:
+            canonical.update(dict(diagnostics))
+
+        per_band = canonical.get("per_band_diagnostics") or {}
+        if not isinstance(per_band, dict):
+            per_band = {}
+        canonical["per_band_diagnostics"] = per_band
+
+        accepted = sorted({str(b) for b in (canonical.get("accepted_bands") or [])})
+        rejected = sorted({str(b) for b in (canonical.get("rejected_bands") or [])})
+        accepted_set = set(accepted)
+        rejected_set = set(rejected)
+        overlap = accepted_set & rejected_set
+        if overlap:
+            # Rejections take precedence: if a band appears in both lists due to
+            # upstream partial bookkeeping, keep it only in rejected_bands.
+            accepted_set -= overlap
+            accepted = sorted(accepted_set)
+        canonical["accepted_bands"] = accepted
+        canonical["rejected_bands"] = rejected
+
+        # Counts are anchored to mutually exclusive accepted/rejected sets.
+        canonical["n_accepted_bands"] = len(accepted)
+        canonical["n_rejected_bands"] = len(rejected)
+        canonical["n_total_bands"] = (
+            canonical["n_accepted_bands"] + canonical["n_rejected_bands"]
+        )
+
+        rejection_reasons_input = canonical.get("rejection_reasons")
+        rejection_summary_input = canonical.get("rejection_summary")
+        canonicalized_rejection_reasons = {}
+
+        # Canonicalize top-level rejection bookkeeping only after accepted/
+        # rejected membership has been normalized so reason->band mappings are
+        # interpreted against stable, finalized band labels.
+        if rejection_reasons_input:
+            canonical_source = {}
+            self._consensus_set_top_level_rejection_reasons(
+                canonical_source, rejection_reasons_input
+            )
+            canonicalized_rejection_reasons = canonical_source["rejection_reasons"]
+
+        canonicalized_rejection_summary = {}
+        if rejection_summary_input:
+            deprecated_source = {}
+            self._consensus_set_top_level_rejection_reasons(
+                deprecated_source, rejection_summary_input
+            )
+            canonicalized_rejection_summary = deprecated_source["rejection_reasons"]
+
+        if canonicalized_rejection_reasons and canonicalized_rejection_summary:
+            if canonicalized_rejection_reasons != canonicalized_rejection_summary:
+                raise ValueError(
+                    "Top-level 'rejection_reasons' and deprecated "
+                    "'rejection_summary' disagree after canonicalization."
+                )
+        elif canonicalized_rejection_summary:
+            canonicalized_rejection_reasons = canonicalized_rejection_summary
+
+        canonical["rejection_reasons"] = canonicalized_rejection_reasons
+        # 'rejection_summary' is a deprecated compatibility alias for the
+        # canonical top-level 'rejection_reasons' mapping.
+        canonical["rejection_summary"] = canonicalized_rejection_reasons.copy()
+
+        # Keep canonical frequency-first keys and synchronize legacy aliases.
+        consensus_frequency = canonical.get("consensus_frequency")
+        if consensus_frequency is None:
+            consensus_frequency = canonical.get("final_consensus_frequency")
+        if consensus_frequency is not None:
+            consensus_frequency = float(consensus_frequency)
+        canonical["consensus_frequency"] = consensus_frequency
+        canonical["final_consensus_frequency"] = consensus_frequency
+
+        consensus_period = canonical.get("consensus_period")
+        if consensus_period is None and consensus_frequency is not None:
+            consensus_period = float(1.0 / consensus_frequency)
+        canonical["consensus_period"] = consensus_period
+        canonical["final_consensus_period"] = consensus_period
+
+        frequency_scatter = canonical.get("consensus_frequency_scatter")
+        if frequency_scatter is None:
+            frequency_scatter = canonical.get("mad_frequency_scatter")
+        canonical["consensus_frequency_scatter"] = frequency_scatter
+        canonical["mad_frequency_scatter"] = frequency_scatter
+
+        frequency_width = canonical.get("consensus_frequency_width")
+        if frequency_width is None:
+            frequency_width = canonical.get("robust_frequency_width")
+        canonical["consensus_frequency_width"] = frequency_width
+        canonical["robust_frequency_width"] = frequency_width
+
+        # Ensure bool fields are stable booleans.
+        for key in (
+            "consensus_success",
+            "use_acf_validation",
+            "use_gp_validation",
+            "gp_validation_requested",
+            "gp_validation_performed",
+        ):
+            canonical[key] = bool(canonical.get(key))
+
+        result = self._consensus_make_json_safe(canonical)
+        if validate:
+            self._consensus_validate_result_structure(result)
+        return result
+
+    def _consensus_validate_result_structure(self, diagnostics):
+        """Validate internal consistency of a finalized consensus diagnostics dict.
+
+        This method enforces structural invariants that must hold for every
+        finalized consensus diagnostics structure.  It is intended to catch
+        corruption introduced by bugs in the consensus machinery before the
+        structure is attached to ``self.consensus_diagnostics``.
+
+        Validation only — this method never silently repairs a corrupted
+        structure.  Raise ``RuntimeError`` or ``ValueError`` with an
+        informative message on any violation.
+
+        Parameters
+        ----------
+        diagnostics : dict
+            A finalized consensus diagnostics dict, typically the return value
+            of :meth:`_consensus_finalize_result_structure`.
+
+        Raises
+        ------
+        RuntimeError
+            If a required key is absent, count fields are inconsistent, or
+            ``consensus_success`` semantics are violated.
+        ValueError
+            If ``accepted_bands``/``rejected_bands`` overlap, the
+            top-level rejection mappings disagree, an unknown GP status is
+            found, or ``rejection_reasons`` entries are not lists.
+        """
+        if not isinstance(diagnostics, dict):
+            raise RuntimeError(
+                "Consensus diagnostics must be a dict; "
+                f"got {type(diagnostics).__name__!r}."
+            )
+
+        # --- 1. Required top-level keys must all be present ---
+        missing_keys = _CONSENSUS_REQUIRED_RESULT_KEYS - diagnostics.keys()
+        if missing_keys:
+            raise RuntimeError(
+                "Consensus diagnostics is missing required top-level key(s): "
+                + ", ".join(f"'{k}'" for k in sorted(missing_keys))
+                + "."
+            )
+
+        top_schema_fields = _CONSENSUS_TOP_LEVEL_SCHEMA["fields"]
+        accepted_bands = diagnostics["accepted_bands"]
+        rejected_bands = diagnostics["rejected_bands"]
+
+        # --- 2. Top-level container fields must match canonical schema ---
+        for field_name in ("accepted_bands", "rejected_bands"):
+            expected_container = top_schema_fields[field_name]["container_type"]
+            if expected_container == "list":
+                expected_type = list
+            elif expected_container == "dict":
+                expected_type = dict
+            else:
+                continue
+            field_value = diagnostics[field_name]
+            if not isinstance(field_value, expected_type):
+                raise RuntimeError(
+                    f"'{field_name}' must be a {expected_container}; got "
+                    f"{type(field_value).__name__!r}."
+                )
+
+        # --- 3. No band may appear in both lists ---
+        accepted_set = {str(b) for b in accepted_bands}
+        rejected_set = {str(b) for b in rejected_bands}
+        overlap = accepted_set & rejected_set
+        if overlap:
+            raise ValueError(
+                "Band(s) appear in both 'accepted_bands' and 'rejected_bands': "
+                + ", ".join(f"'{b}'" for b in sorted(overlap))
+                + "."
+            )
+
+        # --- 4. Count fields must be consistent with the band lists ---
+        n_accepted = diagnostics["n_accepted_bands"]
+        n_rejected = diagnostics["n_rejected_bands"]
+        n_total = diagnostics["n_total_bands"]
+        if n_accepted != len(accepted_set):
+            raise RuntimeError(
+                f"'n_accepted_bands' ({n_accepted}) does not match "
+                f"len(accepted_bands) ({len(accepted_set)})."
+            )
+        if n_rejected != len(rejected_set):
+            raise RuntimeError(
+                f"'n_rejected_bands' ({n_rejected}) does not match "
+                f"len(rejected_bands) ({len(rejected_set)})."
+            )
+        if n_total != n_accepted + n_rejected:
+            raise RuntimeError(
+                f"'n_total_bands' ({n_total}) != "
+                f"n_accepted_bands ({n_accepted}) + "
+                f"n_rejected_bands ({n_rejected})."
+            )
+
+        # --- 5. rejection_reasons is canonical; rejection_summary is alias ---
+        canonical_rejection_source = {}
+        self._consensus_set_top_level_rejection_reasons(
+            canonical_rejection_source, diagnostics["rejection_reasons"]
+        )
+        rejection_reasons = canonical_rejection_source["rejection_reasons"]
+
+        for reason, bands in rejection_reasons.items():
+            if not isinstance(bands, list):
+                raise ValueError(
+                    f"rejection_reasons[{reason!r}] must be a list; "
+                    f"got {type(bands).__name__!r}."
+                )
+            band_labels = [str(b) for b in bands]
+            duplicate_bands = sorted(
+                {b for b in band_labels if band_labels.count(b) > 1}
+            )
+            if duplicate_bands:
+                raise ValueError(
+                    f"rejection_reasons[{reason!r}] contains duplicate "
+                    "band label(s): "
+                    + ", ".join(f"{b!r}" for b in duplicate_bands)
+                    + "."
+                )
+            for band in bands:
+                band_str = str(band)
+                if band_str not in rejected_set:
+                    raise ValueError(
+                        f"Band {band_str!r} in rejection_reasons[{reason!r}] "
+                        "is not present in 'rejected_bands'."
+                    )
+                if band_str in accepted_set:
+                    raise ValueError(
+                        f"Accepted band {band_str!r} appears in "
+                        f"rejection_reasons[{reason!r}]."
+                    )
+
+        alias_rejection_source = {}
+        self._consensus_set_top_level_rejection_reasons(
+            alias_rejection_source, diagnostics["rejection_summary"]
+        )
+        rejection_summary = alias_rejection_source["rejection_reasons"]
+        if rejection_summary != rejection_reasons:
+            raise ValueError(
+                "Top-level 'rejection_summary' must match canonical "
+                "'rejection_reasons'."
+            )
+
+        # --- 6. per_band_diagnostics must be a dict ---
+        per_band = diagnostics["per_band_diagnostics"]
+        expected_per_band_container = top_schema_fields["per_band_diagnostics"][
+            "container_type"
+        ]
+        if not isinstance(per_band, dict):
+            raise RuntimeError(
+                f"'per_band_diagnostics' must be a "
+                f"{expected_per_band_container}; "
+                f"got {type(per_band).__name__!r}."
+            )
+        referenced_bands = accepted_set | rejected_set
+        per_band_labels = {str(label) for label in per_band}
+        missing_per_band = sorted(referenced_bands - per_band_labels)
+        if missing_per_band:
+            raise RuntimeError(
+                "per_band_diagnostics is missing entries for referenced band(s): "
+                + ", ".join(f"'{b}'" for b in missing_per_band)
+                + "."
+            )
+        extra_per_band = sorted(per_band_labels - referenced_bands)
+        if extra_per_band:
+            raise RuntimeError(
+                "per_band_diagnostics contains entries for unknown band(s): "
+                + ", ".join(f"'{b}'" for b in extra_per_band)
+                + "."
+            )
+
+        # --- 7-9. Per-band record invariants ---
+        band_schema_fields = _CONSENSUS_BAND_SCHEMA["fields"]
+        for band_label, record in per_band.items():
+            _b = str(band_label)
+            if not isinstance(record, dict):
+                raise RuntimeError(
+                    f"per_band_diagnostics[{_b!r}] must be a dict; "
+                    f"got {type(record).__name__!r}."
+                )
+            missing_band = _CONSENSUS_REQUIRED_BAND_KEYS - record.keys()
+            if missing_band:
+                raise RuntimeError(
+                    f"Band {_b!r} is missing required key(s): "
+                    + ", ".join(f"'{k}'" for k in sorted(missing_band))
+                    + "."
+                )
+
+            band_status = record["status"]
+            band_status_allowed = band_schema_fields["status"]["allowed_values"]
+            if band_status not in band_status_allowed:
+                raise ValueError(
+                    f"Band {_b!r} has unknown 'status' {band_status!r}; "
+                    "expected one of "
+                    f"{band_status_allowed}."
+                )
+
+            # 8. gp_validation_status must be a known value ---
+            gp_status = record["gp_validation_status"]
+            gp_status_allowed = band_schema_fields["gp_validation_status"][
+                "allowed_values"
+            ]
+            if gp_status not in gp_status_allowed:
+                raise ValueError(
+                    f"Band {_b!r} has unknown 'gp_validation_status' "
+                    f"{gp_status!r}; expected one of "
+                    f"{gp_status_allowed}."
+                )
+
+            acf_status = record.get("acf_comparison_status")
+            acf_nullable = band_schema_fields["acf_comparison_status"]["nullable"]
+            acf_allowed = band_schema_fields["acf_comparison_status"]["allowed_values"]
+            if (
+                (acf_status is not None or not acf_nullable)
+                and acf_status not in acf_allowed
+            ):
+                raise ValueError(
+                    f"Band {_b!r} has unknown 'acf_comparison_status' "
+                    f"{acf_status!r}; expected one of "
+                    f"{acf_allowed} or "
+                    "None."
+                )
+            acf_ratio = record.get("acf_period_ratio")
+            if acf_ratio is not None:
+                try:
+                    acf_ratio = float(acf_ratio)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Band {_b!r}: 'acf_period_ratio' must be a float or "
+                        f"None; got {record.get('acf_period_ratio')!r}."
+                    ) from exc
+                if not (np.isfinite(acf_ratio) and acf_ratio > 0):
+                    raise ValueError(
+                        f"Band {_b!r}: 'acf_period_ratio' must be finite and "
+                        "strictly positive when present."
+                    )
+            acf_order = record.get("acf_harmonic_order")
+            if acf_order is not None:
+                try:
+                    acf_order = int(acf_order)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Band {_b!r}: 'acf_harmonic_order' must be an integer "
+                        f"or None; got {record.get('acf_harmonic_order')!r}."
+                    ) from exc
+                if acf_order <= 0:
+                    raise ValueError(
+                        f"Band {_b!r}: 'acf_harmonic_order' must be positive "
+                        "when present."
+                    )
+
+            # 9. rejection_reasons must be a list ---
+            rr = record["rejection_reasons"]
+            if not isinstance(rr, list):
+                raise ValueError(
+                    f"Band {_b!r}: 'rejection_reasons' must be a list; "
+                    f"got {type(rr).__name__!r}."
+                )
+            normalized_rr = []
+            for reason in rr:
+                if not isinstance(reason, str):
+                    raise ValueError(
+                        f"Band {_b!r}: rejection reason {reason!r} must be a "
+                        "string."
+                    )
+                reason_str = reason.strip()
+                if not reason_str:
+                    raise ValueError(
+                        f"Band {_b!r}: rejection reason {reason!r} is empty."
+                    )
+                if not self._consensus_is_allowed_rejection_reason(reason_str):
+                    raise ValueError(
+                        f"Band {_b!r} has unknown rejection reason "
+                        f"{reason_str!r}; expected one of "
+                        f"{_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED} "
+                        "or a known sampling-metrics reason prefix."
+                    )
+                normalized_rr.append(reason_str)
+
+            rejection_reason = record.get("rejection_reason")
+            if rejection_reason is not None:
+                if not isinstance(rejection_reason, str):
+                    raise ValueError(
+                        f"Band {_b!r}: 'rejection_reason' must be a string or "
+                        f"None; got {type(rejection_reason).__name__!r}."
+                    )
+                rejection_reason = rejection_reason.strip()
+                if not rejection_reason:
+                    raise ValueError(
+                        f"Band {_b!r}: 'rejection_reason' must not be empty."
+                    )
+                if not self._consensus_is_allowed_rejection_reason(rejection_reason):
+                    raise ValueError(
+                        f"Band {_b!r} has unknown 'rejection_reason' "
+                        f"{rejection_reason!r}; expected one of "
+                        f"{_CONSENSUS_ALLOWED_REJECTION_REASONS_SORTED} "
+                        "or a known sampling-metrics reason prefix."
+                    )
+            if normalized_rr and rejection_reason != normalized_rr[0]:
+                raise ValueError(
+                    f"Band {_b!r} has 'rejection_reason'={rejection_reason!r} "
+                    "but first entry in 'rejection_reasons' is "
+                    f"{normalized_rr[0]!r}."
+                )
+            if not normalized_rr and rejection_reason is not None:
+                raise ValueError(
+                    f"Band {_b!r} has 'rejection_reason'={rejection_reason!r} "
+                    "but no rejection reasons."
+                )
+
+            if (
+                band_status == _CONSENSUS_BAND_STATUS_ACCEPTED
+                and (normalized_rr or rejection_reason is not None)
+            ):
+                raise ValueError(
+                    f"Band {_b!r} has status='accepted' but carries rejection "
+                    f"payload (rejection_reasons={normalized_rr!r}, "
+                    f"rejection_reason={rejection_reason!r})."
+                )
+            if (
+                band_status == _CONSENSUS_BAND_STATUS_REJECTED
+                and not normalized_rr
+            ):
+                raise ValueError(
+                    f"Band {_b!r} has status='rejected' but no rejection reasons."
+                )
+            if (
+                band_status == _CONSENSUS_BAND_STATUS_PENDING
+                and (normalized_rr or rejection_reason is not None)
+            ):
+                raise ValueError(
+                    f"Band {_b!r} has status='pending' but carries rejection "
+                    f"payload (rejection_reasons={normalized_rr!r}, "
+                    f"rejection_reason={rejection_reason!r})."
+                )
+            if (
+                _b in accepted_set
+                and band_status == _CONSENSUS_BAND_STATUS_REJECTED
+            ):
+                raise ValueError(
+                    f"Band {_b!r} is in 'accepted_bands' but has status "
+                    "'rejected'."
+                )
+            if (
+                _b in rejected_set
+                and band_status == _CONSENSUS_BAND_STATUS_ACCEPTED
+            ):
+                raise ValueError(
+                    f"Band {_b!r} is in 'rejected_bands' but has status "
+                    "'accepted'."
+                )
+            if (
+                _b in accepted_set
+                and band_status == _CONSENSUS_BAND_STATUS_PENDING
+            ):
+                raise ValueError(
+                    f"Band {_b!r} is in 'accepted_bands' but has status "
+                    "'pending'."
+                )
+            if (
+                _b in rejected_set
+                and band_status == _CONSENSUS_BAND_STATUS_PENDING
+            ):
+                raise ValueError(
+                    f"Band {_b!r} is in 'rejected_bands' but has status "
+                    "'pending'."
+                )
+
+            if acf_status is None:
+                if acf_ratio is not None or acf_order is not None:
+                    raise ValueError(
+                        f"Band {_b!r} has acf_comparison_status=None but "
+                        "acf_period_ratio/acf_harmonic_order is set."
+                    )
+            elif acf_status in (_ACF_STATUS_AGREEMENT, _ACF_STATUS_DISAGREEMENT):
+                if acf_ratio is None:
+                    raise ValueError(
+                        f"Band {_b!r} has acf_comparison_status={acf_status!r} "
+                        "but missing required acf_period_ratio."
+                    )
+            elif acf_status == _ACF_STATUS_HARMONIC:
+                if acf_ratio is None:
+                    raise ValueError(
+                        f"Band {_b!r} has acf_comparison_status='harmonic' but "
+                        "missing required acf_period_ratio."
+                    )
+                if acf_order is None:
+                    raise ValueError(
+                        f"Band {_b!r} has acf_comparison_status='harmonic' but "
+                        "missing required acf_harmonic_order."
+                    )
+            elif acf_status == _ACF_STATUS_UNAVAILABLE:
+                if acf_ratio is not None or acf_order is not None:
+                    raise ValueError(
+                        f"Band {_b!r} has acf_comparison_status='unavailable' "
+                        "but carries acf_period_ratio/acf_harmonic_order data."
+                    )
+
+            # 10. gp_validation_reason invariant per status ---
+            gp_reason = record.get("gp_validation_reason")
+            gp_reason_allowed = band_schema_fields["gp_validation_reason"][
+                "allowed_values"
+            ]
+            if (
+                gp_reason is not None
+                and gp_reason not in gp_reason_allowed
+            ):
+                raise ValueError(
+                    f"Band {_b!r} has unknown 'gp_validation_reason' "
+                    f"{gp_reason!r}; expected one of {gp_reason_allowed} "
+                    "or None."
+                )
+            allowed_reasons = _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS.get(
+                gp_status
+            )
+            if allowed_reasons is not None and gp_reason not in allowed_reasons:
+                allowed_sorted = (
+                    _CONSENSUS_ALLOWED_GP_VALIDATION_REASONS_BY_STATUS_SORTED[
+                        gp_status
+                    ]
+                )
+                raise ValueError(
+                    f"Band {_b!r} has gp_validation_status={gp_status!r} "
+                    f"but gp_validation_reason={gp_reason!r} is not allowed "
+                    f"for this status (allowed: {allowed_sorted} and/or None)."
+                )
+
+        # --- 10. consensus_success semantics ---
+        consensus_success = diagnostics["consensus_success"]
+        if consensus_success:
+            consensus_frequency = diagnostics.get("consensus_frequency")
+            n_accepted_bands = diagnostics["n_accepted_bands"]
+            trusted_candidate_count = diagnostics.get("trusted_candidate_count")
+            if consensus_frequency is None:
+                raise RuntimeError(
+                    "consensus_success is True but 'consensus_frequency' "
+                    "is None."
+                )
+            if n_accepted_bands <= 0:
+                raise RuntimeError(
+                    "consensus_success is True but 'n_accepted_bands' is "
+                    f"{n_accepted_bands} (must be > 0)."
+                )
+            if (
+                trusted_candidate_count is None
+                or int(trusted_candidate_count) <= 0
+            ):
+                raise RuntimeError(
+                    "consensus_success is True but 'trusted_candidate_count' "
+                    f"is {trusted_candidate_count!r} (must be > 0)."
+                )
+
+    def _consensus_debug_checkpoint(self, result_diagnostics, label):
+        """Validate a partial diagnostics snapshot at a consensus checkpoint.
+
+        Only active when :data:`_CONSENSUS_DEBUG_VALIDATE` is ``True``.
+        Finalizes a shallow copy of *result_diagnostics* (without mutating
+        the original) and passes the result to
+        :meth:`_consensus_validate_result_structure`.  Any
+        ``RuntimeError`` or ``ValueError`` raised by validation is
+        re-raised as ``AssertionError`` with the checkpoint label prepended.
+
+        This method is a no-op (fast path) when
+        ``_CONSENSUS_DEBUG_VALIDATE`` is ``False``.
+
+        Parameters
+        ----------
+        result_diagnostics : dict
+            Intermediate consensus diagnostics dict to snapshot and check.
+        label : str
+            Short human-readable identifier for this checkpoint (used in
+            the ``AssertionError`` message).
+
+        Raises
+        ------
+        AssertionError
+            If the finalized snapshot fails structural validation.
+        """
+        if not _CONSENSUS_DEBUG_VALIDATE:
+            return
+        try:
+            self._consensus_finalize_result_structure(
+                dict(result_diagnostics), validate=True
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise AssertionError(
+                f"[consensus debug] Checkpoint {label!r} detected a "
+                f"structural inconsistency: {exc}"
+            ) from exc
+
+    def _consensus_debug_checkpoint_from_candidate_state(
+        self,
+        *,
+        label,
+        controls,
+        band_records,
+        accepted_bands,
+        rejected_bands,
+        rejection_reasons,
+        use_acf,
+        use_gp_validation,
+        gp_validation_requested,
+        gp_validation_performed,
+    ):
+        """Build and validate a staged diagnostics snapshot from candidate state."""
+        staged_diag = self._consensus_initialize_result_structure(
+            fit_strategy="consensus"
+        )
+        _band_records = dict(band_records or {})
+        _accepted = list(accepted_bands or [])
+        _rejected = list(rejected_bands or [])
+        _band_reasons = dict(rejection_reasons or {})
+        staged_diag.update({
+            "controls": self._consensus_make_json_safe(dict(controls or {})),
+            "per_band_diagnostics": self._consensus_make_json_safe(_band_records),
+            "accepted_bands": self._consensus_make_json_safe(_accepted),
+            "rejected_bands": self._consensus_make_json_safe(_rejected),
+            "rejection_reasons": self._consensus_build_rejection_summary(
+                per_band_diagnostics=_band_records,
+                rejected_bands=_rejected,
+                rejection_reasons=_band_reasons,
+            ),
+            "use_acf_validation": bool(use_acf),
+            "use_gp_validation": bool(use_gp_validation),
+            "gp_validation_requested": bool(gp_validation_requested),
+            "gp_validation_performed": bool(gp_validation_performed),
+        })
+        self._consensus_debug_checkpoint(staged_diag, label)
+
+    def _consensus_collect_band_candidates(
+        self,
+        *,
+        min_points_per_band=None,
+        max_gap_fraction=None,
+        min_duty_cycle=None,
+        use_acf=False,
+        gp_validation_requested=False,
+        verbose=False,
+    ):
+        """Collect one dominant LS frequency candidate per accepted band.
+
+        This function computes per-band sampling metrics, applies conservative
+        pre-fit band rejection, runs per-band LS (and optional ACF diagnostics),
+        and retains at most one dominant physically plausible LS candidate per
+        band. When ACF is enabled, LS-vs-ACF disagreement triggers rejection,
+        while direct or harmonic agreement is preserved as diagnostic support.
+
+        Parameters
+        ----------
+        min_points_per_band : int or None, optional
+            Minimum number of points required to accept a band prior to LS.
+            If ``None``, derived from per-band sampling metrics.
+        max_gap_fraction : float or None, optional
+            Maximum allowed largest-gap fraction per band. If ``None``, derived
+            from per-band sampling metrics.
+        min_duty_cycle : float or None, optional
+            Minimum allowed duty-cycle estimate per band. If ``None``, derived
+            from per-band sampling metrics.
+        use_acf : bool, optional
+            If ``True``, compute data-driven ACF diagnostics per accepted band.
+        gp_validation_requested : bool, optional
+            If ``True``, this stage records intent only; records remain
+            ``gp_validation_status="not_requested"`` until the GP-validation
+            stage runs and assigns ``skipped``/``failed``/``rejected``/
+            ``success`` per band.
+        verbose : bool, optional
+            If ``True``, print per-band acceptance/rejection and dominant LS
+            values.
+
+        Returns
+        -------
+        dict
+            Dictionary with control values, per-band records, accepted and
+            rejected bands, and rejection reasons.
+        """
+        per_band_lc = dict(self._consensus_iter_band_lightcurves())
+        metrics_by_band = {
+            band: lc_band.compute_sampling_metrics()
+            for band, lc_band in per_band_lc.items()
+        }
+
+        controls = self._consensus_resolve_controls(
+            metrics_by_band=metrics_by_band,
+            min_points_per_band=min_points_per_band,
+            max_gap_fraction=max_gap_fraction,
+            min_duty_cycle=min_duty_cycle,
+        )
+
+        band_records = {}
+        accepted_bands = []
+        rejected_bands = []
+        rejection_reasons = {}
+
+        def _reject_band(record, reasons):
+            self._consensus_add_rejection_reasons(record, reasons)
+            band = record["band"]
+            if band not in rejected_bands:
+                rejected_bands.append(band)
+            if band in accepted_bands:
+                accepted_bands.remove(band)
+            rejection_reasons[band] = list(record["rejection_reasons"])
+
+        for band_label, lc_band in per_band_lc.items():
+            metrics = metrics_by_band[band_label]
+            reasons = self._consensus_reject_bad_bands(
+                metrics=metrics,
+                min_points_per_band=controls["min_points_per_band"],
+                max_gap_fraction=controls["max_gap_fraction"],
+                min_duty_cycle=controls["min_duty_cycle"],
+            )
+            record = self._consensus_initialize_band_record(
+                band_label,
+                metrics=metrics,
+                gp_validation_requested=gp_validation_requested,
+            )
+
+            if reasons:
+                _reject_band(record, reasons)
+                band_records[band_label] = record
+                continue
+
+            ls_freqs, ls_sig = lc_band.fit_LS(num_peaks=5)
+            ls_freqs_np = np.asarray(ls_freqs.detach().cpu().numpy(), dtype=float)
+            ls_sig_np = np.asarray(ls_sig.detach().cpu().numpy(), dtype=bool)
+            if ls_freqs_np.size == 0:
+                _reject_band(record, [_CONSENSUS_REJECTION_REASON_NO_LS_PEAKS])
+                band_records[band_label] = record
+                continue
+
+            baseline = float(metrics.get("baseline", np.nan))
+            longest_period = float(metrics.get("longest_detectable_period", np.nan))
+            if not (np.isfinite(longest_period) and longest_period > 0):
+                longest_period = baseline / 2.0 if np.isfinite(baseline) else np.nan
+            # Minimum physically plausible frequency (inverse of longest
+            # detectable period). All plausibility checks use frequency space.
+            min_detectable_frequency = (
+                float(1.0 / longest_period)
+                if (np.isfinite(longest_period) and longest_period > 0)
+                else 0.0
+            )
+            nyquist_freq = float(metrics.get("nyquist_frequency", np.inf))
+
+            plausible_idx = []
+            for idx, fval in enumerate(ls_freqs_np):
+                if not (np.isfinite(fval) and fval > 0):
+                    continue
+                if np.isfinite(nyquist_freq) and fval > nyquist_freq:
+                    continue
+                # Frequency below the minimum detectable frequency means the
+                # corresponding period would exceed the longest detectable period.
+                if min_detectable_frequency > 0 and fval < min_detectable_frequency:
+                    continue
+                plausible_idx.append(idx)
+
+            if not plausible_idx:
+                _reject_band(
+                    record, [_CONSENSUS_REJECTION_REASON_NO_PLAUSIBLE_LS_PEAK]
+                )
+                band_records[band_label] = record
+                continue
+
+            best_idx = None
+            for idx in plausible_idx:
+                if idx < ls_sig_np.size and ls_sig_np[idx]:
+                    best_idx = idx
+                    break
+            if best_idx is None:
+                best_idx = plausible_idx[0]
+
+            dominant_freq = float(ls_freqs_np[best_idx])
+
+            # Final plausibility guard: frequency must meet the minimum
+            # detectable frequency threshold.
+            if (
+                min_detectable_frequency > 0
+                and dominant_freq < min_detectable_frequency
+            ):
+                _reject_band(
+                    record,
+                    [_CONSENSUS_REJECTION_REASON_CANDIDATE_FREQUENCY_TOO_LOW],
+                )
+                band_records[band_label] = record
+                continue
+
+            if use_acf:
+                # ACF is optional in consensus vetting. Sparse/irregular bands
+                # may fail ACF estimation, so failure falls back to LS-only
+                # candidate vetting while preserving diagnostics.
+                try:
+                    _acf_result = lc_band.acf(method="data", normalize=True)
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                ) as exc:
+                    _acf_result = None
+                    record["acf_error"] = f"{type(exc).__name__}: {exc}"
+                    record["acf_supported"] = False
+
+                acf_candidate = self._consensus_extract_acf_candidate(_acf_result)
+                if acf_candidate is not None:
+                    record["acf_frequency"] = acf_candidate["frequency"]
+                    record["acf_period"] = acf_candidate["period"]
+
+                # Consistency check is performed in frequency space; period
+                # fields in the record are presentation-only derivations.
+                acf_compare = self._consensus_compare_ls_acf(
+                    ls_frequency=dominant_freq,
+                    acf_frequency=record["acf_frequency"],
+                )
+                self._consensus_set_acf_comparison_status(
+                    record,
+                    acf_compare["status"],
+                    period_ratio=acf_compare["ratio"],
+                    harmonic_order=acf_compare["harmonic_order"],
+                )
+                record["acf_supported"] = bool(
+                    acf_compare["status"] in (
+                        _ACF_STATUS_AGREEMENT,
+                        _ACF_STATUS_HARMONIC,
+                    )
+                )
+
+                # ACF is a direct time-domain periodicity diagnostic. Strong
+                # LS-vs-ACF disagreement is treated conservatively as likely
+                # LS window/alias contamination for shared-timescale consensus.
+                if acf_compare["status"] == _ACF_STATUS_DISAGREEMENT:
+                    _reject_band(
+                        record, [_CONSENSUS_REJECTION_REASON_LS_ACF_DISAGREEMENT]
+                    )
+                    band_records[band_label] = record
+                    continue
+
+            # Consensus logic operates in frequency space internally. Period is
+            # derived only for user-facing diagnostics.
+            dominant_period = float(1.0 / dominant_freq)
+            record["dominant_frequency"] = dominant_freq
+            record["dominant_period"] = dominant_period
+            record["ls_significant"] = bool(
+                best_idx < ls_sig_np.size and ls_sig_np[best_idx]
+            )
+            record["selected_from"] = "ls_primary_peak"
+            self._consensus_set_band_status(
+                record,
+                _CONSENSUS_BAND_STATUS_ACCEPTED,
+                [],
+            )
+            band_records[band_label] = record
+            accepted_bands.append(band_label)
+
+        if verbose:
+            print("[consensus] accepted bands:", accepted_bands)
+            print("[consensus] rejected bands:", rejected_bands)
+            for _band, _record in band_records.items():
+                _freq = _record["dominant_frequency"]
+                _period = _record["dominant_period"]
+                if _freq is not None:
+                    _msg = (
+                        f"[consensus] band={_band} dominant_period={_period:.6g} "
+                        f"dominant_frequency={_freq:.6g}"
+                    )
+                    if use_acf:
+                        _msg += (
+                            f" acf_status={_record.get('acf_comparison_status')}"
+                            f" harmonic_order={_record.get('acf_harmonic_order')}"
+                        )
+                    print(_msg)
+                elif _band in rejection_reasons:
+                    print(
+                        f"[consensus] band={_band} rejected: "
+                        f"{', '.join(rejection_reasons[_band])}"
+                    )
+
+        # Final guard: records define accepted/rejected membership.
+        for _band, _record in band_records.items():
+            _reasons = self._consensus_normalize_rejection_reasons(
+                _record.get("rejection_reasons")
+            )
+            if _reasons:
+                self._consensus_set_band_status(
+                    _record,
+                    _CONSENSUS_BAND_STATUS_REJECTED,
+                    _reasons,
+                )
+                if _band in accepted_bands:
+                    accepted_bands.remove(_band)
+                if _band not in rejected_bands:
+                    rejected_bands.append(_band)
+                rejection_reasons[_band] = list(_reasons)
+            else:
+                _status = _record.get("status")
+                if _status == _CONSENSUS_BAND_STATUS_REJECTED:
+                    _reasons = self._consensus_normalize_rejection_reasons(
+                        rejection_reasons.get(_band)
+                    )
+                    self._consensus_set_band_status(
+                        _record,
+                        _CONSENSUS_BAND_STATUS_REJECTED,
+                        _reasons,
+                    )
+                    if _band not in rejected_bands:
+                        rejected_bands.append(_band)
+                    rejection_reasons[_band] = list(
+                        _record.get("rejection_reasons", [])
+                    )
+                else:
+                    self._consensus_set_band_status(
+                        _record,
+                        _CONSENSUS_BAND_STATUS_ACCEPTED,
+                        [],
+                    )
+                    rejection_reasons.pop(_band, None)
+            band_records[_band] = self._consensus_make_json_safe(_record)
+
+        accepted_bands = [b for b in accepted_bands if b not in set(rejected_bands)]
+
+        self._consensus_debug_checkpoint_from_candidate_state(
+            label="after_per_band_ls_candidate_extraction",
+            controls=controls,
+            band_records=band_records,
+            accepted_bands=accepted_bands,
+            rejected_bands=rejected_bands,
+            rejection_reasons=rejection_reasons,
+            use_acf=False,
+            use_gp_validation=bool(gp_validation_requested),
+            gp_validation_requested=bool(gp_validation_requested),
+            gp_validation_performed=False,
+        )
+        if use_acf:
+            self._consensus_debug_checkpoint_from_candidate_state(
+                label="after_acf_validation_comparison",
+                controls=controls,
+                band_records=band_records,
+                accepted_bands=accepted_bands,
+                rejected_bands=rejected_bands,
+                rejection_reasons=rejection_reasons,
+                use_acf=True,
+                use_gp_validation=bool(gp_validation_requested),
+                gp_validation_requested=bool(gp_validation_requested),
+                gp_validation_performed=False,
+            )
+
+        return {
+            "controls": self._consensus_make_json_safe(controls),
+            "band_records": band_records,
+            "accepted_bands": accepted_bands,
+            "rejected_bands": rejected_bands,
+            "rejection_reasons": self._consensus_make_json_safe(rejection_reasons),
+        }
+
+    @staticmethod
+    def _consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs=None):
+        """Build a safe, isolated kwarg dict for nested 1D GP validation fits.
+
+        All consensus logic operates in frequency space [1/day]. Periods are
+        derived from frequencies only for user-facing diagnostics.
+
+        This helper:
+
+        1. Starts from conservative defaults (``model="1D"``,
+           ``num_mixtures=1``, ``use_mls_init=True``,
+           ``training_iter=100``).
+        2. Merges non-blocked user overrides from ``gp_validation_kwargs``.
+        3. Always forces ``fit_strategy=None`` after merging.
+
+        Why ``fit_strategy`` is forced to ``None``
+        ------------------------------------------
+        Nested validation fits run on 1D per-band ``Lightcurve`` objects
+        created by ``select_bands``. These objects have no multi-band
+        structure and cannot support ``fit_strategy="consensus"``.
+        Propagating the outer ``fit_strategy`` would cause infinite
+        recursion or a misleading error.
+
+        Why consensus-only kwargs are stripped
+        --------------------------------------
+        Keys like ``consensus_frequencies``, ``use_gp_validation``, and
+        ``outlier_sigma`` are meaningful only at the 2D consensus level.
+        Forwarding them into nested 1D fits would either be silently
+        ignored or cause unexpected errors.
+
+        Parameters
+        ----------
+        gp_validation_kwargs : dict or None, optional
+            User-supplied overrides. The reserved nested key
+            ``period_summary_kwargs`` is stripped here and must NOT be
+            forwarded to ``fit()``; callers must pass it separately to
+            ``get_period_summary``.
+
+        Returns
+        -------
+        dict
+            Sanitized kwargs safe for a nested 1D ``Lightcurve.fit()``
+            call. The ``fit_strategy`` key is always ``None``.
+        """
+        # Keys that must NOT propagate into nested GP validation fits.
+        # Consensus-only kwargs are meaningless or harmful for 1D band fits.
+        # period_summary_kwargs is forwarded separately to get_period_summary.
+        _BLOCKED_KEYS = frozenset({
+            "fit_strategy",
+            "consensus_frequencies",
+            "consensus_scales",
+            "consensus_frequency_width",
+            "consensus_frequency_k",
+            "consensus_scale_max_factor",
+            "apply_consensus_constraints",
+            "constrain_consensus",
+            "use_gp_validation",
+            "gp_validation_kwargs",
+            "gp_frequency_tolerance_factor",
+            "outlier_sigma",
+            "consensus_width_factor",
+            "consensus_dedup_rtol",
+            "min_points_per_band",
+            "max_gap_fraction",
+            "min_duty_cycle",
+            "use_acf",
+            "period_summary_kwargs",
+        })
+
+        # Conservative defaults: keep validation lightweight and reproducible.
+        # Users can override non-blocked keys via gp_validation_kwargs.
+        defaults = {
+            "model": "1D",
+            "num_mixtures": 1,
+            "use_mls_init": True,
+            "training_iter": 100,
+        }
+
+        merged = dict(defaults)
+        if gp_validation_kwargs:
+            for key, val in gp_validation_kwargs.items():
+                if key not in _BLOCKED_KEYS:
+                    merged[key] = val
+
+        # Force fit_strategy=None last, regardless of any user override.
+        # A recursive consensus fit on a 1D band lightcurve is always wrong.
+        merged["fit_strategy"] = None
+        return merged
+
+    def _consensus_validate_candidates_with_1d_gp(
+        self,
+        candidate_diag,
+        gp_validation_kwargs=None,
+        gp_frequency_tolerance_factor=3.0,
+        verbose=False,
+    ):
+        """Validate LS/ACF-vetted band candidates against per-band 1D GP PSD.
+
+        All comparison logic operates in frequency space [1/day].  Period
+        values stored in ``band_records`` (``gp_dominant_period`` etc.) are
+        derived from the validated GP frequency solely for user-facing display
+        and are not used in any acceptance/rejection decision.
+        """
+        if not isinstance(candidate_diag, dict):
+            raise ValueError("candidate_diag must be a dictionary.")
+        if gp_validation_kwargs is None:
+            gp_validation_kwargs = {}
+        elif not isinstance(gp_validation_kwargs, dict):
+            raise ValueError("gp_validation_kwargs must be None or a dictionary.")
+
+        gp_frequency_tolerance_factor = float(gp_frequency_tolerance_factor)
+        if (
+            not np.isfinite(gp_frequency_tolerance_factor)
+            or gp_frequency_tolerance_factor <= 0
+        ):
+            raise ValueError(
+                "gp_frequency_tolerance_factor must be a finite, strictly "
+                "positive float."
+            )
+
+        period_summary_kwargs = gp_validation_kwargs.get("period_summary_kwargs")
+        if period_summary_kwargs is None:
+            period_summary_kwargs = {}
+        elif not isinstance(period_summary_kwargs, dict):
+            raise ValueError(
+                "gp_validation_kwargs['period_summary_kwargs'] must be a "
+                "dictionary when provided."
+            )
+
+        controls = dict(candidate_diag.get("controls", {}))
+        band_records = {}
+        for band, record in candidate_diag.get("band_records", {}).items():
+            canonical = self._consensus_initialize_band_record(
+                band,
+                metrics=(record or {}).get("metrics"),
+                gp_validation_requested=True,
+            )
+            canonical.update(dict(record))
+            canonical_reasons = self._consensus_normalize_rejection_reasons(
+                canonical.get("rejection_reasons")
+            )
+            canonical_status = (
+                _CONSENSUS_BAND_STATUS_REJECTED
+                if canonical_reasons
+                else canonical.get("status", _CONSENSUS_BAND_STATUS_PENDING)
+            )
+            if canonical_status == _CONSENSUS_BAND_STATUS_REJECTED:
+                self._consensus_set_band_status(
+                    canonical,
+                    _CONSENSUS_BAND_STATUS_REJECTED,
+                    canonical_reasons,
+                )
+            elif canonical_status == _CONSENSUS_BAND_STATUS_ACCEPTED:
+                self._consensus_set_band_status(
+                    canonical,
+                    _CONSENSUS_BAND_STATUS_ACCEPTED,
+                    [],
+                )
+            else:
+                self._consensus_set_band_status(
+                    canonical,
+                    _CONSENSUS_BAND_STATUS_PENDING,
+                    [],
+                )
+            band_records[band] = canonical
+        accepted_bands = list(candidate_diag.get("accepted_bands", []))
+        rejected_bands = list(candidate_diag.get("rejected_bands", []))
+        rejection_reasons = {}
+        for band, reasons in candidate_diag.get("rejection_reasons", {}).items():
+            normalized = self._consensus_normalize_rejection_reasons(reasons)
+            if normalized:
+                rejection_reasons[band] = normalized
+
+        for record in band_records.values():
+            record.setdefault("gp_validation_used", False)
+            record.setdefault("gp_dominant_frequency", None)
+            record.setdefault("gp_dominant_period", None)
+            record.setdefault("gp_frequency_difference", None)
+            record.setdefault("gp_fractional_frequency_difference", None)
+            record.setdefault("gp_frequency_tolerance", None)
+            if "gp_validation_status" not in record:
+                self._consensus_set_gp_validation_status(
+                    record,
+                    _CONSENSUS_GP_VALIDATION_STATUS_NOT_REQUESTED,
+                )
+            record.setdefault("gp_validation_error", None)
+
+        # GP validation is requested for this function call. Bands not in
+        # accepted_bands are intentionally bypassed by pre-GP filtering.
+        for band, record in band_records.items():
+            if (
+                band not in accepted_bands
+                and not record.get("gp_validation_used", False)
+            ):
+                self._consensus_set_gp_validation_status(
+                    record,
+                    _CONSENSUS_GP_VALIDATION_STATUS_SKIPPED,
+                    reason=_CONSENSUS_GP_VALIDATION_REASON_BAND_NOT_ACCEPTED,
+                )
+
+        default_gp_fit_kwargs = (
+            self._consensus_prepare_gp_validation_fit_kwargs(gp_validation_kwargs)
+        )
+        gp_ls_tolerance_base_factor = 0.1
+
+        accepted_after_gp = []
+        for band_label in accepted_bands:
+            record = band_records.get(
+                band_label,
+                self._consensus_initialize_band_record(
+                    band_label, gp_validation_requested=True
+                ),
+            )
+            band_records[band_label] = record
+
+            record["gp_validation_used"] = True
+            # The pre-attempt state is "failed"; it remains "failed" if any
+            # exception is raised during the GP fit.
+            self._consensus_set_gp_validation_status(
+                record, _CONSENSUS_GP_VALIDATION_STATUS_FAILED
+            )
+            record["gp_validation_error"] = None
+
+            _candidate_frequency_raw = record.get("dominant_frequency", np.nan)
+            candidate_frequency = (
+                float(_candidate_frequency_raw)
+                if _candidate_frequency_raw is not None
+                else np.nan
+            )
+            # Period is derived for verbose display only; all GP validation
+            # decisions are made in frequency space.
+            gp_dominant_frequency = None
+            gp_dominant_period = None
+            reason = None
+
+            try:
+                if not (
+                    np.isfinite(candidate_frequency) and candidate_frequency > 0
+                ):
+                    raise ValueError(
+                        "dominant_frequency is missing or invalid for GP validation."
+                    )
+
+                # Validation is performed on a separate 1D Lightcurve returned
+                # by select_bands. The per-band lc_band.fit() call mutates
+                # only lc_band — it does NOT affect self.model, self.likelihood,
+                # self.guess, or self.consensus_diagnostics on this instance.
+                # (self.consensus_diagnostics is assigned by _consensus_standard_fit
+                # after all per-band validation has finished, not here.)
+                lc_band = self.select_bands([str(band_label)])
+                lc_band.fit(**default_gp_fit_kwargs)
+                summary = lc_band.get_period_summary(**period_summary_kwargs)
+
+                gp_dominant_frequency = getattr(summary, "dominant_frequency", None)
+                if gp_dominant_frequency is None and hasattr(summary, "get"):
+                    gp_dominant_frequency = summary.get("dominant_frequency")
+
+                gp_dominant_frequency = float(gp_dominant_frequency)
+                if not (
+                    np.isfinite(gp_dominant_frequency)
+                    and gp_dominant_frequency > 0
+                ):
+                    raise ValueError("GP dominant frequency is not finite/positive.")
+
+                # Consensus logic operates in frequency space internally.
+                # Period is derived from frequency only for display/diagnostics.
+                gp_dominant_period = float(1.0 / gp_dominant_frequency)
+
+                frequency_tolerance = max(
+                    gp_frequency_tolerance_factor
+                    * gp_ls_tolerance_base_factor
+                    * min(candidate_frequency, gp_dominant_frequency),
+                    1.0e-8,
+                )
+                frequency_difference = abs(
+                    gp_dominant_frequency - candidate_frequency
+                )
+                fractional_frequency_difference = (
+                    self._consensus_fractional_frequency_difference(
+                        candidate_frequency, gp_dominant_frequency
+                    )
+                )
+
+                record["gp_dominant_frequency"] = gp_dominant_frequency
+                record["gp_dominant_period"] = gp_dominant_period
+                record["gp_frequency_difference"] = float(frequency_difference)
+                record["gp_fractional_frequency_difference"] = float(
+                    fractional_frequency_difference
+                )
+                record["gp_frequency_tolerance"] = float(frequency_tolerance)
+
+                if frequency_difference <= frequency_tolerance:
+                    # GP fit succeeded and the band is accepted.
+                    self._consensus_set_gp_validation_status(
+                        record, _CONSENSUS_GP_VALIDATION_STATUS_SUCCESS
+                    )
+                    self._consensus_set_band_status(
+                        record,
+                        _CONSENSUS_BAND_STATUS_ACCEPTED,
+                        [],
+                    )
+                    accepted_after_gp.append(band_label)
+                else:
+                    # GP fit succeeded but disagreed with the LS candidate.
+                    self._consensus_set_gp_validation_status(
+                        record,
+                        _CONSENSUS_GP_VALIDATION_STATUS_REJECTED,
+                        reason=_CONSENSUS_GP_VALIDATION_REASON_DIAGNOSTICS_FAILED,
+                    )
+                    reason = _CONSENSUS_REJECTION_REASON_GP_LS_DISAGREEMENT
+
+            except Exception as exc:
+                # GP fit attempt raised/failed.
+                self._consensus_set_gp_validation_status(
+                    record,
+                    _CONSENSUS_GP_VALIDATION_STATUS_FAILED,
+                    reason=_CONSENSUS_GP_VALIDATION_REASON_EXCEPTION,
+                )
+                record["gp_validation_error"] = (
+                    f"band={band_label}: {type(exc).__name__}: {exc}"
+                )
+                reason = _CONSENSUS_REJECTION_REASON_GP_VALIDATION_FAILED
+
+            if reason is not None:
+                self._consensus_add_rejection_reasons(record, [reason])
+                if band_label not in rejected_bands:
+                    rejected_bands.append(band_label)
+                rejection_reasons[band_label] = list(record["rejection_reasons"])
+
+            if verbose:
+                _status = record.get("gp_validation_status")
+                # Period shown here is derived from frequency for display only.
+                _ls_period_display = (
+                    float(1.0 / candidate_frequency)
+                    if (
+                        np.isfinite(candidate_frequency)
+                        and candidate_frequency > 0
+                    )
+                    else None
+                )
+                _msg = (
+                    f"[consensus][gp] band={band_label} "
+                    f"ls_period_display={_ls_period_display} "
+                    f"ls_frequency={record.get('dominant_frequency')} "
+                    f"gp_period={record.get('gp_dominant_period')} "
+                    f"gp_frequency={record.get('gp_dominant_frequency')} "
+                    f"status={_status}"
+                )
+                if reason is not None:
+                    _msg += f" rejection_reason={reason}"
+                print(_msg)
+
+        # Guard: ensure no band can appear in both accepted and rejected.
+        # Overlap is unlikely in normal operation but could occur if a band
+        # was recorded in rejected_bands before GP validation ran (e.g. for
+        # a missing LS frequency) and was somehow also added to accepted_after_gp.
+        for band in rejected_bands:
+            if band in band_records:
+                band_reasons = self._consensus_normalize_rejection_reasons(
+                    band_records[band].get("rejection_reasons")
+                )
+                if band_reasons:
+                    self._consensus_set_band_status(
+                        band_records[band],
+                        _CONSENSUS_BAND_STATUS_REJECTED,
+                        band_reasons,
+                    )
+
+        _rejected_set = set(rejected_bands)
+        final_accepted = [b for b in accepted_after_gp if b not in _rejected_set]
+        for band in final_accepted:
+            if band in band_records:
+                self._consensus_set_band_status(
+                    band_records[band],
+                    _CONSENSUS_BAND_STATUS_ACCEPTED,
+                    [],
+                )
+                rejection_reasons.pop(band, None)
+
+        for band, record in band_records.items():
+            reasons = self._consensus_normalize_rejection_reasons(
+                record.get("rejection_reasons")
+            )
+            if reasons:
+                self._consensus_set_band_status(
+                    record,
+                    _CONSENSUS_BAND_STATUS_REJECTED,
+                    reasons,
+                )
+                rejection_reasons[band] = list(reasons)
+            elif band in set(rejected_bands):
+                reasons = self._consensus_normalize_rejection_reasons(
+                    rejection_reasons.get(band)
+                )
+                if reasons:
+                    self._consensus_set_band_status(
+                        record,
+                        _CONSENSUS_BAND_STATUS_REJECTED,
+                        reasons,
+                    )
+                    rejection_reasons[band] = list(reasons)
+                else:
+                    self._consensus_set_band_status(
+                        record,
+                        _CONSENSUS_BAND_STATUS_ACCEPTED,
+                        [],
+                    )
+            else:
+                self._consensus_set_band_status(
+                    record,
+                    _CONSENSUS_BAND_STATUS_ACCEPTED,
+                    [],
+                )
+            band_records[band] = self._consensus_make_json_safe(record)
+
+        return {
+            "controls": self._consensus_make_json_safe(controls),
+            "band_records": band_records,
+            "accepted_bands": final_accepted,
+            "rejected_bands": rejected_bands,
+            "rejection_reasons": self._consensus_make_json_safe(rejection_reasons),
+        }
+
+    def _deduplicate_frequency_candidates(
+        self,
+        candidates,
+        rtol=0.01,
+    ):
+        """Collapse near-identical frequency candidates before ranking.
+
+        Near-duplicate frequencies can split support across effectively
+        identical peaks due to floating-point jitter. Deduplicating first keeps
+        only the strongest representative in each cluster before downstream
+        ranking and trusted-candidate selection.
+
+        Notes
+        -----
+        ``rtol=0`` disables deduplication while still validating candidate
+        structure and numeric values.
+        """
+        if candidates is None:
+            return []
+
+        _rtol = float(rtol)
+        # rtol=0 is allowed and effectively disables deduplication.
+        if not np.isfinite(_rtol) or _rtol < 0:
+            raise ValueError("rtol must be a finite, non-negative float.")
+
+        normalized = []
+        for idx, candidate in enumerate(candidates):
+            if not isinstance(candidate, dict):
+                raise ValueError("Each candidate must be a dict.")
+            if "frequency" not in candidate or "score" not in candidate:
+                raise ValueError(
+                    "Each candidate must contain 'frequency' and 'score'."
+                )
+            freq = float(candidate["frequency"])
+            score = float(candidate["score"])
+            if not (np.isfinite(freq) and freq > 0):
+                raise ValueError(
+                    "Candidate frequencies must be finite and positive."
+                )
+            if not np.isfinite(score):
+                raise ValueError("Candidate scores must be finite.")
+            candidate_copy = dict(candidate)
+            candidate_copy["frequency"] = freq
+            candidate_copy["score"] = score
+            candidate_copy["_dedup_index"] = idx
+            normalized.append(candidate_copy)
+
+        if not normalized:
+            return []
+
+        parent = list(range(len(normalized)))
+
+        def _find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def _union(i, j):
+            ri = _find(i)
+            rj = _find(j)
+            if ri != rj:
+                parent[rj] = ri
+
+        for i in range(len(normalized)):
+            f1 = float(normalized[i]["frequency"])
+            for j in range(i + 1, len(normalized)):
+                f2 = float(normalized[j]["frequency"])
+                rel_diff = self._consensus_fractional_frequency_difference(f1, f2)
+                if rel_diff < _rtol:
+                    _union(i, j)
+
+        clusters = {}
+        for idx, candidate in enumerate(normalized):
+            root = _find(idx)
+            clusters.setdefault(root, []).append(candidate)
+
+        deduped = []
+        for cluster in clusters.values():
+            best = max(
+                cluster,
+                key=lambda c: (float(c["score"]), -int(c["_dedup_index"])),
+            )
+            deduped.append(best)
+
+        deduped.sort(key=lambda c: (-float(c["score"]), int(c["_dedup_index"])))
+
+        output = []
+        for candidate in deduped:
+            candidate_copy = dict(candidate)
+            candidate_copy.pop("_dedup_index", None)
+            output.append(candidate_copy)
+        return output
+
+    def _consensus_build_frequency_consensus(
+        self,
+        band_records,
+        accepted_bands,
+        outlier_sigma=3.5,
+        dedup_rtol=0.01,
+        min_consensus_inliers=2,
+        verbose=False,
+    ):
+        """Build a robust cross-band consensus frequency from dominant candidates.
+
+        Near-duplicate frequencies are collapsed before robust aggregation so
+        equivalent peaks do not receive duplicate weight during ranking.
+
+        Parameters
+        ----------
+        band_records : dict
+            Per-band candidate records containing at least
+            ``dominant_frequency`` keys.
+        accepted_bands : list[str]
+            Bands to include in the robust aggregation stage.
+        outlier_sigma : float, optional
+            Robust sigma threshold used with MAD-based dispersion for
+            catastrophic outlier rejection.
+        dedup_rtol : float, optional
+            Relative tolerance used to cluster near-identical frequency
+            candidates before consensus ranking.
+        min_consensus_inliers : int, optional
+            Minimum number of bands that must survive outlier rejection and
+            cluster around a common frequency for the consensus to be
+            considered valid.  When fewer inliers survive, the method returns
+            a diagnostics dict with ``insufficient_inliers=True`` and
+            ``final_consensus_frequency=nan`` so the caller can finalize
+            diagnostics and raise an informative ``RuntimeError``.  Defaults
+            to ``2``, meaning at least two bands must agree.
+        verbose : bool, optional
+            If ``True``, print outlier decisions and final consensus values.
+
+        Returns
+        -------
+        dict
+            Aggregation diagnostics including median frequency, MAD scatter,
+            inlier/outlier bands, and final consensus frequency.  When the
+            inlier count is below ``min_consensus_inliers``, the dict
+            contains ``insufficient_inliers=True`` and
+            ``final_consensus_frequency=nan``.
+
+        Raises
+        ------
+        ValueError
+            If no valid per-band dominant frequencies are available.
+        """
+        freq_pairs = []
+        for band in accepted_bands:
+            freq = band_records[band].get("dominant_frequency")
+            if freq is None:
+                continue
+            if np.isfinite(freq) and freq > 0:
+                freq_pairs.append((band, float(freq)))
+
+        if not freq_pairs:
+            raise ValueError(
+                "Consensus fit failed: no valid dominant per-band frequencies "
+                "were available after quality gating."
+            )
+
+        # Deduplicate near-identical frequencies to prevent floating-point
+        # jitter from counting equivalent peaks multiple times.
+        _significant_ls_score = 2.0
+        _default_ls_score = 1.0
+        candidates = []
+        for band, freq in freq_pairs:
+            record = band_records.get(band, {})
+            ls_significant = bool(record.get("ls_significant"))
+            candidates.append(
+                {
+                    "frequency": float(freq),
+                    "score": (
+                        _significant_ls_score
+                        if ls_significant
+                        else _default_ls_score
+                    ),
+                    "band": band,
+                }
+            )
+
+        n_before = len(candidates)
+        candidates = self._deduplicate_frequency_candidates(
+            candidates, rtol=dedup_rtol
+        )
+        n_after = len(candidates)
+        if verbose:
+            print(f"[Consensus] Deduplicated {n_before} -> {n_after} candidates")
+
+        if not candidates:
+            raise ValueError(
+                "Consensus fit failed: no valid dominant per-band frequencies "
+                "were available after deduplication."
+            )
+
+        freq_arr = np.asarray([cand["frequency"] for cand in candidates], dtype=float)
+        band_arr = np.asarray([cand["band"] for cand in candidates], dtype=object)
+
+        median_freq = float(np.median(freq_arr))
+        mad_freq = float(np.median(np.abs(freq_arr - median_freq)))
+        robust_sigma = 1.4826 * mad_freq
+
+        if len(freq_arr) >= 3 and robust_sigma > 0 and np.isfinite(robust_sigma):
+            abs_dev = np.abs(freq_arr - median_freq)
+            inlier_mask = abs_dev <= float(outlier_sigma) * robust_sigma
+        else:
+            inlier_mask = np.ones_like(freq_arr, dtype=bool)
+
+        if not np.any(inlier_mask):
+            inlier_mask = np.ones_like(freq_arr, dtype=bool)
+
+        outlier_bands = band_arr[~inlier_mask].tolist()
+        inlier_freqs = freq_arr[inlier_mask]
+        inlier_bands = band_arr[inlier_mask].tolist()
+
+        # Count how many ORIGINAL bands (pre-deduplication) lie within the
+        # inlier frequency window.  Near-identical frequencies from different
+        # bands may have been collapsed into one representative candidate by
+        # the deduplication step, so the deduped inlier list can be shorter
+        # than the true number of bands that agree on a common frequency.
+        # Using the original freq_pairs count correctly handles both the
+        # "all bands agree" case (robust_sigma ≈ 0 → all original bands are
+        # inliers) and the "mutually inconsistent" case (robust_sigma > 0 →
+        # only original bands within the inlier window are counted).
+        if len(freq_arr) >= 3 and robust_sigma > 0 and np.isfinite(robust_sigma):
+            _inlier_tol = float(outlier_sigma) * robust_sigma
+            n_original_inlier_bands = sum(
+                1 for _, f in freq_pairs if abs(f - median_freq) <= _inlier_tol
+            )
+        else:
+            # Robust scatter is zero or undefined: all original bands are
+            # treated as inliers (no sigma-clipping is possible).
+            n_original_inlier_bands = len(freq_pairs)
+
+        # Require a minimum number of original bands in the inlier cluster.
+        # If too few original bands agree, no scientifically defensible
+        # consensus exists and the caller should report failure.
+        if n_original_inlier_bands < int(min_consensus_inliers):
+            return {
+                "frequencies_all": freq_arr.tolist(),
+                "bands_all": band_arr.tolist(),
+                "median_frequency": median_freq,
+                "mad_frequency_scatter": mad_freq,
+                "inlier_bands": inlier_bands,
+                "outlier_bands": outlier_bands,
+                "final_consensus_frequency": float("nan"),
+                "final_mad_frequency_scatter": float("nan"),
+                "insufficient_inliers": True,
+                "insufficient_inliers_count": n_original_inlier_bands,
+                "required_min_consensus_inliers": int(min_consensus_inliers),
+            }
+
+        final_consensus_frequency = float(np.median(inlier_freqs))
+        mad_scatter = float(np.median(np.abs(inlier_freqs - final_consensus_frequency)))
+
+        if verbose:
+            if outlier_bands:
+                print(
+                    "[consensus] outlier rejection removed bands:",
+                    outlier_bands,
+                )
+            print(
+                "[consensus] median frequency:",
+                f"{median_freq:.6g}",
+                "MAD:",
+                f"{mad_freq:.6g}",
+            )
+            print(
+                "[consensus] final consensus frequency:",
+                f"{final_consensus_frequency:.6g}",
+            )
+
+        return {
+            "frequencies_all": freq_arr.tolist(),
+            "bands_all": band_arr.tolist(),
+            "median_frequency": median_freq,
+            "mad_frequency_scatter": mad_freq,
+            "inlier_bands": inlier_bands,
+            "outlier_bands": outlier_bands,
+            "final_consensus_frequency": final_consensus_frequency,
+            "final_mad_frequency_scatter": mad_scatter,
+        }
+
+    @staticmethod
+    def _consensus_build_initialization_from_frequency(
+        final_frequency,
+        scatter,
+        *,
+        num_mixtures=1,
+        consensus_width_factor=3.0,
+    ):
+        """Convert a scalar consensus frequency into init guesses and bounds.
+
+        Parameters
+        ----------
+        final_frequency : float
+            Final robust consensus frequency.
+        scatter : float
+            Robust frequency scatter estimate (MAD-based).
+        num_mixtures : int, optional
+            Number of spectral-mixture components for initialization vectors.
+        consensus_width_factor : float, optional
+            Multiplier applied to robust scatter to form constraint width.
+
+        Returns
+        -------
+        dict
+            Initialization payload containing ``consensus_frequencies``,
+            ``consensus_scales``, ``consensus_frequency_width``, and
+            ``consensus_constraint_bounds``.
+
+        Raises
+        ------
+        ValueError
+            If inputs are invalid (non-positive frequency or mixture count).
+        """
+        if not (np.isfinite(final_frequency) and final_frequency > 0):
+            raise ValueError(
+                "final consensus frequency must be positive and finite."
+            )
+        if not isinstance(num_mixtures, int) or num_mixtures < 1:
+            raise ValueError("num_mixtures must be a positive integer.")
+
+        floor_width = max(final_frequency * 0.01, 1.0e-8)
+        if np.isfinite(scatter) and scatter > 0:
+            width = float(consensus_width_factor) * float(scatter)
+            width = max(width, floor_width)
+        else:
+            width = floor_width
+
+        lower = max(final_frequency - width, _CONSENSUS_MIN_FREQUENCY_BOUND)
+        upper = final_frequency + width
+        scale_guess = max(
+            float(scatter),
+            final_frequency * 0.05,
+            _CONSENSUS_MIN_SCALE_BOUND,
+        )
+
+        return {
+            "consensus_frequencies": np.full(
+                num_mixtures, final_frequency, dtype=float
+            ),
+            "consensus_scales": np.full(num_mixtures, scale_guess, dtype=float),
+            "consensus_frequency_width": np.full(num_mixtures, width, dtype=float),
+            "consensus_constraint_bounds": (float(lower), float(upper)),
+        }
+
+    def _consensus_standard_fit(self, **fit_kwargs):
+        """Run the conservative consensus fit workflow.
+
+        For ``fit_strategy="consensus"``, this method:
+        1) uses caller-provided consensus frequencies directly when supplied,
+        2) collects one dominant LS candidate per band after quality gating,
+           using LS with optional ACF consistency support diagnostics,
+        3) optionally validates each LS/ACF-accepted band against the dominant
+           frequency from a per-band 1D GP PSD fit when
+           ``use_gp_validation=True`` — all comparisons and aggregation are
+           performed in frequency space; user-facing diagnostics may report
+           periods,
+        4) builds a robust cross-band consensus using median and MAD in
+           frequency space,
+        5) forwards consensus outputs into existing initial-guess and
+           constraint plumbing,
+        6) dispatches to the standard fit path with merged guesses.
+
+        Manual ``consensus_frequencies`` can be supplied directly and bypass
+        automatic candidate collection. Automatic LS/ACF consensus construction
+        currently requires a 2D light curve.
+
+        Parameters
+        ----------
+        **fit_kwargs : dict
+            Standard :meth:`fit` kwargs plus consensus-specific controls:
+            ``min_points_per_band``, ``max_gap_fraction``, ``min_duty_cycle``,
+            ``outlier_sigma``, ``min_consensus_inliers``, ``use_acf``,
+            ``constrain_consensus``, ``consensus_width_factor``,
+            ``consensus_dedup_rtol``, ``use_gp_validation``,
+            ``gp_validation_kwargs``, and ``gp_frequency_tolerance_factor``.
+
+            Manual overrides are also accepted via:
+
+            - ``consensus_frequencies`` : array-like of float
+              Consensus frequency values used directly when provided (automatic
+              cross-band construction is skipped).
+            - ``consensus_scales`` : array-like of float or scalar
+              Optional spectral-mixture scale initialization values.
+            - ``consensus_frequency_width`` : array-like of float or scalar
+              Optional width values for consensus-frequency constraints.
+            - ``consensus_frequency_k`` : float, default ``3.0``
+              Multiplier applied to ``consensus_frequency_width`` when building
+              mixture-mean constraint bounds.
+            - ``consensus_scale_max_factor`` : float, default ``0.2``
+              Multiplier on median consensus frequency to derive an upper bound
+              for mixture-scale constraints when enabled.
+            - ``consensus_dedup_rtol`` : float, default ``0.01``
+              Relative tolerance used to cluster near-identical frequency
+              candidates before consensus ranking. Must be finite and strictly
+              positive.
+            - ``min_consensus_inliers`` : int, default ``2``
+              Minimum number of original (pre-deduplication) photometric bands
+              that must lie within the inlier frequency window for the
+              consensus to be accepted.  When fewer bands agree, the fit
+              raises :class:`ConsensusFitError` and
+              ``consensus_success`` is ``False``.
+              This guards against spurious consensus frequencies when all
+              accepted bands have mutually inconsistent periods.
+            - ``use_gp_validation`` : bool, default ``False``
+              If ``True``, run optional per-band 1D GP frequency validation on
+              LS/ACF-vetted candidates before final consensus aggregation.
+            - ``gp_validation_kwargs`` : dict or None, default ``None``
+              Extra kwargs for per-band 1D GP validation fit and period summary.
+              Reserved nested key: ``period_summary_kwargs`` (dict), forwarded
+              only to :meth:`get_period_summary`.
+            - ``gp_frequency_tolerance_factor`` : float, default ``3.0``
+              Positive scale factor controlling the LS-vs-GP frequency
+              consistency tolerance.
+
+        Returns
+        -------
+        dict
+            The result object returned by the underlying :meth:`fit` call.
+
+        Raises
+        ------
+        ValueError
+            If automatic consensus construction is requested for a non-2D light
+            curve, or if consensus inputs fail validation.
+        ConsensusFitError
+            If the consensus pipeline determines that the data do not support a
+            coherent shared period.  The exception carries a
+            ``failure_diagnostics`` attribute with structured diagnostics.
+            Possible reasons: all bands fail quality gating
+            (``"no_accepted_bands"``); too few inlier bands after outlier
+            rejection (``"insufficient_consensus_inliers"``); frequency
+            aggregation error (``"frequency_aggregation_error"``); or an
+            invalid aggregated frequency (``"invalid_consensus_frequency"``).
+            In all cases ``lc.consensus_diagnostics`` is populated before the
+            exception is raised.
+        """
+        consensus_frequencies = fit_kwargs.pop("consensus_frequencies", None)
+        consensus_scales = fit_kwargs.pop("consensus_scales", None)
+        user_guess = fit_kwargs.pop("guess", None)
+        consensus_frequency_width = fit_kwargs.pop("consensus_frequency_width", None)
+        consensus_frequency_k = fit_kwargs.pop("consensus_frequency_k", 3.0)
+        consensus_scale_max_factor = fit_kwargs.pop("consensus_scale_max_factor", 0.2)
+        legacy_apply_constraints = fit_kwargs.pop("apply_consensus_constraints", None)
+        constrain_consensus = fit_kwargs.pop("constrain_consensus", None)
+        if constrain_consensus is None:
+            apply_consensus_constraints = (
+                True
+                if legacy_apply_constraints is None
+                else bool(legacy_apply_constraints)
+            )
+        else:
+            apply_consensus_constraints = bool(constrain_consensus)
+
+        min_points_per_band = fit_kwargs.pop("min_points_per_band", None)
+        max_gap_fraction = fit_kwargs.pop("max_gap_fraction", None)
+        min_duty_cycle = fit_kwargs.pop("min_duty_cycle", None)
+        outlier_sigma = fit_kwargs.pop("outlier_sigma", None)
+        min_consensus_inliers = fit_kwargs.pop("min_consensus_inliers", 2)
+        use_acf = fit_kwargs.pop("use_acf", False)
+        consensus_width_factor = fit_kwargs.pop("consensus_width_factor", None)
+        consensus_dedup_rtol = fit_kwargs.pop("consensus_dedup_rtol", 0.01)
+        use_gp_validation = fit_kwargs.pop("use_gp_validation", False)
+        gp_validation_kwargs = fit_kwargs.pop("gp_validation_kwargs", None)
+        gp_frequency_tolerance_factor = fit_kwargs.pop(
+            "gp_frequency_tolerance_factor", 3.0
+        )
+        verbose = fit_kwargs.get("verbose", False)
+        _allow_existing = fit_kwargs.pop("_allow_existing_model_for_consensus", False)
+        consensus_dedup_rtol = float(consensus_dedup_rtol)
+        if not np.isfinite(consensus_dedup_rtol) or consensus_dedup_rtol <= 0:
+            raise ValueError(
+                "consensus_dedup_rtol must be a finite, strictly positive "
+                "float."
+            )
+        if not isinstance(use_gp_validation, bool):
+            raise ValueError("use_gp_validation must be a boolean.")
+        if gp_validation_kwargs is not None and not isinstance(
+            gp_validation_kwargs, dict
+        ):
+            raise ValueError("gp_validation_kwargs must be None or a dictionary.")
+        gp_frequency_tolerance_factor = float(gp_frequency_tolerance_factor)
+        if (
+            not np.isfinite(gp_frequency_tolerance_factor)
+            or gp_frequency_tolerance_factor <= 0
+        ):
+            raise ValueError(
+                "gp_frequency_tolerance_factor must be a finite, strictly "
+                "positive float."
+            )
+
+        result_diagnostics = self._consensus_initialize_result_structure(
+            fit_strategy="consensus"
+        )
+        result_diagnostics.update({
+            "use_acf_validation": bool(use_acf),
+            "use_gp_validation": bool(use_gp_validation),
+            "gp_validation_requested": bool(use_gp_validation),
+            "gp_validation_performed": False,
+            "consensus_generation_method": (
+                "auto_consensus"
+                if consensus_frequencies is None
+                else "manual_consensus_frequencies"
+            ),
+        })
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
+
+        auto_constraint_bounds = None
+        auto_controls = None
+        if consensus_frequencies is None:
+            if self.ndim != 2:
+                raise ValueError(
+                    "Automatic consensus frequency construction requires a 2D "
+                    "light curve."
+                )
+            candidate_diag = self._consensus_collect_band_candidates(
+                min_points_per_band=min_points_per_band,
+                max_gap_fraction=max_gap_fraction,
+                min_duty_cycle=min_duty_cycle,
+                use_acf=use_acf,
+                gp_validation_requested=use_gp_validation,
+                verbose=verbose,
+            )
+            if use_gp_validation:
+                validated_diag = self._consensus_validate_candidates_with_1d_gp(
+                    candidate_diag=candidate_diag,
+                    gp_validation_kwargs=gp_validation_kwargs,
+                    gp_frequency_tolerance_factor=gp_frequency_tolerance_factor,
+                    verbose=verbose,
+                )
+                candidate_diag = validated_diag
+                result_diagnostics["gp_validation_performed"] = any(
+                    bool(rec.get("gp_validation_used", False))
+                    for rec in candidate_diag.get("band_records", {}).values()
+                )
+            auto_controls = candidate_diag["controls"]
+            _band_records_snap = dict(candidate_diag.get("band_records", {}))
+            _rejected_bands_snap = list(candidate_diag.get("rejected_bands", []))
+            # Convert per-band {band: [reasons]} accumulator to canonical
+            # top-level {reason: [bands]} format via the rejection-summary
+            # builder before storing in result_diagnostics.
+            _top_level_rr = self._consensus_build_rejection_summary(
+                per_band_diagnostics=_band_records_snap,
+                rejected_bands=_rejected_bands_snap,
+                rejection_reasons=dict(candidate_diag.get("rejection_reasons", {})),
+            )
+            result_diagnostics.update({
+                "accepted_bands": list(candidate_diag.get("accepted_bands", [])),
+                "rejected_bands": _rejected_bands_snap,
+                "rejection_reasons": _top_level_rr,
+                "per_band_diagnostics": _band_records_snap,
+            })
+            if use_gp_validation:
+                self._consensus_debug_checkpoint(
+                    result_diagnostics, "after_gp_validation"
+                )
+            accepted_bands = candidate_diag.get("accepted_bands", [])
+            if not accepted_bands:
+                rejection_reasons = candidate_diag.get("rejection_reasons", {})
+                self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                    result_diagnostics
+                )
+                _rr_summary = {
+                    reason: list(bands)
+                    for reason, bands in rejection_reasons.items()
+                }
+                raise ConsensusFitError(
+                    "Consensus fit failed: the bands do not support a common "
+                    "periodicity. Every band was rejected before LS frequency "
+                    "extraction (e.g. too few points, excessive gaps, or no "
+                    "reliable LS peaks). Check per-band sampling quality. "
+                    f"Rejection reasons: {_rr_summary!r}.",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "no_accepted_bands",
+                        "rejection_reasons": _rr_summary,
+                    },
+                )
+            self._consensus_debug_checkpoint(
+                result_diagnostics, "before_consensus_frequency_generation"
+            )
+            try:
+                consensus_diag = self._consensus_build_frequency_consensus(
+                    band_records=candidate_diag["band_records"],
+                    accepted_bands=accepted_bands,
+                    outlier_sigma=(
+                        auto_controls["outlier_sigma"]
+                        if outlier_sigma is None
+                        else float(outlier_sigma)
+                    ),
+                    dedup_rtol=consensus_dedup_rtol,
+                    min_consensus_inliers=int(min_consensus_inliers),
+                    verbose=verbose,
+                )
+            except Exception as exc:
+                self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                    result_diagnostics
+                )
+                raise ConsensusFitError(
+                    "Consensus fit failed during robust frequency aggregation. "
+                    "This may occur if accepted per-band frequencies are "
+                    "invalid, all identical, or too sparse to compute a "
+                    "reliable median. Check per-band dominant frequencies in "
+                    f"consensus_diagnostics. Details: {exc}",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "frequency_aggregation_error",
+                        "detail": str(exc),
+                    },
+                ) from exc
+
+            # Insufficient inliers: the accepted bands do not cluster around
+            # a common frequency.  Populate partial diagnostics for inspection
+            # before raising a RuntimeError.
+            if consensus_diag.get("insufficient_inliers"):
+                n_found = consensus_diag.get("insufficient_inliers_count", 0)
+                n_req = consensus_diag.get(
+                    "required_min_consensus_inliers", int(min_consensus_inliers)
+                )
+                _resolved_outlier_sigma = (
+                    auto_controls["outlier_sigma"]
+                    if outlier_sigma is None
+                    else float(outlier_sigma)
+                )
+                _resolved_width_factor = (
+                    auto_controls["consensus_width_factor"]
+                    if consensus_width_factor is None
+                    else float(consensus_width_factor)
+                )
+                result_diagnostics.update({
+                    "median_frequency": consensus_diag["median_frequency"],
+                    "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
+                    "consensus_inlier_bands": consensus_diag["inlier_bands"],
+                    "consensus_outlier_bands": consensus_diag["outlier_bands"],
+                    "candidate_count": len(
+                        consensus_diag.get("frequencies_all", [])
+                    ),
+                    "trusted_candidate_count": n_found,
+                    "per_band_dominant_periods": {
+                        band: rec["dominant_period"]
+                        for band, rec in candidate_diag["band_records"].items()
+                        if rec.get("dominant_period") is not None
+                    },
+                    "per_band_dominant_frequencies": {
+                        band: rec["dominant_frequency"]
+                        for band, rec in candidate_diag["band_records"].items()
+                        if rec.get("dominant_frequency") is not None
+                    },
+                    "controls": {
+                        **auto_controls,
+                        "outlier_sigma": _resolved_outlier_sigma,
+                        "use_acf": bool(use_acf),
+                        "constrain_consensus": bool(apply_consensus_constraints),
+                        "consensus_width_factor": _resolved_width_factor,
+                        "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                        "use_gp_validation": bool(use_gp_validation),
+                        "gp_frequency_tolerance_factor": float(
+                            gp_frequency_tolerance_factor
+                        ),
+                    },
+                })
+                self.consensus_diagnostics = (
+                    self._consensus_finalize_result_structure(result_diagnostics)
+                )
+                _cand_periods = [
+                    (float(1.0 / f) if f and f > 0 else None)
+                    for f in consensus_diag.get("frequencies_all", [])
+                ]
+                raise ConsensusFitError(
+                    f"Consensus fit failed: the inferred periods are mutually "
+                    f"inconsistent across bands. Only {n_found} band(s) "
+                    f"clustered around a common frequency after outlier "
+                    f"rejection, but {n_req} are required. The bands do not "
+                    "support a coherent shared period — this is a data-quality "
+                    "issue, not a software error.",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "insufficient_consensus_inliers",
+                        "n_inlier_bands": n_found,
+                        "required_inliers": n_req,
+                        "n_candidate_bands": len(
+                            consensus_diag.get("frequencies_all", [])
+                        ),
+                        "candidate_periods": _cand_periods,
+                    },
+                )
+
+            final_consensus_frequency = float(
+                consensus_diag.get("final_consensus_frequency", np.nan)
+            )
+            if not (
+                np.isfinite(final_consensus_frequency)
+                and final_consensus_frequency > 0
+            ):
+                self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                    result_diagnostics
+                )
+                raise ConsensusFitError(
+                    "Consensus fit failed: the aggregated consensus frequency "
+                    "is not finite or not strictly positive. This may indicate "
+                    "that the accepted band frequencies are dominated by noise "
+                    "or contain invalid (NaN/Inf) values.",
+                    failure_diagnostics={
+                        "status": "failed",
+                        "reason": "invalid_consensus_frequency",
+                        "frequency_value": (
+                            None
+                            if not math.isfinite(final_consensus_frequency)
+                            else float(final_consensus_frequency)
+                        ),
+                    },
+                )
+            robust_width = float(
+                consensus_diag.get("final_mad_frequency_scatter", np.nan)
+            )
+            if not (np.isfinite(robust_width) and robust_width > 0):
+                robust_width = None
+
+            if consensus_width_factor is None:
+                consensus_width_factor = auto_controls["consensus_width_factor"]
+            if outlier_sigma is None:
+                outlier_sigma = auto_controls["outlier_sigma"]
+
+            requested_num_mixtures = fit_kwargs.get("num_mixtures")
+            if requested_num_mixtures is None:
+                requested_num_mixtures = 1
+                fit_kwargs["num_mixtures"] = 1
+
+            # Automatic consensus strategy uses a single robust cross-band
+            # frequency (LS primary + optional ACF support checks).
+            consensus_frequencies = np.asarray(
+                [final_consensus_frequency], dtype=float
+            )
+            if consensus_frequency_width is None and robust_width is not None:
+                consensus_frequency_width = np.asarray([robust_width], dtype=float)
+            auto_constraint_bounds = None
+
+            result_diagnostics.update({
+                "accepted_bands": candidate_diag["accepted_bands"],
+                "rejected_bands": candidate_diag["rejected_bands"],
+                # Convert per-band {band: [reasons]} accumulator to canonical
+                # top-level {reason: [bands]} format.
+                "rejection_reasons": self._consensus_build_rejection_summary(
+                    per_band_diagnostics=candidate_diag["band_records"],
+                    rejected_bands=candidate_diag["rejected_bands"],
+                    rejection_reasons=dict(
+                        candidate_diag.get("rejection_reasons", {})
+                    ),
+                ),
+                "per_band_diagnostics": candidate_diag["band_records"],
+                "per_band_dominant_periods": {
+                    band: rec["dominant_period"]
+                    for band, rec in candidate_diag["band_records"].items()
+                    if rec["dominant_period"] is not None
+                },
+                "per_band_dominant_frequencies": {
+                    band: rec["dominant_frequency"]
+                    for band, rec in candidate_diag["band_records"].items()
+                    if rec["dominant_frequency"] is not None
+                },
+                "candidate_count": len(consensus_diag.get("frequencies_all", [])),
+                "trusted_candidate_count": len(consensus_diag.get("inlier_bands", [])),
+                "consensus_frequency": final_consensus_frequency,
+                "consensus_period": float(1.0 / final_consensus_frequency),
+                "consensus_frequency_width": robust_width,
+                "consensus_frequency_scatter": consensus_diag["mad_frequency_scatter"],
+                "median_frequency": consensus_diag["median_frequency"],
+                "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
+                "consensus_inlier_bands": consensus_diag["inlier_bands"],
+                "consensus_outlier_bands": consensus_diag["outlier_bands"],
+                "final_consensus_frequency": final_consensus_frequency,
+                "final_consensus_period": float(1.0 / final_consensus_frequency),
+                "robust_frequency_width": robust_width,
+                "final_constraint_bounds": None,
+                "controls": {
+                    **auto_controls,
+                    "outlier_sigma": float(outlier_sigma),
+                    "use_acf": bool(use_acf),
+                    "constrain_consensus": bool(apply_consensus_constraints),
+                    "consensus_width_factor": float(consensus_width_factor),
+                    "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                    "use_gp_validation": bool(use_gp_validation),
+                    "gp_frequency_tolerance_factor": float(
+                        gp_frequency_tolerance_factor
+                    ),
+                },
+            })
+            result_diagnostics["consensus_generation_method"] = (
+                "auto_ls_acf_gp" if use_gp_validation else "auto_ls_acf"
+            )
+            self._consensus_debug_checkpoint(
+                result_diagnostics, "before_finalization"
+            )
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
+            if verbose:
+                print("[consensus] accepted bands:", candidate_diag["accepted_bands"])
+                print("[consensus] rejected bands:", candidate_diag["rejected_bands"])
+                print(
+                    "[consensus] per-band dominant periods:",
+                    self.consensus_diagnostics["per_band_dominant_periods"],
+                )
+                print(
+                    "[consensus] final consensus frequency:",
+                    f"{final_consensus_frequency:.6g}",
+                )
+                print(
+                    "[consensus] final consensus period:",
+                    f"{(1.0 / final_consensus_frequency):.6g}",
+                )
+                print(
+                    "[consensus] robust frequency width:",
+                    "None"
+                    if robust_width is None
+                    else f"{float(robust_width):.6g}",
+                )
+        else:
+            consensus_frequencies = np.asarray(
+                consensus_frequencies, dtype=float
+            ).ravel()
+            if consensus_frequencies.size == 0:
+                raise ValueError("consensus_frequencies must not be empty.")
+            if not np.all(
+                np.isfinite(consensus_frequencies) & (consensus_frequencies > 0)
+            ):
+                raise ValueError(
+                    "consensus_frequencies must contain finite, strictly "
+                    "positive values."
+                )
+            # Apply near-duplicate suppression before downstream ranking and
+            # aggregation, using the configured consensus clustering tolerance.
+            manual_candidates = [
+                {"frequency": float(freq), "score": 1.0, "index": idx}
+                for idx, freq in enumerate(consensus_frequencies.tolist())
+            ]
+            n_before = len(manual_candidates)
+            manual_candidates = self._deduplicate_frequency_candidates(
+                manual_candidates, rtol=consensus_dedup_rtol
+            )
+            n_after = len(manual_candidates)
+            if verbose:
+                print(f"[Consensus] Deduplicated {n_before} -> {n_after} candidates")
+
+            consensus_frequencies = np.asarray(
+                [cand["frequency"] for cand in manual_candidates], dtype=float
+            )
+            if consensus_frequencies.size == 0:
+                raise ValueError("consensus_frequencies must not be empty.")
+
+            if consensus_frequency_width is not None:
+                _manual_widths = np.asarray(
+                    consensus_frequency_width, dtype=float
+                ).ravel()
+                if _manual_widths.size > 1 and _manual_widths.size == n_before:
+                    _selected_idx = np.asarray(
+                        [int(cand["index"]) for cand in manual_candidates],
+                        dtype=int,
+                    )
+                    consensus_frequency_width = _manual_widths[_selected_idx]
+            if consensus_frequency_width is None:
+                floor_width = np.maximum(consensus_frequencies * 0.01, 1.0e-8)
+                consensus_frequency_width = floor_width
+            _median_frequency = float(np.median(consensus_frequencies))
+            _mad_frequency_scatter = float(
+                np.median(
+                    np.abs(consensus_frequencies - np.median(consensus_frequencies))
+                )
+            )
+            result_diagnostics.update({
+                "accepted_bands": [],
+                "rejected_bands": [],
+                "rejection_reasons": {},
+                "per_band_diagnostics": {},
+                "per_band_dominant_periods": {},
+                "per_band_dominant_frequencies": {},
+                "candidate_count": int(consensus_frequencies.size),
+                "trusted_candidate_count": int(consensus_frequencies.size),
+                "consensus_frequency": _median_frequency,
+                "consensus_period": float(1.0 / _median_frequency),
+                "consensus_frequency_width": float(
+                    np.median(consensus_frequency_width)
+                ),
+                "consensus_frequency_scatter": _mad_frequency_scatter,
+                "median_frequency": _median_frequency,
+                "mad_frequency_scatter": _mad_frequency_scatter,
+                "final_consensus_frequency": _median_frequency,
+                "final_constraint_bounds": None,
+                "controls": {
+                    "outlier_sigma": outlier_sigma,
+                    "use_acf": bool(use_acf),
+                    "constrain_consensus": bool(apply_consensus_constraints),
+                    "consensus_width_factor": consensus_width_factor,
+                    "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                    "use_gp_validation": bool(use_gp_validation),
+                    "gp_frequency_tolerance_factor": float(
+                        gp_frequency_tolerance_factor
+                    ),
+                },
+                "mode": "manual_consensus_frequencies",
+            })
+            result_diagnostics["consensus_generation_method"] = (
+                "manual_consensus_frequencies"
+            )
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics
+            )
+
+        # When a model is explicitly specified, always build a fresh model for
+        # this consensus fit.  Never reuse stale model state from a previous
+        # fit: the user may have requested a different model, time_kernel_type,
+        # or num_mixtures in this call.
+        # If model is None, require explicit internal opt-in via the private
+        # flag _allow_existing_model_for_consensus to reuse a pre-existing
+        # model; otherwise raise a clear error to prevent accidental stale-
+        # state reuse in public consensus fits.
+        _requested_model = fit_kwargs.get("model")
+        if _requested_model is not None:
+            self._consensus_clear_model_state()
+        elif not _allow_existing:
+            raise ConsensusFitError(
+                "Consensus fit requires an explicit final model. "
+                "Pass model='2D' or another spectral-mixture-compatible "
+                "model. Pre-existing model reuse is disabled by default "
+                "to prevent stale consensus constraints."
+            )
+        _set_model_excluded = {
+            "model",
+            "likelihood",
+            "num_mixtures",
+            "variance",
+            "guess",
+            "consensus_frequencies",
+            "consensus_scales",
+            "consensus_frequency_width",
+            "consensus_frequency_k",
+            "consensus_scale_max_factor",
+            "apply_consensus_constraints",
+            "constrain_consensus",
+            "min_points_per_band",
+            "max_gap_fraction",
+            "min_duty_cycle",
+            "outlier_sigma",
+            "use_acf",
+            "consensus_width_factor",
+            "use_gp_validation",
+            "gp_validation_kwargs",
+            "gp_frequency_tolerance_factor",
+            "periods",
+            "use_mls_init",
+            "use_best_band_init",
+            "constraint_set",
+            "grid_size",
+            "cuda",
+            "training_iter",
+            "max_cg_iterations",
+            "optim",
+            "miniter",
+            "stop",
+            "lr",
+            "stopavg",
+            "fit_strategy",
+            "verbose",
+            "_allow_existing_model_for_consensus",
+        }
+        _model_needs_build = (
+            _requested_model is not None
+            or not (
+                hasattr(self, "model")
+                and self.model is not None
+                and hasattr(self, "_model_pars")
+            )
+        )
+        if _model_needs_build:
+            set_model_kwargs = {
+                key: value
+                for key, value in fit_kwargs.items()
+                if key not in _set_model_excluded
+            }
+            self.set_model(
+                _requested_model,
+                fit_kwargs.get("likelihood"),
+                num_mixtures=fit_kwargs.get("num_mixtures"),
+                variance=fit_kwargs.get("variance", False),
+                **set_model_kwargs,
+            )
+        fit_kwargs["model"] = None
+
+        if apply_consensus_constraints:
+            # Validate that the freshly built model supports SM time-kernel
+            # constraints before attempting to resolve keys.
+            self._consensus_validate_final_model_supports_sm_time_kernel(
+                model_name=_requested_model,
+                time_kernel_type=fit_kwargs.get("time_kernel_type"),
+            )
+            _constraint_dict = {}
+            _keys = self._consensus_resolve_time_spectral_mixture_keys()
+            _frequency_constraint_bounds = None
+            # --- Step 1: apply default/LPV constraints as a base first -------
+            # This ensures any constraint_set period bounds are registered
+            # before the consensus constraints override the mixture_means key.
+            # Calling set_default_constraints also sets __CONTRAINTS_SET=True
+            # which prevents _fit_core from re-applying defaults and
+            # overwriting the consensus constraints below.
+            _constraint_set_for_defaults = fit_kwargs.get("constraint_set")
+            self.set_default_constraints(
+                constraint_set=_constraint_set_for_defaults
+            )
+            result_diagnostics[
+                "default_constraints_applied_before_consensus"
+            ] = True
+            # --- Step 2: build consensus constraint dict ---------------------
+            if consensus_frequency_width is not None:
+                _freqs = np.asarray(
+                    consensus_frequencies, dtype=float
+                ).ravel()
+                _widths = np.asarray(
+                    consensus_frequency_width, dtype=float
+                ).ravel()
+                if _widths.size == 1:
+                    _widths = np.broadcast_to(_widths, _freqs.shape).copy()
+                if _widths.shape != _freqs.shape:
+                    _msg = (
+                        "consensus_frequency_width must be scalar or have one "
+                        "entry per consensus frequency "
+                        f"(got {_widths.shape} vs {_freqs.shape})."
+                    )
+                    raise ValueError(_msg)
+                if not np.all(np.isfinite(_widths) & (_widths > 0)):
+                    raise ValueError(
+                        "consensus_frequency_width values must all be "
+                        "positive and finite."
+                    )
+                _k = float(consensus_frequency_k)
+                # Practical lower bound - frequencies must be positive.
+                _lowers = np.maximum(
+                    _freqs - _k * _widths, _CONSENSUS_MIN_FREQUENCY_BOUND
+                )
+                _uppers = _freqs + _k * _widths
+                _global_lower = float(_lowers.min())
+                _global_upper = float(_uppers.max())
+                _constraint_dict[_keys["mixture_means"]] = Interval(
+                    _global_lower, _global_upper
+                )
+                _frequency_constraint_bounds = (_global_lower, _global_upper)
+
+            _freqs_arr = np.asarray(
+                consensus_frequencies, dtype=float
+            ).ravel()
+            _scale_upper = (
+                float(consensus_scale_max_factor) * float(np.median(_freqs_arr))
+            )
+            if not (np.isfinite(_scale_upper) and _scale_upper > 0):
+                _msg = (
+                    "consensus_scale_max_factor * median(consensus_frequencies)"
+                    f" must be positive and finite (got {_scale_upper})."
+                )
+                raise ValueError(_msg)
+            # Practical lower bound - scales must be positive.
+            _constraint_dict[_keys["mixture_scales"]] = Interval(
+                _CONSENSUS_MIN_SCALE_BOUND, _scale_upper
+            )
+            # --- Step 3: apply consensus constraints on top of defaults ------
+            # These must win over the defaults applied in step 1.
+            if _constraint_dict:
+                self.set_constraint(_constraint_dict)
+            # --- Step 4: mark constraints as set so _fit_core skips defaults -
+            # set_default_constraints already set this flag in step 1, but we
+            # re-assert it here to make the intent explicit and guard against
+            # future refactors that might reorder the steps.
+            self.__CONTRAINTS_SET = True
+            result_diagnostics[
+                "constraints_marked_set_after_consensus"
+            ] = True
+            # --- Step 5: validate that the consensus constraint took effect --
+            self._consensus_validate_applied_sm_constraints(
+                keys=_keys,
+                consensus_frequencies=consensus_frequencies,
+                frequency_bounds=_frequency_constraint_bounds,
+            )
+            # --- Step 6: record constraint-handoff diagnostics ---------------
+            result_diagnostics["consensus_constraints_applied"] = True
+            result_diagnostics["consensus_constraint_bounds"] = (
+                list(_frequency_constraint_bounds)
+                if _frequency_constraint_bounds is not None
+                else None
+            )
+            result_diagnostics["consensus_constraint_target_key"] = (
+                _keys.get("mixture_means")
+            )
+            result_diagnostics["consensus_scale_constraint_bounds"] = [
+                float(_CONSENSUS_MIN_SCALE_BOUND), float(_scale_upper)
+            ]
+            result_diagnostics["consensus_scale_constraint_target_key"] = (
+                _keys.get("mixture_scales")
+            )
+        else:
+            _frequency_constraint_bounds = None
+            _scale_upper = None
+            result_diagnostics["consensus_constraints_applied"] = False
+            result_diagnostics["default_constraints_applied_before_consensus"] = (
+                False
+            )
+            result_diagnostics["constraints_marked_set_after_consensus"] = False
+
+
+        consensus_guess = self._consensus_build_guess(
+            frequencies=consensus_frequencies,
+            scales=consensus_scales,
+        )
+
+        self._last_consensus_fit_info = {
+            "fit_strategy": "consensus",
+            "consensus_frequencies": np.asarray(
+                consensus_frequencies, dtype=float
+            ).ravel().tolist(),
+            "consensus_scales": (
+                None
+                if consensus_scales is None
+                else np.asarray(consensus_scales, dtype=float).ravel().tolist()
+            ),
+            "consensus_frequency_width": (
+                None
+                if consensus_frequency_width is None
+                else np.asarray(consensus_frequency_width, dtype=float).ravel().tolist()
+            ),
+            "apply_consensus_constraints": bool(apply_consensus_constraints),
+            "consensus_frequency_bounds": (
+                _frequency_constraint_bounds
+                if _frequency_constraint_bounds is not None
+                else auto_constraint_bounds
+            ),
+            "consensus_scale_upper": (
+                float(_scale_upper) if _scale_upper is not None else None
+            ),
+        }
+
+        merged_guess = {}
+        if user_guess is not None:
+            merged_guess.update(user_guess)
+        merged_guess.update(consensus_guess)
+
+        fit_kwargs["guess"] = merged_guess
+        fit_kwargs["fit_strategy"] = None
+
+        _consensus_frequency_raw = result_diagnostics.get("consensus_frequency")
+        _consensus_frequency_ready = bool(
+            _consensus_frequency_raw is not None
+            and np.isfinite(float(_consensus_frequency_raw))
+            and float(_consensus_frequency_raw) > 0
+        )
+        _trusted_candidate_count = result_diagnostics.get("trusted_candidate_count")
+        _trusted_candidate_ready = bool(
+            _trusted_candidate_count is not None
+            and int(_trusted_candidate_count) > 0
+        )
+        _consensus_init_ready = bool(consensus_guess)
+        _consensus_ready_for_success = bool(
+            _consensus_frequency_ready
+            and _trusted_candidate_ready
+            and _consensus_init_ready
+        )
+
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
+        try:
+            fit_result = self.fit(**fit_kwargs)
+        except Exception:
+            result_diagnostics["consensus_success"] = False
+            # validate=False prevents masking the original exception when
+            # partial error-recovery diagnostics are finalized.  Validation
+            # is skipped here because diagnostics may be incomplete during
+            # exception handling, and the original error is more important.
+            self.consensus_diagnostics = self._consensus_finalize_result_structure(
+                result_diagnostics, validate=False
+            )
+            raise
+
+        result_diagnostics["consensus_success"] = _consensus_ready_for_success
+        self.consensus_diagnostics = self._consensus_finalize_result_structure(
+            result_diagnostics
+        )
+        return fit_result
+
+    def _consensus_multicomp_fit(self, **fit_kwargs):
+        """Frequency-space consensus-fit stub for multi-component fitting."""
+        raise NotImplementedError(
+            "fit_strategy='consensus_multicomp' is not implemented yet."
+        )
+
+    def _consensus_relaxed_fit(self, **fit_kwargs):
+        """Frequency-space consensus-fit stub for relaxed-consensus behavior."""
+        raise NotImplementedError(
+            "fit_strategy='consensus_relaxed' is not implemented yet."
+        )
 
     def mcmc(
         self,
@@ -8675,6 +15896,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         NotImplementedError
             If an unsupported ``uncertainty`` method is requested.
         """
+        self._raise_if_fit_failed("GP period summary")
         _sm_uncertainties = {"peak_mass"}
         if uncertainty not in _sm_uncertainties:
             raise NotImplementedError(
@@ -8731,6 +15953,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         max_peaks_to_mark=3,
         log_y=True,
         close=False,
+        annotate_provenance=False,
+        provenance_location="lower left",
         **kwargs,
     ):
         """Plot the period summary from :meth:`get_period_summary`.
@@ -8793,6 +16017,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If True and show=True, close the figure immediately after displaying it.
             This is useful in notebooks or loops where many figures are generated.
             Ignored when show=False, because the figure is returned to the caller.
+        annotate_provenance : bool, optional
+            If ``True``, annotate the plot with lightweight fit provenance
+            (model, runtime, timestamp) from the most recent fit-history entry.
+            Default is ``False``.
+        provenance_location : {"lower left", "lower right", "upper left",
+            "upper right"}, optional
+            Axes-relative location for provenance annotations when
+            ``annotate_provenance=True``. Default is ``"lower left"``.
         **kwargs
             Additional keyword arguments forwarded to
             :meth:`get_period_summary` when ``summary`` is ``None``.
@@ -8803,6 +16035,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Returned when ``show=False``; otherwise ``None``.
             For the multi-panel case ``ax`` is the top axes.
         """
+        self._raise_if_fit_failed("period summary plot")
         if summary is None:
             summary = self.get_period_summary(**kwargs)
 
@@ -8829,6 +16062,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             ax.set_axis_off()
             ax.set_title("Period summary")
+            if annotate_provenance:
+                self._plot_fit_history_provenance(
+                    ax,
+                    provenance_location=provenance_location,
+                )
             if show:
                 plt.show()
                 if close:
@@ -9130,6 +16368,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     )
 
             fig.tight_layout()
+            if annotate_provenance:
+                self._plot_fit_history_provenance(
+                    ax,
+                    provenance_location=provenance_location,
+                )
             if show:
                 plt.show()
                 return None
@@ -9250,6 +16493,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ax.set_ylabel("PSD" if has_psd else "")
         ax.set_title(f"Period summary ({method})")
         ax.legend(fontsize=8, loc="upper left")
+        if annotate_provenance:
+            self._plot_fit_history_provenance(
+                ax,
+                provenance_location=provenance_location,
+            )
 
         if show:
             plt.show()
@@ -9324,6 +16572,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         include_peaks=True,
         include_psd_info=False,
         include_psd_in_json=False,
+        include_fit_history=False,
         summary_kwargs=None,
         plot_kwargs=None,
     ):
@@ -9384,6 +16633,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ``True`` the full frequency grid and PSD arrays are embedded in
             the JSON file.  Default is ``False`` (arrays are omitted to keep
             the file small).
+        include_fit_history : bool, optional
+            Forwarded to :meth:`PeriodSummaryResult.write_json`.  When ``True``
+            the current ``Lightcurve.fit_history`` is included in the exported
+            JSON for reproducibility/debug provenance.  Default is ``False``.
         summary_kwargs : dict or None, optional
             Extra keyword arguments forwarded to :meth:`get_period_summary`
             when *summary* is ``None``.  Ignored if *summary* is supplied.
@@ -9437,7 +16690,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         if json_file is not None:
-            summary.write_json(json_file, include_psd=include_psd_in_json)
+            summary.write_json(
+                json_file,
+                include_psd=include_psd_in_json,
+                include_fit_history=include_fit_history,
+                fit_history=self.get_fit_history() if include_fit_history else None,
+            )
 
         if png_file is not None:
             self._save_period_summary_figure(
@@ -9623,6 +16881,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fig, ax : matplotlib.pyplot.Figure, matplotlib.pyplot.Axes
             The figure and axes objects of the plot.
         """
+        self._raise_if_fit_failed("PSD plot")
 
         if freq is None:
             if self.ndim == 1:
@@ -9913,6 +17172,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The power spectral density of the model at the frequencies given
             by freq.
         """
+        self._raise_if_fit_failed("PSD evaluation")
         if means is None:
             means = self.model.sci_kernel.mixture_means
             # now apply the transform too!
@@ -10008,6 +17268,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         show=True,
         mcmc_samples=False,
         n_pred=1000,
+        annotate_provenance=False,
+        provenance_location="lower left",
         **kwargs,
     ):
         """Plot the model and data
@@ -10036,6 +17298,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Number of prediction points used to construct the fine time grid
             for plotting. Lower values reduce memory usage and speed up
             plotting, especially for 2D light curves. Default is 1000.
+        annotate_provenance : bool, optional
+            If ``True``, annotate GP-fit plots with model/runtime/timestamp from
+            the most recent fit-history entry. Default is ``False``.
+        provenance_location : {"lower left", "lower right", "upper left",
+            "upper right"}, optional
+            Axes-relative location for provenance annotations when
+            ``annotate_provenance=True``. Default is ``"lower left"``.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the plotting routine.
 
@@ -10045,6 +17314,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The figure object of the plot.  For 2-D (multiwavelength) data a
             list of figures is returned, one per wavelength.
         """
+        self._raise_if_fit_failed("GP fit plot")
         _VALID_YSCALES = ("auto", "linear", "log")
         if yscale not in _VALID_YSCALES:
             raise ValueError(
@@ -10095,6 +17365,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             self._eval()
 
+            target_dtype = self._xdata_transformed.dtype
+            target_device = self._xdata_transformed.device
+            self.model = self.model.to(dtype=target_dtype, device=target_device)
+            self.likelihood = self.likelihood.to(dtype=target_dtype, device=target_device)
+            self.model.prediction_strategy = None
+
             # Importing raw x and y training data from xdata and
             # ydata functions
             if self.ndim == 1:
@@ -10104,15 +17380,27 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # y_raw = self.ydata
 
             # creating array of test points across the range of the data
-            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), n_pred)
+            x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), n_pred, dtype=x_raw.dtype, device=x_raw.device)
 
             if self.ndim == 1:
                 fig = self._plot_1d(
-                    x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
+                    x_fine_raw,
+                    ylim=ylim,
+                    yscale=yscale,
+                    show=show,
+                    annotate_provenance=annotate_provenance,
+                    provenance_location=provenance_location,
+                    **kwargs,
                 )
             else:
                 fig = self._plot_2d(
-                    x_fine_raw, ylim=ylim, yscale=yscale, show=show, **kwargs
+                    x_fine_raw,
+                    ylim=ylim,
+                    yscale=yscale,
+                    show=show,
+                    annotate_provenance=annotate_provenance,
+                    provenance_location=provenance_location,
+                    **kwargs,
                 )
         return fig
 
@@ -10155,7 +17443,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # y_raw = self.ydata
 
         # creating array of 10000 test points across the range of the data
-        x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000).unsqueeze(-1)
+        x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000, dtype=x_raw.dtype, device=x_raw.device).unsqueeze(-1)
 
         # transforming the x_fine_raw data to the space that the GP was
         # trained in (so it can predict)
@@ -10323,7 +17611,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return f
 
     def _plot_1d(
-        self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
+        self,
+        x_fine_raw,
+        ylim=None,
+        yscale="auto",
+        show=False,
+        save=True,
+        annotate_provenance=False,
+        provenance_location="lower left",
+        **kwargs,
     ):
         # transforming the x_fine_raw data to the space that the GP was
         # trained in (so it can predict)
@@ -10384,6 +17680,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ax.set_yscale(current_yscale)
         if current_ylim is not None:
             ax.set_ylim(current_ylim)
+        if annotate_provenance:
+            self._plot_fit_history_provenance(
+                ax,
+                provenance_location=provenance_location,
+            )
         ax.legend()
         if save:
             plt.savefig(f"{self.name}_fit.png")
@@ -10392,7 +17693,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return f
 
     def _plot_2d(
-        self, x_fine_raw, ylim=None, yscale="auto", show=False, save=True, **kwargs
+        self,
+        x_fine_raw,
+        ylim=None,
+        yscale="auto",
+        show=False,
+        save=True,
+        annotate_provenance=False,
+        provenance_location="lower left",
+        **kwargs,
     ):
         if self.xtransform is None:
             x_fine_transformed = x_fine_raw
@@ -10465,6 +17774,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ax.set_yscale(current_yscale)
             if current_ylim is not None:
                 ax.set_ylim(current_ylim)
+            if annotate_provenance:
+                self._plot_fit_history_provenance(
+                    ax,
+                    provenance_location=provenance_location,
+                )
 
             if save:
                 plt.savefig(f"{self.name}_{val}_fit.png")
@@ -10543,6 +17857,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Now we want the model predictions for the input times:
             if self.__FITTED_MAP:
                 self._eval()
+                
+                target_dtype = self._xdata_transformed.dtype
+                target_device = self._xdata_transformed.device
+                self.model = self.model.to(dtype=target_dtype, device=target_device)
+                self.likelihood = self.likelihood.to(dtype=target_dtype, device=target_device)
+                self.model.prediction_strategy = None
+                
                 with torch.no_grad():
                     observed_pred = self.likelihood(self.model(self._xdata_transformed))
                     t["y_pred_mean_obs"] = [np.asarray(observed_pred.mean.cpu())]
@@ -10560,7 +17881,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     # y_raw = self.ydata
 
                     # creating array of 10000 test points across the range of the data
-                    x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000)
+                    x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000, dtype=x_raw.dtype, device=x_raw.device)
                     if self.xtransform is None:
                         x_fine_transformed = x_fine_raw
                     elif isinstance(self.xtransform, Transformer):
