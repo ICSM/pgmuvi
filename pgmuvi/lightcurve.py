@@ -66,6 +66,7 @@ from pgmuvi.parameter_workflow import (
     build_and_apply_parameter_estimates,
     model_supports_parameter_workflow,
 )
+from pgmuvi.constraint_utils import register_constraint_preserving_value
 
 try:
     from scipy.signal import find_peaks as _scipy_find_peaks
@@ -6511,8 +6512,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     p not in key
                     for p in pars_to_transform["y"] + pars_to_transform["x"]
                 ):  # no transform needed!
-                    self._model_pars[key]["module"].register_constraint(
-                        k, constraint[key]
+                    register_constraint_preserving_value(
+                        self._model_pars[key]["module"],
+                        k,
+                        constraint[key],
                     )
                 elif any(p in key for p in pars_to_transform["x"]):
                     # now apply the x transform
@@ -6588,8 +6591,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                 print(constraint[key])
                         if debug:
                             print(constraint[key])
-                    self._model_pars[key]["module"].register_constraint(
-                        k, constraint[key]
+                    register_constraint_preserving_value(
+                        self._model_pars[key]["module"],
+                        k,
+                        constraint[key],
                     )
                 elif any(p in key for p in pars_to_transform["y"]):
                     if self.ytransform is not None:
@@ -6634,8 +6639,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                 print(constraint[key])
                     if debug:
                         print(constraint[key])
-                    self._model_pars[key]["module"].register_constraint(
-                        k, constraint[key]
+                    register_constraint_preserving_value(
+                        self._model_pars[key]["module"],
+                        k,
+                        constraint[key],
                     )
                 if debug:
                     try:
@@ -7243,8 +7250,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # the noise should be less than
             # the standard deviation
             noise_constraint = Interval(noise_min, noise_max)
-            self._model_pars["noise"]["module"].register_constraint(
-                "raw_noise", noise_constraint
+            register_constraint_preserving_value(
+                self._model_pars["noise"]["module"],
+                "raw_noise",
+                noise_constraint,
             )
         with contextlib.suppress(RuntimeError):
             mean_const_constraint = Interval(
@@ -7252,8 +7261,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             for key in self._model_pars:
                 if "mean_module.constant" in key:
-                    self._model_pars[key]["module"].register_constraint(
-                        "raw_constant", mean_const_constraint
+                    register_constraint_preserving_value(
+                        self._model_pars[key]["module"],
+                        "raw_constant",
+                        mean_const_constraint,
                     )
         # Apply frequency constraints only for spectral-mixture models that
         # have a mixture_means parameter.  Models using alternative kernels
@@ -7422,8 +7433,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                     new_lower, cur_upper
                                 )
 
-            self._model_pars["mixture_means"]["module"].register_constraint(
-                "raw_mixture_means", mixture_means_constraint
+            register_constraint_preserving_value(
+                self._model_pars["mixture_means"]["module"],
+                "raw_mixture_means",
+                mixture_means_constraint,
             )
 
         # to-do - check if constraints on mixture scales are useful!
@@ -9616,6 +9629,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 periods=periods,
                 use_mls_init=use_mls_init,
                 use_best_band_init=use_best_band_init,
+                # use_parameter_workflow=use_parameter_workflow,
                 constraint_set=constraint_set,
                 grid_size=grid_size,
                 cuda=cuda,
@@ -10469,6 +10483,39 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"expected_frequency_bounds={frequency_bounds}, "
                 f"consensus_frequency={_target_freq:.6g}, detail={exc!r}."
             ) from exc
+
+    def _consensus_get_registered_sm_constraint_bounds(self, keys):
+        """Return live mixture-means constraint bounds for consensus diagnostics."""
+        _model_pars = getattr(self, "_model_pars", None)
+        _mm_key = keys.get("mixture_means") if isinstance(keys, dict) else None
+
+        if not isinstance(_model_pars, dict) or _mm_key not in _model_pars:
+            return None
+
+        _mm_meta = _model_pars[_mm_key]
+        if not isinstance(_mm_meta, dict):
+            return None
+
+        _module = _mm_meta.get("module")
+        if _module is None:
+            return None
+
+        _raw_name = (
+            f"raw_{_mm_key.split('.')[-1]}"
+            if "raw_" not in _mm_key
+            else _mm_key.split(".")[-1]
+        )
+        _constraint = getattr(_module, f"{_raw_name}_constraint", None)
+        if _constraint is None:
+            return None
+
+        _lower = getattr(_constraint, "lower_bound", None)
+        _upper = getattr(_constraint, "upper_bound", None)
+        if _lower is None or _upper is None:
+            return None
+
+        return [float(_lower), float(_upper)]
+
 
     def _consensus_build_spectral_mixture_initialization(
         self,
@@ -16085,6 +16132,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             raise
 
+        if apply_consensus_constraints:
+            _final_bounds = self._consensus_get_registered_sm_constraint_bounds(_keys)
+            result_diagnostics["consensus_constraint_bounds_final"] = _final_bounds
+            self._consensus_validate_applied_sm_constraints(
+                keys=_keys,
+                consensus_frequencies=consensus_frequencies,
+                frequency_bounds=_frequency_constraint_bounds,
+            )
+
         result_diagnostics["consensus_success"] = _consensus_ready_for_success
         self.consensus_diagnostics = self._consensus_finalize_result_structure(
             result_diagnostics
@@ -16716,6 +16772,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 result_diagnostics, validate=False
             )
             raise
+
+        if apply_consensus_constraints:
+            _final_bounds = self._consensus_get_registered_sm_constraint_bounds(_keys)
+            result_diagnostics["consensus_constraint_bounds_final"] = _final_bounds
+            result_diagnostics["final_constraint_bounds"] = _final_bounds
+            self._consensus_validate_applied_sm_constraints(
+                keys=_keys,
+                consensus_frequencies=consensus_frequencies,
+                frequency_bounds=_frequency_constraint_bounds,
+            )
 
         try:
             fitted_diagnostics = self._consensus_collect_fitted_mixture_diagnostics(

@@ -1,0 +1,263 @@
+test_failed_consensus_sets_formal_failure_contract (test_consensus_fit_error.TestConsensusFailureStateAndUX.test_failed_consensus_sets_formal_failure_contract)
+Failed consensus run populates canonical failure-state fields. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ERROR
+test_fit_failure_summary_serializes_and_is_readable (test_consensus_fit_error.TestConsensusFailureStateAndUX.test_fit_failure_summary_serializes_and_is_readable)
+FitFailureSummary to_dict/write_json/to_text are notebook-friendly. ... ok
+test_period_summary_and_plots_raise_cleanly_after_failure (test_consensus_fit_error.TestConsensusFailureStateAndUX.test_period_summary_and_plots_raise_cleanly_after_failure)
+Summary/plot helpers raise clean ConsensusFitError after failure. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ERROR
+test_reset_fit_state_clears_relevant_attributes (test_consensus_fit_error.TestConsensusFailureStateAndUX.test_reset_fit_state_clears_relevant_attributes)
+_reset_fit_state clears fit, cache, diagnostics, and model handles. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+ok
+test_basic_construction (test_consensus_fit_error.TestConsensusFitErrorClass.test_basic_construction)
+ConsensusFitError can be constructed with just a message. ... ok
+test_construction_with_failure_diagnostics (test_consensus_fit_error.TestConsensusFitErrorClass.test_construction_with_failure_diagnostics)
+ConsensusFitError stores failure_diagnostics correctly. ... ok
+test_failure_diagnostics_is_independent_copy (test_consensus_fit_error.TestConsensusFitErrorClass.test_failure_diagnostics_is_independent_copy)
+Mutating the original dict after construction does not change stored copy. ... ok
+test_failure_diagnostics_json_serializable (test_consensus_fit_error.TestConsensusFitErrorClass.test_failure_diagnostics_json_serializable)
+failure_diagnostics can be serialized with json.dumps. ... ok
+test_is_runtime_error_subclass (test_consensus_fit_error.TestConsensusFitErrorClass.test_is_runtime_error_subclass)
+ConsensusFitError is a subclass of RuntimeError. ... ok
+test_insufficient_inliers_diagnostics_structure (test_consensus_fit_error.TestConsensusFitErrorRaised.test_insufficient_inliers_diagnostics_structure)
+insufficient_consensus_inliers failure_diagnostics has expected keys. ... /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_insufficient_inliers_fd_json_serializable (test_consensus_fit_error.TestConsensusFitErrorRaised.test_insufficient_inliers_fd_json_serializable)
+failure_diagnostics from insufficient_inliers is JSON-serializable. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_insufficient_inliers_raises_consensus_fit_error (test_consensus_fit_error.TestConsensusFitErrorRaised.test_insufficient_inliers_raises_consensus_fit_error)
+Inconsistent-period failure raises ConsensusFitError. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_majority_cluster_succeeds (test_consensus_fit_error.TestConsensusFitErrorRaised.test_majority_cluster_succeeds)
+3 bands near 30 d + 1 discrepant band at 10 d → consensus succeeds. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ERROR
+test_no_accepted_bands_diagnostics_structure (test_consensus_fit_error.TestConsensusFitErrorRaised.test_no_accepted_bands_diagnostics_structure)
+no_accepted_bands failure_diagnostics has expected keys. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+ok
+test_no_accepted_bands_fd_json_serializable (test_consensus_fit_error.TestConsensusFitErrorRaised.test_no_accepted_bands_fd_json_serializable)
+failure_diagnostics from no_accepted_bands is JSON-serializable. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+ok
+test_no_accepted_bands_is_also_runtime_error (test_consensus_fit_error.TestConsensusFitErrorRaised.test_no_accepted_bands_is_also_runtime_error)
+ConsensusFitError is a RuntimeError (backwards-compatible). ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+ok
+test_no_accepted_bands_raises_consensus_fit_error (test_consensus_fit_error.TestConsensusFitErrorRaised.test_no_accepted_bands_raises_consensus_fit_error)
+All-bands quality failure raises ConsensusFitError, not bare RuntimeError. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+ok
+test_no_partial_gp_model_after_inlier_failure (test_consensus_fit_error.TestConsensusFitErrorRaised.test_no_partial_gp_model_after_inlier_failure)
+lc.gp_model is not set to a broken object after inlier failure. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_no_partial_gp_model_after_quality_failure (test_consensus_fit_error.TestConsensusFitErrorRaised.test_no_partial_gp_model_after_quality_failure)
+lc.gp_model is not set to a broken object after quality-gate failure. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+ok
+test_successful_fit_does_not_raise (test_consensus_fit_error.TestConsensusFitErrorRaised.test_successful_fit_does_not_raise)
+A clean single-period consensus fit does not raise ConsensusFitError. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ERROR
+
+======================================================================
+ERROR: test_failed_consensus_sets_formal_failure_contract (test_consensus_fit_error.TestConsensusFailureStateAndUX.test_failed_consensus_sets_formal_failure_contract)
+Failed consensus run populates canonical failure-state fields.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 399, in test_failed_consensus_sets_formal_failure_contract
+    lc = self._fit_success_then_fail()
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 391, in _fit_success_then_fail
+    _run_consensus_fit(lc)
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 95, in _run_consensus_fit
+    lc.fit(**kwargs)
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 9311, in fit
+    result = self._fit_core(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 9623, in _fit_core
+    return self._consensus_fit(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 10141, in _consensus_fit
+    return self._consensus_standard_fit(**fit_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 15917, in _consensus_standard_fit
+    self.set_model(
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 6365, in set_model
+    self.model = model_dic_1[model](
+                 ^^^^^^^^^^^^^^^^^^^
+TypeError: TwoDSpectralMixtureGPModel.__init__() got an unexpected keyword argument 'use_parameter_workflow'
+
+======================================================================
+ERROR: test_period_summary_and_plots_raise_cleanly_after_failure (test_consensus_fit_error.TestConsensusFailureStateAndUX.test_period_summary_and_plots_raise_cleanly_after_failure)
+Summary/plot helpers raise clean ConsensusFitError after failure.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 408, in test_period_summary_and_plots_raise_cleanly_after_failure
+    lc = self._fit_success_then_fail()
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 391, in _fit_success_then_fail
+    _run_consensus_fit(lc)
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 95, in _run_consensus_fit
+    lc.fit(**kwargs)
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 9311, in fit
+    result = self._fit_core(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 9623, in _fit_core
+    return self._consensus_fit(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 10141, in _consensus_fit
+    return self._consensus_standard_fit(**fit_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 15917, in _consensus_standard_fit
+    self.set_model(
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 6365, in set_model
+    self.model = model_dic_1[model](
+                 ^^^^^^^^^^^^^^^^^^^
+TypeError: TwoDSpectralMixtureGPModel.__init__() got an unexpected keyword argument 'use_parameter_workflow'
+
+======================================================================
+ERROR: test_majority_cluster_succeeds (test_consensus_fit_error.TestConsensusFitErrorRaised.test_majority_cluster_succeeds)
+3 bands near 30 d + 1 discrepant band at 10 d → consensus succeeds.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 367, in test_majority_cluster_succeeds
+    diag = _run_consensus_fit(lc, outlier_sigma=2.0, min_consensus_inliers=2)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 95, in _run_consensus_fit
+    lc.fit(**kwargs)
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 9311, in fit
+    result = self._fit_core(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 9623, in _fit_core
+    return self._consensus_fit(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 10141, in _consensus_fit
+    return self._consensus_standard_fit(**fit_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 15917, in _consensus_standard_fit
+    self.set_model(
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 6365, in set_model
+    self.model = model_dic_1[model](
+                 ^^^^^^^^^^^^^^^^^^^
+TypeError: TwoDSpectralMixtureGPModel.__init__() got an unexpected keyword argument 'use_parameter_workflow'
+
+======================================================================
+ERROR: test_successful_fit_does_not_raise (test_consensus_fit_error.TestConsensusFitErrorRaised.test_successful_fit_does_not_raise)
+A clean single-period consensus fit does not raise ConsensusFitError.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 351, in test_successful_fit_does_not_raise
+    diag = _run_consensus_fit(lc)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/tests/test_consensus_fit_error.py", line 95, in _run_consensus_fit
+    lc.fit(**kwargs)
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 9311, in fit
+    result = self._fit_core(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 9623, in _fit_core
+    return self._consensus_fit(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 10141, in _consensus_fit
+    return self._consensus_standard_fit(**fit_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 15917, in _consensus_standard_fit
+    self.set_model(
+  File "/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py", line 6365, in set_model
+    self.model = model_dic_1[model](
+                 ^^^^^^^^^^^^^^^^^^^
+TypeError: TwoDSpectralMixtureGPModel.__init__() got an unexpected keyword argument 'use_parameter_workflow'
+
+----------------------------------------------------------------------
+Ran 20 tests in 3.014s
+
+FAILED (errors=4)

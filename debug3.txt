@@ -1,0 +1,225 @@
+test_constrained_consensus_applies_constraints_on_first_fit (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constrained_consensus_applies_constraints_on_first_fit)
+Consensus constraints must take effect on the first fit call. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_bounds_contain_consensus_frequency (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_bounds_contain_consensus_frequency)
+The applied mixture_means constraint must enclose the consensus freq. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_diagnostics_fields_in_schema (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_diagnostics_fields_in_schema)
+New constraint-handoff fields must exist in consensus_diagnostics. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_target_keys_populated (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_target_keys_populated)
+Diagnostic keys for constraint target parameters must be set. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_validation_fails_for_consensus_frequency_outside_bounds (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_validation_fails_for_consensus_frequency_outside_bounds)
+Validation must fail when registered bounds exclude consensus freq. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_validation_fails_for_infinite_upper_bound (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_validation_fails_for_infinite_upper_bound)
+Validation must fail when upper bound is infinite. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_validation_fails_for_missing_module_metadata (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_validation_fails_for_missing_module_metadata)
+Validation must fail when mixture_means metadata has no module. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_validation_fails_for_missing_registered_constraint (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_validation_fails_for_missing_registered_constraint)
+Validation must fail if named_constraints has no expected key. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_validation_fails_for_non_dict_metadata (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_validation_fails_for_non_dict_metadata)
+Validation must fail when mixture_means metadata is not a dict. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_constraint_validation_helper_success (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_constraint_validation_helper_success)
+Strict helper validation should pass for valid constrained fits. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_second_fit_matches_first_fit_constraints (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_second_fit_matches_first_fit_constraints)
+Second fit must not produce different constraints than first fit. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_unconstrained_consensus_diagnostics_are_false (test_consensus_scientific_regression.TestConsensusConstraintHandoff.test_unconstrained_consensus_diagnostics_are_false)
+When constrain_consensus=False, constraint diagnostics are False. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_clean_single_period_multiband_recovery (test_consensus_scientific_regression.TestConsensusScientificRegression.test_clean_single_period_multiband_recovery)
+All bands carry the same injected period; expect full acceptance. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_harmonic_band_is_detected_as_frequency_outlier (test_consensus_scientific_regression.TestConsensusScientificRegression.test_harmonic_band_is_detected_as_frequency_outlier)
+Sub-harmonic band is detected as outlier; majority consensus is preserved. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_low_quality_sampling_band_is_rejected (test_consensus_scientific_regression.TestConsensusScientificRegression.test_low_quality_sampling_band_is_rejected)
+One band is sparsely sampled with a large gap; must fail quality gating. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_no_consensus_all_bands_fail_quality_gating (test_consensus_scientific_regression.TestConsensusScientificRegression.test_no_consensus_all_bands_fail_quality_gating)
+All bands fail the sampling quality gate; consensus is impossible. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+ok
+test_no_consensus_inconsistent_periods (test_consensus_scientific_regression.TestConsensusScientificRegression.test_no_consensus_inconsistent_periods)
+Adequately sampled but mutually inconsistent periods → no consensus. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+test_one_discrepant_band_is_detected_as_outlier (test_consensus_scientific_regression.TestConsensusScientificRegression.test_one_discrepant_band_is_detected_as_outlier)
+Majority period cluster + one discrepant band far in frequency space. ... /Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2770: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  xdata = self._ensure_tensor(xdata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2771: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  ydata = self._ensure_tensor(ydata)
+/Volumes/SSD2TBShaanpatiKhan/MovedHomeFolder/sundar/work/pgmuvi/pgmuvi/lightcurve.py:2773: UserWarning: The function expects a torch.Tensor as input.Your data will be converted to a tensor.
+  yerr = self._ensure_tensor(yerr)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in scalar power
+  return (1 - z) ** (0.5 * Nk)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/astropy/timeseries/periodograms/lombscargle/_statistics.py:140: RuntimeWarning: invalid value encountered in power
+  return (1 - z) ** (0.5 * Nk)
+ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 6.301s
+
+OK
