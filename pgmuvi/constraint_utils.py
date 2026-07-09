@@ -124,6 +124,64 @@ def clamp_to_constraint_interior(
     return value_tensor
 
 
+def make_interval_constraint(lower: Any, upper: Any) -> gpytorch.constraints.Interval:
+    """Create a GPyTorch interval-style constraint from finite or one-sided bounds."""
+    lower_tensor = torch.as_tensor(lower)
+    upper_tensor = torch.as_tensor(upper)
+
+    lower_finite = torch.all(torch.isfinite(lower_tensor)).item()
+    upper_finite = torch.all(torch.isfinite(upper_tensor)).item()
+
+    if lower_finite and upper_finite:
+        return gpytorch.constraints.Interval(lower, upper)
+
+    if lower_finite and not upper_finite:
+        return gpytorch.constraints.GreaterThan(lower)
+
+    if not lower_finite and upper_finite:
+        return gpytorch.constraints.LessThan(upper)
+
+    return gpytorch.constraints.Interval(-math.inf, math.inf)
+
+
+def intersect_constraint_bounds(existing: Any, proposed: Any) -> tuple[Any, Any]:
+    """Return the intersection bounds of two constraints.
+
+    Existing bounds are never loosened: callers can decide whether to register
+    the returned bounds or keep the existing constraint when the intersection is
+    identical.
+    """
+    existing_lower, existing_upper = get_bounds(existing)
+    proposed_lower, proposed_upper = get_bounds(proposed)
+
+    existing_lower_tensor = torch.as_tensor(existing_lower)
+    proposed_lower_tensor = torch.as_tensor(proposed_lower)
+    existing_upper_tensor = torch.as_tensor(existing_upper)
+    proposed_upper_tensor = torch.as_tensor(proposed_upper)
+
+    lower = torch.maximum(existing_lower_tensor, proposed_lower_tensor)
+    upper = torch.minimum(existing_upper_tensor, proposed_upper_tensor)
+
+    return lower, upper
+
+
+def bounds_are_equivalent(first: tuple[Any, Any], second: tuple[Any, Any]) -> bool:
+    """Return True when two lower/upper bound pairs are numerically equal."""
+    first_lower, first_upper = first
+    second_lower, second_upper = second
+
+    return bool(
+        torch.allclose(torch.as_tensor(first_lower), torch.as_tensor(second_lower))
+        and torch.allclose(torch.as_tensor(first_upper), torch.as_tensor(second_upper))
+    )
+
+
+def bounds_are_valid(bounds: tuple[Any, Any]) -> bool:
+    """Return True when every lower bound is strictly below its upper bound."""
+    lower, upper = bounds
+    return bool(torch.all(torch.as_tensor(lower) < torch.as_tensor(upper)))
+
+
 def _constrained_name_from_raw(raw_parameter_name: str) -> str:
     if raw_parameter_name.startswith("raw_"):
         return raw_parameter_name.removeprefix("raw_")

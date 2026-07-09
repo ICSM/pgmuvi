@@ -11,6 +11,7 @@ from pgmuvi.parameter_specs import (
     ParameterRole,
     ParameterScale,
     ParameterSpec,
+    ConstraintStrategy,
 )
 import math
 import torch
@@ -869,6 +870,108 @@ class DummyMeanModule:
 class DummyModel:
     def __init__(self):
         self.mean_module = DummyMeanModule()
+
+    def test_default_constraint_keeps_tighter_existing_interval(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+            constraint=(1.0e-6, 1.0e6),
+            constraint_strategy=ConstraintStrategy.DEFAULT,
+        )
+        estimate = ParameterEstimate(spec=spec, constraint=(1.0e-6, 1.0e6))
+
+        class Model:
+            def __init__(self):
+                self.covar_module = gpytorch.kernels.RBFKernel()
+                self.covar_module.register_constraint(
+                    "raw_lengthscale",
+                    gpytorch.constraints.Interval(0.1, 10.0),
+                )
+
+        model = Model()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        constraint = model.covar_module.raw_lengthscale_constraint
+        self.assertTrue(result["covar_module.lengthscale"]["constraint"])
+        self.assertEqual(
+            result["covar_module.lengthscale"]["constraint_action"],
+            "kept_existing",
+        )
+        self.assertAlmostEqual(float(constraint.lower_bound), 0.1)
+        self.assertAlmostEqual(float(constraint.upper_bound), 10.0)
+
+    def test_default_constraint_tightens_one_sided_existing_constraint(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+            constraint=(1.0e-6, 10.0),
+            constraint_strategy=ConstraintStrategy.DEFAULT,
+        )
+        estimate = ParameterEstimate(spec=spec, constraint=(1.0e-6, 10.0))
+
+        class Model:
+            def __init__(self):
+                self.covar_module = gpytorch.kernels.RBFKernel()
+                self.covar_module.register_constraint(
+                    "raw_lengthscale",
+                    gpytorch.constraints.GreaterThan(0.1),
+                )
+
+        model = Model()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        constraint = model.covar_module.raw_lengthscale_constraint
+        self.assertTrue(result["covar_module.lengthscale"]["constraint"])
+        self.assertEqual(
+            result["covar_module.lengthscale"]["constraint_action"],
+            "tightened",
+        )
+        self.assertAlmostEqual(float(constraint.lower_bound), 0.1, places=5)
+        self.assertAlmostEqual(float(constraint.upper_bound), 10.0, places=5)
+
+    def test_default_constraint_conflict_keeps_existing_constraint(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+            constraint=(20.0, 30.0),
+            constraint_strategy=ConstraintStrategy.DEFAULT,
+        )
+        estimate = ParameterEstimate(spec=spec, constraint=(20.0, 30.0))
+
+        class Model:
+            def __init__(self):
+                self.covar_module = gpytorch.kernels.RBFKernel()
+                self.covar_module.register_constraint(
+                    "raw_lengthscale",
+                    gpytorch.constraints.Interval(0.1, 10.0),
+                )
+
+        model = Model()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        constraint = model.covar_module.raw_lengthscale_constraint
+        self.assertTrue(result["covar_module.lengthscale"]["constraint"])
+        self.assertEqual(
+            result["covar_module.lengthscale"]["constraint_action"],
+            "conflict_kept_existing",
+        )
+        self.assertAlmostEqual(float(constraint.lower_bound), 0.1)
+        self.assertAlmostEqual(float(constraint.upper_bound), 10.0)
 
 
 if __name__ == "__main__":

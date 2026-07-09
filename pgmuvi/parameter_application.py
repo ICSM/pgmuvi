@@ -7,9 +7,15 @@ resolution and parameter-space transformations.
 
 from __future__ import annotations
 
+from pgmuvi.constraint_utils import bounds_are_equivalent
+from pgmuvi.constraint_utils import bounds_are_valid
 from pgmuvi.constraint_utils import clamp_to_constraint_interior
+from pgmuvi.constraint_utils import get_bounds
+from pgmuvi.constraint_utils import intersect_constraint_bounds
+from pgmuvi.constraint_utils import make_interval_constraint
 from pgmuvi.constraint_utils import register_constraint_preserving_value
 from pgmuvi.parameter_estimates import ParameterEstimateCollection
+from pgmuvi.parameter_specs import ConstraintStrategy
 from pgmuvi.parameter_specs import ParameterScale
 import math
 import torch
@@ -45,7 +51,7 @@ class ParameterEstimateApplicator:
                 estimate,
             )
 
-            results[estimate.name] = {
+            result = {
                 "value": value_applied,
                 "constraint": constraint_applied,
                 "value_reason": (
@@ -61,6 +67,12 @@ class ParameterEstimateApplicator:
                     None if constraint_applied else "constraint_unavailable"
                 ),
             }
+
+            constraint_action = estimate.metadata.get("constraint_action")
+            if constraint_action is not None:
+                result["constraint_action"] = constraint_action
+
+            results[estimate.name] = result
 
         return results
 
@@ -180,7 +192,7 @@ class ParameterEstimateApplicator:
             else parameter_name
         )
 
-        constraint = gpytorch.constraints.Interval(
+        proposed_constraint = gpytorch.constraints.Interval(
             lower,
             upper,
         )
@@ -189,6 +201,44 @@ class ParameterEstimateApplicator:
             isinstance(target_module, gpytorch.Module)
             and constraint_target.startswith("raw_")
         ):
+            existing_constraint = getattr(
+                target_module,
+                f"{constraint_target}_constraint",
+                None,
+            )
+
+            constraint = proposed_constraint
+            if (
+                estimate.spec.constraint_strategy
+                is ConstraintStrategy.DEFAULT
+                and existing_constraint is not None
+            ):
+                existing_bounds = get_bounds(existing_constraint)
+                proposed_bounds = get_bounds(proposed_constraint)
+                intersected_bounds = intersect_constraint_bounds(
+                    existing_constraint,
+                    proposed_constraint,
+                )
+
+                if not bounds_are_valid(intersected_bounds):
+                    estimate.metadata["constraint_action"] = (
+                        "conflict_kept_existing"
+                    )
+                    return True
+
+                if bounds_are_equivalent(intersected_bounds, existing_bounds):
+                    estimate.metadata["constraint_action"] = "kept_existing"
+                    return True
+
+                if bounds_are_equivalent(intersected_bounds, proposed_bounds):
+                    estimate.metadata["constraint_action"] = "applied"
+                else:
+                    estimate.metadata["constraint_action"] = "tightened"
+
+                constraint = make_interval_constraint(*intersected_bounds)
+            else:
+                estimate.metadata["constraint_action"] = "applied"
+
             register_constraint_preserving_value(
                 target_module,
                 constraint_target,
@@ -197,8 +247,9 @@ class ParameterEstimateApplicator:
         else:
             target_module.register_constraint(
                 constraint_target,
-                constraint,
+                proposed_constraint,
             )
+            estimate.metadata["constraint_action"] = "applied"
 
         return True
 
