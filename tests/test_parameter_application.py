@@ -1,5 +1,8 @@
 import unittest
 
+from pgmuvi.constraint_utils import clamp_to_constraint_interior
+from pgmuvi.constraint_utils import get_bounds
+from pgmuvi.constraint_utils import register_constraint_preserving_value
 from pgmuvi.parameter_application import ParameterEstimateApplicator
 from pgmuvi.parameter_estimates import ParameterEstimateCollection
 from pgmuvi.parameter_estimates import ParameterEstimate
@@ -59,6 +62,73 @@ class DummyConstraintModule:
 class DummyConstraintModel:
     def __init__(self):
         self.mean_module = DummyConstraintModule()
+
+
+class TestConstraintUtils(unittest.TestCase):
+
+    def test_get_bounds_for_interval(self):
+        constraint = gpytorch.constraints.Interval(0.1, 10.0)
+
+        lower, upper = get_bounds(constraint)
+
+        self.assertAlmostEqual(float(lower), 0.1)
+        self.assertAlmostEqual(float(upper), 10.0)
+
+    def test_get_bounds_for_greater_than(self):
+        constraint = gpytorch.constraints.GreaterThan(0.1)
+
+        lower, upper = get_bounds(constraint)
+
+        self.assertAlmostEqual(float(lower), 0.1)
+        self.assertTrue(torch.isinf(torch.as_tensor(upper)))
+
+    def test_get_bounds_for_positive(self):
+        constraint = gpytorch.constraints.Positive()
+
+        lower, upper = get_bounds(constraint)
+
+        self.assertAlmostEqual(float(lower), 0.0)
+        self.assertTrue(torch.isinf(torch.as_tensor(upper)))
+
+    def test_clamp_to_constraint_interior_moves_endpoint_values(self):
+        constraint = gpytorch.constraints.Interval(0.05, 10.0)
+        value = torch.tensor([0.05, 1.0, 10.0])
+
+        clipped = clamp_to_constraint_interior(value, constraint)
+
+        self.assertGreater(float(clipped[0]), 0.05)
+        self.assertAlmostEqual(float(clipped[1]), 1.0)
+        self.assertLess(float(clipped[2]), 10.0)
+
+    def test_register_constraint_preserving_value_keeps_gpytorch_property(self):
+        kernel = gpytorch.kernels.RBFKernel()
+        kernel.initialize(lengthscale=torch.tensor(2.0))
+
+        register_constraint_preserving_value(
+            kernel,
+            "raw_lengthscale",
+            gpytorch.constraints.Interval(0.1, 10.0),
+        )
+
+        self.assertAlmostEqual(
+            float(kernel.lengthscale.detach().cpu().view(-1)[0]),
+            2.0,
+            places=5,
+        )
+
+    def test_register_constraint_preserving_value_clips_to_safe_interior(self):
+        kernel = gpytorch.kernels.RBFKernel()
+        kernel.initialize(lengthscale=torch.tensor(0.05))
+
+        register_constraint_preserving_value(
+            kernel,
+            "raw_lengthscale",
+            gpytorch.constraints.Interval(0.05, 10.0),
+        )
+
+        value = float(kernel.lengthscale.detach().cpu().view(-1)[0])
+        self.assertGreater(value, 0.05)
+        self.assertLess(value, 10.0)
 
 
 class TestParameterEstimateApplicator(unittest.TestCase):
@@ -624,6 +694,75 @@ class TestParameterEstimateApplicator(unittest.TestCase):
             float(model.covar_module.lengthscale.detach().cpu().view(-1)[0]),
             2.0,
         )
+
+    def test_apply_constraint_then_value_keeps_estimated_gpytorch_value(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+        )
+
+        estimates = ParameterEstimateCollection(
+            [
+                ParameterEstimate(
+                    spec=spec,
+                    value=2.0,
+                    constraint=(0.1, 10.0),
+                )
+            ]
+        )
+
+        class Model:
+            def __init__(self):
+                self.covar_module = gpytorch.kernels.RBFKernel()
+
+        model = Model()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=estimates,
+        )
+
+        self.assertTrue(result["covar_module.lengthscale"]["constraint"])
+        self.assertTrue(result["covar_module.lengthscale"]["value"])
+        self.assertAlmostEqual(
+            float(model.covar_module.lengthscale.detach().cpu().view(-1)[0]),
+            2.0,
+            places=5,
+        )
+
+    def test_apply_value_clips_gpytorch_endpoint_to_safe_interior(self):
+        spec = ParameterSpec(
+            name="covar_module.lengthscale",
+            role=ParameterRole.LENGTHSCALE,
+            domain=ParameterDomain.TIME,
+            scale=ParameterScale.LOG,
+        )
+
+        estimates = ParameterEstimateCollection(
+            [
+                ParameterEstimate(
+                    spec=spec,
+                    value=0.1,
+                    constraint=(0.1, 10.0),
+                )
+            ]
+        )
+
+        class Model:
+            def __init__(self):
+                self.covar_module = gpytorch.kernels.RBFKernel()
+
+        model = Model()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=estimates,
+        )
+
+        value = float(model.covar_module.lengthscale.detach().cpu().view(-1)[0])
+        self.assertTrue(result["covar_module.lengthscale"]["value"])
+        self.assertGreater(value, 0.1)
+        self.assertLess(value, 10.0)
 
     def test_apply_value_reports_shape_mismatch(self):
         class ModelWithVectorParameter(torch.nn.Module):

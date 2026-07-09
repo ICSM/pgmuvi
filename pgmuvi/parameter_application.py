@@ -7,6 +7,8 @@ resolution and parameter-space transformations.
 
 from __future__ import annotations
 
+from pgmuvi.constraint_utils import clamp_to_constraint_interior
+from pgmuvi.constraint_utils import register_constraint_preserving_value
 from pgmuvi.parameter_estimates import ParameterEstimateCollection
 from pgmuvi.parameter_specs import ParameterScale
 import math
@@ -36,12 +38,12 @@ class ParameterEstimateApplicator:
                 else self._resolve_parameter(model, module_path)
             )
 
+            constraint_applied = self._apply_constraint(model, estimate)
             value_applied = self._apply_value(
                 target_module,
                 parameter_name,
                 estimate,
             )
-            constraint_applied = self._apply_constraint(model, estimate)
 
             results[estimate.name] = {
                 "value": value_applied,
@@ -118,6 +120,23 @@ class ParameterEstimateApplicator:
 
             value_tensor = value_tensor.reshape_as(current)
 
+        if isinstance(target_module, gpytorch.Module):
+            raw_parameter_name = (
+                parameter_name
+                if parameter_name.startswith("raw_")
+                else f"raw_{parameter_name}"
+            )
+            constraint = getattr(
+                target_module,
+                f"{raw_parameter_name}_constraint",
+                None,
+            )
+            if constraint is not None:
+                value_tensor = clamp_to_constraint_interior(
+                    value_tensor,
+                    constraint,
+                )
+
         with torch.no_grad():
             if isinstance(target_module, gpytorch.Module):
                 target_module.initialize(**{parameter_name: value_tensor})
@@ -161,13 +180,25 @@ class ParameterEstimateApplicator:
             else parameter_name
         )
 
-        target_module.register_constraint(
-            constraint_target,
-            gpytorch.constraints.Interval(
-                lower,
-                upper,
-            ),
+        constraint = gpytorch.constraints.Interval(
+            lower,
+            upper,
         )
+
+        if (
+            isinstance(target_module, gpytorch.Module)
+            and constraint_target.startswith("raw_")
+        ):
+            register_constraint_preserving_value(
+                target_module,
+                constraint_target,
+                constraint,
+            )
+        else:
+            target_module.register_constraint(
+                constraint_target,
+                constraint,
+            )
 
         return True
 

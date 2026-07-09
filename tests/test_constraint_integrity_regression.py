@@ -32,7 +32,6 @@ class TestConstraintIntegrityRegression(unittest.TestCase):
         y = torch.sin(2.0 * torch.pi * x / 3.0)
         return x, y
 
-    @unittest.expectedFailure
     def test_value_survives_constraint_application(self):
         """Applying value+constraint should leave the parameter at the value."""
         x, y = self._toy_1d_data()
