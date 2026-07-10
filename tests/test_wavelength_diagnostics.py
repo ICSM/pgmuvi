@@ -1,12 +1,16 @@
 """Tests for pre-fit wavelength-dependence diagnostics."""
 
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
 
 from pgmuvi.lightcurve import Lightcurve
-from pgmuvi.wavelength_diagnostics import diagnose_wavelength_dependence_prefit
+from pgmuvi.wavelength_diagnostics import (
+    compare_wavelength_candidate_models,
+    diagnose_wavelength_dependence_prefit,
+)
 
 
 def _make_multiband_lightcurve(
@@ -51,6 +55,62 @@ def _make_multiband_lightcurve(
         band=band,
         max_samples=None,
     )
+
+
+class _FakeFittedModel:
+    pass
+
+
+class _FakeLikelihood:
+    @property
+    def noise(self):
+        return np.asarray([0.02])
+
+    def named_parameters(self):
+        return [("second_noise_covar.raw_noise", np.asarray([0.03]))]
+
+
+class _FakeLightcurveForComparison:
+    def __init__(self, *, fail_models=None):
+        self.fail_models = dict(fail_models or {})
+        self.calls = []
+        self.fit_history = []
+        self.model = None
+        self.likelihood = None
+
+    def fit(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        model = kwargs.get("model")
+        if model in self.fail_models:
+            exc = self.fail_models[model]
+            self.fit_history.append(
+                {
+                    "model_class": model,
+                    "success": False,
+                    "failed": True,
+                    "exception_type": exc.__class__.__name__,
+                    "exception_message": str(exc),
+                }
+            )
+            raise exc
+        self.model = _FakeFittedModel()
+        self.likelihood = _FakeLikelihood()
+        self.fit_history.append(
+            {
+                "model_class": model,
+                "fit_strategy": kwargs.get("fit_strategy"),
+                "success": True,
+                "failed": False,
+                "training_iter": kwargs.get("training_iter"),
+            }
+        )
+        return {"model": model}
+
+    def get_fit_history(self):
+        return [dict(item) for item in self.fit_history]
+
+    def clear_fit_history(self):
+        self.fit_history.clear()
 
 
 class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
@@ -343,6 +403,125 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         self.assertFalse(classification["available"])
         self.assertEqual(classification["primary_class"], "insufficient_data")
         self.assertEqual(report["recommended_candidate_models"], [])
+
+    def test_compare_wavelength_models_runs_fit_candidates_and_skips_next_steps(self):
+        fake_lc = _FakeLightcurveForComparison()
+        candidates = [
+            {
+                "name": "baseline",
+                "model": "2D",
+                "fit_strategy": "consensus",
+                "priority": "baseline",
+                "reason": "baseline fit",
+                "options": {"learn_additional_noise": True},
+            },
+            {
+                "name": "next_step_consensus_period_diagnostics",
+                "model": None,
+                "fit_strategy": "consensus",
+                "priority": "next_step",
+                "reason": "not a fit candidate",
+            },
+        ]
+
+        report = compare_wavelength_candidate_models(
+            fake_lc,
+            candidates=candidates,
+            base_fit_kwargs={"training_iter": 0, "miniter": 0},
+            copy_lightcurve=False,
+        )
+
+        self.assertEqual(report["kind"], "wavelength_model_comparison")
+        self.assertEqual(report["summary"]["n_candidates"], 2)
+        self.assertEqual(report["summary"]["n_fit_candidates"], 1)
+        self.assertEqual(report["summary"]["n_successful"], 1)
+        self.assertEqual(report["summary"]["n_skipped"], 1)
+        self.assertEqual(fake_lc.calls[0]["model"], "2D")
+        self.assertEqual(fake_lc.calls[0]["fit_strategy"], "consensus")
+        self.assertTrue(fake_lc.calls[0]["learn_additional_noise"])
+        self.assertEqual(fake_lc.calls[0]["training_iter"], 0)
+
+        success = report["results"][0]
+        self.assertTrue(success["success"])
+        self.assertEqual(success["resolved_model_class"], "_FakeFittedModel")
+        self.assertTrue(success["likelihood_noise_summary"]["available"])
+
+        skipped = report["results"][1]
+        self.assertTrue(skipped["skipped"])
+        self.assertIn("no model", skipped["skip_reason"])
+
+    def test_compare_wavelength_models_records_failures_without_stopping(self):
+        fake_lc = _FakeLightcurveForComparison(
+            fail_models={"2DAchromatic": FloatingPointError("non-finite loss")}
+        )
+
+        report = compare_wavelength_candidate_models(
+            fake_lc,
+            candidates=["2DAchromatic", "2DWavelengthDependent"],
+            base_fit_kwargs={"training_iter": 0},
+            copy_lightcurve=False,
+        )
+
+        self.assertEqual(report["summary"]["n_fit_candidates"], 2)
+        self.assertEqual(report["summary"]["n_failed"], 1)
+        self.assertEqual(report["summary"]["n_successful"], 1)
+        failed = report["results"][0]
+        self.assertTrue(failed["failed"])
+        self.assertEqual(failed["exception_type"], "FloatingPointError")
+        self.assertEqual(failed["failure_category"], "numerical_failure")
+        self.assertEqual(report["results"][1]["status"], "success")
+
+    def test_compare_wavelength_models_uses_diagnostic_recommendations(self):
+        fake_lc = _FakeLightcurveForComparison()
+        diagnostic_report = {
+            "classification": {"primary_class": "prefit_table_only"},
+            "recommended_candidate_models": [
+                {
+                    "name": "baseline",
+                    "model": "2D",
+                    "fit_strategy": "consensus",
+                    "priority": "baseline",
+                    "reason": "recommended baseline",
+                }
+            ],
+        }
+
+        report = compare_wavelength_candidate_models(
+            fake_lc,
+            diagnostic_report=diagnostic_report,
+            base_fit_kwargs={"training_iter": 0},
+            copy_lightcurve=False,
+        )
+
+        self.assertEqual(report["summary"]["n_successful"], 1)
+        self.assertEqual(fake_lc.calls[0]["model"], "2D")
+        self.assertEqual(
+            report["diagnostic_classification"],
+            {"primary_class": "prefit_table_only"},
+        )
+
+    def test_lightcurve_compare_wavelength_models_delegates_to_module_function(self):
+        lc = _make_multiband_lightcurve()
+        expected = {"kind": "wavelength_model_comparison"}
+
+        with mock.patch(
+            "pgmuvi.wavelength_diagnostics.compare_wavelength_candidate_models",
+            return_value=expected,
+        ) as mocked:
+            report = lc.compare_wavelength_models(
+                candidates=["2D"],
+                base_fit_kwargs={"training_iter": 0},
+                copy_lightcurve=False,
+            )
+
+        self.assertIs(report, expected)
+        mocked.assert_called_once()
+        self.assertIs(mocked.call_args.args[0], lc)
+        self.assertEqual(mocked.call_args.kwargs["candidates"], ["2D"])
+        self.assertEqual(
+            mocked.call_args.kwargs["base_fit_kwargs"],
+            {"training_iter": 0},
+        )
 
 
 if __name__ == "__main__":

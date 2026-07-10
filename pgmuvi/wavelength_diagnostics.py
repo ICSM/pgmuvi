@@ -9,6 +9,8 @@ selection stages can reuse.
 
 from __future__ import annotations
 
+import copy
+import time
 from typing import Any
 
 import numpy as np
@@ -747,6 +749,381 @@ def classify_wavelength_diagnostics(
         classification["primary_class"] = "fixed_frequency_inconclusive"
 
     return _clean_scalar_dict(classification)
+
+
+def _normalise_candidate_models(
+    candidates: list[Any] | tuple[Any, ...] | None,
+) -> list[dict[str, Any]]:
+    """Normalise model-comparison candidate specifications.
+
+    Candidate dictionaries are intentionally aligned with the entries returned
+    by :func:`classify_wavelength_diagnostics`, but strings are accepted as a
+    compact user-facing form.
+    """
+    if candidates is None:
+        return []
+
+    normalised: list[dict[str, Any]] = []
+    for idx, candidate in enumerate(candidates):
+        if isinstance(candidate, str):
+            entry = {
+                "name": candidate,
+                "model": candidate,
+                "priority": "candidate",
+                "reason": "User-supplied candidate model string.",
+            }
+        elif isinstance(candidate, dict):
+            entry = dict(candidate)
+            if "name" not in entry or entry.get("name") is None:
+                model_name = entry.get("model")
+                entry["name"] = str(model_name) if model_name is not None else f"candidate_{idx}"
+        else:
+            raise TypeError(
+                "Candidate model specifications must be strings or dictionaries."
+            )
+
+        options = entry.get("options")
+        if options is not None and not isinstance(options, dict):
+            raise TypeError("Candidate 'options' entries must be dictionaries.")
+        fit_kwargs = entry.get("fit_kwargs")
+        if fit_kwargs is not None and not isinstance(fit_kwargs, dict):
+            raise TypeError("Candidate 'fit_kwargs' entries must be dictionaries.")
+        normalised.append(entry)
+
+    return normalised
+
+
+def _candidate_extra_kwargs(
+    candidate: dict[str, Any], per_candidate_fit_kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Return extra fit kwargs matching a candidate by name or model."""
+    extras: dict[str, Any] = {}
+    for key in (candidate.get("name"), candidate.get("model")):
+        if key is None:
+            continue
+        value = per_candidate_fit_kwargs.get(str(key))
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            raise TypeError(
+                "per_candidate_fit_kwargs values must be dictionaries keyed by "
+                "candidate name or model string."
+            )
+        extras.update(value)
+    return extras
+
+
+def _build_candidate_fit_kwargs(
+    candidate: dict[str, Any],
+    *,
+    base_fit_kwargs: dict[str, Any],
+    per_candidate_fit_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the exact kwargs passed to ``Lightcurve.fit`` for a candidate."""
+    model = candidate.get("model")
+    if model is None:
+        raise ValueError("Cannot build fit kwargs for a non-fit recommendation.")
+
+    fit_kwargs = dict(base_fit_kwargs)
+    fit_kwargs.update(dict(candidate.get("options") or {}))
+    fit_kwargs.update(dict(candidate.get("fit_kwargs") or {}))
+    fit_kwargs.update(_candidate_extra_kwargs(candidate, per_candidate_fit_kwargs))
+    fit_kwargs["model"] = model
+    if candidate.get("fit_strategy") is not None:
+        fit_kwargs["fit_strategy"] = candidate.get("fit_strategy")
+    return fit_kwargs
+
+
+def _clone_for_model_comparison(lightcurve):
+    """Return an isolated light-curve object for one candidate fit."""
+    cloned = copy.deepcopy(lightcurve)
+    if hasattr(cloned, "clear_fit_history"):
+        try:
+            cloned.clear_fit_history()
+        except Exception:
+            pass
+    return cloned
+
+
+def _latest_fit_history_entry(lightcurve) -> dict[str, Any] | None:
+    """Return the most recent fit-history entry from a lightcurve-like object."""
+    getter = getattr(lightcurve, "get_fit_history", None)
+    if getter is None:
+        return None
+    try:
+        history = getter()
+    except Exception:
+        return None
+    if not history:
+        return None
+    last = history[-1]
+    return dict(last) if isinstance(last, dict) else None
+
+
+def _module_class_name(obj: Any) -> str | None:
+    """Return a best-effort class name for a fitted model/likelihood object."""
+    if obj is None:
+        return None
+    try:
+        return obj.__class__.__name__
+    except Exception:
+        return None
+
+
+def _tensor_scalar_or_list(value: Any) -> Any:
+    """Convert small tensor/array-like values to JSON-safe scalars/lists."""
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        try:
+            value = value.numpy()
+        except Exception:
+            pass
+    if isinstance(value, np.ndarray):
+        if value.size == 1:
+            return _finite_or_none(float(value.reshape(-1)[0]))
+        if value.size <= 8:
+            return [_finite_or_none(float(v)) for v in value.reshape(-1)]
+        finite = value[np.isfinite(value)]
+        return {
+            "shape": list(value.shape),
+            "min": _finite_or_none(float(np.min(finite))) if finite.size else None,
+            "max": _finite_or_none(float(np.max(finite))) if finite.size else None,
+        }
+    return _finite_or_none(value)
+
+
+def _likelihood_noise_summary(likelihood: Any) -> dict[str, Any]:
+    """Extract lightweight noise diagnostics from a fitted likelihood."""
+    if likelihood is None:
+        return {"available": False}
+
+    summary: dict[str, Any] = {
+        "available": True,
+        "likelihood_class": _module_class_name(likelihood),
+        "noise_parameters": {},
+    }
+
+    named_parameters = getattr(likelihood, "named_parameters", None)
+    if named_parameters is not None:
+        try:
+            for name, value in named_parameters():
+                if "noise" in str(name).lower():
+                    summary["noise_parameters"][str(name)] = _tensor_scalar_or_list(value)
+        except Exception:
+            pass
+
+    for attr_name in ("noise", "raw_noise"):
+        if hasattr(likelihood, attr_name):
+            try:
+                summary[attr_name] = _tensor_scalar_or_list(getattr(likelihood, attr_name))
+            except Exception:
+                pass
+
+    return _clean_scalar_dict(summary)
+
+
+def _failure_category(exc: BaseException) -> str:
+    """Classify a candidate-fit exception for model-comparison reports."""
+    exc_name = exc.__class__.__name__
+    if exc_name == "ConsensusFitError":
+        return "consensus_data_rejection"
+    if isinstance(exc, FloatingPointError):
+        return "numerical_failure"
+    if isinstance(exc, (ValueError, TypeError)):
+        return "api_or_configuration_error"
+    if isinstance(exc, RuntimeError):
+        return "runtime_fit_failure"
+    return "fit_exception"
+
+
+def _comparison_result_entry(
+    *,
+    candidate: dict[str, Any],
+    status: str,
+    fit_kwargs: dict[str, Any] | None = None,
+    elapsed_seconds: float | None = None,
+    target_lightcurve: Any | None = None,
+    exception: BaseException | None = None,
+    fit_result: Any | None = None,
+) -> dict[str, Any]:
+    """Build one JSON-safe candidate-comparison row."""
+    entry: dict[str, Any] = {
+        "name": candidate.get("name"),
+        "model": candidate.get("model"),
+        "fit_strategy": candidate.get("fit_strategy"),
+        "priority": candidate.get("priority"),
+        "reason": candidate.get("reason"),
+        "status": status,
+        "success": bool(status == "success"),
+        "failed": bool(status == "failed"),
+        "skipped": bool(status == "skipped"),
+        "elapsed_seconds": elapsed_seconds,
+        "fit_kwargs": fit_kwargs,
+    }
+
+    if status == "skipped":
+        entry["skip_reason"] = "candidate has no model string to fit"
+    elif status == "success":
+        entry["result_type"] = _module_class_name(fit_result)
+        entry["resolved_model_class"] = _module_class_name(
+            getattr(target_lightcurve, "model", None)
+        )
+        entry["likelihood_noise_summary"] = _likelihood_noise_summary(
+            getattr(target_lightcurve, "likelihood", None)
+        )
+        entry["fit_history_entry"] = _latest_fit_history_entry(target_lightcurve)
+    elif status == "failed" and exception is not None:
+        entry["exception_type"] = exception.__class__.__name__
+        entry["exception_message"] = str(exception)
+        entry["failure_category"] = _failure_category(exception)
+        if hasattr(exception, "failure_diagnostics"):
+            try:
+                entry["failure_diagnostics"] = getattr(exception, "failure_diagnostics")
+            except Exception:
+                pass
+        entry["fit_history_entry"] = _latest_fit_history_entry(target_lightcurve)
+
+    return _clean_scalar_dict(entry)
+
+
+def compare_wavelength_candidate_models(
+    lightcurve,
+    *,
+    diagnostic_report: dict[str, Any] | None = None,
+    candidates: list[Any] | tuple[Any, ...] | None = None,
+    base_fit_kwargs: dict[str, Any] | None = None,
+    per_candidate_fit_kwargs: dict[str, Any] | None = None,
+    copy_lightcurve: bool = True,
+    stop_on_error: bool = False,
+) -> dict[str, Any]:
+    """Run a controlled wavelength-candidate model comparison.
+
+    This is an additive diagnostic wrapper around ``Lightcurve.fit``.  It does
+    not change the behaviour of any model, trainer, constraint, or consensus
+    pathway.  The function records which candidate fits succeeded or failed and
+    returns lightweight fit-history/noise diagnostics for later residual and
+    predictive-scoring PRs.
+
+    Parameters
+    ----------
+    lightcurve : pgmuvi.lightcurve.Lightcurve
+        Light curve to fit.
+    diagnostic_report : dict or None, optional
+        Report returned by :func:`diagnose_wavelength_dependence_prefit`.  When
+        ``candidates`` is omitted, the report's ``recommended_candidate_models``
+        are used.
+    candidates : list or tuple or None, optional
+        Candidate model specifications.  Each item may be a model string or a
+        dictionary with keys compatible with ``recommended_candidate_models``.
+    base_fit_kwargs : dict or None, optional
+        Fit keyword arguments applied to every fit candidate, e.g.
+        ``training_iter``, ``miniter``, ``lr``, or ``learn_additional_noise``.
+    per_candidate_fit_kwargs : dict or None, optional
+        Additional kwargs keyed by candidate ``name`` or ``model``.
+    copy_lightcurve : bool, optional
+        If True, each candidate is fit on a deep copy of the input light curve.
+        This is the safe default because it avoids reusing fitted model state.
+    stop_on_error : bool, optional
+        If True, re-raise the first fit exception after recording it.
+
+    Returns
+    -------
+    dict
+        JSON-safe comparison report.  This PR deliberately does not choose a
+        best model because residual and predictive scoring are added later.
+    """
+    base_fit_kwargs = dict(base_fit_kwargs or {})
+    per_candidate_fit_kwargs = dict(per_candidate_fit_kwargs or {})
+
+    if candidates is None:
+        if diagnostic_report is None:
+            diagnostic_report = diagnose_wavelength_dependence_prefit(lightcurve)
+        candidates = diagnostic_report.get("recommended_candidate_models", [])
+
+    normalised = _normalise_candidate_models(candidates)
+    results: list[dict[str, Any]] = []
+    n_fit_candidates = 0
+    n_successful = 0
+    n_failed = 0
+    n_skipped = 0
+
+    for candidate in normalised:
+        if candidate.get("model") is None:
+            n_skipped += 1
+            results.append(
+                _comparison_result_entry(candidate=candidate, status="skipped")
+            )
+            continue
+
+        n_fit_candidates += 1
+        fit_kwargs = _build_candidate_fit_kwargs(
+            candidate,
+            base_fit_kwargs=base_fit_kwargs,
+            per_candidate_fit_kwargs=per_candidate_fit_kwargs,
+        )
+        target = _clone_for_model_comparison(lightcurve) if copy_lightcurve else lightcurve
+
+        start = time.perf_counter()
+        try:
+            fit_result = target.fit(**fit_kwargs)
+        except Exception as exc:
+            elapsed = time.perf_counter() - start
+            n_failed += 1
+            results.append(
+                _comparison_result_entry(
+                    candidate=candidate,
+                    status="failed",
+                    fit_kwargs=fit_kwargs,
+                    elapsed_seconds=elapsed,
+                    target_lightcurve=target,
+                    exception=exc,
+                )
+            )
+            if stop_on_error:
+                raise
+        else:
+            elapsed = time.perf_counter() - start
+            n_successful += 1
+            results.append(
+                _comparison_result_entry(
+                    candidate=candidate,
+                    status="success",
+                    fit_kwargs=fit_kwargs,
+                    elapsed_seconds=elapsed,
+                    target_lightcurve=target,
+                    fit_result=fit_result,
+                )
+            )
+
+    report = {
+        "kind": "wavelength_model_comparison",
+        "stage": "model_comparison",
+        "summary": {
+            "n_candidates": int(len(normalised)),
+            "n_fit_candidates": int(n_fit_candidates),
+            "n_successful": int(n_successful),
+            "n_failed": int(n_failed),
+            "n_skipped": int(n_skipped),
+            "all_fit_candidates_succeeded": bool(
+                n_fit_candidates > 0 and n_successful == n_fit_candidates
+            ),
+            "any_fit_candidate_succeeded": bool(n_successful > 0),
+            "best_candidate": None,
+            "selection_status": "not_scored",
+        },
+        "results": results,
+        "warnings": [
+            "This comparison records fit success/failure only. Residual and "
+            "predictive scoring are not part of this PR, so no best model is "
+            "selected."
+        ],
+    }
+    if diagnostic_report is not None:
+        report["diagnostic_classification"] = diagnostic_report.get("classification")
+    return _clean_scalar_dict(report)
 
 
 def diagnose_wavelength_dependence_prefit(

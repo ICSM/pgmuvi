@@ -9317,6 +9317,64 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             classification_kwargs=classification_kwargs,
         )
 
+
+    def compare_wavelength_models(
+        self,
+        *,
+        diagnostic_report: dict | None = None,
+        candidates: list | tuple | None = None,
+        base_fit_kwargs: dict | None = None,
+        per_candidate_fit_kwargs: dict | None = None,
+        copy_lightcurve: bool = True,
+        stop_on_error: bool = False,
+    ) -> dict:
+        """Run candidate GP fits for wavelength-model comparison.
+
+        This is a diagnostic wrapper around :meth:`fit`.  It consumes candidate
+        model recommendations from :meth:`diagnose_wavelength_dependence` or a
+        user-supplied candidate list, runs each real model candidate, and records
+        success/failure plus lightweight fit-history and likelihood-noise
+        diagnostics.  It does not score residuals or choose a best model yet.
+
+        Parameters
+        ----------
+        diagnostic_report : dict or None, optional
+            Report returned by :meth:`diagnose_wavelength_dependence`.  Used for
+            candidate recommendations when ``candidates`` is omitted.
+        candidates : list or tuple or None, optional
+            Candidate model strings or candidate dictionaries.  Dictionaries may
+            include ``name``, ``model``, ``fit_strategy``, ``options``, and
+            ``fit_kwargs``.
+        base_fit_kwargs : dict or None, optional
+            Keyword arguments applied to every candidate fit.
+        per_candidate_fit_kwargs : dict or None, optional
+            Additional fit kwargs keyed by candidate name or model string.
+        copy_lightcurve : bool, optional
+            If True, each candidate is fit on a deep copy of this light curve so
+            that fitted state is not reused between candidates.
+        stop_on_error : bool, optional
+            If True, re-raise the first candidate-fit exception after recording
+            it in the comparison report.
+
+        Returns
+        -------
+        dict
+            JSON-safe candidate-comparison report.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            compare_wavelength_candidate_models,
+        )
+
+        return compare_wavelength_candidate_models(
+            self,
+            diagnostic_report=diagnostic_report,
+            candidates=candidates,
+            base_fit_kwargs=base_fit_kwargs,
+            per_candidate_fit_kwargs=per_candidate_fit_kwargs,
+            copy_lightcurve=copy_lightcurve,
+            stop_on_error=stop_on_error,
+        )
+
     def auto_select_model(self, verbose=True):
         """Automatically select the best model type based on data characteristics.
 
