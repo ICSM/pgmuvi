@@ -1,7 +1,116 @@
+import numbers
+
 import numpy as np
 import torch
 import gpytorch
 from tqdm import tqdm
+
+
+def _collect_trainable_parameters(*modules):
+    """Return unique trainable parameters from model/likelihood modules.
+
+    GPyTorch likelihoods may own trainable parameters, e.g. the standard
+    GaussianLikelihood noise parameter or the additional noise term in
+    FixedNoiseGaussianLikelihood(learn_additional_noise=True).  Optimizers
+    built from model.parameters() alone silently leave those parameters fixed.
+    """
+
+    params = []
+    seen = set()
+
+    for module in modules:
+        if module is None or not hasattr(module, "parameters"):
+            continue
+        for param in module.parameters():
+            if not getattr(param, "requires_grad", False):
+                continue
+            ident = id(param)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            params.append(param)
+
+    return params
+
+
+
+
+def _iter_named_trainable_parameters(model, likelihood=None):
+    """Yield stable result-history names and unique trainable parameters.
+
+    The trainer records parameter histories after each optimization step.  Once
+    likelihood parameters are included in string-built optimizers, the history
+    dictionary must use the same model+likelihood parameter set.
+    """
+
+    seen = set()
+
+    for prefix, module in (("", model), ("likelihood.", likelihood)):
+        if module is None or not hasattr(module, "named_parameters"):
+            continue
+        for name, param in module.named_parameters():
+            if not getattr(param, "requires_grad", False):
+                continue
+            ident = id(param)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            yield f"{prefix}{name}", param
+
+def _validate_training_controls(maxiter, miniter, stopavg, lr):
+    """Validate basic scalar trainer controls before optimizer setup."""
+
+    if not isinstance(maxiter, numbers.Integral) or int(maxiter) < 0:
+        raise ValueError("maxiter must be a non-negative integer.")
+    if not isinstance(miniter, numbers.Integral) or int(miniter) < 0:
+        raise ValueError("miniter must be a non-negative integer.")
+    if not isinstance(stopavg, numbers.Integral) or int(stopavg) < 1:
+        raise ValueError("stopavg must be a positive integer.")
+    if (
+        not isinstance(lr, numbers.Real)
+        or not np.isfinite(float(lr))
+        or float(lr) <= 0
+    ):
+        raise ValueError("lr must be a positive finite real number.")
+
+    return int(maxiter), int(miniter), int(stopavg), float(lr)
+
+
+def _raise_if_nonfinite_tensor(value, *, label, iteration=None):
+    """Raise a clear error if a tensor/scalar contains NaN or Inf."""
+
+    tensor = torch.as_tensor(value)
+    if torch.isfinite(tensor).all():
+        return
+
+    where = f" at iteration {iteration}" if iteration is not None else ""
+    raise FloatingPointError(f"Non-finite {label}{where}.")
+
+
+def _raise_if_nonfinite_gradients(model, likelihood=None, *, iteration=None):
+    """Raise a clear error if any optimized parameter has NaN/Inf gradients."""
+
+    bad_names = []
+
+    def _check_named_parameters(prefix, module):
+        if module is None or not hasattr(module, "named_parameters"):
+            return
+        for name, param in module.named_parameters():
+            if param.grad is None:
+                continue
+            if not torch.isfinite(param.grad).all():
+                bad_names.append(f"{prefix}{name}")
+
+    _check_named_parameters("model.", model)
+    _check_named_parameters("likelihood.", likelihood)
+
+    if bad_names:
+        where = f" at iteration {iteration}" if iteration is not None else ""
+        listed = ", ".join(bad_names[:10])
+        extra = "" if len(bad_names) <= 10 else f", ... ({len(bad_names)} total)"
+        raise FloatingPointError(
+            f"Non-finite parameter gradient(s){where}: {listed}{extra}."
+        )
 
 
 class Trainer:
@@ -139,13 +248,24 @@ def train(
             "pyro loss function."
         )
 
+    maxiter, miniter, stopavg, lr = _validate_training_controls(
+        maxiter=maxiter, miniter=miniter, stopavg=stopavg, lr=lr
+    )
+
     if isinstance(optim, str):
+        optim_params = _collect_trainable_parameters(model, likelihood)
+        if not optim_params:
+            raise ValueError(
+                "No trainable model or likelihood parameters were found for "
+                "the optimizer."
+            )
+
         if optim == "SGD":
-            optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+            optimizer = torch.optim.SGD(optim_params, lr=lr)
         elif optim == "Adam":
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr, eps=eps)
+            optimizer = torch.optim.Adam(optim_params, lr=lr, eps=eps)
         elif optim == "AdamW":
-            optimizer = torch.optim.AdamW(model.parameters(), lr=lr, eps=eps)
+            optimizer = torch.optim.AdamW(optim_params, lr=lr, eps=eps)
         elif optim == "NUTS":
             raise NotImplementedError(
                 "Optimisation with NUTS/MCMC is not yet implemented."
@@ -171,15 +291,16 @@ def train(
         for key, value in pars.items():
             results[key] = [value.cpu().detach().numpy()]
     else:
-        for param_name, param in model.named_parameters():
-            p = param_name.split(".")[1] if "raw" in param_name else param_name
-            results[p] = []
+        for param_name, _param in _iter_named_trainable_parameters(model, likelihood):
+            results[param_name] = []
     # for param_name, param in
     for i in tqdm(range(maxiter), disable=not verbose):
         optimizer.zero_grad()
         output = model(train_x)
         loss = -lossfn(output, train_y)
+        _raise_if_nonfinite_tensor(loss.detach(), label="training loss", iteration=i)
         loss.backward()
+        _raise_if_nonfinite_gradients(model, likelihood, iteration=i)
         optimizer.step()
         # Now update list of parameters
         if i > 0:
@@ -192,7 +313,7 @@ def train(
             for key, value in lightcurve.get_parameters().items():
                 results[key].append(value.cpu().detach().numpy())
         else:
-            for param_name, param in model.named_parameters():
+            for param_name, param in _iter_named_trainable_parameters(model, likelihood):
                 results[param_name].append(param.cpu().detach().numpy())
             # print(i, param_name," = ",param.item())
         # Finally check if convergence criterion is met
