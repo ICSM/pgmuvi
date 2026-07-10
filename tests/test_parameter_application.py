@@ -1,5 +1,6 @@
 import unittest
 
+from pgmuvi.constraint_utils import bounds_are_equivalent
 from pgmuvi.constraint_utils import clamp_to_constraint_interior
 from pgmuvi.constraint_utils import get_bounds
 from pgmuvi.constraint_utils import register_constraint_preserving_value
@@ -90,6 +91,13 @@ class TestConstraintUtils(unittest.TestCase):
 
         self.assertAlmostEqual(float(lower), 0.0)
         self.assertTrue(torch.isinf(torch.as_tensor(upper)))
+
+
+    def test_bounds_are_equivalent_accepts_mixed_float_dtypes(self):
+        first = (torch.tensor([0.1], dtype=torch.float64), torch.tensor([10.0], dtype=torch.float64))
+        second = (torch.tensor([0.1], dtype=torch.float32), torch.tensor([10.0], dtype=torch.float32))
+
+        self.assertTrue(bounds_are_equivalent(first, second))
 
     def test_clamp_to_constraint_interior_moves_endpoint_values(self):
         constraint = gpytorch.constraints.Interval(0.05, 10.0)
