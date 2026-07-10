@@ -973,6 +973,67 @@ class DummyModel:
         self.assertAlmostEqual(float(constraint.lower_bound), 0.1)
         self.assertAlmostEqual(float(constraint.upper_bound), 10.0)
 
+    def test_plain_parameter_constraint_is_reported_unenforceable(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+            constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=5.0,
+            constraint=(0.0, 10.0),
+        )
+
+        model = DummyTensorModel()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        self.assertEqual(
+            result["mean_module.offset"]["constraint_reason"],
+            "constraint_not_enforceable_plain_parameter",
+        )
+        self.assertFalse(result["mean_module.offset"]["constraint"])
+        self.assertTrue(result["mean_module.offset"]["value"])
+        self.assertAlmostEqual(float(model.mean_module.offset.item()), 5.0)
+
+    def test_plain_parameter_value_is_clamped_to_requested_constraint(self):
+        spec = ParameterSpec(
+            name="mean_module.offset",
+            role=ParameterRole.OFFSET,
+            domain=ParameterDomain.FLUX,
+            scale=ParameterScale.LINEAR,
+            constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=-100.0,
+            constraint=(0.0, 10.0),
+            metadata={
+                "constraint_enforceability": "plain_parameter",
+            },
+        )
+
+        model = DummyTensorModel()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        value = float(model.mean_module.offset.item())
+        self.assertFalse(result["mean_module.offset"]["constraint"])
+        self.assertEqual(
+            result["mean_module.offset"]["constraint_reason"],
+            "constraint_not_enforceable_plain_parameter",
+        )
+        self.assertGreaterEqual(value, 0.0)
+        self.assertLessEqual(value, 10.0)
+
+
 
 if __name__ == "__main__":
     unittest.main()

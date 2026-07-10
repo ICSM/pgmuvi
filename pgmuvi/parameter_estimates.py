@@ -52,7 +52,14 @@ class ParameterEstimate:
 
             if self.value is not None:
                 value_arr = np.asarray(self.value)
-                if np.any(value_arr < lower_arr) or np.any(value_arr > upper_arr):
+                allow_unenforceable_plain_parameter = (
+                    self.metadata.get("constraint_enforceability")
+                    == "plain_parameter"
+                )
+                if (
+                    np.any(value_arr < lower_arr)
+                    or np.any(value_arr > upper_arr)
+                ) and not allow_unenforceable_plain_parameter:
                     raise ValueError(
                         f"Estimated value for {self.name!r} lies outside its constraint."
                     )

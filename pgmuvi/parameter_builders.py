@@ -51,6 +51,16 @@ class ParameterEstimateBuilder:
             value,
         )
 
+        metadata = {
+            "value_reason": value_reason,
+        }
+
+        if spec.name.startswith("mean_module.") and constraint is not None:
+            metadata["constraint_reason"] = (
+                "constraint_not_enforceable_plain_parameter"
+            )
+            metadata["constraint_enforceability"] = "plain_parameter"
+
         return ParameterEstimate(
             spec=spec,
             value=value,
@@ -59,9 +69,7 @@ class ParameterEstimateBuilder:
             constraint_source=(
                 spec.constraint_strategy.value if spec.constraint_strategy else None
             ),
-            metadata={
-                "value_reason": value_reason,
-            },
+            metadata=metadata,
         )
 
     def _estimate_value_reason(

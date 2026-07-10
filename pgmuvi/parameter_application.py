@@ -64,7 +64,12 @@ class ParameterEstimateApplicator:
                     or "value_unavailable"
                 ),
                 "constraint_reason": (
-                    None if constraint_applied else "constraint_unavailable"
+                    None
+                    if constraint_applied
+                    else estimate.metadata.get(
+                        "constraint_reason",
+                        "constraint_unavailable",
+                    )
                 ),
             }
 
@@ -148,6 +153,13 @@ class ParameterEstimateApplicator:
                     value_tensor,
                     constraint,
                 )
+        elif isinstance(current, torch.nn.Parameter):
+            transformed_constraint = self._transform_constraint(estimate)
+            if transformed_constraint is not None:
+                value_tensor = clamp_to_constraint_interior(
+                    value_tensor,
+                    make_interval_constraint(*transformed_constraint),
+                )
 
         with torch.no_grad():
             if isinstance(target_module, gpytorch.Module):
@@ -191,6 +203,19 @@ class ParameterEstimateApplicator:
             if hasattr(target_module, raw_parameter_name)
             else parameter_name
         )
+
+        current = getattr(target_module, parameter_name, None)
+        if (
+            isinstance(current, torch.nn.Parameter)
+            and constraint_target == parameter_name
+        ):
+            estimate.metadata["constraint_action"] = (
+                "constraint_not_enforceable_plain_parameter"
+            )
+            estimate.metadata["constraint_reason"] = (
+                "constraint_not_enforceable_plain_parameter"
+            )
+            return False
 
         proposed_constraint = gpytorch.constraints.Interval(
             lower,
