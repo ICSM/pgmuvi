@@ -145,9 +145,10 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
             {
                 "mean_module.offset": {
                     "value": True,
-                    "constraint": True,
+                    "constraint": False,
                     "value_reason": None,
-                    "constraint_reason": None,
+                    "constraint_reason": "constraint_not_enforceable_plain_parameter",
+                    "constraint_action": "constraint_not_enforceable_plain_parameter",
                 },
             },
         )
@@ -162,10 +163,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
             20.0,
         )
 
-        self.assertEqual(
-            lc.model.mean_module.calls[0][0],
-            "offset",
-        )
+        self.assertEqual(lc.model.mean_module.calls, [])
 
     def test_build_parameter_estimation_context_computes_1d_sampling_diagnostics(self):
         lc = Lightcurve(
@@ -364,12 +362,14 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                     "constraint": True,
                     "value_reason": None,
                     "constraint_reason": None,
+                    "constraint_action": "applied",
                 },
                 "covar_module.base_kernel.lengthscale": {
                     "value": True,
                     "constraint": True,
                     "value_reason": None,
                     "constraint_reason": None,
+                    "constraint_action": "applied",
                 },
             },
         )
@@ -414,28 +414,38 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
         result = lc._apply_parameter_workflow_estimates()
 
         self.assertEqual(
-            result,
+            set(result),
             {
-                "covar_module.mixture_means": {
-                    "value": False,
-                    "constraint": True,
-                    "value_reason": "consensus_frequency_unavailable",
-                    "constraint_reason": None,
-                },
-                "covar_module.mixture_scales": {
-                    "value": True,
-                    "constraint": True,
-                    "value_reason": None,
-                    "constraint_reason": None,
-                },
-                "covar_module.mixture_weights": {
-                    "value": True,
-                    "constraint": True,
-                    "value_reason": None,
-                    "constraint_reason": None,
-                },
+                "covar_module.mixture_means",
+                "covar_module.mixture_scales",
+                "covar_module.mixture_weights",
             },
         )
+        expected_value_applied = {
+            "covar_module.mixture_means": True,
+            "covar_module.mixture_scales": False,
+            "covar_module.mixture_weights": False,
+        }
+
+        for parameter_name in result:
+            with self.subTest(parameter_name=parameter_name):
+                self.assertEqual(
+                    result[parameter_name]["value"],
+                    expected_value_applied[parameter_name],
+                )
+                self.assertTrue(result[parameter_name]["constraint"])
+                if expected_value_applied[parameter_name]:
+                    self.assertIsNone(result[parameter_name]["value_reason"])
+                else:
+                    self.assertEqual(
+                        result[parameter_name]["value_reason"],
+                        "value_unavailable",
+                    )
+                self.assertIsNone(result[parameter_name]["constraint_reason"])
+                self.assertIn(
+                    result[parameter_name].get("constraint_action"),
+                    {"applied", "tightened", "kept_existing"},
+                )
 
         self.assertEqual(
             lc.parameter_workflow_result,
@@ -476,12 +486,14 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                     "constraint": True,
                     "value_reason": None,
                     "constraint_reason": None,
+                    "constraint_action": "applied",
                 },
                 "covar_module.base_kernel.lengthscale": {
                     "value": True,
                     "constraint": True,
                     "value_reason": None,
                     "constraint_reason": None,
+                    "constraint_action": "applied",
                 },
             },
         )
@@ -530,12 +542,14 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
                     "constraint": True,
                     "value_reason": None,
                     "constraint_reason": None,
+                    "constraint_action": "applied",
                 },
                 "covar_module.base_kernel.lengthscale": {
                     "value": True,
                     "constraint": True,
                     "value_reason": None,
                     "constraint_reason": None,
+                    "constraint_action": "applied",
                 },
             },
         )

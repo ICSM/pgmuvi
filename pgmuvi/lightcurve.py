@@ -67,6 +67,7 @@ from pgmuvi.parameter_workflow import (
     build_and_apply_parameter_estimates,
     model_supports_parameter_workflow,
 )
+from pgmuvi.constraint_utils import clamp_to_constraint_interior
 from pgmuvi.constraint_utils import register_constraint_preserving_value
 
 try:
@@ -7895,6 +7896,48 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     if debug:
                         print(f"Applying y-transform to {key}")
                     hypers[key] = self.ytransform.transform(hypers[key])
+        # GPyTorch validates constrained parameters when initialize() is called.
+        # The only known problematic path here is the 2D spectral-mixture
+        # initialiser, which builds a [num_mixtures, ard_num_dims] tensor whose
+        # temporal column is scientifically meaningful while the wavelength
+        # column is a placeholder.  GPyTorch applies the same scalar constraint
+        # element-wise to both columns, so only that multi-dimensional placeholder
+        # path should be clamped.  Do not clamp ordinary 1D MLS frequencies here:
+        # that silently changes the user/MLS-specified ordering and breaks the
+        # long-standing 1D initialisation contract.
+        for key, value in list(hypers.items()):
+            if "mixture_means" not in key:
+                continue
+            if value.dim() < 2 or value.shape[-1] <= 1:
+                continue
+
+            module_path, parameter_name = (
+                key.rsplit(".", 1) if "." in key else ("", key)
+            )
+            target_module = self.model
+            if module_path:
+                try:
+                    for part in module_path.split("."):
+                        target_module = getattr(target_module, part)
+                except AttributeError:
+                    continue
+
+            raw_parameter_name = (
+                parameter_name
+                if parameter_name.startswith("raw_")
+                else f"raw_{parameter_name}"
+            )
+            constraint = getattr(
+                target_module,
+                f"{raw_parameter_name}_constraint",
+                None,
+            )
+            if constraint is not None:
+                hypers[key] = clamp_to_constraint_interior(value, constraint).to(
+                    dtype=value.dtype,
+                    device=value.device,
+                )
+
         if debug:
             print("hypers after transform:")
             print(hypers)

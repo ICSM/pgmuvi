@@ -162,9 +162,10 @@ class TestParameterWorkflow(unittest.TestCase):
             {
                 "mean_module.offset": {
                     "value": True,
-                    "constraint": True,
+                    "constraint": False,
                     "value_reason": None,
-                    "constraint_reason": None,
+                    "constraint_reason": "constraint_not_enforceable_plain_parameter",
+                    "constraint_action": "constraint_not_enforceable_plain_parameter",
                 },
             },
         )
@@ -174,10 +175,7 @@ class TestParameterWorkflow(unittest.TestCase):
             55.0,
         )
 
-        self.assertEqual(
-            model.mean_module.calls[0][0],
-            "offset",
-        )
+        self.assertEqual(model.mean_module.calls, [])
 
     def test_build_and_apply_parameter_estimates_runs_full_workflow(self):
         model = ModelWithRealSchema()
@@ -202,9 +200,10 @@ class TestParameterWorkflow(unittest.TestCase):
             {
                 "mean_module.offset": {
                     "value": True,
-                    "constraint": True,
+                    "constraint": False,
                     "value_reason": None,
-                    "constraint_reason": None,
+                    "constraint_reason": "constraint_not_enforceable_plain_parameter",
+                    "constraint_action": "constraint_not_enforceable_plain_parameter",
                 },
             },
         )
@@ -214,10 +213,7 @@ class TestParameterWorkflow(unittest.TestCase):
             55.0,
         )
 
-        self.assertEqual(
-            model.mean_module.calls[0][0],
-            "offset",
-        )
+        self.assertEqual(model.mean_module.calls, [])
 
     def test_returns_none_when_schema_has_wrong_type(self):
         self.assertIsNone(

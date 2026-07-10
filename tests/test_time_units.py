@@ -2,6 +2,7 @@ import unittest
 
 import torch
 
+from pgmuvi.dtypes import DEFAULT_DTYPE
 from pgmuvi.lightcurve import Lightcurve
 
 
@@ -79,13 +80,27 @@ class TestTimeUnits(unittest.TestCase):
         """time_units works when xdata is a numpy array (not just a tensor)."""
         xdata_seconds_np = (self.xdata_days * 86400.0).numpy()
         lc = Lightcurve(xdata_seconds_np, self.ydata, time_units="s")
-        self.assertTrue(torch.allclose(lc.xdata, self.xdata_days, atol=1e-4))
+        self.assertEqual(lc.xdata.dtype, DEFAULT_DTYPE)
+        self.assertTrue(
+            torch.allclose(
+                lc.xdata,
+                self.xdata_days.to(dtype=lc.xdata.dtype),
+                atol=1e-4,
+            )
+        )
 
     def test_list_input_with_units(self):
         """time_units works when xdata is a plain Python list."""
         xdata_seconds_list = (self.xdata_days * 86400.0).tolist()
         lc = Lightcurve(xdata_seconds_list, self.ydata, time_units="s")
-        self.assertTrue(torch.allclose(lc.xdata, self.xdata_days, atol=1e-4))
+        self.assertEqual(lc.xdata.dtype, DEFAULT_DTYPE)
+        self.assertTrue(
+            torch.allclose(
+                lc.xdata,
+                self.xdata_days.to(dtype=lc.xdata.dtype),
+                atol=1e-4,
+            )
+        )
 
 
 if __name__ == "__main__":
