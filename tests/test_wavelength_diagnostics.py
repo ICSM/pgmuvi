@@ -9,6 +9,7 @@ import torch
 from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.wavelength_diagnostics import (
     compare_wavelength_candidate_models,
+    compute_wavelength_residual_diagnostics,
     diagnose_wavelength_dependence_prefit,
 )
 
@@ -71,12 +72,31 @@ class _FakeLikelihood:
 
 
 class _FakeLightcurveForComparison:
-    def __init__(self, *, fail_models=None):
+    def __init__(self, *, fail_models=None, prediction_offsets=None):
         self.fail_models = dict(fail_models or {})
+        self.prediction_offsets = dict(prediction_offsets or {})
         self.calls = []
         self.fit_history = []
         self.model = None
         self.likelihood = None
+        t = np.tile(np.linspace(0.0, 20.0, 8), 2)
+        wl = np.repeat([1.0, 2.0], 8)
+        self._xdata_raw = torch.as_tensor(
+            np.column_stack([t, wl]), dtype=torch.float64
+        )
+        self._xdata_transformed = self._xdata_raw
+        self._ydata_transformed = torch.as_tensor(
+            1.0 + 0.2 * np.cos(2.0 * np.pi * t / 10.0), dtype=torch.float64
+        )
+        self.band = np.asarray(["A"] * 8 + ["B"] * 8, dtype=np.str_)
+        self._prediction_mean = self._ydata_transformed.detach().cpu().numpy()
+        self._prediction_variance = np.full(self._prediction_mean.shape, 0.01)
+
+    def training_predictions_for_wavelength_diagnostics(self):
+        return {
+            "mean": self._prediction_mean,
+            "variance": self._prediction_variance,
+        }
 
     def fit(self, **kwargs):
         self.calls.append(dict(kwargs))
@@ -93,6 +113,10 @@ class _FakeLightcurveForComparison:
                 }
             )
             raise exc
+        offset = float(self.prediction_offsets.get(model, 0.0))
+        self._prediction_mean = (
+            self._ydata_transformed.detach().cpu().numpy() + offset
+        )
         self.model = _FakeFittedModel()
         self.likelihood = _FakeLikelihood()
         self.fit_history.append(
@@ -522,6 +546,88 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
             mocked.call_args.kwargs["base_fit_kwargs"],
             {"training_iter": 0},
         )
+
+
+    def test_residual_diagnostics_score_training_predictions_by_band(self):
+        fake_lc = _FakeLightcurveForComparison()
+        fake_lc.fit(model="2D")
+
+        report = compute_wavelength_residual_diagnostics(
+            fake_lc,
+            period=10.0,
+            min_points_per_band=3,
+        )
+
+        self.assertTrue(report["available"])
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["predictive_score"]["available"], True)
+        self.assertEqual(len(report["by_band"]), 2)
+        self.assertLess(report["overall"]["residual_rms"], 1e-12)
+        for row in report["by_band"]:
+            self.assertIn("fixed_frequency_residual", row)
+            self.assertLess(row["fixed_frequency_residual"]["amplitude"], 1e-12)
+
+    def test_compare_wavelength_models_scores_successful_candidates(self):
+        fake_lc = _FakeLightcurveForComparison(
+            prediction_offsets={"2D": 0.0, "2DAchromatic": 0.5}
+        )
+
+        report = compare_wavelength_candidate_models(
+            fake_lc,
+            candidates=["2D", "2DAchromatic"],
+            base_fit_kwargs={"training_iter": 0},
+            residual_diagnostic_kwargs={"period": 10.0},
+            copy_lightcurve=False,
+        )
+
+        self.assertEqual(report["summary"]["n_successful"], 2)
+        self.assertEqual(report["summary"]["n_scored_successful"], 2)
+        self.assertEqual(report["summary"]["selection_status"], "scored_predictive")
+        self.assertEqual(report["summary"]["best_candidate"]["model"], "2D")
+        for result in report["results"]:
+            self.assertIn("residual_diagnostics", result)
+            self.assertIn("predictive_score", result)
+            self.assertTrue(result["predictive_score"]["available"])
+
+    def test_compare_wavelength_models_can_disable_success_scoring(self):
+        fake_lc = _FakeLightcurveForComparison()
+
+        report = compare_wavelength_candidate_models(
+            fake_lc,
+            candidates=["2D"],
+            base_fit_kwargs={"training_iter": 0},
+            score_successful_fits=False,
+            copy_lightcurve=False,
+        )
+
+        self.assertEqual(report["summary"]["n_successful"], 1)
+        self.assertEqual(report["summary"]["n_scored_successful"], 0)
+        self.assertEqual(report["summary"]["selection_status"], "not_scored")
+        self.assertNotIn("residual_diagnostics", report["results"][0])
+
+    def test_lightcurve_compare_wavelength_models_passes_scoring_kwargs(self):
+        lc = _make_multiband_lightcurve()
+        expected = {"kind": "wavelength_model_comparison"}
+
+        with mock.patch(
+            "pgmuvi.wavelength_diagnostics.compare_wavelength_candidate_models",
+            return_value=expected,
+        ) as mocked:
+            report = lc.compare_wavelength_models(
+                candidates=["2D"],
+                residual_diagnostic_kwargs={"period": 30.0},
+                score_successful_fits=False,
+                copy_lightcurve=False,
+            )
+
+        self.assertIs(report, expected)
+        mocked.assert_called_once()
+        self.assertEqual(
+            mocked.call_args.kwargs["residual_diagnostic_kwargs"],
+            {"period": 30.0},
+        )
+        self.assertFalse(mocked.call_args.kwargs["score_successful_fits"])
+
 
 
 if __name__ == "__main__":

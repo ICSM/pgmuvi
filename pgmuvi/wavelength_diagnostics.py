@@ -15,6 +15,11 @@ from typing import Any
 
 import numpy as np
 
+try:
+    import torch
+except ImportError:  # pragma: no cover - pgmuvi normally depends on torch
+    torch = None
+
 from pgmuvi.preprocess.quality import assess_sampling_quality, robust_scale
 from pgmuvi.preprocess.variability import is_variable
 
@@ -948,6 +953,7 @@ def _comparison_result_entry(
     target_lightcurve: Any | None = None,
     exception: BaseException | None = None,
     fit_result: Any | None = None,
+    residual_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one JSON-safe candidate-comparison row."""
     entry: dict[str, Any] = {
@@ -975,6 +981,11 @@ def _comparison_result_entry(
             getattr(target_lightcurve, "likelihood", None)
         )
         entry["fit_history_entry"] = _latest_fit_history_entry(target_lightcurve)
+        if residual_diagnostics is not None:
+            entry["residual_diagnostics"] = residual_diagnostics
+            entry["predictive_score"] = residual_diagnostics.get(
+                "predictive_score", {"available": False}
+            )
     elif status == "failed" and exception is not None:
         entry["exception_type"] = exception.__class__.__name__
         entry["exception_message"] = str(exception)
@@ -989,6 +1000,322 @@ def _comparison_result_entry(
     return _clean_scalar_dict(entry)
 
 
+
+def _array_from_tensor_like(value: Any) -> np.ndarray | None:
+    """Convert tensor/array/scalar-like values to a NumPy array."""
+    if value is None:
+        return None
+    if torch is not None and isinstance(value, torch.Tensor):
+        return value.detach().cpu().numpy()
+    try:
+        return np.asarray(value)
+    except Exception:
+        return None
+
+
+def _training_prediction_arrays(lightcurve) -> tuple[np.ndarray | None, np.ndarray | None, str]:
+    """Return training-point predictive mean/variance arrays when available."""
+    custom = getattr(lightcurve, "training_predictions_for_wavelength_diagnostics", None)
+    if callable(custom):
+        prediction = custom()
+        if isinstance(prediction, dict):
+            mean = prediction.get("mean")
+            variance = prediction.get("variance")
+        else:
+            mean, variance = prediction
+        return (
+            _array_from_tensor_like(mean),
+            _array_from_tensor_like(variance),
+            "custom_training_predictions",
+        )
+
+    mean_attr = getattr(lightcurve, "_wavelength_diagnostic_prediction_mean", None)
+    if mean_attr is not None:
+        return (
+            _array_from_tensor_like(mean_attr),
+            _array_from_tensor_like(
+                getattr(lightcurve, "_wavelength_diagnostic_prediction_variance", None)
+            ),
+            "stored_training_predictions",
+        )
+
+    model = getattr(lightcurve, "model", None)
+    likelihood = getattr(lightcurve, "likelihood", None)
+    x_train = getattr(lightcurve, "_xdata_transformed", None)
+    if model is None or x_train is None or torch is None:
+        return None, None, "unavailable"
+
+    try:
+        if hasattr(model, "eval"):
+            model.eval()
+        if likelihood is not None and hasattr(likelihood, "eval"):
+            likelihood.eval()
+        with torch.no_grad():
+            output = model(x_train)
+            predictive = likelihood(output) if likelihood is not None else output
+            mean = getattr(predictive, "mean", None)
+            variance = getattr(predictive, "variance", None)
+    except Exception:
+        return None, None, "prediction_failed"
+
+    return _array_from_tensor_like(mean), _array_from_tensor_like(variance), "gpytorch"
+
+
+def _safe_standardised_residuals(
+    residual: np.ndarray,
+    variance: np.ndarray | None,
+) -> np.ndarray | None:
+    """Return residuals divided by predictive standard deviation."""
+    if variance is None:
+        return None
+    variance = np.asarray(variance, dtype=float)
+    if variance.shape != residual.shape:
+        return None
+    valid = np.isfinite(variance) & (variance > 0.0)
+    if not np.any(valid):
+        return None
+    out = np.full_like(residual, np.nan, dtype=float)
+    out[valid] = residual[valid] / np.sqrt(variance[valid])
+    return out
+
+
+def _gaussian_negative_log_predictive_density(
+    residual: np.ndarray,
+    variance: np.ndarray | None,
+) -> np.ndarray | None:
+    """Compute per-point Gaussian negative log predictive density."""
+    if variance is None:
+        return None
+    variance = np.asarray(variance, dtype=float)
+    if variance.shape != residual.shape:
+        return None
+    valid = np.isfinite(residual) & np.isfinite(variance) & (variance > 0.0)
+    if not np.any(valid):
+        return None
+    out = np.full_like(residual, np.nan, dtype=float)
+    out[valid] = 0.5 * (
+        np.log(2.0 * np.pi * variance[valid])
+        + (residual[valid] ** 2) / variance[valid]
+    )
+    return out
+
+
+def _residual_scalar_summary(
+    residual: np.ndarray,
+    standardised: np.ndarray | None,
+    nlpd: np.ndarray | None,
+    variance: np.ndarray | None,
+) -> dict[str, Any]:
+    """Summarise residual and predictive-score arrays."""
+    finite = np.isfinite(residual)
+    summary: dict[str, Any] = {
+        "n_points": int(np.count_nonzero(finite)),
+        "residual_mean": None,
+        "residual_median": None,
+        "residual_rms": None,
+        "residual_robust_scatter": None,
+        "standardized_residual_mean": None,
+        "standardized_residual_rms": None,
+        "coverage_1sigma": None,
+        "coverage_2sigma": None,
+        "mean_negative_log_predictive_density": None,
+        "median_negative_log_predictive_density": None,
+        "median_predictive_std": None,
+    }
+    if np.any(finite):
+        r = residual[finite]
+        summary["residual_mean"] = float(np.mean(r))
+        summary["residual_median"] = float(np.median(r))
+        summary["residual_rms"] = float(np.sqrt(np.mean(r**2)))
+        summary["residual_robust_scatter"] = float(robust_scale(r))
+
+    if standardised is not None:
+        zfinite = np.isfinite(standardised)
+        if np.any(zfinite):
+            z = standardised[zfinite]
+            summary["standardized_residual_mean"] = float(np.mean(z))
+            summary["standardized_residual_rms"] = float(np.sqrt(np.mean(z**2)))
+            summary["coverage_1sigma"] = float(np.mean(np.abs(z) <= 1.0))
+            summary["coverage_2sigma"] = float(np.mean(np.abs(z) <= 2.0))
+
+    if nlpd is not None:
+        nfinite = np.isfinite(nlpd)
+        if np.any(nfinite):
+            n = nlpd[nfinite]
+            summary["mean_negative_log_predictive_density"] = float(np.mean(n))
+            summary["median_negative_log_predictive_density"] = float(np.median(n))
+
+    if variance is not None:
+        vfinite = np.isfinite(variance) & (variance > 0.0)
+        if np.any(vfinite):
+            summary["median_predictive_std"] = float(np.median(np.sqrt(variance[vfinite])))
+
+    return _clean_scalar_dict(summary)
+
+
+def compute_wavelength_residual_diagnostics(
+    lightcurve,
+    *,
+    frequency: float | None = None,
+    period: float | None = None,
+    min_points_per_band: int = 3,
+) -> dict[str, Any]:
+    """Compute residual and predictive diagnostics for a fitted light curve.
+
+    The diagnostics are evaluated at the training coordinates.  They are meant
+    for model-comparison reports: they score whether a fitted candidate leaves
+    structured residuals by wavelength and, when predictive variances are
+    available, compute Gaussian predictive-score and coverage summaries.
+    """
+    if isinstance(min_points_per_band, bool) or int(min_points_per_band) < 1:
+        raise ValueError("min_points_per_band must be a positive integer.")
+    min_points_per_band = int(min_points_per_band)
+    fixed_frequency = _resolve_frequency(frequency=frequency, period=period)
+
+    x_raw = _array_from_tensor_like(getattr(lightcurve, "_xdata_raw", None))
+    y_train = _array_from_tensor_like(getattr(lightcurve, "_ydata_transformed", None))
+    if y_train is None:
+        y_train = _array_from_tensor_like(getattr(lightcurve, "_ydata_raw", None))
+    if x_raw is None or y_train is None:
+        return {
+            "available": False,
+            "status": "missing_training_data",
+            "by_band": [],
+            "overall": {},
+            "predictive_score": {"available": False},
+        }
+
+    x_raw = np.asarray(x_raw, dtype=float)
+    y_train = np.asarray(y_train, dtype=float).reshape(-1)
+    if x_raw.ndim != 2 or x_raw.shape[1] < 2 or x_raw.shape[0] != y_train.size:
+        return {
+            "available": False,
+            "status": "requires_2d_multiband_training_data",
+            "by_band": [],
+            "overall": {},
+            "predictive_score": {"available": False},
+        }
+
+    mean, variance, prediction_source = _training_prediction_arrays(lightcurve)
+    if mean is None:
+        return {
+            "available": False,
+            "status": prediction_source,
+            "by_band": [],
+            "overall": {},
+            "predictive_score": {"available": False},
+        }
+    mean = np.asarray(mean, dtype=float).reshape(-1)
+    if mean.size != y_train.size:
+        return {
+            "available": False,
+            "status": "prediction_shape_mismatch",
+            "prediction_source": prediction_source,
+            "by_band": [],
+            "overall": {},
+            "predictive_score": {"available": False},
+        }
+
+    if variance is not None:
+        variance = np.asarray(variance, dtype=float).reshape(-1)
+        if variance.size != y_train.size:
+            variance = None
+
+    residual = y_train - mean
+    standardised = _safe_standardised_residuals(residual, variance)
+    nlpd = _gaussian_negative_log_predictive_density(residual, variance)
+    wavelengths = np.unique(x_raw[:, 1])
+    band_rows: list[dict[str, Any]] = []
+
+    for wl in wavelengths:
+        mask = x_raw[:, 1] == wl
+        row = {
+            "wavelength": float(wl),
+            "n_points": int(np.count_nonzero(mask)),
+            "status": "ok" if np.count_nonzero(mask) >= min_points_per_band else "insufficient_points",
+            "band_labels": _band_labels_for_mask(getattr(lightcurve, "band", None), mask),
+        }
+        if np.count_nonzero(mask) >= min_points_per_band:
+            row.update(
+                _residual_scalar_summary(
+                    residual[mask],
+                    standardised[mask] if standardised is not None else None,
+                    nlpd[mask] if nlpd is not None else None,
+                    variance[mask] if variance is not None else None,
+                )
+            )
+            if fixed_frequency is not None:
+                periodic = _fit_fixed_frequency_sinusoid(
+                    x_raw[mask, 0],
+                    residual[mask],
+                    None,
+                    frequency=fixed_frequency,
+                    min_points=max(3, min_points_per_band),
+                )
+                row["fixed_frequency_residual"] = periodic
+        band_rows.append(_clean_scalar_dict(row))
+
+    overall = _residual_scalar_summary(residual, standardised, nlpd, variance)
+    predictive_score = {
+        "available": bool(nlpd is not None and np.any(np.isfinite(nlpd))),
+        "mean_negative_log_predictive_density": overall.get(
+            "mean_negative_log_predictive_density"
+        ),
+        "median_negative_log_predictive_density": overall.get(
+            "median_negative_log_predictive_density"
+        ),
+        "standardized_residual_rms": overall.get("standardized_residual_rms"),
+        "coverage_1sigma": overall.get("coverage_1sigma"),
+        "coverage_2sigma": overall.get("coverage_2sigma"),
+    }
+
+    report = {
+        "available": True,
+        "status": "ok",
+        "prediction_source": prediction_source,
+        "target_space": "transformed_y_training_space",
+        "fixed_frequency": fixed_frequency,
+        "fixed_period": (None if fixed_frequency is None else float(1.0 / fixed_frequency)),
+        "overall": overall,
+        "by_band": band_rows,
+        "predictive_score": _clean_scalar_dict(predictive_score),
+    }
+    return _clean_scalar_dict(report)
+
+
+def _score_comparison_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarise scored successful candidate fits."""
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for result in results:
+        if result.get("status") != "success":
+            continue
+        score = result.get("predictive_score", {})
+        value = _finite_float(score.get("mean_negative_log_predictive_density"))
+        if value is not None:
+            scored.append((value, result))
+
+    if not scored:
+        return {
+            "n_scored_successful": 0,
+            "best_candidate": None,
+            "selection_status": "not_scored",
+            "selection_basis": None,
+        }
+
+    scored.sort(key=lambda item: item[0])
+    best_value, best = scored[0]
+    return {
+        "n_scored_successful": int(len(scored)),
+        "best_candidate": {
+            "name": best.get("name"),
+            "model": best.get("model"),
+            "fit_strategy": best.get("fit_strategy"),
+            "mean_negative_log_predictive_density": float(best_value),
+        },
+        "selection_status": "scored_predictive",
+        "selection_basis": "lowest training-point mean negative log predictive density",
+    }
+
 def compare_wavelength_candidate_models(
     lightcurve,
     *,
@@ -996,6 +1323,8 @@ def compare_wavelength_candidate_models(
     candidates: list[Any] | tuple[Any, ...] | None = None,
     base_fit_kwargs: dict[str, Any] | None = None,
     per_candidate_fit_kwargs: dict[str, Any] | None = None,
+    residual_diagnostic_kwargs: dict[str, Any] | None = None,
+    score_successful_fits: bool = True,
     copy_lightcurve: bool = True,
     stop_on_error: bool = False,
 ) -> dict[str, Any]:
@@ -1023,6 +1352,12 @@ def compare_wavelength_candidate_models(
         ``training_iter``, ``miniter``, ``lr``, or ``learn_additional_noise``.
     per_candidate_fit_kwargs : dict or None, optional
         Additional kwargs keyed by candidate ``name`` or ``model``.
+    residual_diagnostic_kwargs : dict or None, optional
+        Keyword arguments passed to :func:`compute_wavelength_residual_diagnostics`
+        after each successful fit.
+    score_successful_fits : bool, optional
+        If True, compute residual and predictive diagnostics immediately after
+        each successful candidate fit.
     copy_lightcurve : bool, optional
         If True, each candidate is fit on a deep copy of the input light curve.
         This is the safe default because it avoids reusing fitted model state.
@@ -1032,11 +1367,14 @@ def compare_wavelength_candidate_models(
     Returns
     -------
     dict
-        JSON-safe comparison report.  This PR deliberately does not choose a
-        best model because residual and predictive scoring are added later.
+        JSON-safe comparison report with fit outcomes and, by default,
+        training-point residual/predictive diagnostics for successful fits.
     """
     base_fit_kwargs = dict(base_fit_kwargs or {})
     per_candidate_fit_kwargs = dict(per_candidate_fit_kwargs or {})
+    residual_diagnostic_kwargs = dict(residual_diagnostic_kwargs or {})
+    if not isinstance(score_successful_fits, bool):
+        raise ValueError("score_successful_fits must be a bool.")
 
     if candidates is None:
         if diagnostic_report is None:
@@ -1087,6 +1425,30 @@ def compare_wavelength_candidate_models(
         else:
             elapsed = time.perf_counter() - start
             n_successful += 1
+            residual_diagnostics = None
+            if score_successful_fits:
+                residual_kwargs = dict(residual_diagnostic_kwargs)
+                if diagnostic_report is not None:
+                    report_frequency = diagnostic_report.get("fixed_frequency")
+                    if (
+                        "frequency" not in residual_kwargs
+                        and "period" not in residual_kwargs
+                        and report_frequency is not None
+                    ):
+                        residual_kwargs["frequency"] = report_frequency
+                try:
+                    residual_diagnostics = compute_wavelength_residual_diagnostics(
+                        target,
+                        **residual_kwargs,
+                    )
+                except Exception as exc:  # diagnostics must not turn fit success into failure
+                    residual_diagnostics = {
+                        "available": False,
+                        "status": "residual_diagnostics_failed",
+                        "exception_type": exc.__class__.__name__,
+                        "exception_message": str(exc),
+                        "predictive_score": {"available": False},
+                    }
             results.append(
                 _comparison_result_entry(
                     candidate=candidate,
@@ -1095,9 +1457,11 @@ def compare_wavelength_candidate_models(
                     elapsed_seconds=elapsed,
                     target_lightcurve=target,
                     fit_result=fit_result,
+                    residual_diagnostics=residual_diagnostics,
                 )
             )
 
+    scoring_summary = _score_comparison_results(results)
     report = {
         "kind": "wavelength_model_comparison",
         "stage": "model_comparison",
@@ -1111,14 +1475,16 @@ def compare_wavelength_candidate_models(
                 n_fit_candidates > 0 and n_successful == n_fit_candidates
             ),
             "any_fit_candidate_succeeded": bool(n_successful > 0),
-            "best_candidate": None,
-            "selection_status": "not_scored",
+            "n_scored_successful": scoring_summary["n_scored_successful"],
+            "best_candidate": scoring_summary["best_candidate"],
+            "selection_status": scoring_summary["selection_status"],
+            "selection_basis": scoring_summary["selection_basis"],
         },
         "results": results,
         "warnings": [
-            "This comparison records fit success/failure only. Residual and "
-            "predictive scoring are not part of this PR, so no best model is "
-            "selected."
+            "Training-point residual and predictive scores are diagnostic, not "
+            "a final scientific model-selection decision. Prefer simpler, more "
+            "interpretable candidates when scores are indistinguishable."
         ],
     }
     if diagnostic_report is not None:
