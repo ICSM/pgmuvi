@@ -11,6 +11,7 @@ from pgmuvi.wavelength_diagnostics import (
     compare_wavelength_candidate_models,
     compute_wavelength_residual_diagnostics,
     diagnose_wavelength_dependence_prefit,
+    interpret_wavelength_model_comparison,
 )
 
 
@@ -627,6 +628,85 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
             {"period": 30.0},
         )
         self.assertFalse(mocked.call_args.kwargs["score_successful_fits"])
+
+
+    def test_interpret_wavelength_model_comparison_flags_tied_scores(self):
+        fake_lc = _FakeLightcurveForComparison(
+            prediction_offsets={"2D": 0.0, "2DAchromatic": 0.01}
+        )
+
+        report = compare_wavelength_candidate_models(
+            fake_lc,
+            candidates=["2D", "2DAchromatic"],
+            base_fit_kwargs={"training_iter": 0},
+            residual_diagnostic_kwargs={"period": 10.0},
+            interpretation_kwargs={"score_tie_tolerance": 1.0},
+            copy_lightcurve=False,
+        )
+
+        interpretation = report["interpretation"]
+        self.assertTrue(interpretation["available"])
+        self.assertEqual(interpretation["decision"], "scores_indistinguishable")
+        self.assertEqual(len(interpretation["candidate_rankings"]), 2)
+        self.assertEqual(interpretation["candidate_rankings"][0]["model"], "2D")
+
+    def test_interpret_wavelength_model_comparison_flags_poor_residual_quality(self):
+        fake_lc = _FakeLightcurveForComparison(prediction_offsets={"2D": 0.5})
+
+        report = compare_wavelength_candidate_models(
+            fake_lc,
+            candidates=["2D"],
+            base_fit_kwargs={"training_iter": 0},
+            residual_diagnostic_kwargs={"period": 10.0},
+            interpretation_kwargs={
+                "standardized_residual_rms_warning": 1.0,
+                "poor_coverage_2sigma_min": 0.99,
+                "band_standardized_residual_rms_warning": 1.0,
+            },
+            copy_lightcurve=False,
+        )
+
+        flags = report["interpretation"]["quality_flags"]
+        flag_names = {flag["flag"] for flag in flags}
+        self.assertIn("large_standardized_residual_rms", flag_names)
+        self.assertIn("poor_two_sigma_coverage", flag_names)
+        self.assertIn("band_specific_residual_mismatch", flag_names)
+
+    def test_interpret_wavelength_model_comparison_handles_unscored_success(self):
+        fake_lc = _FakeLightcurveForComparison()
+        report = compare_wavelength_candidate_models(
+            fake_lc,
+            candidates=["2D"],
+            base_fit_kwargs={"training_iter": 0},
+            score_successful_fits=False,
+            copy_lightcurve=False,
+        )
+
+        interpretation = interpret_wavelength_model_comparison(report)
+        self.assertTrue(interpretation["available"])
+        self.assertEqual(interpretation["decision"], "scores_unavailable")
+
+    def test_lightcurve_compare_wavelength_models_passes_interpretation_kwargs(self):
+        lc = _make_multiband_lightcurve()
+        expected = {"kind": "wavelength_model_comparison"}
+
+        with mock.patch(
+            "pgmuvi.wavelength_diagnostics.compare_wavelength_candidate_models",
+            return_value=expected,
+        ) as mocked:
+            report = lc.compare_wavelength_models(
+                candidates=["2D"],
+                interpretation_kwargs={"score_tie_tolerance": 0.2},
+                interpret_results=False,
+            )
+
+        self.assertIs(report, expected)
+        mocked.assert_called_once()
+        self.assertEqual(
+            mocked.call_args.kwargs["interpretation_kwargs"],
+            {"score_tie_tolerance": 0.2},
+        )
+        self.assertFalse(mocked.call_args.kwargs["interpret_results"])
 
 
 

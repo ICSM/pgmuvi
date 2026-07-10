@@ -9327,6 +9327,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         per_candidate_fit_kwargs: dict | None = None,
         residual_diagnostic_kwargs: dict | None = None,
         score_successful_fits: bool = True,
+        interpretation_kwargs: dict | None = None,
+        interpret_results: bool = True,
         copy_lightcurve: bool = True,
         stop_on_error: bool = False,
     ) -> dict:
@@ -9357,6 +9359,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         score_successful_fits : bool, optional
             If True, successful candidates are scored using training-point
             residual and predictive diagnostics.
+        interpretation_kwargs : dict or None, optional
+            Keyword arguments for the conservative interpretation layer.
+        interpret_results : bool, optional
+            If True, attach candidate rankings and residual-quality warnings to
+            the comparison report.
         copy_lightcurve : bool, optional
             If True, each candidate is fit on a deep copy of this light curve so
             that fitted state is not reused between candidates.
@@ -9381,6 +9388,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             per_candidate_fit_kwargs=per_candidate_fit_kwargs,
             residual_diagnostic_kwargs=residual_diagnostic_kwargs,
             score_successful_fits=score_successful_fits,
+            interpretation_kwargs=interpretation_kwargs,
+            interpret_results=interpret_results,
             copy_lightcurve=copy_lightcurve,
             stop_on_error=stop_on_error,
         )

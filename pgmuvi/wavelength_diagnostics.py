@@ -1316,6 +1316,256 @@ def _score_comparison_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         "selection_basis": "lowest training-point mean negative log predictive density",
     }
 
+def _scored_candidate_rows(results: list[dict[str, Any]]) -> list[tuple[float, dict[str, Any]]]:
+    """Return scored successful candidates sorted by predictive score."""
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for result in results:
+        if result.get("status") != "success":
+            continue
+        score = result.get("predictive_score", {})
+        value = _finite_float(score.get("mean_negative_log_predictive_density"))
+        if value is not None:
+            scored.append((value, result))
+    scored.sort(key=lambda item: item[0])
+    return scored
+
+
+def _candidate_identifier(result: dict[str, Any]) -> dict[str, Any]:
+    """Return compact candidate-identification fields for reports."""
+    return {
+        "name": result.get("name"),
+        "model": result.get("model"),
+        "fit_strategy": result.get("fit_strategy"),
+    }
+
+
+def _candidate_residual_flags(
+    result: dict[str, Any],
+    *,
+    standardized_residual_rms_warning: float,
+    poor_coverage_2sigma_min: float,
+    band_standardized_residual_rms_warning: float,
+) -> list[dict[str, Any]]:
+    """Build residual-quality flags for one successful comparison result."""
+    diagnostics = result.get("residual_diagnostics")
+    if not isinstance(diagnostics, dict) or not diagnostics.get("available"):
+        return []
+
+    flags: list[dict[str, Any]] = []
+    overall = diagnostics.get("overall", {})
+    z_rms = _finite_float(overall.get("standardized_residual_rms"))
+    if z_rms is not None and z_rms >= standardized_residual_rms_warning:
+        flags.append(
+            {
+                "flag": "large_standardized_residual_rms",
+                "severity": "warning",
+                "value": z_rms,
+                "threshold": standardized_residual_rms_warning,
+                "message": (
+                    "Training-point standardized residual RMS is large; this "
+                    "candidate may be underfitting, overconfident, or using "
+                    "inadequate noise assumptions."
+                ),
+            }
+        )
+
+    coverage = _finite_float(overall.get("coverage_2sigma"))
+    if coverage is not None and coverage < poor_coverage_2sigma_min:
+        flags.append(
+            {
+                "flag": "poor_two_sigma_coverage",
+                "severity": "warning",
+                "value": coverage,
+                "threshold": poor_coverage_2sigma_min,
+                "message": (
+                    "Training points have poor two-sigma predictive coverage; "
+                    "the candidate may be overconfident or missing structure."
+                ),
+            }
+        )
+
+    bad_band_rows: list[dict[str, Any]] = []
+    for row in diagnostics.get("by_band", []):
+        if not isinstance(row, dict) or row.get("status") != "ok":
+            continue
+        band_z_rms = _finite_float(row.get("standardized_residual_rms"))
+        if (
+            band_z_rms is not None
+            and band_z_rms >= band_standardized_residual_rms_warning
+        ):
+            bad_band_rows.append(
+                {
+                    "wavelength": row.get("wavelength"),
+                    "band_labels": row.get("band_labels", []),
+                    "standardized_residual_rms": band_z_rms,
+                }
+            )
+    if bad_band_rows:
+        flags.append(
+            {
+                "flag": "band_specific_residual_mismatch",
+                "severity": "warning",
+                "threshold": band_standardized_residual_rms_warning,
+                "bands": bad_band_rows,
+                "message": (
+                    "One or more wavelength bands have unusually large "
+                    "standardized residual scatter; inspect rejected bands, "
+                    "band uncertainties, and wavelength-model adequacy."
+                ),
+            }
+        )
+
+    return _clean_scalar_dict({"flags": flags})["flags"]
+
+
+def interpret_wavelength_model_comparison(
+    comparison_report: dict[str, Any],
+    *,
+    score_tie_tolerance: float = 0.05,
+    standardized_residual_rms_warning: float = 2.0,
+    poor_coverage_2sigma_min: float = 0.80,
+    band_standardized_residual_rms_warning: float = 2.5,
+) -> dict[str, Any]:
+    """Interpret a wavelength model-comparison report conservatively.
+
+    The interpretation layer does not declare a final science model.  It turns
+    PR45 predictive/residual scores into a compact ranking and explicit quality
+    warnings.  The output is intended to help users decide whether the current
+    candidate set is informative, whether scores are effectively tied, and
+    whether residual structure argues against trusting the provisional best
+    candidate.
+    """
+    if comparison_report.get("kind") != "wavelength_model_comparison":
+        raise ValueError(
+            "interpret_wavelength_model_comparison() expects a report produced "
+            "by compare_wavelength_candidate_models()."
+        )
+
+    for name, value in [
+        ("score_tie_tolerance", score_tie_tolerance),
+        ("standardized_residual_rms_warning", standardized_residual_rms_warning),
+        ("poor_coverage_2sigma_min", poor_coverage_2sigma_min),
+        (
+            "band_standardized_residual_rms_warning",
+            band_standardized_residual_rms_warning,
+        ),
+    ]:
+        value = float(value)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be a non-negative finite value.")
+
+    summary = comparison_report.get("summary", {})
+    results = comparison_report.get("results", [])
+    warnings = list(comparison_report.get("warnings", []))
+    scored = _scored_candidate_rows(results)
+
+    interpretation: dict[str, Any] = {
+        "available": False,
+        "status": "not_interpretable",
+        "decision": "no_successful_fit",
+        "provisional_best_candidate": None,
+        "candidate_rankings": [],
+        "quality_flags": [],
+        "warnings": warnings,
+        "notes": [
+            "This interpretation is diagnostic. It is not a substitute for "
+            "science review of light curves, residuals, sampling, and candidate "
+            "model assumptions."
+        ],
+    }
+
+    if int(summary.get("n_successful", 0) or 0) == 0:
+        warnings.append(
+            "No candidate model fit succeeded, so wavelength-model comparison "
+            "cannot be interpreted. Inspect failure categories before changing "
+            "the candidate set."
+        )
+        return _clean_scalar_dict(interpretation)
+
+    if not scored:
+        interpretation.update(
+            {
+                "available": True,
+                "status": "unscored_successful_fits",
+                "decision": "scores_unavailable",
+            }
+        )
+        warnings.append(
+            "At least one candidate fit succeeded, but predictive scores were "
+            "not available. Use fit-status and residual diagnostics only."
+        )
+        return _clean_scalar_dict(interpretation)
+
+    best_score, best_result = scored[0]
+    denominator = max(1.0, abs(best_score))
+    rankings: list[dict[str, Any]] = []
+    for rank, (score, result) in enumerate(scored, start=1):
+        delta = float(score - best_score)
+        rankings.append(
+            {
+                "rank": int(rank),
+                **_candidate_identifier(result),
+                "mean_negative_log_predictive_density": float(score),
+                "delta_from_best": delta,
+                "relative_delta_from_best": float(delta / denominator),
+            }
+        )
+
+    interpretation.update(
+        {
+            "available": True,
+            "status": "ok",
+            "decision": "provisional_predictive_preference",
+            "provisional_best_candidate": rankings[0],
+            "candidate_rankings": rankings,
+            "selection_basis": "lowest training-point mean negative log predictive density",
+        }
+    )
+
+    if len(scored) == 1:
+        interpretation["decision"] = "single_scored_candidate"
+        warnings.append(
+            "Only one successful candidate was scored. Treat it as a fitted "
+            "baseline, not as evidence that it is preferred over alternatives."
+        )
+    else:
+        second_score = float(scored[1][0])
+        second_delta = second_score - best_score
+        relative_delta = second_delta / denominator
+        interpretation["second_best_delta"] = float(second_delta)
+        interpretation["second_best_relative_delta"] = float(relative_delta)
+        if relative_delta <= score_tie_tolerance:
+            interpretation["decision"] = "scores_indistinguishable"
+            warnings.append(
+                "The two best predictive scores are within the configured tie "
+                "tolerance. Prefer the simpler or more interpretable model unless "
+                "residual plots show a meaningful difference."
+            )
+
+    quality_flags: list[dict[str, Any]] = []
+    for _, result in scored:
+        candidate_flags = _candidate_residual_flags(
+            result,
+            standardized_residual_rms_warning=standardized_residual_rms_warning,
+            poor_coverage_2sigma_min=poor_coverage_2sigma_min,
+            band_standardized_residual_rms_warning=band_standardized_residual_rms_warning,
+        )
+        for flag in candidate_flags:
+            flag = dict(flag)
+            flag["candidate"] = _candidate_identifier(result)
+            quality_flags.append(flag)
+
+    if quality_flags:
+        interpretation["quality_flags"] = quality_flags
+        warnings.append(
+            "One or more successful candidates have residual or predictive-"
+            "coverage warnings. Do not select a wavelength model from scalar "
+            "scores alone."
+        )
+
+    return _clean_scalar_dict(interpretation)
+
+
 def compare_wavelength_candidate_models(
     lightcurve,
     *,
@@ -1325,6 +1575,8 @@ def compare_wavelength_candidate_models(
     per_candidate_fit_kwargs: dict[str, Any] | None = None,
     residual_diagnostic_kwargs: dict[str, Any] | None = None,
     score_successful_fits: bool = True,
+    interpretation_kwargs: dict[str, Any] | None = None,
+    interpret_results: bool = True,
     copy_lightcurve: bool = True,
     stop_on_error: bool = False,
 ) -> dict[str, Any]:
@@ -1358,6 +1610,12 @@ def compare_wavelength_candidate_models(
     score_successful_fits : bool, optional
         If True, compute residual and predictive diagnostics immediately after
         each successful candidate fit.
+    interpretation_kwargs : dict or None, optional
+        Keyword arguments passed to :func:`interpret_wavelength_model_comparison`
+        when ``interpret_results`` is True.
+    interpret_results : bool, optional
+        If True, attach a conservative interpretation block with candidate
+        rankings and residual-quality warnings.
     copy_lightcurve : bool, optional
         If True, each candidate is fit on a deep copy of the input light curve.
         This is the safe default because it avoids reusing fitted model state.
@@ -1373,8 +1631,11 @@ def compare_wavelength_candidate_models(
     base_fit_kwargs = dict(base_fit_kwargs or {})
     per_candidate_fit_kwargs = dict(per_candidate_fit_kwargs or {})
     residual_diagnostic_kwargs = dict(residual_diagnostic_kwargs or {})
+    interpretation_kwargs = dict(interpretation_kwargs or {})
     if not isinstance(score_successful_fits, bool):
         raise ValueError("score_successful_fits must be a bool.")
+    if not isinstance(interpret_results, bool):
+        raise ValueError("interpret_results must be a bool.")
 
     if candidates is None:
         if diagnostic_report is None:
@@ -1489,6 +1750,11 @@ def compare_wavelength_candidate_models(
     }
     if diagnostic_report is not None:
         report["diagnostic_classification"] = diagnostic_report.get("classification")
+    if interpret_results:
+        report["interpretation"] = interpret_wavelength_model_comparison(
+            report,
+            **interpretation_kwargs,
+        )
     return _clean_scalar_dict(report)
 
 
