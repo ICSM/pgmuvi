@@ -890,6 +890,143 @@ class ZScore(Transformer):
         return (data * self.sd) + (self.mean * shift)
 
 
+class Shift(Transformer):
+    """Shift selected coordinate dimensions by a fitted offset.
+
+    ``Shift`` changes coordinate origins but does not rescale durations.  The
+    ``shift=False`` convention therefore returns the input unchanged; this is
+    important for period/frequency parameters, which represent coordinate
+    differences rather than absolute coordinate values.
+    """
+
+    def __init__(self, offset=None, apply_to=None, method="midpoint"):
+        super().__init__()
+        self.apply_to = apply_to
+        self.method = method
+        if offset is not None:
+            self.register_buffer("offset", torch.as_tensor(offset, dtype=DEFAULT_DTYPE))
+
+    def _set_offset(self, offset):
+        if hasattr(self, "offset"):
+            self.offset = offset
+        else:
+            self.register_buffer("offset", offset)
+
+    def _normalise_apply_to(self, ndim):
+        if self.apply_to is None:
+            return None
+        if isinstance(self.apply_to, slice):
+            return self.apply_to
+        if isinstance(self.apply_to, (list, tuple)):
+            return list(self.apply_to)
+        return [int(self.apply_to)] if ndim > 1 else None
+
+    def _fit_offset(self, data, dim=0):
+        apply_to = self._normalise_apply_to(data.dim())
+        offset = torch.zeros_like(data.mean(dim=dim, keepdim=True))
+
+        if isinstance(self.method, str):
+            if self.method == "midpoint":
+                fitted = (
+                    torch.min(data, dim=dim, keepdim=True)[0]
+                    + torch.max(data, dim=dim, keepdim=True)[0]
+                ) / 2
+            elif self.method == "mean":
+                fitted = torch.mean(data, dim=dim, keepdim=True)
+            elif self.method == "median":
+                fitted = torch.median(data, dim=dim, keepdim=True)[0]
+            else:
+                raise ValueError(
+                    "Shift method must be 'midpoint', 'mean', 'median', "
+                    "or a numeric offset."
+                )
+        else:
+            fitted = torch.as_tensor(self.method, dtype=data.dtype, device=data.device)
+            if fitted.dim() == 0:
+                fitted = torch.full_like(offset, fitted)
+            else:
+                fitted = fitted.to(dtype=data.dtype, device=data.device)
+                while fitted.dim() < offset.dim():
+                    fitted = fitted.unsqueeze(0)
+
+        if apply_to is None:
+            offset = fitted.to(dtype=data.dtype, device=data.device)
+        else:
+            offset[..., apply_to] = fitted[..., apply_to]
+        self._set_offset(offset)
+
+    def _first_apply_to_index(self):
+        """Return the first configured coordinate index, if one is defined."""
+        apply_to = self.apply_to
+        if apply_to is None:
+            return None
+        if isinstance(apply_to, slice):
+            start = 0 if apply_to.start is None else apply_to.start
+            return int(start)
+        if isinstance(apply_to, (list, tuple)):
+            if len(apply_to) != 1:
+                raise ValueError(
+                    "Cannot apply a multi-coordinate Shift to 1-D input data."
+                )
+            return int(apply_to[0])
+        return int(apply_to)
+
+    def _offset_for_data(self, data):
+        """Return a fitted offset whose shape is compatible with ``data``.
+
+        A 2-D parent light curve can share its fitted TimeCenter with 1-D
+        per-band diagnostic light curves.  In that case the stored offset has
+        one entry per parent coordinate, while the child data only contain the
+        time coordinate.  Reuse the configured time-column offset instead of
+        trying to broadcast the full 2-D offset onto a 1-D tensor.
+        """
+        offset = self.offset.to(dtype=data.dtype, device=data.device)
+        if data.dim() == 1 and offset.numel() > 1:
+            index = self._first_apply_to_index()
+            if index is None:
+                raise ValueError(
+                    "Cannot apply a multi-coordinate Shift to 1-D input data "
+                    "without a configured coordinate index."
+                )
+            return offset.reshape(-1)[index]
+        return offset
+
+    def transform(self, data, dim=0, apply_to=None, recalc=False, shift=True, **kwargs):
+        """Subtract the fitted offset from absolute coordinates.
+
+        Parameters are intentionally compatible with the existing transformer
+        interface.  ``apply_to`` is accepted for call-site compatibility but
+        this transform uses the dimensions configured on the instance.
+        """
+        del apply_to  # configured on the instance; accepted for compatibility
+        if recalc or not hasattr(self, "offset"):
+            self._fit_offset(data, dim=dim)
+            shift = True
+        if not shift:
+            return data
+        return data - self._offset_for_data(data)
+
+    def inverse(self, data, shift=True, **kwargs):
+        """Add the fitted offset back to absolute coordinates."""
+        if not shift:
+            return data
+        if not hasattr(self, "offset"):
+            raise RuntimeError("Shift.inverse() called before the offset was fitted.")
+        return data + self._offset_for_data(data)
+
+
+class TimeCenter(Shift):
+    """Center the time coordinate while preserving all other coordinates.
+
+    For 1-D light curves the full coordinate is time.  For 2-D light curves
+    PGMUVI convention stores time in column 0 and wavelength/band coordinate
+    in column 1, so only column 0 is shifted.
+    """
+
+    def __init__(self, offset=None, method="midpoint"):
+        super().__init__(offset=offset, apply_to=0, method=method)
+
+
 class RobustZScore(Transformer):
     def transform(self, data, dim=0, apply_to=None, recalc=False, shift=True, **kwargs):
         """Perform a robust z-score transformation
@@ -2622,9 +2759,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     yerr : Tensor of floats, optional
         The uncertainties on the dependent variable data, by default None
     xtransform : str, optional
-        The transform to apply to the x data, by default None
+        The transform to apply to the x data, by default None.  When no
+        explicit x-transform is supplied, time centering is applied by
+        default unless ``center_time=False`` is passed.
     ytransform : str, optional
         The transform to apply to the y data, by default None
+    center_time : bool or {"auto"}, optional
+        Whether to subtract a fitted reference time from the time coordinate
+        before GP training.  ``"auto"`` applies time centering only when no
+        explicit ``xtransform`` is supplied.
+    time_center_method : {"midpoint", "mean", "median"} or float, optional
+        Method used to define the reference time.  The default,
+        ``"midpoint"``, uses the midpoint of the raw time baseline.
     time_units : str, astropy.units.UnitBase, or None, optional
         Units of the time axis.  Time values are converted to days
         internally.  If *None* (default) the data are assumed to already
@@ -2661,6 +2807,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ytransform=None,
         name=None,
         time_units=None,
+        center_time="auto",
+        time_center_method="midpoint",
         max_samples: int | None = 1000,
         max_samples_per_band: int | None = None,
         subsample_seed: int | None = None,
@@ -2683,9 +2831,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         yerr : torch.Tensor, optional
             The uncertainties on the dependent variable data, by default None
         xtransform : str or Transformer, optional
-            The transform to apply to the x data, by default None
+            The transform to apply to the x data, by default None.  When no
+            explicit x-transform is supplied, time centering is applied by
+            default unless ``center_time=False`` is passed.
         ytransform : str or Transformer, optional
             The transform to apply to the y data, by default None
+        center_time : bool or {"auto"}, optional
+            Whether to subtract a fitted reference time from the time
+            coordinate before GP training.  ``"auto"`` applies time centering
+            only when no explicit ``xtransform`` is supplied.
+        time_center_method : {"midpoint", "mean", "median"} or float, optional
+            Method used to define the reference time.  The default,
+            ``"midpoint"``, uses the midpoint of the raw time baseline.
         name : str, optional
             A name for this light curve, by default 'Lightcurve'
         time_units : str, astropy.units.UnitBase, or None, optional
@@ -2754,16 +2911,47 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "minmax": MinMax,
             "zscore": ZScore,
             "robust_score": RobustZScore,
+            "robust_zscore": RobustZScore,
+            "shift": Shift,
+            "time_center": TimeCenter,
+            "center_time": TimeCenter,
         }
+
+        if center_time not in ("auto", True, False):
+            raise ValueError(
+                "center_time must be 'auto', True, or False; "
+                f"got {center_time!r}."
+            )
+        if center_time is True and xtransform is not None:
+            raise ValueError(
+                "center_time=True cannot currently be combined with an explicit "
+                "xtransform. Pass xtransform='time_center' for time centering, "
+                "or use center_time='auto' to leave the explicit transform unchanged."
+            )
+        if center_time in ("auto", True) and xtransform is None:
+            xtransform = TimeCenter(method=time_center_method)
 
         if xtransform is None or isinstance(xtransform, Transformer):
             self.xtransform = xtransform
         else:
-            self.xtransform = transform_dic[xtransform]()
+            if xtransform not in transform_dic:
+                raise ValueError(
+                    f"Unknown xtransform {xtransform!r}. Supported transforms are "
+                    f"{sorted(transform_dic)}."
+                )
+            if xtransform in {"time_center", "center_time"}:
+                self.xtransform = transform_dic[xtransform](method=time_center_method)
+            else:
+                self.xtransform = transform_dic[xtransform]()
 
         if ytransform is None or isinstance(ytransform, Transformer):
             self.ytransform = ytransform
         else:
+            if ytransform not in transform_dic:
+                raise ValueError(
+                    f"Unknown ytransform {ytransform!r}. Supported transforms are "
+                    f"{sorted(transform_dic)}."
+                )
             self.ytransform = transform_dic[ytransform]()
 
         # Convert time units and coerce to tensors before non-finite filtering.
@@ -6124,17 +6312,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         raise exc
 
+    def _coerce_x_prediction_values(self, values):
+        """Return prediction coordinates on the training dtype/device."""
+        if not isinstance(values, torch.Tensor):
+            values = torch.as_tensor(values, dtype=self._xdata_transformed.dtype)
+        return values.to(
+            dtype=self._xdata_transformed.dtype,
+            device=self._xdata_transformed.device,
+        )
+
     def transform_x(self, values):
+        values = self._coerce_x_prediction_values(values)
         if self.xtransform is None:
             return values
         elif isinstance(self.xtransform, Transformer):
             return self.xtransform.transform(values)
+        raise TypeError("xtransform must be None or a Transformer instance.")
 
     def transform_y(self, values):
         if self.ytransform is None:
             return values
-        elif isinstance(self.xtransform, Transformer):
-            return self.xtransform.transform(values)
+        elif isinstance(self.ytransform, Transformer):
+            return self.ytransform.transform(values)
+        raise TypeError("ytransform must be None or a Transformer instance.")
 
     def _floating_data_dtype(self):
         """Return the floating dtype used by the stored training data."""
@@ -8750,7 +8950,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             xdata[keep_mask].clone(),
             self._ydata_raw[keep_mask].clone(),
             self._yerr_raw[keep_mask].clone() if hasattr(self, "_yerr_raw") else None,
-            band=new_band
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+            band=new_band,
         )
 
     def _get_best_sampled_band_lc(self) -> "Lightcurve":
@@ -8953,7 +9156,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         else:
             new_yerr = None
 
-        return Lightcurve(new_x, new_y, yerr=new_yerr)
+        new_band = self.band[keep_mask] if self.band is not None else None
+
+        return Lightcurve(
+            new_x,
+            new_y,
+            yerr=new_yerr,
+            xtransform=self.xtransform,
+            ytransform=self.ytransform,
+            name=self.name,
+            band=new_band,
+        )
 
     def auto_select_model(self, verbose=True):
         """Automatically select the best model type based on data characteristics.
@@ -21134,14 +21347,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # creating array of 10000 test points across the range of the data
         x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000, dtype=x_raw.dtype, device=x_raw.device).unsqueeze(-1)
 
-        # transforming the x_fine_raw data to the space that the GP was
-        # trained in (so it can predict)
-        if self.xtransform is None:
-            self.x_fine_transformed = x_fine_raw
-        elif isinstance(self.xtransform, Transformer):
-            self.x_fine_transformed = self.xtransform.transform(
-                x_fine_raw.to(self.xtransform.min.device)
-            )
+        # Transform prediction coordinates to the space used for GP training.
+        self.x_fine_transformed = self.transform_x(x_fine_raw)
 
         self.expanded_test_x = self.x_fine_transformed.unsqueeze(0).repeat(
             self.num_samples, 1, 1
@@ -21310,14 +21517,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         provenance_location="lower left",
         **kwargs,
     ):
-        # transforming the x_fine_raw data to the space that the GP was
-        # trained in (so it can predict)
-        if self.xtransform is None:
-            x_fine_transformed = x_fine_raw
-        elif isinstance(self.xtransform, Transformer):
-            x_fine_transformed = self.xtransform.transform(
-                x_fine_raw.to(self.xtransform.min.device)
-            )
+        # Transform prediction coordinates to the space used for GP training.
+        x_fine_transformed = self.transform_x(x_fine_raw)
 
         # Make predictions
         observed_pred = self.likelihood(self.model(x_fine_transformed))
@@ -21392,21 +21593,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         provenance_location="lower left",
         **kwargs,
     ):
-        if self.xtransform is None:
-            x_fine_transformed = x_fine_raw
-        elif isinstance(self.xtransform, Transformer):
-            x_fine_transformed = self.xtransform.transform(
-                x_fine_raw.to(self.xtransform.min.device),
-                apply_to=(0, 0),
-            )
         unique_values_axis2 = torch.unique(self.xdata[:, 1])
         figs = []
         for val in unique_values_axis2:
             fig = plt.figure()
             ax = fig.add_subplot(111)
 
-            vals = torch.ones_like(x_fine_transformed) * val
-            x_fine_tmp = torch.cat((x_fine_transformed[:, None], vals[:, None]), dim=1)
+            vals = torch.ones_like(x_fine_raw) * val
+            x_fine_tmp_raw = torch.stack((x_fine_raw, vals), dim=1)
+            x_fine_tmp = self.transform_x(x_fine_tmp_raw)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
             ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(),
@@ -21570,17 +21765,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     # y_raw = self.ydata
 
                     # creating array of 10000 test points across the range of the data
-                    x_fine_raw = torch.linspace(x_raw.min(), x_raw.max(), 10000, dtype=x_raw.dtype, device=x_raw.device)
-                    if self.xtransform is None:
-                        x_fine_transformed = x_fine_raw
-                    elif isinstance(self.xtransform, Transformer):
-                        x_fine_transformed = self.xtransform.transform(
-                            x_fine_raw.to(self.xtransform.min.device)
-                        )
+                    x_fine_raw = torch.linspace(
+                        x_raw.min(),
+                        x_raw.max(),
+                        10000,
+                        dtype=x_raw.dtype,
+                        device=x_raw.device,
+                    )
+                    if self.ndim == 1:
+                        x_fine_model_raw = x_fine_raw
+                    else:
+                        raw_blocks = []
+                        for val in torch.unique(self.xdata[:, 1]):
+                            vals = torch.ones_like(x_fine_raw) * val
+                            raw_blocks.append(torch.stack((x_fine_raw, vals), dim=1))
+                        x_fine_model_raw = torch.cat(raw_blocks, dim=0)
+                    x_fine_transformed = self.transform_x(x_fine_model_raw)
 
                     # Make predictions
                     observed_pred = self.likelihood(self.model(x_fine_transformed))
-                    t["x_fine"] = [np.asarray(x_fine_raw.cpu())]
+                    t["x_fine"] = [np.asarray(x_fine_model_raw.cpu())]
                     t["y_pred_mean"] = [np.asarray(observed_pred.mean.cpu())]
                     t["y_pred_lower"] = [
                         np.asarray(observed_pred.confidence_region()[0].cpu())

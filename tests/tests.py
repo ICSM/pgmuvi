@@ -5,8 +5,17 @@ import unittest
 import warnings
 
 import gpytorch
-from pgmuvi.lightcurve import InputHelpers, Lightcurve, Transformer, MinMax, ZScore, RobustZScore
+from pgmuvi.lightcurve import (
+    InputHelpers,
+    Lightcurve,
+    Transformer,
+    MinMax,
+    ZScore,
+    RobustZScore,
+    TimeCenter,
+)
 from pgmuvi.trainers import train
+from pgmuvi.dtypes import DEFAULT_DTYPE
 from pgmuvi.gps import SpectralMixtureGPModel
 from pgmuvi.synthetic import make_chromatic_sinusoid_2d, make_simple_sinusoid_1d
 import numpy as np
@@ -26,6 +35,47 @@ class TestTransformer(unittest.TestCase):
         self.assertRaises(NotImplementedError,
                           transformer.inverse,
                           test_zeros_one)
+
+
+class TestTimeCenter(unittest.TestCase):
+    def test_1d_midpoint_centering(self):
+        data = torch.as_tensor([1000.0, 1010.0, 1020.0], dtype=torch.float32)
+        transformer = TimeCenter()
+        transformed = transformer.transform(data)
+        expected = torch.as_tensor([-10.0, 0.0, 10.0], dtype=torch.float32)
+        self.assertTrue(torch.equal(transformed, expected))
+
+    def test_2d_centers_only_time_column(self):
+        data = torch.as_tensor(
+            [[1000.0, 2.0], [1010.0, 4.0], [1020.0, 6.0]],
+            dtype=torch.float32,
+        )
+        transformer = TimeCenter()
+        transformed = transformer.transform(data)
+        expected = torch.as_tensor(
+            [[-10.0, 2.0], [0.0, 4.0], [10.0, 6.0]],
+            dtype=torch.float32,
+        )
+        self.assertTrue(torch.equal(transformed, expected))
+
+    def test_inverse_restores_absolute_coordinates(self):
+        data = torch.as_tensor([1000.0, 1010.0, 1020.0], dtype=torch.float32)
+        transformer = TimeCenter()
+        transformed = transformer.transform(data)
+        restored = transformer.inverse(transformed)
+        self.assertTrue(torch.equal(restored, data))
+
+    def test_shift_false_leaves_durations_unchanged(self):
+        data = torch.as_tensor([1000.0, 1010.0, 1020.0], dtype=torch.float32)
+        transformer = TimeCenter()
+        transformer.transform(data)
+        durations = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        self.assertTrue(
+            torch.equal(transformer.transform(durations, shift=False), durations)
+        )
+        self.assertTrue(
+            torch.equal(transformer.inverse(durations, shift=False), durations)
+        )
 
 
 class TestMinMax(unittest.TestCase):
@@ -88,8 +138,16 @@ class TestLightCurve(unittest.TestCase):
     def test_xdata_getter(self):
         self.assertTrue(torch.equal(self.lightcurve.xdata, self.test_xdata))
 
-    def test_default_no_transform(self):
+    def test_default_time_centering(self):
         lc = Lightcurve(self.test_xdata, self.test_ydata)
+        self.assertIsInstance(lc.xtransform, TimeCenter)
+        self.assertIsNone(lc.ytransform)
+        expected = self.test_xdata - 2.5
+        self.assertTrue(torch.equal(lc._xdata_raw, self.test_xdata))
+        self.assertTrue(torch.equal(lc._xdata_transformed, expected))
+
+    def test_center_time_false_preserves_no_transform_behavior(self):
+        lc = Lightcurve(self.test_xdata, self.test_ydata, center_time=False)
         self.assertIsNone(lc.xtransform)
         self.assertIsNone(lc.ytransform)
         self.assertTrue(torch.equal(lc._xdata_transformed, self.test_xdata))
@@ -735,9 +793,9 @@ class TestFromCSV(unittest.TestCase):
             "x,y,yerr\n1.0,10.0,0.1\n2.0,20.0,0.2\n3.0,30.0,0.3\n",
         )
         lc = Lightcurve.from_csv(path)
-        expected_x = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-        expected_y = torch.as_tensor([10.0, 20.0, 30.0], dtype=torch.float32)
-        expected_yerr = torch.as_tensor([0.1, 0.2, 0.3], dtype=torch.float32)
+        expected_x = torch.as_tensor([1.0, 2.0, 3.0], dtype=DEFAULT_DTYPE)
+        expected_y = torch.as_tensor([10.0, 20.0, 30.0], dtype=DEFAULT_DTYPE)
+        expected_yerr = torch.as_tensor([0.1, 0.2, 0.3], dtype=DEFAULT_DTYPE)
         self.assertTrue(torch.allclose(lc._xdata_raw, expected_x))
         self.assertTrue(torch.allclose(lc._ydata_raw, expected_y))
         self.assertTrue(torch.allclose(lc._yerr_raw, expected_yerr))
@@ -852,8 +910,8 @@ class TestFromCSV(unittest.TestCase):
             "1.0,1.5,30.0\n2.0,1.5,40.0\n",
         )
         lc = Lightcurve.from_csv(path)
-        expected_time = torch.as_tensor([1.0, 2.0, 1.0, 2.0], dtype=torch.float32)
-        expected_wave = torch.as_tensor([0.5, 0.5, 1.5, 1.5], dtype=torch.float32)
+        expected_time = torch.as_tensor([1.0, 2.0, 1.0, 2.0], dtype=DEFAULT_DTYPE)
+        expected_wave = torch.as_tensor([0.5, 0.5, 1.5, 1.5], dtype=DEFAULT_DTYPE)
         self.assertTrue(torch.allclose(lc._xdata_raw[:, 0], expected_time))
         self.assertTrue(torch.allclose(lc._xdata_raw[:, 1], expected_wave))
 
@@ -981,9 +1039,9 @@ class TestToCSV(unittest.TestCase):
 
         lc2 = Lightcurve.from_csv(path)
         self.assertEqual(lc2.ndim, 2)
-        self.assertTrue(torch.allclose(lc2.xdata, x))
-        self.assertTrue(torch.allclose(lc2.ydata, y))
-        self.assertTrue(torch.allclose(lc2.yerr, yerr))
+        self.assertTrue(torch.allclose(lc2.xdata, x.to(DEFAULT_DTYPE)))
+        self.assertTrue(torch.allclose(lc2.ydata, y.to(DEFAULT_DTYPE)))
+        self.assertTrue(torch.allclose(lc2.yerr, yerr.to(DEFAULT_DTYPE)))
         np.testing.assert_array_equal(lc2.band, band)
 
     def test_to_csv_roundtrip_without_optional_columns(self):
@@ -1001,8 +1059,8 @@ class TestToCSV(unittest.TestCase):
 
         lc2 = Lightcurve.from_csv(path)
         self.assertEqual(lc2.ndim, 1)
-        self.assertTrue(torch.allclose(lc2.xdata, x))
-        self.assertTrue(torch.allclose(lc2.ydata, y))
+        self.assertTrue(torch.allclose(lc2.xdata, x.to(DEFAULT_DTYPE)))
+        self.assertTrue(torch.allclose(lc2.ydata, y.to(DEFAULT_DTYPE)))
         self.assertFalse(hasattr(lc2, "_yerr_raw"))
 
     def test_to_csv_default_filename(self):

@@ -165,14 +165,35 @@ def intersect_constraint_bounds(existing: Any, proposed: Any) -> tuple[Any, Any]
     return lower, upper
 
 
+def _as_common_dtype_tensors(first: Any, second: Any) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return two tensors with a common dtype for safe numeric comparison."""
+    first_tensor = torch.as_tensor(first)
+    second_tensor = torch.as_tensor(second, device=first_tensor.device)
+
+    common_dtype = torch.promote_types(first_tensor.dtype, second_tensor.dtype)
+    if not torch.is_floating_point(torch.empty((), dtype=common_dtype)):
+        common_dtype = torch.get_default_dtype()
+
+    return first_tensor.to(dtype=common_dtype), second_tensor.to(dtype=common_dtype)
+
+
 def bounds_are_equivalent(first: tuple[Any, Any], second: tuple[Any, Any]) -> bool:
     """Return True when two lower/upper bound pairs are numerically equal."""
     first_lower, first_upper = first
     second_lower, second_upper = second
 
+    first_lower_tensor, second_lower_tensor = _as_common_dtype_tensors(
+        first_lower,
+        second_lower,
+    )
+    first_upper_tensor, second_upper_tensor = _as_common_dtype_tensors(
+        first_upper,
+        second_upper,
+    )
+
     return bool(
-        torch.allclose(torch.as_tensor(first_lower), torch.as_tensor(second_lower))
-        and torch.allclose(torch.as_tensor(first_upper), torch.as_tensor(second_upper))
+        torch.allclose(first_lower_tensor, second_lower_tensor)
+        and torch.allclose(first_upper_tensor, second_upper_tensor)
     )
 
 
