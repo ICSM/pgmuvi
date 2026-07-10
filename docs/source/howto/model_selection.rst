@@ -205,6 +205,22 @@ recompute diagnostics, run fits, or mutate the light curve::
 See ``examples/wavelength_model_selection_diagnostics.py`` for a complete
 script using a synthetic 2D light curve.
 
+For a deterministic smoke validation of the full public workflow, run::
+
+    PYTHONPATH=. python3 examples/validate_wavelength_model_selection_workflow.py
+
+This writes JSON, Markdown, and plot artifacts to
+``wavelength_diagnostics_validation/``.  To also exercise candidate GP fitting
+and comparison scoring, run::
+
+    PYTHONPATH=. python3 examples/validate_wavelength_model_selection_workflow.py \
+        --run-model-comparison --training-iter 10
+
+The validation script is intentionally an example/integration check rather than
+a unit test; it is meant to confirm that the staged diagnostics, reporting,
+plotting, and optional comparison APIs work together on a known chromatic
+synthetic source.
+
 Manual Model Selection
 -----------------------
 
