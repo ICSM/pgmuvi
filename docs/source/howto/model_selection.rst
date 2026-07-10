@@ -118,6 +118,93 @@ can be passed directly to :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`::
 
     lc.set_model(recommended)
 
+
+Wavelength-Dependence Diagnostics for 2D Light Curves
+------------------------------------------------------
+
+For multiwavelength light curves, choosing a model is not only a question of
+period recovery.  You often need to decide whether the variability is
+approximately achromatic, smoothly wavelength-dependent, power-law-like,
+dust-like, lagged, or too band-specific for a shared 2D model.
+
+Use :meth:`~pgmuvi.lightcurve.Lightcurve.diagnose_wavelength_dependence` before
+running a model grid.  This pre-fit stage is cheap: it builds a band-by-band
+report with sampling, variability, flux, and robust-amplitude diagnostics.  If a
+known period or frequency is supplied, it also measures period-locked amplitude,
+phase, and time lag per wavelength::
+
+    diag = lc.diagnose_wavelength_dependence(period=350.0)
+    print(lc.format_wavelength_diagnostics_report(diag))
+
+The report contains:
+
+* ``band_table`` — one row per wavelength/band,
+* ``summary`` — counts of usable/rejected bands,
+* ``amplitude_phase_summary`` — fixed-frequency amplitude and lag summaries,
+* ``classification`` — conservative diagnostic labels,
+* ``recommended_candidate_models`` — candidate model families and reasons.
+
+The recommendations are intentionally conservative.  They do not claim that a
+model is correct; they identify plausible next fits.  Typical outcomes are:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Diagnostic pattern
+     - Candidate family
+   * - Same period, same amplitude and phase across bands
+     - ``model="2DAchromatic"``
+   * - Same period, smooth amplitude change with wavelength
+     - ``model="2DWavelengthDependent"``
+   * - Power-law-like wavelength trend
+     - ``model="2DPowerLawMean"`` or ``model="2DPowerLaw"``
+   * - Dust/extinction-like mean trend
+     - ``model="2DDustMean"`` or ``model="2DDust"``
+   * - Multiple shared components
+     - ``fit_strategy="consensus_multicomp"`` with an appropriate final model
+   * - Strong wavelength-dependent lag
+     - Treat as a warning: current separable wavelength models do not explicitly
+       encode deterministic wavelength-dependent delays.
+
+After inspecting the pre-fit diagnostics, you can run the recommended candidate
+models through the normal fitting pathway with
+:meth:`~pgmuvi.lightcurve.Lightcurve.compare_wavelength_models`::
+
+    comparison = lc.compare_wavelength_models(
+        diagnostic_report=diag,
+        base_fit_kwargs={
+            "training_iter": 500,
+            "miniter": 100,
+            "learn_additional_noise": True,
+            "verbose": True,
+        },
+        residual_diagnostic_kwargs={"period": 350.0},
+    )
+
+The comparison report records successful, failed, and skipped candidates; fit
+history summaries; learned-noise summaries; residual/predictive scores; and
+quality flags.  A lower predictive score is useful evidence, but it is not a
+standalone scientific decision.  Always inspect residuals, coverage, rejected
+bands, and whether the score improvement is large enough to justify the more
+complex model.
+
+The reporting and plotting helpers consume existing reports only.  They do not
+recompute diagnostics, run fits, or mutate the light curve::
+
+    print(lc.format_wavelength_diagnostics_report(
+        diag,
+        comparison_report=comparison,
+    ))
+    diagnostic_figs = lc.plot_wavelength_diagnostics(diag, show=False)
+    comparison_figs = lc.plot_wavelength_model_comparison(
+        comparison,
+        show=False,
+    )
+
+See ``examples/wavelength_model_selection_diagnostics.py`` for a complete
+script using a synthetic 2D light curve.
+
 Manual Model Selection
 -----------------------
 

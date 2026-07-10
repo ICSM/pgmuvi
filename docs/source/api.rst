@@ -21,3 +21,4 @@ Subpackages
     pgmuvi.synthetic
     pgmuvi.preprocess
     pgmuvi.multiband_ls_significance
+    pgmuvi.wavelength_diagnostics

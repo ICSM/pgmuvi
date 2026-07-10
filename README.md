@@ -128,6 +128,55 @@ lc_var = lc2d.filter_variable_bands()
 lc_var.fit(...)
 ```
 
+
+## Wavelength-Dependence Model-Selection Diagnostics
+
+For 2D multiwavelength light curves, ``pgmuvi`` provides a staged diagnostic
+workflow for deciding which wavelength-dependent GP model families are plausible.
+The first stage is pre-fit and cheap:
+
+```python
+# If the period is known from LS/ACF/consensus diagnostics, provide it here.
+diag = lc2d.diagnose_wavelength_dependence(period=350.0)
+print(lc2d.format_wavelength_diagnostics_report(diag))
+```
+
+The report summarizes sampling quality, variability, robust amplitude,
+period-locked amplitude, phase/lag, diagnostic classification, and recommended
+candidate model families.  The recommendations are conservative; they identify
+plausible next fits rather than declaring a final science model.
+
+Candidate models can then be compared through the normal ``fit()`` pathway:
+
+```python
+comparison = lc2d.compare_wavelength_models(
+    diagnostic_report=diag,
+    base_fit_kwargs={
+        "training_iter": 500,
+        "miniter": 100,
+        "learn_additional_noise": True,
+        "verbose": True,
+    },
+    residual_diagnostic_kwargs={"period": 350.0},
+)
+print(lc2d.format_wavelength_diagnostics_report(
+    diag,
+    comparison_report=comparison,
+))
+```
+
+Plotting helpers return Matplotlib figures without recomputing diagnostics:
+
+```python
+figs = lc2d.plot_wavelength_diagnostics(diag, show=False)
+comparison_figs = lc2d.plot_wavelength_model_comparison(comparison, show=False)
+```
+
+Use this workflow to distinguish achromatic shared variability, smooth
+wavelength-dependent amplitude, power-law-like trends, dust/extinction-like
+trends, possible wavelength-dependent lags, and cases where independent per-band
+behavior or multi-component consensus should be considered.
+
 ### Parameter workflow initialization
 
 Schema-enabled models can automatically initialize supported model
