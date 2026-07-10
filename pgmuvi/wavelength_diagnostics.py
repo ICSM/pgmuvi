@@ -365,6 +365,390 @@ def _amplitude_phase_summary(band_table: list[dict[str, Any]]) -> dict[str, Any]
     return _clean_scalar_dict(summary)
 
 
+def _finite_float(value: Any) -> float | None:
+    """Return finite float values from report fields, otherwise None."""
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if np.isfinite(out) else None
+
+
+def _fixed_frequency_rows(
+    band_table: list[dict[str, Any]],
+) -> list[tuple[float, dict[str, Any]]]:
+    """Return rows with successful fixed-frequency diagnostics."""
+    rows: list[tuple[float, dict[str, Any]]] = []
+    for row in band_table:
+        wavelength = _finite_float(row.get("wavelength"))
+        periodic = row.get("fixed_frequency_diagnostics")
+        if wavelength is None or not isinstance(periodic, dict):
+            continue
+        if periodic.get("status") != "ok":
+            continue
+        rows.append((wavelength, periodic))
+    rows.sort(key=lambda item: item[0])
+    return rows
+
+
+def _values_are_monotonic(
+    values: np.ndarray, *, tolerance_fraction: float = 0.05
+) -> bool:
+    """Return True when a finite sequence is approximately monotonic."""
+    if values.size < 3:
+        return True
+    span = float(np.nanmax(values) - np.nanmin(values))
+    tolerance = tolerance_fraction * span if span > 0.0 else 0.0
+    diffs = np.diff(values)
+    return bool(
+        np.all(diffs >= -tolerance)
+        or np.all(diffs <= tolerance)
+    )
+
+
+def _add_candidate(
+    candidates: list[dict[str, Any]],
+    *,
+    name: str,
+    model: str | None,
+    priority: str,
+    reason: str,
+    fit_strategy: str | None = None,
+    options: dict[str, Any] | None = None,
+) -> None:
+    """Append a JSON-safe candidate-model recommendation."""
+    entry: dict[str, Any] = {
+        "name": name,
+        "model": model,
+        "priority": priority,
+        "reason": reason,
+    }
+    if fit_strategy is not None:
+        entry["fit_strategy"] = fit_strategy
+    if options:
+        entry["options"] = _clean_scalar_dict(dict(options))
+    candidates.append(entry)
+
+
+def classify_wavelength_diagnostics(
+    report: dict[str, Any],
+    *,
+    achromatic_amplitude_ratio_tol: float = 1.25,
+    wavelength_dependent_amplitude_ratio_min: float = 1.5,
+    powerlaw_slope_min: float = 0.5,
+    negligible_lag_fraction: float = 0.05,
+    significant_lag_fraction: float = 0.10,
+) -> dict[str, Any]:
+    """Classify a pre-fit wavelength diagnostic report.
+
+    The classifier is intentionally heuristic and conservative.  It does not
+    choose a final GP model and it does not run any fitting.  It translates the
+    pre-fit diagnostic table into evidence labels and a short candidate-model
+    list that can be used by later model-comparison code.
+
+    Parameters
+    ----------
+    report : dict
+        Report returned by :func:`diagnose_wavelength_dependence_prefit`.
+    achromatic_amplitude_ratio_tol : float, optional
+        Maximum max/min fixed-frequency amplitude ratio still treated as
+        consistent with constant amplitude.
+    wavelength_dependent_amplitude_ratio_min : float, optional
+        Minimum max/min amplitude ratio treated as evidence for wavelength-
+        dependent amplitude.
+    powerlaw_slope_min : float, optional
+        Minimum absolute log-amplitude/log-wavelength slope used to label a
+        smooth monotonic trend as power-law-like.
+    negligible_lag_fraction : float, optional
+        Maximum lag span as a fraction of the fixed period treated as
+        consistent with no wavelength-dependent lag.
+    significant_lag_fraction : float, optional
+        Minimum lag span as a fraction of the fixed period used to flag a
+        possible wavelength-dependent lag.
+
+    Returns
+    -------
+    dict
+        JSON-safe classification with evidence labels, candidate models, and
+        warnings.  Model recommendations are candidate families, not a final
+        selection.
+    """
+    if report.get("kind") != "wavelength_dependence_prefit_diagnostics":
+        raise ValueError(
+            "classify_wavelength_diagnostics() expects a report produced by "
+            "diagnose_wavelength_dependence_prefit()."
+        )
+
+    for name, value in [
+        ("achromatic_amplitude_ratio_tol", achromatic_amplitude_ratio_tol),
+        (
+            "wavelength_dependent_amplitude_ratio_min",
+            wavelength_dependent_amplitude_ratio_min,
+        ),
+        ("powerlaw_slope_min", powerlaw_slope_min),
+        ("negligible_lag_fraction", negligible_lag_fraction),
+        ("significant_lag_fraction", significant_lag_fraction),
+    ]:
+        value = float(value)
+        if not np.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{name} must be a positive finite value.")
+
+    summary = report.get("summary", {})
+    band_table = report.get("band_table", [])
+    n_bands = int(summary.get("n_bands", 0) or 0)
+    n_usable = int(summary.get("n_usable_for_wavelength_diagnostics", 0) or 0)
+    fixed_frequency = _finite_float(report.get("fixed_frequency"))
+    fixed_period = _finite_float(report.get("fixed_period"))
+    fixed_rows = _fixed_frequency_rows(band_table)
+
+    warnings = list(report.get("warnings", []))
+    evidence: list[str] = []
+    candidates: list[dict[str, Any]] = []
+
+    classification: dict[str, Any] = {
+        "available": False,
+        "primary_class": "insufficient_data",
+        "amplitude_class": "unavailable",
+        "phase_lag_class": "unavailable",
+        "n_bands": n_bands,
+        "n_usable_bands": n_usable,
+        "n_fixed_frequency_bands": int(len(fixed_rows)),
+        "evidence": evidence,
+        "recommended_candidate_models": candidates,
+        "warnings": warnings,
+    }
+
+    if n_bands < 2 or n_usable < 2:
+        warnings.append(
+            "Candidate wavelength-model recommendations are suppressed because "
+            "fewer than two usable bands are available."
+        )
+        return _clean_scalar_dict(classification)
+
+    classification["available"] = True
+    _add_candidate(
+        candidates,
+        name="robust_2d_consensus_baseline",
+        model="2D",
+        fit_strategy="consensus",
+        priority="baseline",
+        reason=(
+            "Use the stabilized 2D consensus path as the baseline period/PSD "
+            "fit before interpreting more specific wavelength models."
+        ),
+        options={"learn_additional_noise": True},
+    )
+
+    if fixed_frequency is None or fixed_period is None:
+        classification["primary_class"] = "prefit_table_only"
+        warnings.append(
+            "No fixed period/frequency was supplied, so amplitude and phase-lag "
+            "candidate recommendations are not available yet."
+        )
+        _add_candidate(
+            candidates,
+            name="next_step_consensus_period_diagnostics",
+            model=None,
+            fit_strategy="consensus",
+            priority="next_step",
+            reason=(
+                "Run LS/ACF or consensus period diagnostics, then rerun "
+                "diagnose_wavelength_dependence(period=...) to classify "
+                "period-locked amplitude and phase behavior."
+            ),
+        )
+        return _clean_scalar_dict(classification)
+
+    if len(fixed_rows) < 2:
+        classification["primary_class"] = "fixed_frequency_inconclusive"
+        warnings.append(
+            "Fixed-frequency diagnostics succeeded in fewer than two bands; "
+            "candidate recommendations are limited to the baseline model."
+        )
+        return _clean_scalar_dict(classification)
+
+    wavelengths = np.asarray([item[0] for item in fixed_rows], dtype=float)
+    amplitudes = np.asarray(
+        [item[1].get("amplitude", np.nan) for item in fixed_rows],
+        dtype=float,
+    )
+    lags = np.asarray(
+        [item[1].get("lag", np.nan) for item in fixed_rows],
+        dtype=float,
+    )
+
+    finite_amp = np.isfinite(wavelengths) & np.isfinite(amplitudes) & (amplitudes > 0.0)
+    if np.count_nonzero(finite_amp) >= 2:
+        amp_wls = wavelengths[finite_amp]
+        amp_values = amplitudes[finite_amp]
+        amp_ratio = float(np.nanmax(amp_values) / np.nanmin(amp_values))
+        amp_monotonic = _values_are_monotonic(amp_values)
+        amp_slope = None
+        positive = (amp_wls > 0.0) & (amp_values > 0.0)
+        if np.count_nonzero(positive) >= 2:
+            amp_slope = float(
+                np.polyfit(
+                    np.log(amp_wls[positive]),
+                    np.log(amp_values[positive]),
+                    1,
+                )[0]
+            )
+
+        classification["amplitude_ratio_max_to_min"] = amp_ratio
+        classification["amplitude_loglog_slope"] = amp_slope
+        classification["amplitude_monotonic"] = bool(amp_monotonic)
+
+        if amp_ratio <= achromatic_amplitude_ratio_tol:
+            classification["amplitude_class"] = "consistent_with_constant_amplitude"
+            evidence.append(
+                "Fixed-frequency amplitudes are consistent with "
+                "wavelength-independent variability."
+            )
+            _add_candidate(
+                candidates,
+                name="achromatic_separable_candidate",
+                model="2DAchromatic",
+                priority="candidate",
+                reason=(
+                    "Fixed-frequency amplitudes vary weakly across usable bands; "
+                    "an achromatic separable covariance is worth testing."
+                ),
+            )
+        elif (
+            amp_ratio >= wavelength_dependent_amplitude_ratio_min
+            and amp_monotonic
+            and amp_slope is not None
+            and abs(amp_slope) >= powerlaw_slope_min
+        ):
+            classification["amplitude_class"] = "power_law_like_amplitude_trend"
+            evidence.append(
+                "Fixed-frequency amplitudes vary smoothly and monotonically "
+                "with wavelength."
+            )
+            _add_candidate(
+                candidates,
+                name="smooth_wavelength_dependent_candidate",
+                model="2DWavelengthDependent",
+                priority="candidate",
+                reason=(
+                    "The accepted bands share a fixed frequency but show a smooth "
+                    "wavelength-dependent amplitude trend."
+                ),
+                options={"wavelength_kernel_type": "rbf"},
+            )
+            _add_candidate(
+                candidates,
+                name="power_law_mean_candidate",
+                model="2DPowerLawMean",
+                priority="candidate",
+                reason=(
+                    "The amplitude trend is monotonic and approximately linear in "
+                    "log amplitude versus log wavelength, so a power-law wavelength "
+                    "mean family should be compared."
+                ),
+            )
+        elif amp_ratio >= wavelength_dependent_amplitude_ratio_min:
+            classification["amplitude_class"] = "smooth_or_band_dependent_amplitude"
+            evidence.append(
+                "Fixed-frequency amplitudes differ substantially across wavelength."
+            )
+            _add_candidate(
+                candidates,
+                name="smooth_wavelength_dependent_candidate",
+                model="2DWavelengthDependent",
+                priority="candidate",
+                reason=(
+                    "The accepted bands share a fixed frequency but have different "
+                    "period-locked amplitudes."
+                ),
+                options={"wavelength_kernel_type": "rbf"},
+            )
+        else:
+            classification["amplitude_class"] = "weak_or_ambiguous_amplitude_trend"
+            evidence.append(
+                "Fixed-frequency amplitudes are not constant enough for a clean "
+                "achromatic label and not different enough for a strong "
+                "wavelength-dependent label."
+            )
+    else:
+        warnings.append(
+            "Amplitude classification is unavailable because fewer than two bands "
+            "have positive finite fixed-frequency amplitudes."
+        )
+
+    finite_lag = np.isfinite(lags)
+    if np.count_nonzero(finite_lag) >= 2:
+        lag_values = lags[finite_lag]
+        lag_span = float(np.nanmax(lag_values) - np.nanmin(lag_values))
+        lag_span_fraction = (
+            float(lag_span / fixed_period) if fixed_period > 0.0 else None
+        )
+        classification["lag_span"] = lag_span
+        classification["lag_span_fraction_of_period"] = lag_span_fraction
+        if (
+            lag_span_fraction is not None
+            and lag_span_fraction <= negligible_lag_fraction
+        ):
+            classification["phase_lag_class"] = "consistent_with_zero_lag"
+            evidence.append(
+                "Fixed-frequency phases are consistent with no meaningful "
+                "wavelength-dependent lag."
+            )
+        elif (
+            lag_span_fraction is not None
+            and lag_span_fraction >= significant_lag_fraction
+        ):
+            lag_monotonic = _values_are_monotonic(lag_values)
+            classification["phase_lag_class"] = (
+                "possible_monotonic_wavelength_lag"
+                if lag_monotonic
+                else "possible_wavelength_lag"
+            )
+            classification["lag_monotonic"] = bool(lag_monotonic)
+            evidence.append(
+                "Fixed-frequency phases show a potentially significant "
+                "wavelength-dependent lag."
+            )
+            warnings.append(
+                "A possible wavelength-dependent phase/lag was detected. Current "
+                "PGMUVI separable wavelength models do not explicitly parameterize "
+                "deterministic wavelength-dependent time delays."
+            )
+        else:
+            classification["phase_lag_class"] = "weak_or_ambiguous_lag"
+            evidence.append(
+                "Fixed-frequency phases show only weak or ambiguous "
+                "wavelength-dependent lag evidence."
+            )
+    else:
+        warnings.append(
+            "Phase-lag classification is unavailable because fewer than two bands "
+            "have finite fixed-frequency lag estimates."
+        )
+
+    amplitude_class = classification.get("amplitude_class")
+    phase_class = classification.get("phase_lag_class")
+    if isinstance(phase_class, str) and phase_class.startswith("possible"):
+        classification["primary_class"] = "possible_wavelength_dependent_lag"
+    elif amplitude_class == "consistent_with_constant_amplitude":
+        classification["primary_class"] = "achromatic_shared_variability_candidate"
+    elif amplitude_class in {
+        "power_law_like_amplitude_trend",
+        "smooth_or_band_dependent_amplitude",
+    }:
+        classification["primary_class"] = (
+            "wavelength_modulated_shared_variability_candidate"
+        )
+    elif amplitude_class == "weak_or_ambiguous_amplitude_trend":
+        classification["primary_class"] = "ambiguous_wavelength_dependence"
+    else:
+        classification["primary_class"] = "fixed_frequency_inconclusive"
+
+    return _clean_scalar_dict(classification)
+
+
 def diagnose_wavelength_dependence_prefit(
     lightcurve,
     *,
@@ -373,6 +757,7 @@ def diagnose_wavelength_dependence_prefit(
     frequency: float | None = None,
     period: float | None = None,
     amplitude_phase_kwargs: dict[str, Any] | None = None,
+    classification_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a cheap pre-fit wavelength diagnostic report.
 
@@ -397,6 +782,8 @@ def diagnose_wavelength_dependence_prefit(
     amplitude_phase_kwargs : dict or None, optional
         Keyword arguments for the fixed-frequency sinusoid fit.  Currently
         supports ``reference_time`` and ``min_points``.
+    classification_kwargs : dict or None, optional
+        Keyword arguments for :func:`classify_wavelength_diagnostics`.
 
     Returns
     -------
@@ -421,6 +808,7 @@ def diagnose_wavelength_dependence_prefit(
     sampling_kwargs = dict(sampling_kwargs or {})
     variability_kwargs = dict(variability_kwargs or {})
     amplitude_phase_kwargs = dict(amplitude_phase_kwargs or {})
+    classification_kwargs = dict(classification_kwargs or {})
     fixed_frequency = _resolve_frequency(frequency=frequency, period=period)
 
     x_np = x_raw.detach().cpu().numpy()
@@ -564,5 +952,11 @@ def diagnose_wavelength_dependence_prefit(
         report["fixed_frequency"] = float(fixed_frequency)
         report["fixed_period"] = float(1.0 / fixed_frequency)
         report["amplitude_phase_summary"] = _amplitude_phase_summary(band_table)
+
+    classification = classify_wavelength_diagnostics(report, **classification_kwargs)
+    report["classification"] = classification
+    report["recommended_candidate_models"] = classification[
+        "recommended_candidate_models"
+    ]
 
     return report

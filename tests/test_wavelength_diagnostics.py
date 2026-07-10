@@ -183,7 +183,10 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
             amplitude_phase_kwargs={"reference_time": 0.0},
         )
 
-        lags = [row["fixed_frequency_diagnostics"]["lag"] for row in report["band_table"]]
+        lags = [
+            row["fixed_frequency_diagnostics"]["lag"]
+            for row in report["band_table"]
+        ]
         np.testing.assert_allclose(lags, [0.0, 2.0, 4.0], atol=0.05)
         self.assertGreater(report["amplitude_phase_summary"]["lag_span"], 3.9)
 
@@ -199,7 +202,10 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
             frequency=1.0 / 30.0,
         )
 
-        self.assertAlmostEqual(via_period["fixed_frequency"], via_frequency["fixed_frequency"])
+        self.assertAlmostEqual(
+            via_period["fixed_frequency"],
+            via_frequency["fixed_frequency"],
+        )
         self.assertEqual(
             via_period["amplitude_phase_summary"],
             via_frequency["amplitude_phase_summary"],
@@ -218,6 +224,125 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "requires 2-D multiband data"):
             lc.diagnose_wavelength_dependence()
+
+
+    def test_classification_recommends_achromatic_candidate_for_constant_amp(self):
+        lc = _make_multiband_lightcurve(
+            n_per_band=80,
+            amplitudes=(0.25, 0.26, 0.24),
+            yerr_value=0.01,
+        )
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+        )
+
+        classification = report["classification"]
+        self.assertTrue(classification["available"])
+        self.assertEqual(
+            classification["amplitude_class"],
+            "consistent_with_constant_amplitude",
+        )
+        self.assertEqual(
+            classification["primary_class"],
+            "achromatic_shared_variability_candidate",
+        )
+        models = [item["model"] for item in report["recommended_candidate_models"]]
+        self.assertIn("2D", models)
+        self.assertIn("2DAchromatic", models)
+
+    def test_classification_recommends_power_law_candidate_for_smooth_trend(self):
+        lc = _make_multiband_lightcurve(
+            n_per_band=80,
+            wavelengths=(1.0, 2.0, 4.0),
+            amplitudes=(0.1, 0.2, 0.4),
+            yerr_value=0.01,
+        )
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+        )
+
+        classification = report["classification"]
+        self.assertEqual(
+            classification["amplitude_class"],
+            "power_law_like_amplitude_trend",
+        )
+        self.assertEqual(
+            classification["primary_class"],
+            "wavelength_modulated_shared_variability_candidate",
+        )
+        models = [item["model"] for item in report["recommended_candidate_models"]]
+        self.assertIn("2DWavelengthDependent", models)
+        self.assertIn("2DPowerLawMean", models)
+
+    def test_classification_flags_possible_phase_lag_without_specific_lag_model(self):
+        lc = _make_multiband_lightcurve(
+            n_per_band=90,
+            amplitudes=(0.4, 0.4, 0.4),
+            lags=(0.0, 2.0, 4.0),
+            yerr_value=0.01,
+        )
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            frequency=1.0 / 30.0,
+            amplitude_phase_kwargs={"reference_time": 0.0},
+        )
+
+        classification = report["classification"]
+        self.assertEqual(
+            classification["phase_lag_class"],
+            "possible_monotonic_wavelength_lag",
+        )
+        self.assertEqual(
+            classification["primary_class"],
+            "possible_wavelength_dependent_lag",
+        )
+        self.assertTrue(
+            any(
+                "do not explicitly parameterize" in warning
+                for warning in classification["warnings"]
+            )
+        )
+
+    def test_classification_without_fixed_frequency_requests_consensus_step(self):
+        lc = _make_multiband_lightcurve()
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+        )
+
+        classification = report["classification"]
+        self.assertTrue(classification["available"])
+        self.assertEqual(classification["primary_class"], "prefit_table_only")
+        names = [item["name"] for item in report["recommended_candidate_models"]]
+        self.assertIn("robust_2d_consensus_baseline", names)
+        self.assertIn("next_step_consensus_period_diagnostics", names)
+
+    def test_classification_suppressed_for_single_band(self):
+        lc = _make_multiband_lightcurve(
+            wavelengths=(2.0,),
+            amplitudes=(0.3,),
+            band_labels=["H"],
+        )
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+        )
+
+        classification = report["classification"]
+        self.assertFalse(classification["available"])
+        self.assertEqual(classification["primary_class"], "insufficient_data")
+        self.assertEqual(report["recommended_candidate_models"], [])
 
 
 if __name__ == "__main__":

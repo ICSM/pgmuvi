@@ -9265,6 +9265,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         frequency: float | None = None,
         period: float | None = None,
         amplitude_phase_kwargs: dict | None = None,
+        classification_kwargs: dict | None = None,
     ) -> dict:
         """Return pre-fit diagnostics for wavelength-dependent variability.
 
@@ -9292,12 +9293,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         amplitude_phase_kwargs : dict or None, optional
             Extra keyword arguments for the fixed-frequency sinusoid fit.
             Currently supports ``reference_time`` and ``min_points``.
+        classification_kwargs : dict or None, optional
+            Extra keyword arguments for the wavelength-dependence classifier.
 
         Returns
         -------
         dict
             JSON-safe report with ``band_table``, ``summary``, ``warnings``,
-            and optional ``amplitude_phase_summary``.
+            optional ``amplitude_phase_summary``, ``classification``, and
+            ``recommended_candidate_models``.
         """
         from pgmuvi.wavelength_diagnostics import (
             diagnose_wavelength_dependence_prefit,
@@ -9310,6 +9314,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             frequency=frequency,
             period=period,
             amplitude_phase_kwargs=amplitude_phase_kwargs,
+            classification_kwargs=classification_kwargs,
         )
 
     def auto_select_model(self, verbose=True):
