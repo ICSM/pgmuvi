@@ -11,7 +11,10 @@ from pgmuvi.wavelength_diagnostics import (
     compare_wavelength_candidate_models,
     compute_wavelength_residual_diagnostics,
     diagnose_wavelength_dependence_prefit,
+    format_wavelength_diagnostics_report,
     interpret_wavelength_model_comparison,
+    plot_wavelength_diagnostics,
+    plot_wavelength_model_comparison,
 )
 
 
@@ -707,6 +710,160 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
             {"score_tie_tolerance": 0.2},
         )
         self.assertFalse(mocked.call_args.kwargs["interpret_results"])
+
+    def test_format_wavelength_diagnostics_report_contains_summary_and_candidates(self):
+        lc = _make_multiband_lightcurve(
+            amplitudes=(0.1, 0.2, 0.4),
+            yerr_value=0.01,
+            band_labels=["J", "H", "K"],
+        )
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+        )
+
+        text = format_wavelength_diagnostics_report(report, max_band_rows=2)
+
+        self.assertIn("# Wavelength-dependence diagnostics", text)
+        self.assertIn("## Pre-fit summary", text)
+        self.assertIn("## Band table", text)
+        self.assertIn("## Candidate model recommendations", text)
+        self.assertIn("power_law_like_amplitude_trend", text)
+        self.assertIn("additional band row(s) omitted", text)
+
+    def test_format_wavelength_diagnostics_report_includes_comparison_summary(self):
+        lc = _make_multiband_lightcurve()
+        diagnostic = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+        )
+        comparison = {
+            "kind": "wavelength_model_comparison",
+            "summary": {
+                "n_fit_candidates": 2,
+                "n_successful": 1,
+                "n_failed": 1,
+                "n_skipped": 0,
+                "best_candidate": {
+                    "name": "baseline",
+                    "model": "2D",
+                    "mean_negative_log_predictive_density": 1.23,
+                },
+            },
+            "interpretation": {"decision": "single_scored_candidate"},
+        }
+
+        text = format_wavelength_diagnostics_report(
+            diagnostic,
+            comparison_report=comparison,
+        )
+
+        self.assertIn("## Model-comparison summary", text)
+        self.assertIn("Best scored candidate", text)
+        self.assertIn("single_scored_candidate", text)
+
+    def test_plot_wavelength_diagnostics_returns_prefit_figures(self):
+        import matplotlib.pyplot as plt
+
+        lc = _make_multiband_lightcurve(
+            amplitudes=(0.1, 0.2, 0.4),
+            yerr_value=0.01,
+        )
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+        )
+
+        figures = plot_wavelength_diagnostics(report, show=False)
+
+        self.assertIn("points_per_wavelength", figures)
+        self.assertIn("median_flux_by_wavelength", figures)
+        self.assertIn("robust_amplitude_by_wavelength", figures)
+        self.assertIn("fixed_frequency_amplitude_by_wavelength", figures)
+        self.assertIn("fixed_frequency_lag_by_wavelength", figures)
+        for fig in figures.values():
+            self.assertTrue(hasattr(fig, "savefig"))
+            plt.close(fig)
+
+    def test_plot_wavelength_model_comparison_returns_score_figure(self):
+        import matplotlib.pyplot as plt
+
+        comparison = {
+            "kind": "wavelength_model_comparison",
+            "results": [
+                {
+                    "name": "baseline",
+                    "model": "2D",
+                    "status": "success",
+                    "predictive_score": {
+                        "mean_negative_log_predictive_density": 1.0,
+                    },
+                },
+                {
+                    "name": "achromatic",
+                    "model": "2DAchromatic",
+                    "status": "success",
+                    "predictive_score": {
+                        "mean_negative_log_predictive_density": 1.2,
+                    },
+                },
+            ],
+        }
+
+        figures = plot_wavelength_model_comparison(comparison, show=False)
+
+        self.assertIn("predictive_score_by_candidate", figures)
+        self.assertTrue(hasattr(figures["predictive_score_by_candidate"], "savefig"))
+        plt.close(figures["predictive_score_by_candidate"])
+
+    def test_lightcurve_report_and_plot_helpers_delegate_to_module_functions(self):
+        lc = _make_multiband_lightcurve()
+        diagnostic = {"kind": "wavelength_dependence_prefit_diagnostics"}
+        comparison = {"kind": "wavelength_model_comparison"}
+
+        with mock.patch(
+            "pgmuvi.wavelength_diagnostics.format_wavelength_diagnostics_report",
+            return_value="summary",
+        ) as mocked_format:
+            text = lc.format_wavelength_diagnostics_report(
+                diagnostic,
+                comparison_report=comparison,
+                max_band_rows=1,
+            )
+        self.assertEqual(text, "summary")
+        mocked_format.assert_called_once_with(
+            diagnostic,
+            comparison_report=comparison,
+            max_band_rows=1,
+        )
+
+        with mock.patch(
+            "pgmuvi.wavelength_diagnostics.plot_wavelength_diagnostics",
+            return_value={"fig": object()},
+        ) as mocked_plot_diag:
+            figures = lc.plot_wavelength_diagnostics(diagnostic, show=False)
+        self.assertIn("fig", figures)
+        mocked_plot_diag.assert_called_once_with(diagnostic, show=False)
+
+        with mock.patch(
+            "pgmuvi.wavelength_diagnostics.plot_wavelength_model_comparison",
+            return_value={"fig": object()},
+        ) as mocked_plot_comp:
+            figures = lc.plot_wavelength_model_comparison(comparison, show=False)
+        self.assertIn("fig", figures)
+        mocked_plot_comp.assert_called_once_with(comparison, show=False)
+
+    def test_report_and_plot_helpers_validate_report_kind(self):
+        with self.assertRaises(ValueError):
+            format_wavelength_diagnostics_report({"kind": "wrong"})
+        with self.assertRaises(ValueError):
+            plot_wavelength_diagnostics({"kind": "wrong"})
+        with self.assertRaises(ValueError):
+            plot_wavelength_model_comparison({"kind": "wrong"})
+
 
 
 

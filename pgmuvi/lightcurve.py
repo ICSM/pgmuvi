@@ -9394,6 +9394,53 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             stop_on_error=stop_on_error,
         )
 
+    def format_wavelength_diagnostics_report(
+        self,
+        diagnostic_report: dict,
+        *,
+        comparison_report: dict | None = None,
+        max_band_rows: int | None = None,
+    ) -> str:
+        """Return a Markdown summary of wavelength diagnostics reports.
+
+        The formatter consumes existing report dictionaries produced by
+        :meth:`diagnose_wavelength_dependence` and optionally
+        :meth:`compare_wavelength_models`.  It does not recompute diagnostics,
+        fit models, or mutate this light curve.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            format_wavelength_diagnostics_report,
+        )
+
+        return format_wavelength_diagnostics_report(
+            diagnostic_report,
+            comparison_report=comparison_report,
+            max_band_rows=max_band_rows,
+        )
+
+    def plot_wavelength_diagnostics(
+        self,
+        diagnostic_report: dict,
+        *,
+        show: bool = False,
+    ) -> dict:
+        """Return Matplotlib figures for a wavelength diagnostic report."""
+        from pgmuvi.wavelength_diagnostics import plot_wavelength_diagnostics
+
+        return plot_wavelength_diagnostics(diagnostic_report, show=show)
+
+    def plot_wavelength_model_comparison(
+        self,
+        comparison_report: dict,
+        *,
+        show: bool = False,
+    ) -> dict:
+        """Return Matplotlib figures for a wavelength model-comparison report."""
+        from pgmuvi.wavelength_diagnostics import plot_wavelength_model_comparison
+
+        return plot_wavelength_model_comparison(comparison_report, show=show)
+
+
     def auto_select_model(self, verbose=True):
         """Automatically select the best model type based on data characteristics.
 

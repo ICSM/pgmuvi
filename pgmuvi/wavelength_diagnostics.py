@@ -1566,6 +1566,376 @@ def interpret_wavelength_model_comparison(
     return _clean_scalar_dict(interpretation)
 
 
+def _format_value(value: Any, *, precision: int = 4) -> str:
+    """Format scalar report values for compact human-readable summaries."""
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    number = _finite_float(value)
+    if number is not None:
+        return f"{number:.{precision}g}"
+    return str(value)
+
+
+def format_wavelength_diagnostics_report(
+    diagnostic_report: dict[str, Any],
+    *,
+    comparison_report: dict[str, Any] | None = None,
+    max_band_rows: int | None = None,
+) -> str:
+    """Return a compact Markdown summary of wavelength diagnostics.
+
+    The formatter is intentionally report-only: it does not recompute any
+    diagnostics, run GP fits, or mutate a light curve.  It is meant for users
+    who need a science-facing text summary that can be pasted into notebooks,
+    logs, or issue reports.
+    """
+    if diagnostic_report.get("kind") != "wavelength_dependence_prefit_diagnostics":
+        raise ValueError(
+            "format_wavelength_diagnostics_report() expects a pre-fit "
+            "wavelength diagnostic report."
+        )
+    if max_band_rows is not None:
+        if isinstance(max_band_rows, bool) or int(max_band_rows) < 1:
+            raise ValueError("max_band_rows must be a positive integer or None.")
+        max_band_rows = int(max_band_rows)
+
+    summary = diagnostic_report.get("summary", {})
+    classification = diagnostic_report.get("classification", {})
+    amp_summary = diagnostic_report.get("amplitude_phase_summary", {})
+    candidates = diagnostic_report.get("recommended_candidate_models", [])
+    warnings = list(diagnostic_report.get("warnings", []))
+    warnings.extend(classification.get("warnings", []) or [])
+
+    lines: list[str] = []
+    lines.append("# Wavelength-dependence diagnostics")
+    lines.append("")
+    lines.append("## Pre-fit summary")
+    lines.append(
+        "- Bands: "
+        f"{_format_value(summary.get('n_bands'), precision=0)} total, "
+        f"{_format_value(summary.get('n_sampling_pass'), precision=0)} passed sampling, "
+        f"{_format_value(summary.get('n_variable'), precision=0)} variable, "
+        f"{_format_value(summary.get('n_usable_for_wavelength_diagnostics'), precision=0)} usable."
+    )
+    lines.append(
+        "- Fixed period/frequency: "
+        f"period={_format_value(diagnostic_report.get('fixed_period'))}, "
+        f"frequency={_format_value(diagnostic_report.get('fixed_frequency'))}."
+    )
+    lines.append(
+        "- Primary class: "
+        f"{classification.get('primary_class', 'unavailable')}."
+    )
+    lines.append(
+        "- Amplitude class: "
+        f"{classification.get('amplitude_class', 'unavailable')}; "
+        "phase/lag class: "
+        f"{classification.get('phase_lag_class', 'unavailable')}."
+    )
+
+    if amp_summary.get("available"):
+        lines.append(
+            "- Period-locked amplitude ratio max/min: "
+            f"{_format_value(amp_summary.get('amplitude_ratio_max_to_min'))}; "
+            "log-log slope: "
+            f"{_format_value(amp_summary.get('amplitude_loglog_slope'))}; "
+            "lag span: "
+            f"{_format_value(amp_summary.get('lag_span'))}."
+        )
+
+    evidence = classification.get("evidence", []) or []
+    if evidence:
+        lines.append("")
+        lines.append("## Evidence")
+        for item in evidence:
+            lines.append(f"- {item}")
+
+    band_rows = list(diagnostic_report.get("band_table", []))
+    if max_band_rows is not None:
+        shown_rows = band_rows[:max_band_rows]
+    else:
+        shown_rows = band_rows
+    if shown_rows:
+        lines.append("")
+        lines.append("## Band table")
+        lines.append(
+            "| wavelength | labels | n | sampling | variable | usable | "
+            "median flux | robust amp | fixed amp | lag |"
+        )
+        lines.append(
+            "|---:|---|---:|---|---|---|---:|---:|---:|---:|"
+        )
+        for row in shown_rows:
+            flux = row.get("flux_summary", {})
+            periodic = row.get("fixed_frequency_diagnostics", {})
+            labels = ",".join(row.get("band_labels", []) or []) or "—"
+            variable = row.get("variable")
+            variable_text = "—" if variable is None else _format_value(variable)
+            lines.append(
+                "| "
+                f"{_format_value(row.get('wavelength'))} | "
+                f"{labels} | "
+                f"{_format_value(row.get('n_points'), precision=0)} | "
+                f"{_format_value(row.get('sampling_pass'))} | "
+                f"{variable_text} | "
+                f"{_format_value(row.get('usable_for_wavelength_diagnostics'))} | "
+                f"{_format_value(flux.get('median_flux'))} | "
+                f"{_format_value(flux.get('robust_amplitude_5_95'))} | "
+                f"{_format_value(periodic.get('amplitude'))} | "
+                f"{_format_value(periodic.get('lag'))} |"
+            )
+        if max_band_rows is not None and len(band_rows) > max_band_rows:
+            lines.append(
+                f"\n{len(band_rows) - max_band_rows} additional band row(s) omitted."
+            )
+
+    if candidates:
+        lines.append("")
+        lines.append("## Candidate model recommendations")
+        for candidate in candidates:
+            name = candidate.get("name", "unnamed_candidate")
+            model = candidate.get("model") or "non-fit diagnostic step"
+            fit_strategy = candidate.get("fit_strategy")
+            priority = candidate.get("priority", "candidate")
+            reason = candidate.get("reason", "")
+            suffix = f", fit_strategy={fit_strategy}" if fit_strategy else ""
+            lines.append(f"- **{name}** ({priority}): model={model}{suffix}. {reason}")
+
+    if comparison_report is not None:
+        if comparison_report.get("kind") != "wavelength_model_comparison":
+            raise ValueError(
+                "comparison_report must be a wavelength model-comparison report."
+            )
+        comp_summary = comparison_report.get("summary", {})
+        interpretation = comparison_report.get("interpretation", {})
+        lines.append("")
+        lines.append("## Model-comparison summary")
+        lines.append(
+            "- Fit candidates: "
+            f"{_format_value(comp_summary.get('n_fit_candidates'), precision=0)}; "
+            f"successful={_format_value(comp_summary.get('n_successful'), precision=0)}, "
+            f"failed={_format_value(comp_summary.get('n_failed'), precision=0)}, "
+            f"skipped={_format_value(comp_summary.get('n_skipped'), precision=0)}."
+        )
+        best = comp_summary.get("best_candidate")
+        if isinstance(best, dict):
+            lines.append(
+                "- Best scored candidate: "
+                f"{best.get('name')} / {best.get('model')} "
+                "by mean NLPD="
+                f"{_format_value(best.get('mean_negative_log_predictive_density'))}."
+            )
+        if interpretation:
+            lines.append(
+                "- Interpretation decision: "
+                f"{interpretation.get('decision', interpretation.get('status', 'unavailable'))}."
+            )
+            quality_flags = interpretation.get("quality_flags", []) or []
+            if quality_flags:
+                lines.append(f"- Quality flags: {len(quality_flags)} warning(s).")
+
+    unique_warnings = []
+    for warning in warnings:
+        if warning and warning not in unique_warnings:
+            unique_warnings.append(warning)
+    if unique_warnings:
+        lines.append("")
+        lines.append("## Warnings")
+        for warning in unique_warnings:
+            lines.append(f"- {warning}")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _import_pyplot():
+    """Import matplotlib.pyplot lazily for optional plotting helpers."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:  # pragma: no cover - matplotlib is a dependency
+        raise ImportError(
+            "Matplotlib is required for wavelength diagnostic plotting."
+        ) from exc
+    return plt
+
+
+def _plot_xy(
+    x: list[float],
+    y: list[float],
+    *,
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    show: bool,
+):
+    """Create one simple x-y figure for wavelength diagnostics."""
+    plt = _import_pyplot()
+    fig, ax = plt.subplots()
+    ax.plot(x, y, marker="o", linestyle="none")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    if show:
+        plt.show()
+    return fig
+
+
+def plot_wavelength_diagnostics(
+    diagnostic_report: dict[str, Any],
+    *,
+    show: bool = False,
+) -> dict[str, Any]:
+    """Create science-facing pre-fit wavelength diagnostic figures.
+
+    Returns a dictionary of Matplotlib figures.  Missing diagnostic quantities
+    are skipped rather than synthesized.
+    """
+    if diagnostic_report.get("kind") != "wavelength_dependence_prefit_diagnostics":
+        raise ValueError(
+            "plot_wavelength_diagnostics() expects a pre-fit wavelength "
+            "diagnostic report."
+        )
+    if not isinstance(show, bool):
+        raise ValueError("show must be a bool.")
+
+    rows = list(diagnostic_report.get("band_table", []))
+    figures: dict[str, Any] = {}
+
+    wavelengths: list[float] = []
+    n_points: list[float] = []
+    median_flux: list[float] = []
+    robust_amp: list[float] = []
+    fixed_amp: list[float] = []
+    fixed_amp_wavelengths: list[float] = []
+    lag_values: list[float] = []
+    lag_wavelengths: list[float] = []
+
+    for row in rows:
+        wl = _finite_float(row.get("wavelength"))
+        if wl is None:
+            continue
+        n = _finite_float(row.get("n_points"))
+        if n is not None:
+            wavelengths.append(wl)
+            n_points.append(n)
+        flux = row.get("flux_summary", {})
+        med = _finite_float(flux.get("median_flux"))
+        amp = _finite_float(flux.get("robust_amplitude_5_95"))
+        if med is not None:
+            median_flux.append(med)
+        else:
+            median_flux.append(np.nan)
+        if amp is not None:
+            robust_amp.append(amp)
+        else:
+            robust_amp.append(np.nan)
+        periodic = row.get("fixed_frequency_diagnostics", {})
+        famp = _finite_float(periodic.get("amplitude"))
+        lag = _finite_float(periodic.get("lag"))
+        if famp is not None:
+            fixed_amp_wavelengths.append(wl)
+            fixed_amp.append(famp)
+        if lag is not None:
+            lag_wavelengths.append(wl)
+            lag_values.append(lag)
+
+    if wavelengths and n_points:
+        figures["points_per_wavelength"] = _plot_xy(
+            wavelengths,
+            n_points,
+            xlabel="Wavelength",
+            ylabel="Number of points",
+            title="Sampling by wavelength",
+            show=show,
+        )
+
+    if wavelengths and any(np.isfinite(median_flux)):
+        figures["median_flux_by_wavelength"] = _plot_xy(
+            wavelengths,
+            median_flux,
+            xlabel="Wavelength",
+            ylabel="Median flux",
+            title="Median flux by wavelength",
+            show=show,
+        )
+
+    if wavelengths and any(np.isfinite(robust_amp)):
+        figures["robust_amplitude_by_wavelength"] = _plot_xy(
+            wavelengths,
+            robust_amp,
+            xlabel="Wavelength",
+            ylabel="Robust amplitude (5–95 half-range)",
+            title="Robust amplitude by wavelength",
+            show=show,
+        )
+
+    if fixed_amp_wavelengths:
+        figures["fixed_frequency_amplitude_by_wavelength"] = _plot_xy(
+            fixed_amp_wavelengths,
+            fixed_amp,
+            xlabel="Wavelength",
+            ylabel="Fixed-frequency amplitude",
+            title="Period-locked amplitude by wavelength",
+            show=show,
+        )
+
+    if lag_wavelengths:
+        figures["fixed_frequency_lag_by_wavelength"] = _plot_xy(
+            lag_wavelengths,
+            lag_values,
+            xlabel="Wavelength",
+            ylabel="Lag",
+            title="Fixed-frequency lag by wavelength",
+            show=show,
+        )
+
+    return figures
+
+
+def plot_wavelength_model_comparison(
+    comparison_report: dict[str, Any],
+    *,
+    show: bool = False,
+) -> dict[str, Any]:
+    """Create model-comparison diagnostic figures from a comparison report."""
+    if comparison_report.get("kind") != "wavelength_model_comparison":
+        raise ValueError(
+            "plot_wavelength_model_comparison() expects a wavelength "
+            "model-comparison report."
+        )
+    if not isinstance(show, bool):
+        raise ValueError("show must be a bool.")
+
+    scored: list[tuple[str, float]] = []
+    for result in comparison_report.get("results", []) or []:
+        if result.get("status") != "success":
+            continue
+        score = result.get("predictive_score", {})
+        value = _finite_float(score.get("mean_negative_log_predictive_density"))
+        if value is None:
+            continue
+        label = str(result.get("name") or result.get("model") or "candidate")
+        scored.append((label, value))
+
+    figures: dict[str, Any] = {}
+    if scored:
+        plt = _import_pyplot()
+        labels = [item[0] for item in scored]
+        values = [item[1] for item in scored]
+        fig, ax = plt.subplots()
+        ax.plot(range(len(values)), values, marker="o", linestyle="none")
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_ylabel("Mean negative log predictive density")
+        ax.set_title("Wavelength model-comparison scores")
+        fig.tight_layout()
+        if show:
+            plt.show()
+        figures["predictive_score_by_candidate"] = fig
+
+    return figures
+
 def compare_wavelength_candidate_models(
     lightcurve,
     *,
