@@ -58,7 +58,6 @@ import dataclasses
 import json
 import math
 from types import MappingProxyType
-from pgmuvi.dtypes import DEFAULT_DTYPE
 from pgmuvi.parameter_context import (
     LightcurveDiagnostics,
     ParameterEstimationContext,
@@ -705,8 +704,8 @@ def _convert_time_to_days(xdata, time_units):
         1-D (or single-column) array of time values.  For 2-D (multi-band)
         light curves this is a 2-D array of shape ``(N, 2)`` where column 0
         is time and column 1 is wavelength/band; only the time column is
-        converted.  Non-tensor inputs are coerced to the package default floating
-        dtype (``torch.float64``) automatically.
+        converted.  Non-tensor inputs are coerced to a ``torch.float32``
+        tensor automatically.
     time_units : str, astropy.units.UnitBase, or None
         Units of the time values.  Any string accepted by
         ``astropy.units.Unit`` (e.g. ``'s'``, ``'hr'``, ``'yr'``,
@@ -745,7 +744,7 @@ def _convert_time_to_days(xdata, time_units):
     # Coerce to tensor so .dim() / .shape are always available, regardless of
     # whether the caller passed a list, NumPy array, or torch.Tensor.
     if not isinstance(xdata, torch.Tensor):
-        xdata = torch.as_tensor(xdata, dtype=DEFAULT_DTYPE)
+        xdata = torch.as_tensor(xdata, dtype=torch.float32)
 
     if xdata.dim() <= 1 or xdata.shape[1] == 1:
         # 1-D light curve: all values are time
@@ -1338,13 +1337,13 @@ class InputHelpers:
         clean = data[valid_mask]
 
         # ------------------------------------------------------------------
-        # Helper: convert a structured-array column to the default floating tensor dtype.
+        # Helper: convert a structured-array column to a float32 tensor.
         # Boolean-indexing a structured array with dtype=None can produce
         # non-contiguous strides; np.array() (not np.asarray) forces a copy.
         # ------------------------------------------------------------------
         def _to_float_tensor(arr):
             return torch.as_tensor(
-                np.array(arr, dtype=np.float64), dtype=DEFAULT_DTYPE
+                np.array(arr, dtype=np.float64), dtype=torch.float32
             )
 
         # ------------------------------------------------------------------
@@ -1358,7 +1357,7 @@ class InputHelpers:
             label_to_idx = {lbl: float(i) for i, lbl in enumerate(unique_labels)}
             indices = np.array([label_to_idx[v] for v in str_vals], dtype=np.float64)
             return (
-                torch.as_tensor(indices, dtype=DEFAULT_DTYPE),
+                torch.as_tensor(indices, dtype=torch.float32),
                 np.array(unique_labels, dtype=np.str_),
             )
 
@@ -3380,7 +3379,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 ),
                 stacklevel=2,
             )
-            values = torch.as_tensor(values, dtype=DEFAULT_DTYPE)
+            values = torch.as_tensor(values, dtype=torch.float32)
         return values
 
     def _ensure_dim(self, values):
@@ -6136,25 +6135,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         elif isinstance(self.xtransform, Transformer):
             return self.xtransform.transform(values)
 
-    def _floating_data_dtype(self):
-        """Return the floating dtype used by the stored training data."""
-        for name in (
-            "_ydata_transformed",
-            "_xdata_transformed",
-            "ydata",
-            "xdata",
-        ):
-            value = getattr(self, name, None)
-            if isinstance(value, torch.Tensor) and torch.is_floating_point(value):
-                return value.dtype
-        return DEFAULT_DTYPE
-
-    def _move_module_to_data_dtype(self, module):
-        """Cast a torch module to the lightcurve floating dtype when possible."""
-        if isinstance(module, torch.nn.Module):
-            module.to(dtype=self._floating_data_dtype())
-        return module
-
     def set_likelihood(self, likelihood=None, variance=False, **kwargs):
         """Set the likelihood function for the model
 
@@ -6260,7 +6240,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                               Likelihood instance, but got {type(likelihood)}.
                               Please provide a suitable likelihood input."""
             )
-        self._move_module_to_data_dtype(self.likelihood)
         self.__SET_LIKELIHOOD_CALLED = True
 
     def set_model(
@@ -6408,9 +6387,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
         else:
             raise ValueError("Insert a valid model")
-
-        self._move_module_to_data_dtype(self.model)
-        self._move_module_to_data_dtype(self.likelihood)
 
         # now we've got a model set up, we're going to make some handy lookups
         # for the parameters and modules that we'll need to access later
@@ -10565,7 +10541,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         dtype : torch.dtype or None, optional
             Tensor dtype for returned initialization tensors. If ``None``,
             inferred from ``self.xdata`` when available; otherwise uses
-            ``DEFAULT_DTYPE``.
+            ``torch.float32``.
         device : torch.device or str or None, optional
             Device for returned initialization tensors. If ``None``, inferred
             from ``self.xdata`` when available; otherwise uses CPU.
@@ -10591,7 +10567,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             dtype = (
                 xdata_tensor.dtype
                 if xdata_tensor is not None
-                else DEFAULT_DTYPE
+                else torch.float32
             )
         if device is None:
             device = (

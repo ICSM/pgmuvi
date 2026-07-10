@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import torch
 
+from pgmuvi.dtypes import DEFAULT_DTYPE
 from pgmuvi.parameter_context import ParameterEstimationContext
 from pgmuvi.parameter_estimates import (
     ParameterEstimate,
@@ -236,7 +237,7 @@ class ParameterEstimateBuilder:
                 max(baseline_frequency * (i + 1), min_frequency)
                 for i in range(n_components)
             ],
-            dtype=torch.float32,
+            dtype=DEFAULT_DTYPE,
         )
 
         if upper is not None:
@@ -259,7 +260,7 @@ class ParameterEstimateBuilder:
         fallback = torch.full(
             spec.shape,
             min_frequency,
-            dtype=torch.float32,
+            dtype=DEFAULT_DTYPE,
         )
 
         fallback[:, 0, 0] = frequencies
