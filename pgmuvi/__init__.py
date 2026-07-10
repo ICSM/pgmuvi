@@ -21,4 +21,5 @@ __all__ = [
     "priors",
     "synthetic",
     "trainers",
+    "wavelength_diagnostics",
 ]

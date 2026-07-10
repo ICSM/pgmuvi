@@ -9257,6 +9257,44 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band=new_band,
         )
 
+    def diagnose_wavelength_dependence(
+        self,
+        *,
+        sampling_kwargs: dict | None = None,
+        variability_kwargs: dict | None = None,
+    ) -> dict:
+        """Return pre-fit diagnostics for wavelength-dependent variability.
+
+        This method builds a band-by-band diagnostic table for standard 2-D
+        multiband light curves.  It is intentionally cheap and conservative:
+        it computes sampling, variability, and robust flux/amplitude summaries
+        without running GP fitting or changing the stored light curve.
+
+        Parameters
+        ----------
+        sampling_kwargs : dict or None, optional
+            Keyword arguments forwarded to
+            :func:`pgmuvi.preprocess.quality.assess_sampling_quality`.
+        variability_kwargs : dict or None, optional
+            Keyword arguments forwarded to
+            :func:`pgmuvi.preprocess.variability.is_variable`.
+
+        Returns
+        -------
+        dict
+            JSON-safe report with ``band_table``, ``summary``, and
+            ``warnings``.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            diagnose_wavelength_dependence_prefit,
+        )
+
+        return diagnose_wavelength_dependence_prefit(
+            self,
+            sampling_kwargs=sampling_kwargs,
+            variability_kwargs=variability_kwargs,
+        )
+
     def auto_select_model(self, verbose=True):
         """Automatically select the best model type based on data characteristics.
 
