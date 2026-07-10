@@ -6355,7 +6355,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             module.to(dtype=self._floating_data_dtype())
         return module
 
-    def set_likelihood(self, likelihood=None, variance=False, **kwargs):
+    def set_likelihood(
+        self,
+        likelihood=None,
+        variance=False,
+        learn_additional_noise=False,
+        **kwargs,
+    ):
         """Set the likelihood function for the model
 
         Parameters
@@ -6373,14 +6379,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             uncertainties are available, a standard
             :class:`gpytorch.likelihoods.GaussianLikelihood` is used.
 
-            If a string, it must be ``'learn'``. When ``'learn'`` is used and
-            uncertainties are available, a
-            :class:`gpytorch.likelihoods.FixedNoiseGaussianLikelihood` is
-            created with the same noise variance tensor and with
-            ``learn_additional_noise=True``. If ``'learn'`` is used and no
-            uncertainties are available, a
-            :class:`gpytorch.likelihoods.GaussianLikelihood` is created with
-            ``learn_additional_noise=True``.
+            If a string, it must be ``'learn'``. This is a backwards-
+            compatible alias for setting ``learn_additional_noise=True`` while
+            otherwise using the automatically selected likelihood. With
+            per-point uncertainties, this creates a
+            :class:`gpytorch.likelihoods.FixedNoiseGaussianLikelihood` with a
+            learned homoscedastic noise term in addition to the fixed
+            per-observation variances. Without per-point uncertainties, this
+            falls back to :class:`gpytorch.likelihoods.GaussianLikelihood`,
+            whose noise parameter is already learned.
 
             If an instance of a :class:`~gpytorch.likelihoods.likelihood.Likelihood`
             object is passed, that object is used directly. If a Constraint
@@ -6410,7 +6417,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             If ``True``, the stored uncertainties are assumed to already be
             variances and are passed through unchanged as the noise tensor.
+        learn_additional_noise : bool, optional
+            If ``True`` and per-point uncertainties are available, use
+            :class:`gpytorch.likelihoods.FixedNoiseGaussianLikelihood` with
+            ``learn_additional_noise=True`` so the model can infer an
+            additional homoscedastic variance term on top of the supplied
+            measurement variances. If no per-point uncertainties are available,
+            this flag simply selects the standard
+            :class:`gpytorch.likelihoods.GaussianLikelihood`, whose single
+            noise term is already learned.
         """
+
+        if likelihood == "learn":
+            likelihood = None
+            learn_additional_noise = True
+        elif learn_additional_noise and likelihood is not None:
+            raise ValueError(
+                "learn_additional_noise can only be used with the automatic "
+                "likelihood path (likelihood=None) or with likelihood='learn'. "
+                "Pass a preconfigured likelihood object instead if custom "
+                "likelihood behaviour is required."
+            )
+
+        learn_additional_noise = bool(learn_additional_noise)
 
         # Prepare the noise tensor: gpytorch likelihoods expect variances.
         # By default (variance=False) we square the stored errors; if the
@@ -6425,16 +6454,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if _has_noise and likelihood is None:
             self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
-                noise
-            )
-        elif _has_noise and likelihood == "learn":
-            self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
                 noise,
-                learn_additional_noise=True,
-            )
-        elif likelihood == "learn":
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood(
-                learn_additional_noise=True
+                learn_additional_noise=learn_additional_noise,
             )
         elif "Constraint" in [t.__name__ for t in type(likelihood).__mro__]:
             # In this case, the likelihood has been passed a constraint, which
@@ -6443,7 +6464,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 noise_constraint=likelihood
             )
         elif likelihood is None:
-            # We're just going to make the simplest assumption
+            # With no per-point uncertainties, GaussianLikelihood already
+            # learns a homoscedastic noise term. ``learn_additional_noise`` is
+            # therefore satisfied by the standard likelihood rather than by
+            # passing FixedNoise-only kwargs to GaussianLikelihood.
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
         # Also add a case for if it is a Likelihood object
         elif isinstance(likelihood, gpytorch.likelihoods.likelihood.Likelihood):
@@ -6461,10 +6485,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                               Please provide a suitable likelihood input."""
             )
         self._move_module_to_data_dtype(self.likelihood)
+        self._learn_additional_noise = learn_additional_noise
         self.__SET_LIKELIHOOD_CALLED = True
 
     def set_model(
-        self, model=None, likelihood=None, num_mixtures=None, variance=False, **kwargs
+        self,
+        model=None,
+        likelihood=None,
+        num_mixtures=None,
+        variance=False,
+        learn_additional_noise=False,
+        **kwargs,
     ):
         """Set the model for the lightcurve
 
@@ -6521,6 +6552,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             uncertainties are treated as errors and squared before being used
             as noise variances.  Set to True if the stored uncertainties
             already represent variances.
+        learn_additional_noise : bool, optional
+            Passed to `set_likelihood()`. If True and per-point uncertainties
+            are available, learn an additional homoscedastic noise variance on
+            top of the supplied fixed per-observation variances.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor.
         """
@@ -6570,14 +6605,39 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "2DPowerLawMean": PowerLawMeanGPModel,
         }
 
+        _noise_setting_changed = bool(learn_additional_noise) != bool(
+            getattr(self, "_learn_additional_noise", False)
+        )
         if not hasattr(self, "likelihood"):
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
+            self.set_likelihood(
+                likelihood,
+                variance=variance,
+                learn_additional_noise=learn_additional_noise,
+                **kwargs,
+            )
+        elif likelihood is None and _noise_setting_changed:
+            self.set_likelihood(
+                likelihood,
+                variance=variance,
+                learn_additional_noise=learn_additional_noise,
+                **kwargs,
+            )
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
             # if no likelihood is passed, we only want to set the likelihood
             # if it hasn't already been set
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
+            self.set_likelihood(
+                likelihood,
+                variance=variance,
+                learn_additional_noise=learn_additional_noise,
+                **kwargs,
+            )
         elif likelihood is not None:
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
+            self.set_likelihood(
+                likelihood,
+                variance=variance,
+                learn_additional_noise=learn_additional_noise,
+                **kwargs,
+            )
 
         if "GP" in [t.__name__ for t in type(model).__mro__]:
             # check if it is or inherets from a GPyTorch model
@@ -9634,6 +9694,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         lr=0.1,
         stopavg=30,
         variance=False,
+        learn_additional_noise=False,
         fit_strategy=None,
         **kwargs,
     ):
@@ -9793,6 +9854,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             (standard deviations) and are squared before being used as noise
             variances in the likelihood.  Set to True if the stored
             uncertainties already represent variances.
+        learn_additional_noise : bool, optional
+            If True and per-point uncertainties are available, the automatic
+            likelihood learns an additional homoscedastic noise variance on top
+            of the fixed per-observation variances. If no uncertainties are
+            available, the standard Gaussian likelihood already learns its
+            single noise term.
         fit_strategy : {"consensus", "consensus_multicomp",
                         "consensus_relaxed"} or None, optional
             Optional fitting-strategy selector.  The default ``None`` keeps the
@@ -9878,17 +9945,43 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 lr=lr,
                 stopavg=stopavg,
                 variance=variance,
+                learn_additional_noise=learn_additional_noise,
                 **kwargs,
             )
 
+        _noise_setting_changed = bool(learn_additional_noise) != bool(
+            getattr(self, "_learn_additional_noise", False)
+        )
         if not hasattr(self, "likelihood"):
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
+            self.set_likelihood(
+                likelihood,
+                variance=variance,
+                learn_additional_noise=learn_additional_noise,
+                **kwargs,
+            )
+        elif likelihood is None and _noise_setting_changed:
+            self.set_likelihood(
+                likelihood,
+                variance=variance,
+                learn_additional_noise=learn_additional_noise,
+                **kwargs,
+            )
         elif not self.__SET_LIKELIHOOD_CALLED and likelihood is None:
             # if no likelihood is passed, we only want to set the likelihood
             # if it hasn't already been set
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
+            self.set_likelihood(
+                likelihood,
+                variance=variance,
+                learn_additional_noise=learn_additional_noise,
+                **kwargs,
+            )
         elif likelihood is not None:
-            self.set_likelihood(likelihood, variance=variance, **kwargs)
+            self.set_likelihood(
+                likelihood,
+                variance=variance,
+                learn_additional_noise=learn_additional_noise,
+                **kwargs,
+            )
         # if likelihood is None and not hasattr(self, 'likelihood'):
         #     raise ValueError("""You must provide a likelihood function""")
         # elif likelihood is not None:
@@ -10195,7 +10288,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # new (filtered) training data via set_train_data() if the
                 # model supports it (ExactGP), otherwise recreate via
                 # set_model() which will use the same underlying class.
-                self.set_likelihood(likelihood, variance=variance, **kwargs)
+                self.set_likelihood(
+                    likelihood,
+                    variance=variance,
+                    learn_additional_noise=learn_additional_noise,
+                    **kwargs,
+                )
                 if hasattr(_stored_instance, "set_train_data"):
                     _stored_instance.set_train_data(
                         inputs=self._xdata_transformed,
@@ -10216,9 +10314,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             elif _stored_str is not None:
                 self.set_model(
                     _stored_str,
-                    self.likelihood,
+                    likelihood,
                     num_mixtures=_effective_num_mixtures,
                     variance=variance,
+                    learn_additional_noise=learn_additional_noise,
                     **kwargs,
                 )
             else:
@@ -10226,9 +10325,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         elif model is not None:
             self.set_model(
                 model,
-                self.likelihood,
+                likelihood,
                 num_mixtures=num_mixtures,
                 variance=variance,
+                learn_additional_noise=learn_additional_noise,
                 **kwargs,
             )
 
@@ -16103,6 +16203,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "likelihood",
             "num_mixtures",
             "variance",
+            "learn_additional_noise",
             "guess",
             "consensus_frequencies",
             "consensus_scales",
@@ -16156,6 +16257,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 fit_kwargs.get("likelihood"),
                 num_mixtures=fit_kwargs.get("num_mixtures"),
                 variance=fit_kwargs.get("variance", False),
+                learn_additional_noise=fit_kwargs.get("learn_additional_noise", False),
                 **set_model_kwargs,
             )
         fit_kwargs["model"] = None
@@ -16731,6 +16833,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "likelihood",
             "num_mixtures",
             "variance",
+            "learn_additional_noise",
             "guess",
             "consensus_frequency_k",
             "consensus_scale_max_factor",
@@ -16779,6 +16882,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 fit_kwargs.get("likelihood"),
                 num_mixtures=fit_kwargs.get("num_mixtures"),
                 variance=fit_kwargs.get("variance", False),
+                learn_additional_noise=fit_kwargs.get("learn_additional_noise", False),
                 **set_model_kwargs,
             )
         fit_kwargs["model"] = None
