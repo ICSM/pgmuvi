@@ -700,6 +700,121 @@ class TestParameterEstimateBuilder(unittest.TestCase):
             )
         )
 
+    def test_default_variance_constraint_expands_for_bright_flux_data(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_weights",
+            role=ParameterRole.WEIGHT,
+            domain=ParameterDomain.VARIANCE,
+            scale=ParameterScale.LOG,
+            constraint=(1.0e-8, 1.0e4),
+            constraint_strategy=ConstraintStrategy.DEFAULT,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=True,
+            global_diagnostics=LightcurveDiagnostics(
+                flux_percentiles={
+                    2.5: 0.0,
+                    97.5: 2000.0,
+                },
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(estimate.constraint[0], 1.0e-8)
+        self.assertGreater(estimate.constraint[1], 1.0e4)
+        self.assertAlmostEqual(
+            estimate.constraint[1],
+            10.0 * (2000.0 / 4.0) ** 2,
+        )
+
+    def test_default_outputscale_constraint_expands_for_bright_flux_data(self):
+        spec = ParameterSpec(
+            name="covar_module.outputscale",
+            role=ParameterRole.WEIGHT,
+            domain=ParameterDomain.VARIANCE,
+            scale=ParameterScale.LOG,
+            initial_value=1.0,
+            constraint=(1.0e-6, 1.0e6),
+            guess_strategy=GuessStrategy.DEFAULT,
+            constraint_strategy=ConstraintStrategy.DEFAULT,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=True,
+            global_diagnostics=LightcurveDiagnostics(
+                flux_percentiles={
+                    2.5: -5000.0,
+                    97.5: 5000.0,
+                },
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(estimate.value, 1.0)
+        self.assertEqual(estimate.constraint[0], 1.0e-6)
+        self.assertGreater(estimate.constraint[1], 1.0e6)
+        self.assertAlmostEqual(
+            estimate.constraint[1],
+            10.0 * (10000.0 / 4.0) ** 2,
+        )
+
+    def test_default_variance_constraint_keeps_schema_cap_for_low_variance_data(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_weights",
+            role=ParameterRole.WEIGHT,
+            domain=ParameterDomain.VARIANCE,
+            scale=ParameterScale.LOG,
+            constraint=(1.0e-8, 1.0e4),
+            constraint_strategy=ConstraintStrategy.DEFAULT,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+            global_diagnostics=LightcurveDiagnostics(
+                flux_percentiles={
+                    2.5: -1.0,
+                    97.5: 1.0,
+                },
+            ),
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(estimate.constraint, (1.0e-8, 1.0e4))
+
+    def test_default_variance_constraint_falls_back_without_flux_percentiles(self):
+        spec = ParameterSpec(
+            name="covar_module.mixture_weights",
+            role=ParameterRole.WEIGHT,
+            domain=ParameterDomain.VARIANCE,
+            scale=ParameterScale.LOG,
+            constraint=(1.0e-8, 1.0e4),
+            constraint_strategy=ConstraintStrategy.DEFAULT,
+        )
+
+        context = ParameterEstimationContext(
+            is_multiband=False,
+        )
+
+        estimate = ParameterEstimateBuilder().build_one(
+            spec=spec,
+            context=context,
+        )
+
+        self.assertEqual(estimate.constraint, (1.0e-8, 1.0e4))
+
 
 if __name__ == "__main__":
     unittest.main()

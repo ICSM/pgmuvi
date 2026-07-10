@@ -17,6 +17,8 @@ from pgmuvi.parameter_estimates import (
 from pgmuvi.parameter_specs import (
     ConstraintStrategy,
     GuessStrategy,
+    ParameterDomain,
+    ParameterRole,
     ParameterSpec,
     ParameterSpecCollection,
 )
@@ -321,7 +323,7 @@ class ParameterEstimateBuilder:
     ):
         """Estimate a constraint for one parameter specification."""
         if spec.constraint_strategy is ConstraintStrategy.DEFAULT:
-            return spec.constraint
+            return self._estimate_default_constraint(spec, context)
 
         if spec.constraint_strategy is ConstraintStrategy.ROBUST_FLUX_RANGE:
             return self._estimate_robust_flux_range(context)
@@ -330,6 +332,94 @@ class ParameterEstimateBuilder:
             return self._estimate_robust_positive_flux_span_constraint(context)
 
         return None
+
+    def _estimate_default_constraint(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Return the default constraint, expanding variance guards from data.
+
+        Spectral-mixture weights and ScaleKernel outputscale are variances in
+        the GP training target space.  Fixed schema caps are therefore only
+        safe as last-resort guards: bright linear-flux light curves can have
+        robust variances far above those constants.  When flux percentiles are
+        available, expand the upper bound to a multiple of the robust flux
+        variance while keeping the schema value as a conservative fallback.
+        """
+        if not self._uses_data_scaled_variance_guard(spec):
+            return spec.constraint
+
+        return self._estimate_data_scaled_variance_constraint(spec, context)
+
+    @staticmethod
+    def _uses_data_scaled_variance_guard(spec: ParameterSpec) -> bool:
+        """Return whether a DEFAULT variance constraint should scale with data."""
+        if spec.domain is not ParameterDomain.VARIANCE:
+            return False
+
+        if spec.role is not ParameterRole.WEIGHT:
+            return False
+
+        return (
+            spec.name.endswith("mixture_weights")
+            or spec.name.endswith("outputscale")
+        )
+
+    def _estimate_data_scaled_variance_constraint(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Return a variance guard expanded from robust flux diagnostics."""
+        fallback = spec.constraint
+        robust_variance = self._estimate_robust_flux_variance(context)
+
+        if robust_variance is None:
+            return fallback
+
+        lower = 1.0e-12
+        fallback_upper = None
+
+        if fallback is not None:
+            lower = float(fallback[0])
+            fallback_upper = float(fallback[1])
+
+        data_upper = 10.0 * robust_variance
+
+        if spec.initial_value is not None:
+            initial = torch.as_tensor(spec.initial_value, dtype=DEFAULT_DTYPE)
+            if initial.numel():
+                data_upper = max(data_upper, float(torch.max(initial)))
+
+        if fallback_upper is not None and math.isfinite(fallback_upper):
+            data_upper = max(data_upper, fallback_upper)
+
+        if not math.isfinite(data_upper) or data_upper <= lower:
+            return fallback
+
+        return (lower, data_upper)
+
+    def _estimate_robust_flux_variance(
+        self,
+        context: ParameterEstimationContext,
+    ):
+        """Estimate target variance from p2.5--p97.5 robust flux span."""
+        span = self._estimate_robust_flux_span(context)
+
+        if span is None or span <= 0:
+            return None
+
+        # For a Gaussian distribution, p97.5 - p2.5 is approximately
+        # 3.92 sigma.  The exact constant is unnecessary here; this is a
+        # guard scale, not a statistical estimator used in the likelihood.
+        robust_sigma = span / 4.0
+        robust_variance = robust_sigma * robust_sigma
+
+        if not math.isfinite(robust_variance) or robust_variance <= 0:
+            return None
+
+        return robust_variance
 
     def _estimate_robust_positive_flux_span_constraint(
         self,
