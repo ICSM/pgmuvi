@@ -9262,13 +9262,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         *,
         sampling_kwargs: dict | None = None,
         variability_kwargs: dict | None = None,
+        frequency: float | None = None,
+        period: float | None = None,
+        amplitude_phase_kwargs: dict | None = None,
     ) -> dict:
         """Return pre-fit diagnostics for wavelength-dependent variability.
 
         This method builds a band-by-band diagnostic table for standard 2-D
         multiband light curves.  It is intentionally cheap and conservative:
         it computes sampling, variability, and robust flux/amplitude summaries
-        without running GP fitting or changing the stored light curve.
+        without running GP fitting or changing the stored light curve.  If a
+        known temporal frequency or period is supplied, it also measures
+        per-band fixed-frequency amplitude, phase, and lag.
 
         Parameters
         ----------
@@ -9278,12 +9283,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         variability_kwargs : dict or None, optional
             Keyword arguments forwarded to
             :func:`pgmuvi.preprocess.variability.is_variable`.
+        frequency : float or None, optional
+            Fixed temporal frequency for per-band sinusoidal amplitude/phase
+            diagnostics.  Usually this should come from LS/ACF/consensus
+            diagnostics.  No frequency is inferred automatically here.
+        period : float or None, optional
+            Fixed temporal period.  Mutually exclusive with ``frequency``.
+        amplitude_phase_kwargs : dict or None, optional
+            Extra keyword arguments for the fixed-frequency sinusoid fit.
+            Currently supports ``reference_time`` and ``min_points``.
 
         Returns
         -------
         dict
-            JSON-safe report with ``band_table``, ``summary``, and
-            ``warnings``.
+            JSON-safe report with ``band_table``, ``summary``, ``warnings``,
+            and optional ``amplitude_phase_summary``.
         """
         from pgmuvi.wavelength_diagnostics import (
             diagnose_wavelength_dependence_prefit,
@@ -9293,6 +9307,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self,
             sampling_kwargs=sampling_kwargs,
             variability_kwargs=variability_kwargs,
+            frequency=frequency,
+            period=period,
+            amplitude_phase_kwargs=amplitude_phase_kwargs,
         )
 
     def auto_select_model(self, verbose=True):

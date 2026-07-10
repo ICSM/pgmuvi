@@ -17,6 +17,9 @@ from pgmuvi.preprocess.quality import assess_sampling_quality, robust_scale
 from pgmuvi.preprocess.variability import is_variable
 
 
+_TWO_PI = 2.0 * np.pi
+
+
 def _finite_or_none(value: Any) -> float | int | bool | str | None:
     """Return JSON-friendly scalar values, replacing NaN/Inf with None."""
     if isinstance(value, (bool, np.bool_)):
@@ -96,11 +99,280 @@ def _band_labels_for_mask(band: np.ndarray | None, mask: np.ndarray) -> list[str
     return sorted({str(label) for label in labels})
 
 
+def _resolve_frequency(
+    *,
+    frequency: float | None = None,
+    period: float | None = None,
+) -> float | None:
+    """Resolve a supplied frequency or period into a positive frequency."""
+    if frequency is not None and period is not None:
+        raise ValueError("Specify only one of frequency or period, not both.")
+    if period is not None:
+        period = float(period)
+        if not np.isfinite(period) or period <= 0.0:
+            raise ValueError("period must be a positive finite value.")
+        return 1.0 / period
+    if frequency is not None:
+        frequency = float(frequency)
+        if not np.isfinite(frequency) or frequency <= 0.0:
+            raise ValueError("frequency must be a positive finite value.")
+        return frequency
+    return None
+
+
+def _phase_to_lag(phase_radians: float, frequency: float) -> float:
+    """Convert cosine-model phase to the nearest signed time lag."""
+    lag = phase_radians / (_TWO_PI * frequency)
+    period = 1.0 / frequency
+    return float(((lag + 0.5 * period) % period) - 0.5 * period)
+
+
+def _fit_fixed_frequency_sinusoid(
+    t: np.ndarray,
+    y: np.ndarray,
+    yerr: np.ndarray | None,
+    *,
+    frequency: float,
+    reference_time: float | None = None,
+    min_points: int = 6,
+) -> dict[str, Any]:
+    """Fit offset + cos + sin terms at a fixed frequency for one band.
+
+    The fitted model is
+
+    ``y(t) = offset + c cos(theta) + s sin(theta)``
+
+    with ``theta = 2 pi frequency (t - reference_time)``.  The returned phase
+    uses the equivalent cosine convention
+
+    ``y(t) = offset + amplitude cos(theta - phase)``.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(t) & np.isfinite(y)
+
+    if yerr is not None:
+        yerr = np.asarray(yerr, dtype=float)
+        finite &= np.isfinite(yerr) & (yerr > 0.0)
+
+    t = t[finite]
+    y = y[finite]
+    dy = yerr[finite] if yerr is not None else None
+
+    result: dict[str, Any] = {
+        "available": False,
+        "status": "unavailable",
+        "frequency": float(frequency),
+        "period": float(1.0 / frequency),
+        "reference_time": None,
+        "n_points_used": int(t.size),
+        "weighted": bool(dy is not None),
+        "offset": None,
+        "cos_coefficient": None,
+        "sin_coefficient": None,
+        "amplitude": None,
+        "amplitude_uncertainty": None,
+        "amplitude_snr": None,
+        "peak_to_peak_amplitude": None,
+        "fractional_amplitude": None,
+        "phase_radians": None,
+        "phase_cycles": None,
+        "phase_uncertainty_radians": None,
+        "lag": None,
+        "lag_fraction_of_period": None,
+        "lag_uncertainty": None,
+        "residual_rms": None,
+        "chi2": None,
+        "reduced_chi2": None,
+        "condition_number": None,
+    }
+
+    if t.size < min_points:
+        result["status"] = "insufficient_points"
+        return result
+
+    if reference_time is None:
+        reference_time = float(0.5 * (np.nanmin(t) + np.nanmax(t)))
+    else:
+        reference_time = float(reference_time)
+        if not np.isfinite(reference_time):
+            raise ValueError("reference_time must be finite when provided.")
+    result["reference_time"] = reference_time
+
+    theta = _TWO_PI * frequency * (t - reference_time)
+    design = np.column_stack([np.ones_like(t), np.cos(theta), np.sin(theta)])
+
+    if dy is not None:
+        sqrt_weight = 1.0 / dy
+        design_w = design * sqrt_weight[:, None]
+        y_w = y * sqrt_weight
+    else:
+        design_w = design
+        y_w = y
+
+    try:
+        coeffs, _, rank, singular_values = np.linalg.lstsq(design_w, y_w, rcond=None)
+    except np.linalg.LinAlgError:
+        result["status"] = "linear_solve_failed"
+        return result
+
+    if rank < design.shape[1]:
+        result["status"] = "rank_deficient"
+        return result
+
+    if singular_values.size > 0 and singular_values[-1] > 0.0:
+        condition_number = float(singular_values[0] / singular_values[-1])
+    else:
+        condition_number = None
+
+    offset, cos_coeff, sin_coeff = [float(v) for v in coeffs]
+    model = design @ coeffs
+    residual = y - model
+    dof = int(max(0, t.size - design.shape[1]))
+    residual_rms = float(np.sqrt(np.mean(residual**2)))
+
+    if dy is not None:
+        chi2 = float(np.sum((residual / dy) ** 2))
+        reduced_chi2 = float(chi2 / dof) if dof > 0 else None
+        covariance_scale = reduced_chi2 if reduced_chi2 is not None else 1.0
+    else:
+        chi2 = float(np.sum(residual**2))
+        reduced_chi2 = None
+        covariance_scale = float(np.sum(residual**2) / dof) if dof > 0 else 1.0
+
+    normal_matrix = design_w.T @ design_w
+    covariance = np.linalg.pinv(normal_matrix) * covariance_scale
+
+    amplitude = float(np.hypot(cos_coeff, sin_coeff))
+    peak_to_peak = float(2.0 * amplitude)
+    fractional_amplitude = None
+    if np.isfinite(offset) and abs(offset) > 0.0:
+        fractional_amplitude = float(amplitude / abs(offset))
+
+    phase = float(np.arctan2(sin_coeff, cos_coeff))
+    phase_cycles = float(phase / _TWO_PI)
+    lag = _phase_to_lag(phase, frequency)
+
+    amplitude_uncertainty = None
+    phase_uncertainty = None
+    lag_uncertainty = None
+    amplitude_snr = None
+    if amplitude > 0.0 and np.all(np.isfinite(covariance[1:3, 1:3])):
+        grad_amp = np.array([cos_coeff / amplitude, sin_coeff / amplitude])
+        cov_cs = covariance[1:3, 1:3]
+        var_amp = float(grad_amp @ cov_cs @ grad_amp)
+        if np.isfinite(var_amp) and var_amp >= 0.0:
+            amplitude_uncertainty = float(np.sqrt(var_amp))
+            if amplitude_uncertainty > 0.0:
+                amplitude_snr = float(amplitude / amplitude_uncertainty)
+
+        grad_phase = np.array([-sin_coeff / amplitude**2, cos_coeff / amplitude**2])
+        var_phase = float(grad_phase @ cov_cs @ grad_phase)
+        if np.isfinite(var_phase) and var_phase >= 0.0:
+            phase_uncertainty = float(np.sqrt(var_phase))
+            lag_uncertainty = float(phase_uncertainty / (_TWO_PI * frequency))
+
+    result.update(
+        {
+            "available": True,
+            "status": "ok",
+            "offset": offset,
+            "cos_coefficient": cos_coeff,
+            "sin_coefficient": sin_coeff,
+            "amplitude": amplitude,
+            "amplitude_uncertainty": amplitude_uncertainty,
+            "amplitude_snr": amplitude_snr,
+            "peak_to_peak_amplitude": peak_to_peak,
+            "fractional_amplitude": fractional_amplitude,
+            "phase_radians": phase,
+            "phase_cycles": phase_cycles,
+            "phase_uncertainty_radians": phase_uncertainty,
+            "lag": lag,
+            "lag_fraction_of_period": float(lag * frequency),
+            "lag_uncertainty": lag_uncertainty,
+            "residual_rms": residual_rms,
+            "chi2": chi2,
+            "reduced_chi2": reduced_chi2,
+            "condition_number": condition_number,
+        }
+    )
+    return _clean_scalar_dict(result)
+
+
+def _amplitude_phase_summary(band_table: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarise fixed-frequency amplitude/phase diagnostics across bands."""
+    wavelength_values: list[float] = []
+    amplitude_values: list[float] = []
+    fractional_amplitude_values: list[float] = []
+    lag_values: list[float] = []
+
+    for row in band_table:
+        periodic = row.get("fixed_frequency_diagnostics", {})
+        if periodic.get("status") != "ok":
+            continue
+        wl = periodic.get("wavelength", row.get("wavelength"))
+        amp = periodic.get("amplitude")
+        frac_amp = periodic.get("fractional_amplitude")
+        lag = periodic.get("lag")
+        if wl is not None and amp is not None and amp > 0.0:
+            wavelength_values.append(float(wl))
+            amplitude_values.append(float(amp))
+        if frac_amp is not None and np.isfinite(frac_amp):
+            fractional_amplitude_values.append(float(frac_amp))
+        if lag is not None and np.isfinite(lag):
+            lag_values.append(float(lag))
+
+    summary: dict[str, Any] = {
+        "available": bool(len(amplitude_values) > 0),
+        "n_bands_with_fixed_frequency_fit": int(len(amplitude_values)),
+        "amplitude_min": None,
+        "amplitude_max": None,
+        "amplitude_ratio_max_to_min": None,
+        "amplitude_loglog_slope": None,
+        "fractional_amplitude_median": None,
+        "fractional_amplitude_scatter": None,
+        "lag_min": None,
+        "lag_max": None,
+        "lag_span": None,
+    }
+
+    if amplitude_values:
+        amps = np.asarray(amplitude_values, dtype=float)
+        summary["amplitude_min"] = float(np.min(amps))
+        summary["amplitude_max"] = float(np.max(amps))
+        if np.min(amps) > 0.0:
+            summary["amplitude_ratio_max_to_min"] = float(np.max(amps) / np.min(amps))
+
+    if len(amplitude_values) >= 2:
+        wls = np.asarray(wavelength_values, dtype=float)
+        amps = np.asarray(amplitude_values, dtype=float)
+        positive = (wls > 0.0) & (amps > 0.0)
+        if np.count_nonzero(positive) >= 2:
+            slope, _ = np.polyfit(np.log(wls[positive]), np.log(amps[positive]), 1)
+            summary["amplitude_loglog_slope"] = float(slope)
+
+    if fractional_amplitude_values:
+        frac = np.asarray(fractional_amplitude_values, dtype=float)
+        summary["fractional_amplitude_median"] = float(np.median(frac))
+        summary["fractional_amplitude_scatter"] = float(robust_scale(frac))
+
+    if lag_values:
+        lags = np.asarray(lag_values, dtype=float)
+        summary["lag_min"] = float(np.min(lags))
+        summary["lag_max"] = float(np.max(lags))
+        summary["lag_span"] = float(np.max(lags) - np.min(lags))
+
+    return _clean_scalar_dict(summary)
+
+
 def diagnose_wavelength_dependence_prefit(
     lightcurve,
     *,
     sampling_kwargs: dict[str, Any] | None = None,
     variability_kwargs: dict[str, Any] | None = None,
+    frequency: float | None = None,
+    period: float | None = None,
+    amplitude_phase_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a cheap pre-fit wavelength diagnostic report.
 
@@ -115,6 +387,16 @@ def diagnose_wavelength_dependence_prefit(
     variability_kwargs : dict or None, optional
         Keyword arguments passed to
         :func:`pgmuvi.preprocess.variability.is_variable`.
+    frequency : float or None, optional
+        Fixed temporal frequency at which to measure per-band sinusoidal
+        amplitude, phase, and lag.  This should usually be a consensus
+        frequency obtained from LS/ACF/consensus diagnostics.  No frequency is
+        inferred automatically in this diagnostics-only function.
+    period : float or None, optional
+        Fixed temporal period.  Mutually exclusive with ``frequency``.
+    amplitude_phase_kwargs : dict or None, optional
+        Keyword arguments for the fixed-frequency sinusoid fit.  Currently
+        supports ``reference_time`` and ``min_points``.
 
     Returns
     -------
@@ -125,7 +407,8 @@ def diagnose_wavelength_dependence_prefit(
     Raises
     ------
     ValueError
-        If the light curve is not standard 2-D multiband data.
+        If the light curve is not standard 2-D multiband data, or if invalid
+        fixed-frequency arguments are supplied.
     """
     x_raw = lightcurve._xdata_raw
     if x_raw.dim() != 2 or x_raw.shape[1] < 2:
@@ -137,6 +420,8 @@ def diagnose_wavelength_dependence_prefit(
 
     sampling_kwargs = dict(sampling_kwargs or {})
     variability_kwargs = dict(variability_kwargs or {})
+    amplitude_phase_kwargs = dict(amplitude_phase_kwargs or {})
+    fixed_frequency = _resolve_frequency(frequency=frequency, period=period)
 
     x_np = x_raw.detach().cpu().numpy()
     y_np = lightcurve._ydata_raw.detach().cpu().numpy()
@@ -225,6 +510,18 @@ def diagnose_wavelength_dependence_prefit(
             "flux_summary": _flux_summary(y, yerr),
             "usable_for_wavelength_diagnostics": usable,
         }
+
+        if fixed_frequency is not None:
+            periodic = _fit_fixed_frequency_sinusoid(
+                t,
+                y,
+                yerr,
+                frequency=fixed_frequency,
+                **amplitude_phase_kwargs,
+            )
+            periodic["wavelength"] = float(wl)
+            table_row["fixed_frequency_diagnostics"] = periodic
+
         band_table.append(_clean_scalar_dict(table_row))
 
     if len(wavelengths) < 2:
@@ -255,10 +552,17 @@ def diagnose_wavelength_dependence_prefit(
         "has_yerr": bool(yerr_np is not None),
     }
 
-    return {
+    report = {
         "kind": "wavelength_dependence_prefit_diagnostics",
         "stage": "prefit",
         "band_table": band_table,
         "summary": _clean_scalar_dict(summary),
         "warnings": warnings,
     }
+
+    if fixed_frequency is not None:
+        report["fixed_frequency"] = float(fixed_frequency)
+        report["fixed_period"] = float(1.0 / fixed_frequency)
+        report["amplitude_phase_summary"] = _amplitude_phase_summary(band_table)
+
+    return report

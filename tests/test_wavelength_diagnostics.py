@@ -14,6 +14,8 @@ def _make_multiband_lightcurve(
     n_per_band=40,
     wavelengths=(1.0, 2.0, 4.0),
     amplitudes=(0.2, 0.3, 0.5),
+    period=30.0,
+    lags=None,
     yerr_value=0.03,
     include_yerr=True,
     band_labels=None,
@@ -24,8 +26,12 @@ def _make_multiband_lightcurve(
     yerrs = []
     labels = []
     t = np.linspace(0.0, 90.0, n_per_band)
-    for i, (wl, amp) in enumerate(zip(wavelengths, amplitudes, strict=True)):
-        y = 1.0 + amp * np.sin(2.0 * np.pi * t / 30.0)
+    if lags is None:
+        lags = tuple(0.0 for _ in wavelengths)
+    for i, (wl, amp, lag) in enumerate(
+        zip(wavelengths, amplitudes, lags, strict=True)
+    ):
+        y = 1.0 + amp * np.cos(2.0 * np.pi * (t - lag) / period)
         times.append(t)
         wls.append(np.full_like(t, wl))
         ys.append(y)
@@ -69,6 +75,7 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         self.assertIn("sampling_metrics", first)
         self.assertIn("variability_metrics", first)
         self.assertIn("flux_summary", first)
+        self.assertNotIn("fixed_frequency_diagnostics", first)
         self.assertTrue(first["sampling_pass"])
         self.assertTrue(first["variable"])
         self.assertTrue(first["usable_for_wavelength_diagnostics"])
@@ -80,15 +87,21 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         via_method = lc.diagnose_wavelength_dependence(
             sampling_kwargs={"min_points": 10},
             variability_kwargs={"min_points": 10, "fvar_min": 0.01},
+            period=30.0,
         )
         via_function = diagnose_wavelength_dependence_prefit(
             lc,
             sampling_kwargs={"min_points": 10},
             variability_kwargs={"min_points": 10, "fvar_min": 0.01},
+            period=30.0,
         )
 
         self.assertEqual(via_method["summary"], via_function["summary"])
         self.assertEqual(via_method["band_table"], via_function["band_table"])
+        self.assertEqual(
+            via_method["amplitude_phase_summary"],
+            via_function["amplitude_phase_summary"],
+        )
 
     def test_single_band_report_refuses_wavelength_claim(self):
         lc = _make_multiband_lightcurve(
@@ -126,6 +139,77 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
             self.assertFalse(row["variability_available"])
             self.assertIsNone(row["variable"])
             self.assertIn("UNAVAILABLE", row["variability_decision"])
+
+    def test_fixed_period_amplitudes_recover_wavelength_trend(self):
+        lc = _make_multiband_lightcurve(
+            n_per_band=80,
+            amplitudes=(0.1, 0.2, 0.4),
+            yerr_value=0.01,
+        )
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+        )
+
+        rows = report["band_table"]
+        recovered = [row["fixed_frequency_diagnostics"]["amplitude"] for row in rows]
+        np.testing.assert_allclose(recovered, [0.1, 0.2, 0.4], rtol=0.03, atol=0.01)
+        self.assertEqual(
+            report["amplitude_phase_summary"]["n_bands_with_fixed_frequency_fit"], 3
+        )
+        self.assertGreater(
+            report["amplitude_phase_summary"]["amplitude_ratio_max_to_min"], 3.5
+        )
+        self.assertAlmostEqual(
+            report["amplitude_phase_summary"]["amplitude_loglog_slope"],
+            1.0,
+            delta=0.08,
+        )
+
+    def test_fixed_period_phase_lags_recover_band_lag_order(self):
+        lc = _make_multiband_lightcurve(
+            n_per_band=90,
+            amplitudes=(0.4, 0.4, 0.4),
+            lags=(0.0, 2.0, 4.0),
+            yerr_value=0.01,
+        )
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            frequency=1.0 / 30.0,
+            amplitude_phase_kwargs={"reference_time": 0.0},
+        )
+
+        lags = [row["fixed_frequency_diagnostics"]["lag"] for row in report["band_table"]]
+        np.testing.assert_allclose(lags, [0.0, 2.0, 4.0], atol=0.05)
+        self.assertGreater(report["amplitude_phase_summary"]["lag_span"], 3.9)
+
+    def test_period_argument_matches_frequency_argument(self):
+        lc = _make_multiband_lightcurve(n_per_band=80, amplitudes=(0.2, 0.2, 0.2))
+
+        via_period = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            period=30.0,
+        )
+        via_frequency = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            frequency=1.0 / 30.0,
+        )
+
+        self.assertAlmostEqual(via_period["fixed_frequency"], via_frequency["fixed_frequency"])
+        self.assertEqual(
+            via_period["amplitude_phase_summary"],
+            via_frequency["amplitude_phase_summary"],
+        )
+
+    def test_frequency_period_conflict_raises(self):
+        lc = _make_multiband_lightcurve()
+
+        with self.assertRaisesRegex(ValueError, "Specify only one"):
+            lc.diagnose_wavelength_dependence(frequency=1.0 / 30.0, period=30.0)
 
     def test_raises_for_1d_lightcurve(self):
         t = torch.linspace(0.0, 10.0, 20)
