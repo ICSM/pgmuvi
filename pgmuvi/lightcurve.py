@@ -2928,8 +2928,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "xtransform. Pass xtransform='time_center' for time centering, "
                 "or use center_time='auto' to leave the explicit transform unchanged."
             )
+        _created_xtransform_in_constructor = False
         if center_time in ("auto", True) and xtransform is None:
             xtransform = TimeCenter(method=time_center_method)
+            _created_xtransform_in_constructor = True
 
         if xtransform is None or isinstance(xtransform, Transformer):
             self.xtransform = xtransform
@@ -2943,6 +2945,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self.xtransform = transform_dic[xtransform](method=time_center_method)
             else:
                 self.xtransform = transform_dic[xtransform]()
+            _created_xtransform_in_constructor = True
+
+        self._recenter_time_after_data_selection = bool(
+            _created_xtransform_in_constructor
+            and isinstance(self.xtransform, TimeCenter)
+        )
 
         if ytransform is None or isinstance(ytransform, Transformer):
             self.ytransform = ytransform
@@ -3030,6 +3038,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.failure_summary = None
         self.fit_history = []
         self.parameter_workflow_result = None
+        self._last_consensus_final_model_request = None
 
         # ------------------------------------------------------------------
         # Sampling quality check
@@ -3323,6 +3332,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             warnings.warn(_msg, UserWarning, stacklevel=2)
 
+        if getattr(self, "_recenter_time_after_data_selection", False):
+            self._refresh_xdata_transform(recalc=True)
+
     @classmethod
     def from_table(
         cls,
@@ -3496,6 +3508,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         elif isinstance(self.xtransform, Transformer):
             self.register_buffer(
                 "_xdata_transformed", self.xtransform.transform(values)
+            )
+
+    def _refresh_xdata_transform(self, *, recalc=False):
+        """Recompute transformed xdata from the current raw xdata.
+
+        This is needed after constructor-time data selection, such as
+        sampling-quality filtering or subsampling.  Those operations mutate
+        the stored raw coordinate array after the initial transform has been
+        fitted.  Recomputing here keeps the training coordinates consistent
+        with the final retained data without touching raw xdata.
+        """
+        if self.xtransform is None:
+            self.register_buffer("_xdata_transformed", self._xdata_raw)
+        elif isinstance(self.xtransform, Transformer):
+            self.register_buffer(
+                "_xdata_transformed",
+                self.xtransform.transform(self._xdata_raw, recalc=recalc),
             )
 
     @property
@@ -16189,6 +16218,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # model; otherwise raise a clear error to prevent accidental stale-
         # state reuse in public consensus fits.
         _requested_model = fit_kwargs.get("model")
+        if _requested_model is None:
+            _requested_model = getattr(
+                self, "_last_consensus_final_model_request", None
+            )
+            if _requested_model is not None:
+                fit_kwargs["model"] = _requested_model
         if _requested_model is not None:
             self._consensus_clear_model_state()
         elif not _allow_existing:
@@ -16470,6 +16505,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 result_diagnostics, validate=False
             )
             raise
+
+        if _requested_model is not None:
+            self._last_consensus_final_model_request = _requested_model
 
         if apply_consensus_constraints:
             _final_bounds = self._consensus_get_registered_sm_constraint_bounds(_keys)
@@ -16818,6 +16856,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         result_diagnostics.update(reconciliation_diagnostics)
 
         _requested_model = fit_kwargs.get("model")
+        if _requested_model is None:
+            _requested_model = getattr(
+                self, "_last_consensus_final_model_request", None
+            )
+            if _requested_model is not None:
+                fit_kwargs["model"] = _requested_model
         if _requested_model is not None:
             self._consensus_clear_model_state()
         elif not _allow_existing:
@@ -17113,6 +17157,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 result_diagnostics, validate=False
             )
             raise
+
+        if _requested_model is not None:
+            self._last_consensus_final_model_request = _requested_model
 
         if apply_consensus_constraints:
             _final_bounds = self._consensus_get_registered_sm_constraint_bounds(_keys)

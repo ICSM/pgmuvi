@@ -56,6 +56,37 @@ class TestTimeCenterTransform(unittest.TestCase):
         )
         torch.testing.assert_close(parent.xtransform.inverse(transformed), band_x)
 
+
+    def test_time_center_refits_after_sampling_quality_band_filter(self):
+        failing_t = torch.as_tensor([0.0, 1.0, 2.0], dtype=torch.float32)
+        passing_t = torch.arange(100.0, 115.0, dtype=torch.float32)
+        failing_x = torch.stack((failing_t, torch.ones_like(failing_t)), dim=1)
+        passing_x = torch.stack((passing_t, torch.full_like(passing_t, 2.0)), dim=1)
+        x = torch.cat((failing_x, passing_x), dim=0)
+        y = torch.full((x.shape[0],), 10.0, dtype=torch.float32)
+        yerr = torch.ones_like(y)
+        band = np.array(["bad"] * len(failing_t) + ["good"] * len(passing_t))
+
+        lc = Lightcurve(
+            x,
+            y,
+            yerr=yerr,
+            band=band,
+            check_sampling=True,
+            sampling_kwargs={
+                "min_points": 5,
+                "max_gap_fraction": 1.0,
+                "min_baseline_factor": 1.0,
+                "min_snr": 0.0,
+            },
+        )
+
+        self.assertEqual(set(lc.band.tolist()), {"good"})
+        torch.testing.assert_close(
+            lc._xdata_transformed[:, 0],
+            passing_t - ((passing_t.min() + passing_t.max()) / 2),
+        )
+
     def test_center_time_false_preserves_raw_training_coordinates(self):
         x = torch.as_tensor([1000.0, 1010.0, 1020.0], dtype=torch.float32)
         y = torch.zeros_like(x)

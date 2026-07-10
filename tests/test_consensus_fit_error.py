@@ -356,6 +356,24 @@ class TestConsensusFitErrorRaised(unittest.TestCase):
         self.assertTrue(diag["consensus_success"])
         self.assertIsNotNone(diag["final_consensus_frequency"])
 
+
+    def test_repeated_consensus_fit_reuses_last_explicit_model_spec(self):
+        """A later consensus call may omit model after one explicit success."""
+        lc = _make_multiband_lightcurve(
+            {"g": 30.0, "r": 30.0, "i": 30.0},
+            noise_std=0.01,
+            seed=17,
+        )
+        first = _run_consensus_fit(lc)
+        self.assertTrue(first["consensus_success"])
+
+        # Historically this raised the explicit-final-model guard despite the
+        # previous call having established a safe model specification.  The
+        # repeated fit should rebuild a fresh model from that remembered spec,
+        # not reuse the stale fitted model object.
+        second = _run_consensus_fit(lc, model=None)
+        self.assertTrue(second["consensus_success"])
+
     def test_majority_cluster_succeeds(self):
         """3 bands near 30 d + 1 discrepant band at 10 d → consensus succeeds."""
         lc = _make_multiband_lightcurve(
