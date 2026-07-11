@@ -14789,6 +14789,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "consensus_frequency_width",
             "consensus_frequency_k",
             "consensus_scale_max_factor",
+            "consensus_scale_width_factor",
             "apply_consensus_constraints",
             "constrain_consensus",
             "use_gp_validation",
@@ -15441,6 +15442,78 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         }
 
     @staticmethod
+    def _consensus_resolve_scale_constraint_upper(
+        consensus_frequencies,
+        consensus_frequency_width=None,
+        *,
+        consensus_scale_max_factor=0.2,
+        consensus_scale_width_factor=1.0,
+    ):
+        """Return a conservative upper bound for SM mixture scales.
+
+        ``mixture_scales`` are spectral widths in frequency units.  The legacy
+        consensus guard used only a fixed fraction of the median consensus
+        frequency.  For well-agreed long-period variables this can be much
+        wider than the measured cross-band consensus scatter, allowing the SM
+        component to run to a broad, low-coherence solution.  When a finite
+        consensus-frequency width is available, cap the scale by that width as
+        well as by the frequency-fraction guard.
+        """
+        freqs = np.asarray(consensus_frequencies, dtype=float).ravel()
+        if freqs.size == 0 or not np.all(np.isfinite(freqs) & (freqs > 0)):
+            raise ValueError(
+                "consensus_frequencies must contain finite, strictly positive "
+                "values when deriving mixture-scale constraints."
+            )
+
+        max_factor = float(consensus_scale_max_factor)
+        if not (np.isfinite(max_factor) and max_factor > 0):
+            raise ValueError(
+                "consensus_scale_max_factor must be a finite, strictly "
+                "positive float."
+            )
+
+        width_factor = float(consensus_scale_width_factor)
+        if not (np.isfinite(width_factor) and width_factor > 0):
+            raise ValueError(
+                "consensus_scale_width_factor must be a finite, strictly "
+                "positive float."
+            )
+
+        frequency_fraction_upper = max_factor * float(np.median(freqs))
+        scale_upper = frequency_fraction_upper
+        width_upper = None
+        strategy = "frequency_fraction"
+
+        if consensus_frequency_width is not None:
+            widths = np.asarray(consensus_frequency_width, dtype=float).ravel()
+            if widths.size == 1 and freqs.size > 1:
+                widths = np.broadcast_to(widths, freqs.shape).copy()
+            if widths.shape == freqs.shape and np.all(np.isfinite(widths) & (widths > 0)):
+                width_upper = width_factor * float(np.median(widths))
+                scale_upper = min(frequency_fraction_upper, width_upper)
+                strategy = "min_frequency_fraction_and_frequency_width"
+
+        # The Interval upper bound must remain strictly above the practical
+        # lower bound even for extremely long periods or tiny width estimates.
+        min_valid_upper = 10.0 * float(_CONSENSUS_MIN_SCALE_BOUND)
+        if not (np.isfinite(scale_upper) and scale_upper > 0):
+            raise ValueError(
+                "derived consensus mixture-scale upper bound must be positive "
+                f"and finite (got {scale_upper})."
+            )
+        scale_upper = max(float(scale_upper), min_valid_upper)
+
+        return {
+            "upper": float(scale_upper),
+            "strategy": strategy,
+            "frequency_fraction_upper": float(frequency_fraction_upper),
+            "width_upper": None if width_upper is None else float(width_upper),
+            "consensus_scale_max_factor": float(max_factor),
+            "consensus_scale_width_factor": float(width_factor),
+        }
+
+    @staticmethod
     def _consensus_build_initialization_from_frequency(
         final_frequency,
         scatter,
@@ -15913,6 +15986,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             - ``consensus_scale_max_factor`` : float, default ``0.2``
               Multiplier on median consensus frequency to derive an upper bound
               for mixture-scale constraints when enabled.
+            - ``consensus_scale_width_factor`` : float, default ``1.0``
+              Multiplier on consensus-frequency width used as an additional
+              upper cap for mixture-scale constraints.  The active upper bound
+              is the smaller of the frequency-fraction cap and this width cap
+              whenever a finite consensus-frequency width is available.
             - ``consensus_dedup_rtol`` : float, default ``0.01``
               Relative tolerance used to cluster near-identical frequency
               candidates before consensus ranking. Must be finite and strictly
@@ -15964,6 +16042,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         consensus_frequency_width = fit_kwargs.pop("consensus_frequency_width", None)
         consensus_frequency_k = fit_kwargs.pop("consensus_frequency_k", 3.0)
         consensus_scale_max_factor = fit_kwargs.pop("consensus_scale_max_factor", 0.2)
+        consensus_scale_width_factor = fit_kwargs.pop("consensus_scale_width_factor", 1.0)
         legacy_apply_constraints = fit_kwargs.pop("apply_consensus_constraints", None)
         constrain_consensus = fit_kwargs.pop("constrain_consensus", None)
         if constrain_consensus is None:
@@ -16177,6 +16256,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "use_acf": bool(use_acf),
                         "constrain_consensus": bool(apply_consensus_constraints),
                         "consensus_width_factor": _resolved_width_factor,
+                        "consensus_scale_width_factor": float(consensus_scale_width_factor),
                         "consensus_dedup_rtol": float(consensus_dedup_rtol),
                         "use_gp_validation": bool(use_gp_validation),
                         "gp_frequency_tolerance_factor": float(
@@ -16421,6 +16501,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "use_acf": bool(use_acf),
                     "constrain_consensus": bool(apply_consensus_constraints),
                     "consensus_width_factor": consensus_width_factor,
+                    "consensus_scale_width_factor": float(consensus_scale_width_factor),
                     "consensus_dedup_rtol": float(consensus_dedup_rtol),
                     "use_gp_validation": bool(use_gp_validation),
                     "gp_frequency_tolerance_factor": float(
@@ -16472,6 +16553,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "consensus_frequency_width",
             "consensus_frequency_k",
             "consensus_scale_max_factor",
+            "consensus_scale_width_factor",
             "apply_consensus_constraints",
             "constrain_consensus",
             "min_points_per_band",
@@ -16585,15 +16667,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _freqs_arr = np.asarray(
                 consensus_frequencies, dtype=float
             ).ravel()
-            _scale_upper = (
-                float(consensus_scale_max_factor) * float(np.median(_freqs_arr))
+            _scale_info = self._consensus_resolve_scale_constraint_upper(
+                _freqs_arr,
+                consensus_frequency_width=consensus_frequency_width,
+                consensus_scale_max_factor=consensus_scale_max_factor,
+                consensus_scale_width_factor=consensus_scale_width_factor,
             )
-            if not (np.isfinite(_scale_upper) and _scale_upper > 0):
-                _msg = (
-                    "consensus_scale_max_factor * median(consensus_frequencies)"
-                    f" must be positive and finite (got {_scale_upper})."
-                )
-                raise ValueError(_msg)
+            _scale_upper = float(_scale_info["upper"])
             # Practical lower bound - scales must be positive.
             _constraint_dict[_keys["mixture_scales"]] = Interval(
                 _CONSENSUS_MIN_SCALE_BOUND, _scale_upper
@@ -16629,6 +16709,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             result_diagnostics["consensus_scale_constraint_bounds"] = [
                 float(_CONSENSUS_MIN_SCALE_BOUND), float(_scale_upper)
             ]
+            result_diagnostics["consensus_scale_upper_strategy"] = _scale_info["strategy"]
+            result_diagnostics["consensus_scale_frequency_fraction_upper"] = (
+                _scale_info["frequency_fraction_upper"]
+            )
+            result_diagnostics["consensus_scale_width_upper"] = _scale_info["width_upper"]
+            result_diagnostics["consensus_scale_width_factor"] = (
+                _scale_info["consensus_scale_width_factor"]
+            )
             result_diagnostics["consensus_scale_constraint_target_key"] = (
                 _keys.get("mixture_scales")
             )
@@ -16641,6 +16729,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             result_diagnostics["constraints_marked_set_after_consensus"] = False
 
+
+        if (
+            consensus_scales is None
+            and apply_consensus_constraints
+            and consensus_frequency_width is not None
+            and _scale_upper is not None
+        ):
+            _widths_for_init = np.asarray(consensus_frequency_width, dtype=float).ravel()
+            if _widths_for_init.size == 1 and np.asarray(consensus_frequencies).size > 1:
+                _widths_for_init = np.broadcast_to(
+                    _widths_for_init, np.asarray(consensus_frequencies).shape
+                ).copy()
+            _safe_init_upper = 0.5 * float(_scale_upper)
+            consensus_scales = np.minimum(_widths_for_init, _safe_init_upper)
+            consensus_scales = np.maximum(
+                consensus_scales, 2.0 * float(_CONSENSUS_MIN_SCALE_BOUND)
+            )
+            result_diagnostics["consensus_mixture_init_scales"] = (
+                np.asarray(consensus_scales, dtype=float).ravel().tolist()
+            )
+            result_diagnostics["consensus_scale_initialization_strategy"] = (
+                "min_frequency_width_and_half_scale_upper"
+            )
 
         consensus_guess = self._consensus_build_guess(
             frequencies=consensus_frequencies,
@@ -16671,6 +16782,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "consensus_scale_upper": (
                 float(_scale_upper) if _scale_upper is not None else None
             ),
+            "consensus_scale_width_factor": float(consensus_scale_width_factor),
         }
 
         merged_guess = {}
@@ -16768,6 +16880,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         user_guess = fit_kwargs.pop("guess", None)
         consensus_frequency_k = fit_kwargs.pop("consensus_frequency_k", 3.0)
         consensus_scale_max_factor = fit_kwargs.pop("consensus_scale_max_factor", 0.2)
+        consensus_scale_width_factor = fit_kwargs.pop("consensus_scale_width_factor", 1.0)
         legacy_apply_constraints = fit_kwargs.pop("apply_consensus_constraints", None)
         constrain_consensus = fit_kwargs.pop("constrain_consensus", None)
         if constrain_consensus is None:
@@ -17108,6 +17221,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "guess",
             "consensus_frequency_k",
             "consensus_scale_max_factor",
+            "consensus_scale_width_factor",
             "apply_consensus_constraints",
             "constrain_consensus",
             "min_points_per_band",
@@ -17189,14 +17303,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _global_upper,
             )
 
-            _scale_upper = (
-                float(consensus_scale_max_factor) * float(np.median(_freqs))
+            _scale_info = self._consensus_resolve_scale_constraint_upper(
+                _freqs,
+                consensus_frequency_width=_widths,
+                consensus_scale_max_factor=consensus_scale_max_factor,
+                consensus_scale_width_factor=consensus_scale_width_factor,
             )
-            if not (np.isfinite(_scale_upper) and _scale_upper > 0):
-                raise ValueError(
-                    "consensus_scale_max_factor * median(consensus_frequencies) "
-                    f"must be positive and finite (got {_scale_upper})."
-                )
+            _scale_upper = float(_scale_info["upper"])
             _constraint_dict[_keys["mixture_scales"]] = Interval(
                 _CONSENSUS_MIN_SCALE_BOUND,
                 _scale_upper,
@@ -17222,6 +17335,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 float(_CONSENSUS_MIN_SCALE_BOUND),
                 float(_scale_upper),
             ]
+            result_diagnostics["consensus_scale_upper_strategy"] = _scale_info["strategy"]
+            result_diagnostics["consensus_scale_frequency_fraction_upper"] = (
+                _scale_info["frequency_fraction_upper"]
+            )
+            result_diagnostics["consensus_scale_width_upper"] = _scale_info["width_upper"]
+            result_diagnostics["consensus_scale_width_factor"] = (
+                _scale_info["consensus_scale_width_factor"]
+            )
             result_diagnostics["consensus_scale_constraint_target_key"] = (
                 _keys.get("mixture_scales")
             )
