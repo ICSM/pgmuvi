@@ -1,9 +1,15 @@
+import copy
 import numbers
 
 import numpy as np
 import torch
 import gpytorch
 from tqdm import tqdm
+
+try:
+    from linear_operator.utils.errors import NotPSDError
+except Exception:  # pragma: no cover - compatibility with older GPyTorch stacks
+    NotPSDError = None
 
 
 def _collect_trainable_parameters(*modules):
@@ -56,6 +62,51 @@ def _iter_named_trainable_parameters(model, likelihood=None):
                 continue
             seen.add(ident)
             yield f"{prefix}{name}", param
+
+
+
+def _recoverable_training_errors():
+    """Return numerical training exceptions that may have a usable best state."""
+
+    errors = [FloatingPointError]
+    if NotPSDError is not None:
+        errors.append(NotPSDError)
+    return tuple(errors)
+
+
+def _snapshot_module_state(module):
+    """Return a detached deep copy of a module state_dict."""
+
+    if module is None or not hasattr(module, "state_dict"):
+        return None
+    return copy.deepcopy(module.state_dict())
+
+
+def _snapshot_training_state(model, likelihood=None):
+    """Capture model/likelihood state so a failed fit can be restored."""
+
+    return {
+        "model": _snapshot_module_state(model),
+        "likelihood": _snapshot_module_state(likelihood),
+    }
+
+
+def _restore_module_state(module, state):
+    """Restore a module state_dict if both module and snapshot exist."""
+
+    if module is None or state is None or not hasattr(module, "load_state_dict"):
+        return
+    module.load_state_dict(state)
+
+
+def _restore_training_state(model, likelihood, state):
+    """Restore model/likelihood state captured by _snapshot_training_state."""
+
+    if state is None:
+        return
+    _restore_module_state(model, state.get("model"))
+    _restore_module_state(likelihood, state.get("likelihood"))
+
 
 def _validate_training_controls(maxiter, miniter, stopavg, lr):
     """Validate basic scalar trainer controls before optimizer setup."""
@@ -133,6 +184,7 @@ def train(
     eps=1e-8,
     stopavg=9,
     verbose=True,
+    restore_best_on_failure=True,
     **kwargs,
 ):
     """Given a GP model, a likelihood, and some training data, optimise a
@@ -180,6 +232,12 @@ def train(
     eps : float, default 1e-8.
         term added to the denominator to improve numerical stability in some
         optimisers (e.g. AdamW)
+    restore_best_on_failure : bool, default True
+        If training fails after at least one finite-loss iteration because of a
+        recoverable numerical error, restore the best finite-loss model and
+        likelihood state and return the partial results instead of discarding
+        the fit.  This currently covers non-finite-loss/gradient failures and
+        GPyTorch/linear-operator NotPSDError failures.
 
     Examples
     --------
@@ -285,7 +343,21 @@ def train(
                         """
         )
 
-    results = {"loss": [], "delta_loss": []}
+    results = {
+        "loss": [],
+        "delta_loss": [],
+        "training_recovered_from_failure": False,
+        "training_failure_iteration": None,
+        "training_failure_type": None,
+        "training_failure_message": None,
+        "training_restored_best_iteration": None,
+        "training_restored_best_loss": None,
+        "training_best_iteration": None,
+        "training_best_loss": None,
+    }
+    best_state = None
+    best_iteration = None
+    best_loss = None
     if lightcurve is not None:
         pars = lightcurve.get_parameters()
         for key, value in pars.items():
@@ -295,13 +367,49 @@ def train(
             results[param_name] = []
     # for param_name, param in
     for i in tqdm(range(maxiter), disable=not verbose):
-        optimizer.zero_grad()
-        output = model(train_x)
-        loss = -lossfn(output, train_y)
-        _raise_if_nonfinite_tensor(loss.detach(), label="training loss", iteration=i)
-        loss.backward()
-        _raise_if_nonfinite_gradients(model, likelihood, iteration=i)
-        optimizer.step()
+        try:
+            optimizer.zero_grad()
+            output = model(train_x)
+            loss = -lossfn(output, train_y)
+            _raise_if_nonfinite_tensor(
+                loss.detach(), label="training loss", iteration=i
+            )
+            loss_value = float(loss.detach().cpu().item())
+            loss.backward()
+            _raise_if_nonfinite_gradients(model, likelihood, iteration=i)
+
+            # Snapshot the pre-step state that produced the finite loss.
+            # If the optimizer step moves into a numerically invalid region,
+            # the next iteration can restore this known-good state.
+            if best_loss is None or loss_value < best_loss:
+                best_loss = loss_value
+                best_iteration = i
+                best_state = _snapshot_training_state(model, likelihood)
+                results["training_best_iteration"] = best_iteration
+                results["training_best_loss"] = best_loss
+
+            optimizer.step()
+        except _recoverable_training_errors() as exc:
+            if restore_best_on_failure and best_state is not None:
+                _restore_training_state(model, likelihood, best_state)
+                model.train()
+                likelihood.train()
+                results["training_recovered_from_failure"] = True
+                results["training_failure_iteration"] = i
+                results["training_failure_type"] = type(exc).__name__
+                results["training_failure_message"] = str(exc)
+                results["training_restored_best_iteration"] = best_iteration
+                results["training_restored_best_loss"] = best_loss
+                if verbose:
+                    print(
+                        "Training recovered from "
+                        f"{type(exc).__name__} at iteration {i}; "
+                        f"restored best finite-loss state from iteration "
+                        f"{best_iteration} (loss={best_loss})."
+                    )
+                break
+            raise
+
         # Now update list of parameters
         if i > 0:
             results["delta_loss"].append(

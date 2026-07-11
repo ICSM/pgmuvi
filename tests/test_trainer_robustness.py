@@ -5,8 +5,11 @@ import torch
 import gpytorch
 
 from pgmuvi.trainers import (
+    NotPSDError,
     _collect_trainable_parameters,
     _raise_if_nonfinite_tensor,
+    _snapshot_training_state,
+    _restore_training_state,
     _validate_training_controls,
     train,
 )
@@ -86,6 +89,104 @@ class TestTrainerRobustness(unittest.TestCase):
         for param in likelihood.parameters():
             if param.requires_grad:
                 self.assertIn(id(param), param_ids)
+
+
+    def test_training_state_snapshot_restores_model_and_likelihood(self):
+        train_x = torch.linspace(0, 1, 5)
+        train_y = torch.sin(train_x)
+        likelihood = gpytorch.likelihoods.GaussianLikelihood()
+        model = ToyExactGP(train_x, train_y, likelihood)
+
+        original_mean = model.mean_module.raw_constant.detach().clone()
+        original_noise = likelihood.noise_covar.raw_noise.detach().clone()
+        state = _snapshot_training_state(model, likelihood)
+
+        with torch.no_grad():
+            model.mean_module.raw_constant.add_(3.0)
+            likelihood.noise_covar.raw_noise.add_(2.0)
+
+        _restore_training_state(model, likelihood, state)
+
+        self.assertTrue(torch.equal(model.mean_module.raw_constant, original_mean))
+        self.assertTrue(torch.equal(likelihood.noise_covar.raw_noise, original_noise))
+
+    @unittest.skipIf(NotPSDError is None, "linear_operator NotPSDError unavailable")
+    def test_train_recovers_notpsd_failure_by_restoring_best_state(self):
+        train_x = torch.linspace(0, 1, 5)
+        train_y = torch.sin(train_x)
+        likelihood = gpytorch.likelihoods.GaussianLikelihood()
+        model = ToyExactGP(train_x, train_y, likelihood)
+
+        with torch.no_grad():
+            model.mean_module.raw_constant.fill_(1.0)
+        expected_restored = model.mean_module.raw_constant.detach().clone()
+
+        class FailingMLL:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, output, target):
+                self.calls += 1
+                if self.calls == 1:
+                    return -(model.mean_module.raw_constant ** 2).sum()
+                raise NotPSDError("synthetic not-PSD failure")
+
+        with mock.patch(
+            "gpytorch.mlls.ExactMarginalLogLikelihood",
+            return_value=FailingMLL(),
+        ):
+            results = train(
+                model=model,
+                likelihood=likelihood,
+                train_x=train_x,
+                train_y=train_y,
+                maxiter=3,
+                miniter=0,
+                optim="SGD",
+                lr=0.1,
+                verbose=False,
+            )
+
+        self.assertTrue(results["training_recovered_from_failure"])
+        self.assertEqual(results["training_failure_iteration"], 1)
+        self.assertEqual(results["training_restored_best_iteration"], 0)
+        self.assertEqual(results["training_failure_type"], "NotPSDError")
+        self.assertTrue(torch.equal(model.mean_module.raw_constant, expected_restored))
+
+    @unittest.skipIf(NotPSDError is None, "linear_operator NotPSDError unavailable")
+    def test_train_can_disable_notpsd_recovery(self):
+        train_x = torch.linspace(0, 1, 5)
+        train_y = torch.sin(train_x)
+        likelihood = gpytorch.likelihoods.GaussianLikelihood()
+        model = ToyExactGP(train_x, train_y, likelihood)
+
+        class FailingMLL:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, output, target):
+                self.calls += 1
+                if self.calls == 1:
+                    return -(model.mean_module.raw_constant ** 2).sum()
+                raise NotPSDError("synthetic not-PSD failure")
+
+        with mock.patch(
+            "gpytorch.mlls.ExactMarginalLogLikelihood",
+            return_value=FailingMLL(),
+        ):
+            with self.assertRaises(NotPSDError):
+                train(
+                    model=model,
+                    likelihood=likelihood,
+                    train_x=train_x,
+                    train_y=train_y,
+                    maxiter=3,
+                    miniter=0,
+                    optim="SGD",
+                    lr=0.1,
+                    verbose=False,
+                    restore_best_on_failure=False,
+                )
 
     def test_training_control_validation_rejects_invalid_values(self):
         # Zero-iteration fits are intentionally supported by consensus smoke
