@@ -2128,6 +2128,404 @@ def compare_wavelength_candidate_models(
     return _clean_scalar_dict(report)
 
 
+
+
+# -----------------------------------------------------------------------------
+# Period-independent wavelength diagnostics (Level 0)
+# -----------------------------------------------------------------------------
+
+def _piwd_float(value: Any) -> float | None:
+    """Return a finite float, otherwise None."""
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if np.isfinite(out) else None
+
+
+def _piwd_quantile(y: np.ndarray, q: float) -> float | None:
+    """Finite-sample quantile with JSON-safe missing output."""
+    y = np.asarray(y, dtype=float)
+    y = y[np.isfinite(y)]
+    if y.size == 0:
+        return None
+    return float(np.percentile(y, q))
+
+
+def _piwd_ratio(values: list[float | None]) -> float | None:
+    """Return max/min for positive finite values, otherwise None."""
+    finite = np.asarray(
+        [float(v) for v in values if v is not None and np.isfinite(float(v))],
+        dtype=float,
+    )
+    finite = finite[finite > 0.0]
+    if finite.size < 2:
+        return None
+    lower = float(np.nanmin(finite))
+    if lower <= 0.0:
+        return None
+    return float(np.nanmax(finite) / lower)
+
+
+def _piwd_loglog_slope(
+    wavelengths: list[float | None], values: list[float | None]
+) -> float | None:
+    """Fit a diagnostic log(value)-log(wavelength) slope."""
+    pairs: list[tuple[float, float]] = []
+    for wl, value in zip(wavelengths, values, strict=False):
+        wl_f = _piwd_float(wl)
+        value_f = _piwd_float(value)
+        if wl_f is None or value_f is None:
+            continue
+        if wl_f <= 0.0 or value_f <= 0.0:
+            continue
+        pairs.append((wl_f, value_f))
+    if len(pairs) < 2:
+        return None
+    x = np.log(np.asarray([p[0] for p in pairs], dtype=float))
+    y = np.log(np.asarray([p[1] for p in pairs], dtype=float))
+    if np.nanmax(x) == np.nanmin(x):
+        return None
+    coeff = np.polyfit(x, y, deg=1)
+    return float(coeff[0])
+
+
+def _piwd_monotonic_class(
+    wavelengths: list[float | None],
+    values: list[float | None],
+    *,
+    flat_tolerance_fraction: float = 0.10,
+) -> str:
+    """Descriptively classify a wavelength trend without assuming a period.
+
+    This is a tolerance-based exploratory label, not a formal statistical test
+    of monotonicity/non-monotonicity.  A ``non_monotonic`` result should be
+    treated as a soft warning that flexible wavelength structure may be worth
+    testing, not as a hard rejection of monotonic dust/power-law models and not
+    as a constraint on the fitted wavelength solution.
+
+    TODO(feature): add an uncertainty-aware monotonicity diagnostic, e.g. a
+    bootstrap/isotonic-regression comparison against monotonic increasing and
+    monotonic decreasing null trends, plus rank-correlation trend diagnostics.
+    """
+    pairs: list[tuple[float, float]] = []
+    for wl, value in zip(wavelengths, values, strict=False):
+        wl_f = _piwd_float(wl)
+        value_f = _piwd_float(value)
+        if wl_f is None or value_f is None:
+            continue
+        pairs.append((wl_f, value_f))
+    if len(pairs) < 2:
+        return "unavailable"
+
+    pairs.sort(key=lambda item: item[0])
+    y = np.asarray([p[1] for p in pairs], dtype=float)
+    span = float(np.nanmax(y) - np.nanmin(y))
+    scale = max(float(np.nanmax(np.abs(y))), 1.0)
+    if span <= flat_tolerance_fraction * scale:
+        return "approximately_flat"
+
+    # Descriptive tolerance rule only.  This deliberately avoids claiming
+    # statistical evidence for non-monotonicity from noisy/sparsely sampled
+    # per-band summaries.  Downstream model-planning code must treat
+    # ``non_monotonic`` as advisory unless/until the TODO(feature) statistical
+    # monotonicity test is implemented.
+    tolerance = flat_tolerance_fraction * span
+    diffs = np.diff(y)
+    if np.all(diffs >= -tolerance):
+        return "increasing"
+    if np.all(diffs <= tolerance):
+        return "decreasing"
+    return "non_monotonic"
+
+
+def _piwd_noise_corrected(value: float | None, noise: float | None) -> float | None:
+    """Quadrature noise correction for positive scale-like quantities."""
+    value_f = _piwd_float(value)
+    noise_f = _piwd_float(noise)
+    if value_f is None or noise_f is None:
+        return None
+    if value_f < 0.0 or noise_f < 0.0:
+        return None
+    return float(np.sqrt(max(0.0, value_f * value_f - noise_f * noise_f)))
+
+
+def _period_independent_band_summary(
+    y: np.ndarray,
+    yerr: np.ndarray | None,
+    *,
+    min_points: int,
+) -> dict[str, Any]:
+    """Robust per-band flux statistics that do not use periods or phases."""
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(y)
+    yf = y[finite]
+
+    result: dict[str, Any] = {
+        "available": False,
+        "status": "insufficient_finite_flux",
+        "n_finite_flux": int(yf.size),
+        "median_flux": None,
+        "trimmed_mean_flux_10_90": None,
+        "mean_flux": None,
+        "q05_flux": None,
+        "q10_flux": None,
+        "q16_flux": None,
+        "q25_flux": None,
+        "q50_flux": None,
+        "q75_flux": None,
+        "q84_flux": None,
+        "q90_flux": None,
+        "q95_flux": None,
+        "mad_scatter": None,
+        "iqr_scatter": None,
+        "robust_scatter": None,
+        "raw_peak_to_peak_q05_q95": None,
+        "raw_half_amplitude_q05_q95": None,
+        "raw_peak_to_peak_q10_q90": None,
+        "raw_half_amplitude_q10_q90": None,
+        "fractional_half_amplitude_q05_q95": None,
+        "fractional_half_amplitude_q10_q90": None,
+        "median_yerr": None,
+        "mean_yerr": None,
+        "noise_corrected_robust_scatter": None,
+        "noise_corrected_half_amplitude_q05_q95": None,
+        "noise_corrected_half_amplitude_q10_q90": None,
+    }
+
+    if yf.size < min_points:
+        return result
+
+    q05, q10, q16, q25, q50, q75, q84, q90, q95 = np.percentile(
+        yf, [5.0, 10.0, 16.0, 25.0, 50.0, 75.0, 84.0, 90.0, 95.0]
+    )
+    trimmed = yf[(yf >= q10) & (yf <= q90)]
+    if trimmed.size == 0:
+        trimmed = yf
+
+    mad = float(1.4826 * np.median(np.abs(yf - q50)))
+    iqr_scatter = float(0.7413 * (q75 - q25))
+    try:
+        robust = float(robust_scale(yf))
+    except Exception:
+        robust = mad
+
+    amp_05_95 = float(0.5 * (q95 - q05))
+    amp_10_90 = float(0.5 * (q90 - q10))
+    median_abs = abs(float(q50))
+
+    result.update(
+        {
+            "available": True,
+            "status": "ok",
+            "median_flux": float(q50),
+            "trimmed_mean_flux_10_90": float(np.mean(trimmed)),
+            "mean_flux": float(np.mean(yf)),
+            "q05_flux": float(q05),
+            "q10_flux": float(q10),
+            "q16_flux": float(q16),
+            "q25_flux": float(q25),
+            "q50_flux": float(q50),
+            "q75_flux": float(q75),
+            "q84_flux": float(q84),
+            "q90_flux": float(q90),
+            "q95_flux": float(q95),
+            "mad_scatter": mad,
+            "iqr_scatter": iqr_scatter,
+            "robust_scatter": robust,
+            "raw_peak_to_peak_q05_q95": float(q95 - q05),
+            "raw_half_amplitude_q05_q95": amp_05_95,
+            "raw_peak_to_peak_q10_q90": float(q90 - q10),
+            "raw_half_amplitude_q10_q90": amp_10_90,
+            "fractional_half_amplitude_q05_q95": (
+                float(amp_05_95 / median_abs) if median_abs > 0.0 else None
+            ),
+            "fractional_half_amplitude_q10_q90": (
+                float(amp_10_90 / median_abs) if median_abs > 0.0 else None
+            ),
+        }
+    )
+
+    if yerr is not None:
+        yerr = np.asarray(yerr, dtype=float)
+        yef = yerr[np.isfinite(yerr) & (yerr > 0.0)]
+        if yef.size > 0:
+            median_yerr = float(np.median(yef))
+            result["median_yerr"] = median_yerr
+            result["mean_yerr"] = float(np.mean(yef))
+            result["noise_corrected_robust_scatter"] = _piwd_noise_corrected(
+                robust, median_yerr
+            )
+            # Approximate Gaussian quantile factors for half central intervals.
+            result["noise_corrected_half_amplitude_q05_q95"] = _piwd_noise_corrected(
+                amp_05_95, 1.64485 * median_yerr
+            )
+            result["noise_corrected_half_amplitude_q10_q90"] = _piwd_noise_corrected(
+                amp_10_90, 1.28155 * median_yerr
+            )
+
+    return _clean_scalar_dict(result)
+
+
+def diagnose_period_independent_wavelength_structure(
+    lightcurve,
+    *,
+    min_points_per_band: int = 5,
+) -> dict[str, Any]:
+    """Diagnose wavelength structure using only per-band flux distributions.
+
+    This is a Level-0, period-independent diagnostic.  It deliberately does not
+    use Lomb-Scargle peaks, ACF peaks, consensus frequencies, phase folding, GP
+    fits, or fitted model residuals.  It is therefore safe to use before and
+    independently of temporal-consensus model selection.
+
+    Parameters
+    ----------
+    lightcurve : pgmuvi.lightcurve.Lightcurve
+        A 2-D/multiband light curve whose raw xdata has columns
+        ``(time, wavelength)``.
+    min_points_per_band : int, optional
+        Minimum number of finite flux values required for a band's robust
+        distribution summary.
+
+    Returns
+    -------
+    dict
+        JSON-safe diagnostics with a per-band table and cross-wavelength robust
+        trend summaries.
+    """
+    min_points_per_band = int(min_points_per_band)
+    if min_points_per_band < 2:
+        raise ValueError("min_points_per_band must be at least 2.")
+
+    x_raw = lightcurve._xdata_raw
+    if x_raw.dim() != 2 or x_raw.shape[1] < 2:
+        raise ValueError(
+            "diagnose_period_independent_wavelength_structure() requires 2-D "
+            "multiband data with raw xdata of shape (N, 2), where column 0 is "
+            "time and column 1 is wavelength/band coordinate."
+        )
+
+    x_np = x_raw.detach().cpu().numpy()
+    y_np = lightcurve._ydata_raw.detach().cpu().numpy()
+    yerr_np = None
+    if hasattr(lightcurve, "_yerr_raw") and lightcurve._yerr_raw is not None:
+        yerr_np = lightcurve._yerr_raw.detach().cpu().numpy()
+
+    wavelengths = np.unique(x_np[:, 1])
+    band_table: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    for wl in wavelengths:
+        mask = x_np[:, 1] == wl
+        y = np.asarray(y_np[mask], dtype=float)
+        yerr = np.asarray(yerr_np[mask], dtype=float) if yerr_np is not None else None
+        summary = _period_independent_band_summary(
+            y,
+            yerr,
+            min_points=min_points_per_band,
+        )
+        row = {
+            "wavelength": float(wl),
+            "band_labels": _band_labels_for_mask(lightcurve.band, mask),
+            "n_points": int(np.sum(mask)),
+            "period_independent_flux_summary": summary,
+        }
+        band_table.append(_clean_scalar_dict(row))
+
+    usable_rows = [
+        row
+        for row in band_table
+        if row["period_independent_flux_summary"].get("available") is True
+    ]
+    usable_wavelengths = [row["wavelength"] for row in usable_rows]
+    medians = [
+        row["period_independent_flux_summary"].get("median_flux")
+        for row in usable_rows
+    ]
+    raw_amp_05_95 = [
+        row["period_independent_flux_summary"].get("raw_half_amplitude_q05_q95")
+        for row in usable_rows
+    ]
+    raw_amp_10_90 = [
+        row["period_independent_flux_summary"].get("raw_half_amplitude_q10_q90")
+        for row in usable_rows
+    ]
+    scatters = [
+        row["period_independent_flux_summary"].get("robust_scatter")
+        for row in usable_rows
+    ]
+    nc_scatters = [
+        row["period_independent_flux_summary"].get("noise_corrected_robust_scatter")
+        for row in usable_rows
+    ]
+
+    if len(wavelengths) < 2:
+        warnings.append(
+            "Only one wavelength/band is present; wavelength structure cannot "
+            "be diagnosed from this light curve."
+        )
+    if len(usable_rows) < 2:
+        warnings.append(
+            "Fewer than two bands have enough finite flux points for period-"
+            "independent wavelength diagnostics."
+        )
+    if yerr_np is None:
+        warnings.append(
+            "No yerr values were provided; noise-corrected distribution summaries "
+            "are unavailable."
+        )
+
+    summary = {
+        "n_bands": int(len(wavelengths)),
+        "n_usable_bands": int(len(usable_rows)),
+        "usable_wavelengths": usable_wavelengths,
+        "has_yerr": bool(yerr_np is not None),
+        "uses_temporal_consensus": False,
+        "uses_period_or_frequency": False,
+        "median_flux_ratio_max_to_min_abs": _piwd_ratio([abs(v) if v is not None else None for v in medians]),
+        "raw_half_amplitude_q05_q95_ratio_max_to_min": _piwd_ratio(raw_amp_05_95),
+        "raw_half_amplitude_q10_q90_ratio_max_to_min": _piwd_ratio(raw_amp_10_90),
+        "robust_scatter_ratio_max_to_min": _piwd_ratio(scatters),
+        "noise_corrected_robust_scatter_ratio_max_to_min": _piwd_ratio(nc_scatters),
+        "median_flux_monotonicity_class": _piwd_monotonic_class(
+            usable_wavelengths, medians
+        ),
+        "raw_half_amplitude_q05_q95_monotonicity_class": _piwd_monotonic_class(
+            usable_wavelengths, raw_amp_05_95
+        ),
+        # These monotonicity classes are descriptive tolerance-rule summaries.
+        # They are intentionally not p-value based and should not be used as
+        # hard model-selection vetoes or hard constraints.  See the TODO in
+        # _piwd_monotonic_class for the deferred uncertainty-aware feature.
+        "robust_scatter_monotonicity_class": _piwd_monotonic_class(
+            usable_wavelengths, scatters
+        ),
+        "median_flux_loglog_slope": _piwd_loglog_slope(
+            usable_wavelengths, [abs(v) if v is not None else None for v in medians]
+        ),
+        "raw_half_amplitude_q05_q95_loglog_slope": _piwd_loglog_slope(
+            usable_wavelengths, raw_amp_05_95
+        ),
+        "robust_scatter_loglog_slope": _piwd_loglog_slope(
+            usable_wavelengths, scatters
+        ),
+    }
+
+    return _clean_scalar_dict(
+        {
+            "kind": "period_independent_wavelength_diagnostics",
+            "stage": "prefit_period_independent",
+            "method": "robust_per_band_flux_distribution",
+            "is_period_independent": True,
+            "band_table": band_table,
+            "summary": summary,
+            "warnings": warnings,
+        }
+    )
+
 def diagnose_wavelength_dependence_prefit(
     lightcurve,
     *,

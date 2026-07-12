@@ -9309,6 +9309,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band=new_band,
         )
 
+
+    def diagnose_period_independent_wavelength_structure(
+        self,
+        *,
+        min_points_per_band: int = 5,
+    ) -> dict:
+        """Return period-independent wavelength-structure diagnostics.
+
+        This Level-0 diagnostic uses only robust per-band flux distributions.
+        It does not use temporal consensus, periods, phase folding, or GP fits.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            diagnose_period_independent_wavelength_structure,
+        )
+
+        return diagnose_period_independent_wavelength_structure(
+            self,
+            min_points_per_band=min_points_per_band,
+        )
+
     def diagnose_wavelength_dependence(
         self,
         *,
