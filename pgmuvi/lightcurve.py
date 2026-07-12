@@ -9337,6 +9337,44 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             positive_floor=positive_floor,
         )
 
+    def build_period_independent_wavelength_fit_candidates(
+        self,
+        *,
+        parameter_plan: dict | None = None,
+        diagnostics_report: dict | None = None,
+        include_models: list[str] | tuple[str, ...] | None = None,
+        include_2d_baseline: bool = True,
+        base_fit_kwargs: dict | None = None,
+        fit_strategy: str = "consensus",
+        lpv_time_kernel_type: str = "quasi_periodic",
+        learn_additional_noise: bool | None = True,
+        candidate_limit: int | None = None,
+        include_parameter_suggestions: bool = True,
+    ) -> dict:
+        """Return advisory fit-candidate configs from wavelength diagnostics.
+
+        This method does not run fits, set hyperparameters, register constraints,
+        or mutate fit state.  It only builds explicit candidate kwargs for a
+        later user-controlled comparison.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            build_period_independent_wavelength_fit_candidates,
+        )
+
+        return build_period_independent_wavelength_fit_candidates(
+            self,
+            parameter_plan=parameter_plan,
+            diagnostics_report=diagnostics_report,
+            include_models=include_models,
+            include_2d_baseline=include_2d_baseline,
+            base_fit_kwargs=base_fit_kwargs,
+            fit_strategy=fit_strategy,
+            lpv_time_kernel_type=lpv_time_kernel_type,
+            learn_additional_noise=learn_additional_noise,
+            candidate_limit=candidate_limit,
+            include_parameter_suggestions=include_parameter_suggestions,
+        )
+
     def diagnose_period_independent_wavelength_structure(
         self,
         *,

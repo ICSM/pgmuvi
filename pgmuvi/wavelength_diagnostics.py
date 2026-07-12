@@ -3230,3 +3230,226 @@ def build_period_independent_wavelength_parameter_plan(
             ],
         }
     )
+
+
+# -----------------------------------------------------------------------------
+# Period-independent wavelength fit-candidate config generation (Level 0c)
+# -----------------------------------------------------------------------------
+
+_PIWD_LPV_SEPARABLE_MODELS = {
+    "2DDustMean",
+    "2DPowerLawMean",
+    "2DWavelengthDependent",
+    "2DSeparable",
+}
+
+
+def _piwd_candidate_model_entries(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return ranked model recommendation entries from a PR57 plan."""
+    entries = plan.get("ranked_candidates")
+    if not entries:
+        entries = plan.get("recommended_models", [])
+    normalized: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            continue
+        model = entry.get("model")
+        if not model:
+            continue
+        normalized.append(
+            {
+                "rank": int(entry.get("rank") or index),
+                "model": str(model),
+                "recommendation_strength": str(
+                    entry.get("recommendation_strength") or "advisory"
+                ),
+                "hard_exclusion": bool(entry.get("hard_exclusion", False)),
+                "primary_reason": entry.get("primary_reason") or entry.get("reason"),
+                "reason": entry.get("reason") or entry.get("primary_reason"),
+            }
+        )
+    normalized.sort(key=lambda item: item["rank"])
+    return normalized
+
+
+def _piwd_candidate_fit_kwargs(
+    model: str,
+    *,
+    base_fit_kwargs: dict[str, Any] | None,
+    fit_strategy: str,
+    lpv_time_kernel_type: str,
+    learn_additional_noise: bool | None,
+) -> dict[str, Any]:
+    """Build explicit but non-executed fit kwargs for one candidate model."""
+    kwargs: dict[str, Any] = {}
+    if base_fit_kwargs:
+        kwargs.update(dict(base_fit_kwargs))
+
+    kwargs["model"] = model
+    kwargs.setdefault("fit_strategy", fit_strategy)
+
+    if learn_additional_noise is not None:
+        kwargs.setdefault("learn_additional_noise", bool(learn_additional_noise))
+
+    # PR55 made the LPV separable model family compatible with consensus via a
+    # period_length handoff.  Use that path by default for these candidate
+    # configs.  The full 2D baseline keeps its existing spectral-mixture default
+    # and therefore should not receive a time_kernel_type kwarg unless the user
+    # explicitly supplied one in base_fit_kwargs.
+    if model in _PIWD_LPV_SEPARABLE_MODELS:
+        kwargs.setdefault("time_kernel_type", lpv_time_kernel_type)
+
+    return kwargs
+
+
+def build_period_independent_wavelength_fit_candidates(
+    lightcurve_or_plan,
+    *,
+    parameter_plan: dict[str, Any] | None = None,
+    diagnostics_report: dict[str, Any] | None = None,
+    include_models: list[str] | tuple[str, ...] | None = None,
+    include_2d_baseline: bool = True,
+    base_fit_kwargs: dict[str, Any] | None = None,
+    fit_strategy: str = "consensus",
+    lpv_time_kernel_type: str = "quasi_periodic",
+    learn_additional_noise: bool | None = True,
+    candidate_limit: int | None = None,
+    include_parameter_suggestions: bool = True,
+) -> dict[str, Any]:
+    """Build advisory fit-candidate configurations from a PR57 plan.
+
+    The returned object is a planning artifact only.  It does not call ``fit``,
+    mutate the Lightcurve, set hyperparameters, register constraints, or apply
+    any PR57 parameter suggestions.  The suggestions are copied into each
+    candidate only as metadata for user inspection or for a later explicit
+    parameter-workflow PR.
+    """
+    if parameter_plan is not None:
+        plan = parameter_plan
+    elif isinstance(lightcurve_or_plan, dict):
+        if lightcurve_or_plan.get("kind") == "period_independent_wavelength_parameter_plan":
+            plan = lightcurve_or_plan
+        else:
+            raise ValueError(
+                "build_period_independent_wavelength_fit_candidates() requires a "
+                "period-independent wavelength parameter plan when a dict is passed."
+            )
+    else:
+        plan = build_period_independent_wavelength_parameter_plan(
+            lightcurve_or_plan,
+            diagnostics_report=diagnostics_report,
+        )
+
+    if plan.get("kind") != "period_independent_wavelength_parameter_plan":
+        raise ValueError(
+            "build_period_independent_wavelength_fit_candidates() requires a "
+            "period-independent wavelength parameter plan."
+        )
+
+    include_set = {str(model) for model in include_models} if include_models else None
+    suggestions = plan.get("model_parameter_suggestions", {})
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in _piwd_candidate_model_entries(plan):
+        model = entry["model"]
+        if include_set is not None and model not in include_set:
+            continue
+        if model in seen:
+            continue
+        seen.add(model)
+
+        fit_kwargs = _piwd_candidate_fit_kwargs(
+            model,
+            base_fit_kwargs=base_fit_kwargs,
+            fit_strategy=fit_strategy,
+            lpv_time_kernel_type=lpv_time_kernel_type,
+            learn_additional_noise=learn_additional_noise,
+        )
+        candidate = {
+            "candidate_id": f"rank{len(candidates) + 1}_{model}",
+            "rank": len(candidates) + 1,
+            "source": "parameter_plan",
+            "source_plan_rank": entry.get("rank"),
+            "model": model,
+            "fit_kwargs": fit_kwargs,
+            "recommendation_strength": entry.get("recommendation_strength", "advisory"),
+            "hard_exclusion": False,
+            "primary_reason": entry.get("primary_reason"),
+            "reason": entry.get("reason"),
+            "applies_parameter_suggestions": False,
+            "parameter_suggestions_applied": False,
+            "applies_constraints": False,
+            "parameter_suggestions": (
+                suggestions.get(model) if include_parameter_suggestions else None
+            ),
+        }
+        candidates.append(candidate)
+
+    if include_2d_baseline and (include_set is None or "2D" in include_set) and "2D" not in seen:
+        baseline_kwargs = _piwd_candidate_fit_kwargs(
+            "2D",
+            base_fit_kwargs=base_fit_kwargs,
+            fit_strategy=fit_strategy,
+            lpv_time_kernel_type=lpv_time_kernel_type,
+            learn_additional_noise=learn_additional_noise,
+        )
+        candidates.append(
+            {
+                "candidate_id": f"rank{len(candidates) + 1}_2D_baseline",
+                "rank": len(candidates) + 1,
+                "source": "baseline_comparison",
+                "source_plan_rank": None,
+                "model": "2D",
+                "fit_kwargs": baseline_kwargs,
+                "recommendation_strength": "baseline_comparison",
+                "hard_exclusion": False,
+                "primary_reason": (
+                    "Full 2D spectral-mixture baseline retained as a comparison "
+                    "against the LPV separable wavelength models."
+                ),
+                "reason": (
+                    "Full 2D spectral-mixture baseline retained as a comparison "
+                    "against the LPV separable wavelength models."
+                ),
+                "applies_parameter_suggestions": False,
+                "parameter_suggestions_applied": False,
+                "applies_constraints": False,
+                "parameter_suggestions": None,
+            }
+        )
+
+    if candidate_limit is not None:
+        candidate_limit = int(candidate_limit)
+        if candidate_limit < 1:
+            raise ValueError("candidate_limit must be >= 1 when provided")
+        candidates = candidates[:candidate_limit]
+        for index, candidate in enumerate(candidates, start=1):
+            candidate["rank"] = index
+            candidate["candidate_id"] = f"rank{index}_{candidate['model']}"
+
+    return _clean_scalar_dict(
+        {
+            "kind": "period_independent_wavelength_fit_candidates",
+            "stage": "prefit_period_independent_candidate_config",
+            "source_plan_kind": plan.get("kind"),
+            "is_period_independent": True,
+            "uses_temporal_consensus": False,
+            "uses_period_or_frequency": False,
+            "applies_to_fit": False,
+            "advisory_only": True,
+            "runs_fits": False,
+            "hard_model_exclusions": False,
+            "automatic_constraints_applied": False,
+            "automatic_initialization_applied": False,
+            "n_candidates": len(candidates),
+            "primary_candidate_model": candidates[0]["model"] if candidates else None,
+            "fit_candidates": candidates,
+            "notes": [
+                "This object only contains candidate fit kwargs; no GP fit has been run.",
+                "Parameter suggestions are metadata only and are not inserted into fit_kwargs.",
+                "LPV separable candidates default to time_kernel_type='quasi_periodic' to use the PR55 period_length handoff.",
+                "The 2D baseline keeps its existing spectral-mixture time-kernel default unless base_fit_kwargs overrides it.",
+            ],
+        }
+    )
