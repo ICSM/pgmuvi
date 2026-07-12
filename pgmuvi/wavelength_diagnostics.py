@@ -3683,3 +3683,210 @@ def run_period_independent_wavelength_fit_candidates(
             ],
         }
     )
+
+
+# -----------------------------------------------------------------------------
+# Period-independent wavelength fit-candidate scoring (Level 0e)
+# -----------------------------------------------------------------------------
+
+def _piwd_bool_from_status(value: Any, *, status: str | None = None) -> bool:
+    """Return a boolean success flag from a possibly-missing report field."""
+    if isinstance(value, bool):
+        return value
+    if value is None and status is not None:
+        return str(status) == "passed"
+    return bool(value)
+
+
+def _piwd_finite_float_or_none(value: Any) -> float | None:
+    """Return a finite float or None."""
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(out):
+        return None
+    return out
+
+
+def _piwd_int_or_zero(value: Any) -> int:
+    """Return an int count or zero when unavailable."""
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
+
+def _piwd_score_one_wavelength_fit_outcome(
+    outcome: dict[str, Any],
+    *,
+    weights: dict[str, float],
+) -> dict[str, Any]:
+    """Score one PR59 candidate outcome without making a model-selection decision."""
+    status = outcome.get("status")
+    fit_success = _piwd_bool_from_status(outcome.get("fit_success"), status=status)
+    consensus_success = outcome.get("consensus_success") is True
+    n_accepted = _piwd_int_or_zero(outcome.get("n_accepted_bands"))
+    n_rejected = _piwd_int_or_zero(outcome.get("n_rejected_bands"))
+    has_exception = outcome.get("exception_type") is not None
+    rank = _piwd_int_or_zero(outcome.get("rank")) or 999999
+
+    score = 0.0
+    reasons: list[str] = []
+
+    if fit_success:
+        score += weights["fit_success"]
+        reasons.append("candidate fit completed")
+    else:
+        score -= weights["fit_failure"]
+        reasons.append("candidate fit failed")
+
+    if consensus_success:
+        score += weights["consensus_success"]
+        reasons.append("consensus diagnostics report success")
+    elif fit_success:
+        score -= weights["consensus_failure"]
+        reasons.append("fit completed but consensus success is not explicitly true")
+
+    if n_accepted:
+        score += weights["accepted_band"] * float(n_accepted)
+        reasons.append(f"accepted bands: {n_accepted}")
+    if n_rejected:
+        score -= weights["rejected_band"] * float(n_rejected)
+        reasons.append(f"rejected bands: {n_rejected}")
+
+    if has_exception:
+        score -= weights["exception"]
+        reasons.append(str(outcome.get("exception_type")))
+
+    # Do not let the upstream advisory order dominate the outcome score, but use
+    # a tiny deterministic penalty so equal-scored candidates keep the PR58 order.
+    score -= weights["rank_tiebreak"] * float(rank)
+
+    period = _piwd_finite_float_or_none(outcome.get("consensus_period"))
+    mode = outcome.get("consensus_time_kernel_constraint_mode")
+
+    return _clean_scalar_dict(
+        {
+            "rank": outcome.get("rank"),
+            "model": outcome.get("model"),
+            "status": status,
+            "fit_success": fit_success,
+            "consensus_success": consensus_success,
+            "consensus_period": period,
+            "consensus_time_kernel_constraint_mode": mode,
+            "n_accepted_bands": n_accepted,
+            "n_rejected_bands": n_rejected,
+            "exception_type": outcome.get("exception_type"),
+            "exception_message": outcome.get("exception_message"),
+            "score": float(score),
+            "viability_score": float(score),
+            "score_kind": "completion_viability",
+            "score_is_fit_quality_metric": False,
+            "fit_quality_metrics_used": [],
+            "score_components": reasons,
+            "source_outcome": outcome,
+        }
+    )
+
+
+def score_period_independent_wavelength_fit_candidate_runs(
+    run_report: dict[str, Any],
+    *,
+    weights: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Score and rank a PR59 wavelength fit-candidate run report.
+
+    This is a comparison report only.  It intentionally does not apply model
+    selection, does not install a winning fit on any Lightcurve, and leaves
+    ``selected_model`` as ``None``.  The highest-scoring candidate is exposed as
+    ``top_ranked_model`` for user inspection, not as an automatic decision.
+    """
+    if not isinstance(run_report, dict) or run_report.get("kind") != "period_independent_wavelength_fit_candidate_results":
+        raise ValueError(
+            "score_period_independent_wavelength_fit_candidate_runs() requires a "
+            "period-independent wavelength fit-candidate results report."
+        )
+
+    default_weights = {
+        "fit_success": 100.0,
+        "fit_failure": 100.0,
+        "consensus_success": 25.0,
+        "consensus_failure": 25.0,
+        "accepted_band": 2.0,
+        "rejected_band": 1.0,
+        "exception": 10.0,
+        "rank_tiebreak": 0.001,
+    }
+    if weights:
+        for key, value in weights.items():
+            if key not in default_weights:
+                raise ValueError(f"Unknown scoring weight: {key!r}")
+            default_weights[key] = float(value)
+
+    outcomes = run_report.get("candidate_results")
+    if outcomes is None:
+        outcomes = run_report.get("outcomes")
+    if not isinstance(outcomes, list):
+        raise ValueError("run report must contain an 'outcomes' or 'candidate_results' list")
+
+    scored = [
+        _piwd_score_one_wavelength_fit_outcome(outcome, weights=default_weights)
+        for outcome in outcomes
+        if isinstance(outcome, dict)
+    ]
+    scored.sort(key=lambda item: (-float(item.get("score", float("-inf"))), int(item.get("rank") or 999999)))
+
+    ranked_results: list[dict[str, Any]] = []
+    for index, item in enumerate(scored, start=1):
+        copied = dict(item)
+        copied["score_rank"] = index
+        copied["is_top_ranked"] = index == 1
+        ranked_results.append(copied)
+
+    top = ranked_results[0] if ranked_results else None
+
+    return _clean_scalar_dict(
+        {
+            "kind": "period_independent_wavelength_fit_candidate_scores",
+            "stage": "candidate_fit_scoring_summary",
+            "source_run_report_kind": run_report.get("kind"),
+            "is_period_independent": True,
+            "uses_temporal_consensus": True,
+            "uses_period_or_frequency": True,
+            "runs_fits": False,
+            "scores_completed_fits": True,
+            "score_kind": "completion_viability",
+            "scores_fit_quality": False,
+            "fit_quality_metrics_used": [],
+            "score_interpretation": (
+                "Completion/diagnostic viability score only; this is not a "
+                "likelihood, residual, predictive, cross-validation, AIC, or BIC "
+                "fit-quality metric."
+            ),
+            "applies_to_fit": False,
+            "advisory_only": True,
+            "automatic_model_selection_applied": False,
+            "selected_model": None,
+            "top_ranked_model": top.get("model") if top else None,
+            "top_ranked_score": top.get("score") if top else None,
+            "top_ranked_viability_score": top.get("viability_score") if top else None,
+            "hard_model_exclusions": False,
+            "automatic_constraints_applied": False,
+            "automatic_initialization_applied": False,
+            "parameter_suggestions_applied": False,
+            "n_candidates": len(outcomes),
+            "n_scored": len(ranked_results),
+            "n_passed": sum(1 for item in ranked_results if item.get("fit_success")),
+            "n_failed": sum(1 for item in ranked_results if not item.get("fit_success")),
+            "scoring_weights": dict(default_weights),
+            "ranked_results": ranked_results,
+            "scored_candidates": ranked_results,
+            "notes": [
+                "Scores are completion/diagnostic viability summaries only, not scientific fit-quality scores.",
+                "No likelihood, residual, predictive, cross-validation, AIC, or BIC metric is used by this scorer.",
+                "No model is selected or installed automatically.",
+                "Ties are broken by the upstream advisory candidate order with a tiny rank penalty.",
+            ],
+        }
+    )

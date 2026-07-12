@@ -9409,6 +9409,26 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             **candidate_builder_kwargs,
         )
 
+    def score_period_independent_wavelength_fit_candidate_runs(
+        self,
+        run_report: dict,
+        *,
+        weights: dict | None = None,
+    ) -> dict:
+        """Score a completed advisory wavelength fit-candidate run report.
+
+        This method returns an advisory ranking only.  It does not choose a
+        winner, install a fit, or mutate this Lightcurve's fit state.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            score_period_independent_wavelength_fit_candidate_runs,
+        )
+
+        return score_period_independent_wavelength_fit_candidate_runs(
+            run_report,
+            weights=weights,
+        )
+
     def diagnose_period_independent_wavelength_structure(
         self,
         *,
