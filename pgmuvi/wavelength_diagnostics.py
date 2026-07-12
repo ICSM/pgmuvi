@@ -3488,6 +3488,217 @@ def _piwd_validate_fit_candidate_report(report: dict[str, Any]) -> list[dict[str
     return normalized
 
 
+
+
+def _piwd_numpy_1d_or_none(value: Any) -> np.ndarray | None:
+    """Return a finite 1-D numpy array when possible."""
+    if value is None:
+        return None
+    try:
+        import torch as _torch
+
+        if isinstance(value, _torch.Tensor):
+            value = value.detach().cpu().numpy()
+    except Exception:
+        pass
+    try:
+        arr = np.asarray(value, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if arr.size == 0:
+        return None
+    return arr
+
+
+def _piwd_safe_float(value: Any) -> float | None:
+    """Return a finite float or None."""
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    return out if np.isfinite(out) else None
+
+
+def _piwd_training_fit_quality_unavailable(reason: str) -> dict[str, Any]:
+    """Return the standard unavailable training-fit-quality payload."""
+    return _clean_scalar_dict(
+        {
+            "available": False,
+            "reason": reason,
+            "space": "transformed_training_space",
+            "metrics_used_for_quality_scoring": [],
+            "n_points": 0,
+        }
+    )
+
+
+def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]:
+    """Compute best-effort training-space residual diagnostics for a fitted GP.
+
+    These diagnostics are intentionally descriptive.  They use predictions at
+    the training coordinates in the transformed space used by the GP.  They are
+    not cross-validation, AIC, BIC, or posterior predictive checks, but they are
+    real fit-quality quantities and can distinguish candidate fits that all pass
+    the consensus/viability checks.
+    """
+    if fitted_lightcurve is None:
+        return _piwd_training_fit_quality_unavailable("no fitted Lightcurve was provided")
+    if not hasattr(fitted_lightcurve, "model") or not hasattr(fitted_lightcurve, "likelihood"):
+        return _piwd_training_fit_quality_unavailable("fitted Lightcurve has no model/likelihood")
+    if not hasattr(fitted_lightcurve, "_xdata_transformed") or not hasattr(fitted_lightcurve, "_ydata_transformed"):
+        return _piwd_training_fit_quality_unavailable("fitted Lightcurve has no transformed training data")
+
+    try:
+        import torch as _torch
+        import gpytorch as _gpytorch
+
+        with _torch.no_grad(), _gpytorch.settings.fast_pred_var():
+            if hasattr(fitted_lightcurve, "_eval"):
+                fitted_lightcurve._eval()
+            prediction = fitted_lightcurve.likelihood(
+                fitted_lightcurve.model(fitted_lightcurve._xdata_transformed)
+            )
+            mean = prediction.mean.detach().cpu().numpy().reshape(-1)
+            variance = getattr(prediction, "variance", None)
+            if variance is not None:
+                pred_var = variance.detach().cpu().numpy().reshape(-1)
+            else:
+                pred_var = None
+            y = fitted_lightcurve._ydata_transformed.detach().cpu().numpy().reshape(-1)
+    except Exception as exc:
+        return _piwd_training_fit_quality_unavailable(
+            f"could not evaluate training predictions: {type(exc).__name__}: {exc}"
+        )
+
+    if mean.shape != y.shape or y.size == 0:
+        return _piwd_training_fit_quality_unavailable("prediction and target shapes are incompatible")
+
+    finite = np.isfinite(mean) & np.isfinite(y)
+    if not np.any(finite):
+        return _piwd_training_fit_quality_unavailable("no finite prediction/target pairs")
+
+    mean = mean[finite]
+    y = y[finite]
+    residual = y - mean
+    n = int(residual.size)
+    y_std = float(np.std(y)) if n > 1 else 0.0
+    y_iqr = float(np.subtract(*np.percentile(y, [75, 25]))) if n > 1 else 0.0
+    robust_scale = y_iqr / 1.349 if y_iqr > 0 else y_std
+    if not np.isfinite(robust_scale) or robust_scale <= 0:
+        robust_scale = float(np.mean(np.abs(y))) if np.mean(np.abs(y)) > 0 else 1.0
+
+    rmse = float(np.sqrt(np.mean(residual**2)))
+    mae = float(np.mean(np.abs(residual)))
+    med_abs = float(np.median(np.abs(residual)))
+    bias = float(np.mean(residual))
+    resid_std = float(np.std(residual)) if n > 1 else 0.0
+    nrmse = float(rmse / robust_scale) if robust_scale > 0 else None
+
+    yerr = _piwd_numpy_1d_or_none(getattr(fitted_lightcurve, "_yerr_transformed", None))
+    if yerr is not None and yerr.size == finite.size:
+        yerr = yerr[finite]
+    else:
+        yerr = None
+
+    pred_std = None
+    if pred_var is not None and pred_var.shape == finite.shape:
+        pred_var = pred_var[finite]
+        pred_var = np.where(np.isfinite(pred_var) & (pred_var > 0), pred_var, np.nan)
+        pred_std = np.sqrt(pred_var)
+
+    sigma = None
+    if yerr is not None:
+        yerr = np.where(np.isfinite(yerr) & (yerr > 0), yerr, np.nan)
+        sigma = yerr.copy()
+    if pred_std is not None:
+        if sigma is None:
+            sigma = pred_std
+        else:
+            sigma = np.sqrt(np.nan_to_num(sigma, nan=0.0) ** 2 + np.nan_to_num(pred_std, nan=0.0) ** 2)
+            sigma = np.where(sigma > 0, sigma, np.nan)
+
+    normalized_rmse = None
+    median_abs_standardized_residual = None
+    outlier_fraction_3sigma = None
+    reduced_chi2 = None
+    if sigma is not None:
+        ok = np.isfinite(sigma) & (sigma > 0)
+        if np.any(ok):
+            std_resid = residual[ok] / sigma[ok]
+            normalized_rmse = float(np.sqrt(np.mean(std_resid**2)))
+            median_abs_standardized_residual = float(np.median(np.abs(std_resid)))
+            outlier_fraction_3sigma = float(np.mean(np.abs(std_resid) > 3.0))
+            dof = max(int(std_resid.size) - 1, 1)
+            reduced_chi2 = float(np.sum(std_resid**2) / dof)
+
+    log_mll = None
+    try:
+        import torch as _torch
+        import gpytorch as _gpytorch
+
+        with _torch.no_grad():
+            output = fitted_lightcurve.model(fitted_lightcurve._xdata_transformed)
+            mll = _gpytorch.mlls.ExactMarginalLogLikelihood(
+                fitted_lightcurve.likelihood, fitted_lightcurve.model
+            )
+            value = mll(output, fitted_lightcurve._ydata_transformed)
+            log_mll = _piwd_safe_float(value.detach().cpu().item())
+    except Exception:
+        log_mll = None
+
+    by_band = []
+    try:
+        x_raw = fitted_lightcurve.xdata
+        import torch as _torch
+
+        if isinstance(x_raw, _torch.Tensor) and x_raw.ndim == 2 and x_raw.shape[0] == finite.size:
+            wavelengths = x_raw.detach().cpu().numpy().reshape((x_raw.shape[0], x_raw.shape[1]))[:, 1]
+            wavelengths = wavelengths[finite]
+            for wl in sorted(set(float(v) for v in wavelengths if np.isfinite(v))):
+                mask = np.isclose(wavelengths, wl)
+                if not np.any(mask):
+                    continue
+                r = residual[mask]
+                by_band.append(
+                    {
+                        "wavelength": wl,
+                        "n_points": int(r.size),
+                        "rmse": float(np.sqrt(np.mean(r**2))),
+                        "mae": float(np.mean(np.abs(r))),
+                        "median_abs_residual": float(np.median(np.abs(r))),
+                        "bias": float(np.mean(r)),
+                    }
+                )
+    except Exception:
+        by_band = []
+
+    return _clean_scalar_dict(
+        {
+            "available": True,
+            "reason": None,
+            "space": "transformed_training_space",
+            "metrics_used_for_quality_scoring": [
+                "training_normalized_rmse",
+                "training_median_abs_standardized_residual",
+                "training_outlier_fraction_3sigma",
+            ],
+            "n_points": n,
+            "rmse": rmse,
+            "mae": mae,
+            "median_abs_residual": med_abs,
+            "bias": bias,
+            "residual_std": resid_std,
+            "target_robust_scale": robust_scale,
+            "normalized_rmse_by_target_scale": nrmse,
+            "normalized_rmse": normalized_rmse,
+            "median_abs_standardized_residual": median_abs_standardized_residual,
+            "outlier_fraction_3sigma": outlier_fraction_3sigma,
+            "reduced_chi2": reduced_chi2,
+            "log_marginal_likelihood": log_mll,
+            "by_band": by_band,
+        }
+    )
+
 def _piwd_extract_fit_outcome(
     candidate: dict[str, Any],
     *,
@@ -3501,6 +3712,11 @@ def _piwd_extract_fit_outcome(
     if fitted_lightcurve is not None:
         diagnostics = getattr(fitted_lightcurve, "consensus_diagnostics", None)
     diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    fit_quality = (
+        _piwd_compute_training_fit_quality(fitted_lightcurve)
+        if status == "passed"
+        else _piwd_training_fit_quality_unavailable("candidate fit did not complete")
+    )
 
     outcome: dict[str, Any] = {
         "candidate_id": candidate.get("candidate_id"),
@@ -3533,6 +3749,17 @@ def _piwd_extract_fit_outcome(
         "accepted_bands": diagnostics.get("accepted_bands"),
         "rejected_bands": diagnostics.get("rejected_bands"),
         "fit_result_type": type(fit_result).__name__ if fit_result is not None else None,
+        "fit_quality": fit_quality,
+        "fit_quality_available": fit_quality.get("available"),
+        "training_rmse": fit_quality.get("rmse"),
+        "training_mae": fit_quality.get("mae"),
+        "training_median_abs_residual": fit_quality.get("median_abs_residual"),
+        "training_normalized_rmse": fit_quality.get("normalized_rmse"),
+        "training_nrmse_by_target_scale": fit_quality.get("normalized_rmse_by_target_scale"),
+        "training_reduced_chi2": fit_quality.get("reduced_chi2"),
+        "training_median_abs_standardized_residual": fit_quality.get("median_abs_standardized_residual"),
+        "training_outlier_fraction_3sigma": fit_quality.get("outlier_fraction_3sigma"),
+        "training_log_marginal_likelihood": fit_quality.get("log_marginal_likelihood"),
     }
 
     if exception is not None:
@@ -3887,6 +4114,181 @@ def score_period_independent_wavelength_fit_candidate_runs(
                 "No likelihood, residual, predictive, cross-validation, AIC, or BIC metric is used by this scorer.",
                 "No model is selected or installed automatically.",
                 "Ties are broken by the upstream advisory candidate order with a tiny rank penalty.",
+            ],
+        }
+    )
+
+
+# -----------------------------------------------------------------------------
+# Period-independent wavelength fit-quality scoring (Level 0f)
+# -----------------------------------------------------------------------------
+
+def _piwd_quality_metric(value: Any, *, fallback: float = 1.0e6) -> float:
+    """Return a finite non-negative quality metric, lower is better."""
+    try:
+        out = float(value)
+    except Exception:
+        return float(fallback)
+    if not np.isfinite(out):
+        return float(fallback)
+    return max(out, 0.0)
+
+
+def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) -> dict[str, Any]:
+    """Score one completed candidate using actual training-residual metrics."""
+    outcome = scored_or_outcome.get("source_outcome")
+    if not isinstance(outcome, dict):
+        outcome = scored_or_outcome
+
+    fit_quality = outcome.get("fit_quality")
+    if not isinstance(fit_quality, dict):
+        fit_quality = {}
+
+    fit_success = _piwd_bool_from_status(
+        outcome.get("fit_success"), status=outcome.get("status")
+    )
+    available = bool(fit_quality.get("available")) and fit_success
+
+    nrmse = _piwd_quality_metric(
+        fit_quality.get("normalized_rmse_by_target_scale"), fallback=1.0e6
+    )
+    standardized = _piwd_quality_metric(
+        fit_quality.get("median_abs_standardized_residual"), fallback=nrmse
+    )
+    outlier_frac = _piwd_quality_metric(
+        fit_quality.get("outlier_fraction_3sigma"), fallback=0.0 if available else 1.0
+    )
+    red_chi2 = _piwd_quality_metric(
+        fit_quality.get("reduced_chi2"), fallback=standardized**2 if available else 1.0e6
+    )
+
+    if available:
+        # Higher is better.  The penalties are deliberately simple and
+        # transparent; this is a training-residual quality score, not a formal
+        # evidence, AIC, BIC, or cross-validation metric.
+        fit_quality_score = 100.0 - 25.0 * nrmse - 5.0 * standardized - 25.0 * outlier_frac
+        fit_quality_score -= 0.25 * np.log1p(red_chi2)
+        reason = "training residual diagnostics available"
+    else:
+        fit_quality_score = -1.0e9
+        reason = fit_quality.get("reason") or "training residual diagnostics unavailable"
+
+    return _clean_scalar_dict(
+        {
+            "rank": outcome.get("rank"),
+            "model": outcome.get("model"),
+            "status": outcome.get("status"),
+            "fit_success": fit_success,
+            "consensus_success": outcome.get("consensus_success"),
+            "consensus_period": outcome.get("consensus_period"),
+            "consensus_time_kernel_constraint_mode": outcome.get("consensus_time_kernel_constraint_mode"),
+            "fit_quality_available": available,
+            "fit_quality_score": float(fit_quality_score),
+            "score": float(fit_quality_score),
+            "score_kind": "training_residual_fit_quality",
+            "scores_fit_quality": True,
+            "fit_quality_metrics_used": [
+                "training_nrmse_by_target_scale",
+                "training_median_abs_standardized_residual",
+                "training_outlier_fraction_3sigma",
+                "training_reduced_chi2",
+            ],
+            "training_rmse": fit_quality.get("rmse"),
+            "training_mae": fit_quality.get("mae"),
+            "training_nrmse_by_target_scale": fit_quality.get("normalized_rmse_by_target_scale"),
+            "training_normalized_rmse": fit_quality.get("normalized_rmse"),
+            "training_median_abs_standardized_residual": fit_quality.get("median_abs_standardized_residual"),
+            "training_outlier_fraction_3sigma": fit_quality.get("outlier_fraction_3sigma"),
+            "training_reduced_chi2": fit_quality.get("reduced_chi2"),
+            "training_log_marginal_likelihood": fit_quality.get("log_marginal_likelihood"),
+            "score_components": [reason],
+            "source_outcome": outcome,
+        }
+    )
+
+
+def score_period_independent_wavelength_fit_candidate_quality(
+    run_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Score completed wavelength candidate fits using training residual diagnostics.
+
+    This is still advisory-only and non-selecting.  It uses actual fit-quality
+    summaries recorded by the PR61 runner, but it does not install the top model
+    on any Lightcurve and it does not claim to be cross-validation or evidence.
+    """
+    if not isinstance(run_report, dict) or run_report.get("kind") != "period_independent_wavelength_fit_candidate_results":
+        raise ValueError(
+            "score_period_independent_wavelength_fit_candidate_quality() requires a "
+            "period-independent wavelength fit-candidate results report."
+        )
+    outcomes = run_report.get("candidate_results")
+    if outcomes is None:
+        outcomes = run_report.get("outcomes")
+    if not isinstance(outcomes, list):
+        raise ValueError("run report must contain an 'outcomes' or 'candidate_results' list")
+
+    scored = [
+        _piwd_score_one_wavelength_fit_quality(outcome)
+        for outcome in outcomes
+        if isinstance(outcome, dict)
+    ]
+    scored.sort(
+        key=lambda item: (
+            -float(item.get("fit_quality_score", -1.0e9)),
+            int(item.get("rank") or 999999),
+        )
+    )
+
+    ranked_results = []
+    for index, item in enumerate(scored, start=1):
+        copied = dict(item)
+        copied["quality_rank"] = index
+        copied["is_top_ranked"] = index == 1
+        ranked_results.append(copied)
+
+    top = ranked_results[0] if ranked_results else None
+
+    return _clean_scalar_dict(
+        {
+            "kind": "period_independent_wavelength_fit_candidate_quality_scores",
+            "stage": "candidate_fit_training_residual_quality_summary",
+            "source_run_report_kind": run_report.get("kind"),
+            "is_period_independent": True,
+            "uses_temporal_consensus": True,
+            "uses_period_or_frequency": True,
+            "runs_fits": False,
+            "scores_completed_fits": True,
+            "score_kind": "training_residual_fit_quality",
+            "scores_fit_quality": True,
+            "fit_quality_metrics_used": [
+                "training_nrmse_by_target_scale",
+                "training_median_abs_standardized_residual",
+                "training_outlier_fraction_3sigma",
+                "training_reduced_chi2",
+            ],
+            "score_interpretation": (
+                "Training-residual fit-quality score computed at the fitted training "
+                "coordinates. This is not cross-validation, AIC, BIC, or model evidence."
+            ),
+            "applies_to_fit": False,
+            "advisory_only": True,
+            "automatic_model_selection_applied": False,
+            "selected_model": None,
+            "top_ranked_model": top.get("model") if top else None,
+            "top_ranked_fit_quality_score": top.get("fit_quality_score") if top else None,
+            "hard_model_exclusions": False,
+            "automatic_constraints_applied": False,
+            "automatic_initialization_applied": False,
+            "parameter_suggestions_applied": False,
+            "n_candidates": len(outcomes),
+            "n_scored": len(ranked_results),
+            "n_with_fit_quality": sum(1 for item in ranked_results if item.get("fit_quality_available")),
+            "ranked_results": ranked_results,
+            "quality_ranked_results": ranked_results,
+            "notes": [
+                "Fit-quality scores use training residual diagnostics from completed candidate fits.",
+                "No model is selected or installed automatically.",
+                "Use cross-validation or held-out diagnostics before treating this as scientific model selection.",
             ],
         }
     )

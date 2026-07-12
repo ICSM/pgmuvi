@@ -9429,6 +9429,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             weights=weights,
         )
 
+    def score_period_independent_wavelength_fit_candidate_quality(
+        self,
+        run_report: dict,
+    ) -> dict:
+        """Score completed wavelength candidate fits using training residual diagnostics.
+
+        This method returns an advisory ranking only. It does not choose a
+        winner, install a fit, or mutate this Lightcurve's fit state.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            score_period_independent_wavelength_fit_candidate_quality,
+        )
+
+        return score_period_independent_wavelength_fit_candidate_quality(run_report)
+
     def diagnose_period_independent_wavelength_structure(
         self,
         *,
