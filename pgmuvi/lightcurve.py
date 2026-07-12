@@ -478,6 +478,15 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
         "consensus_scale_constraint_target_key": _consensus_schema_field(
             default=None, nullable=True
         ),
+        "consensus_time_kernel_constraint_mode": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_period_constraint_bounds": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_period_constraint_bounds_final": _consensus_schema_field(
+            default=None, nullable=True
+        ),
         "requested_consensus_frequencies": _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
@@ -10858,44 +10867,137 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         except Exception:
             pass
 
-    def _consensus_validate_final_model_supports_sm_time_kernel(
+    def _consensus_resolve_time_period_length_key(self):
+        """Resolve the time-kernel ``period_length`` parameter key.
+
+        This supports consensus handoff to period-based kernels such as
+        ``time_kernel_type='quasi_periodic'`` in separable 2D LPV models.
+        """
+        if (
+            not hasattr(self, "model")
+            or self.model is None
+            or not hasattr(self, "_model_pars")
+        ):
+            raise RuntimeError(
+                "Model has not been set yet. Call set_model() before resolving "
+                "consensus period_length keys."
+            )
+
+        candidates = set()
+        available = [k for k in self._model_pars if isinstance(k, str)]
+        for key, meta in self._model_pars.items():
+            if not isinstance(key, str):
+                continue
+            if "raw_" in key:
+                continue
+            if key.endswith(".period_length") or key == "period_length":
+                candidates.add(key)
+            if isinstance(meta, dict):
+                for resolved_name in (
+                    meta.get("constrained_full_name"),
+                    meta.get("full_name"),
+                ):
+                    if (
+                        isinstance(resolved_name, str)
+                        and "raw_" not in resolved_name
+                        and resolved_name.endswith(".period_length")
+                    ):
+                        candidates.add(resolved_name)
+
+        if not candidates:
+            available_str = ", ".join(available[:20]) or "(none)"
+            raise RuntimeError(
+                "Could not resolve a time-kernel 'period_length' key from "
+                f"_model_pars. Available keys: {available_str}. Ensure the "
+                "model uses a period-based time kernel such as "
+                "time_kernel_type='quasi_periodic'."
+            )
+
+        def candidate_rank(candidate):
+            if candidate == "covar_module.base_kernel.kernels.0.period_length":
+                return (0, len(candidate), candidate)
+            if (
+                candidate.startswith("covar_module.")
+                and ".kernels.0." in candidate
+                and ".period_length" in candidate
+            ):
+                return (1, len(candidate), candidate)
+            if candidate.startswith("covar_module."):
+                return (2, len(candidate), candidate)
+            return (3, len(candidate), candidate)
+
+        return sorted(candidates, key=candidate_rank)[0]
+
+    def _consensus_resolve_time_kernel_constraint_mode(self):
+        """Return the consensus handoff mode supported by the current model."""
+        try:
+            keys = self._consensus_resolve_time_spectral_mixture_keys()
+            return "spectral_mixture", keys
+        except RuntimeError as sm_exc:
+            try:
+                period_key = self._consensus_resolve_time_period_length_key()
+                return "period_length", {"period_length": period_key}
+            except RuntimeError as period_exc:
+                raise RuntimeError(
+                    "Could not resolve a consensus-compatible time kernel. "
+                    "Expected either spectral-mixture parameters "
+                    "(mixture_means / mixture_scales) or a period-based "
+                    "time-kernel parameter (period_length). "
+                    f"SM detail: {sm_exc}; period detail: {period_exc}"
+                ) from period_exc
+
+    def _consensus_validate_final_model_supports_time_kernel_handoff(
         self, model_name, time_kernel_type
     ):
-        """Validate that the built model exposes SM time-kernel parameters.
+        """Validate that the built model exposes a consensus time-kernel target.
 
-        Parameters
-        ----------
-        model_name : str or None
-            The model identifier passed to the current fit call.
-        time_kernel_type : str or None
-            The time-kernel type passed to the current fit call.
-
-        Raises
-        ------
-        ConsensusFitError
-            If the model does not expose ``mixture_means`` / ``mixture_scales``
-            in ``_model_pars``.
+        Consensus can be handed off either to spectral-mixture frequency
+        parameters or to a period-based ``period_length`` parameter.
         """
         try:
-            self._consensus_resolve_time_spectral_mixture_keys()
+            return self._consensus_resolve_time_kernel_constraint_mode()
         except RuntimeError as exc:
-            _model_str = repr(model_name)
-            _tkt_str = repr(time_kernel_type)
-            _msg = (
-                "Consensus constraints require a spectral-mixture time kernel, "
-                f"but the model {_model_str} built with "
-                f"time_kernel_type={_tkt_str} does not expose the required "
-                "mixture_means / mixture_scales parameters. "
-                "Pass time_kernel_type='spectral_mixture' or use model='2D'."
+            model_str = repr(model_name)
+            tkt_str = repr(time_kernel_type)
+            msg = (
+                "Consensus constraints require either a spectral-mixture time "
+                "kernel or a period-based time kernel, but the model "
+                f"{model_str} built with time_kernel_type={tkt_str} exposes "
+                "neither mixture_means / mixture_scales nor period_length. "
+                "Pass time_kernel_type='spectral_mixture' or "
+                "time_kernel_type='quasi_periodic' for the LPV separable models."
             )
-            _exc = ConsensusFitError(_msg)
-            _exc.failure_diagnostics = {
-                "reason": "model_incompatible_with_sm_constraints",
+            new_exc = ConsensusFitError(msg)
+            new_exc.failure_diagnostics = {
+                "reason": "model_incompatible_with_consensus_constraints",
                 "model": model_name,
                 "time_kernel_type": time_kernel_type,
                 "detail": str(exc),
             }
-            raise _exc from exc
+            raise new_exc from exc
+
+    def _consensus_validate_final_model_supports_sm_time_kernel(
+        self, model_name, time_kernel_type
+    ):
+        """Backward-compatible wrapper for older tests/callers."""
+        mode, keys = self._consensus_validate_final_model_supports_time_kernel_handoff(
+            model_name=model_name, time_kernel_type=time_kernel_type
+        )
+        if mode != "spectral_mixture":
+            msg = (
+                "Consensus spectral-mixture validation expected an SM time "
+                f"kernel but resolved consensus handoff mode {mode!r}."
+            )
+            exc = ConsensusFitError(msg)
+            exc.failure_diagnostics = {
+                "reason": "model_incompatible_with_sm_constraints",
+                "model": model_name,
+                "time_kernel_type": time_kernel_type,
+                "resolved_mode": mode,
+                "resolved_keys": keys,
+            }
+            raise exc
+        return mode, keys
 
     def _consensus_validate_applied_sm_constraints(
         self, keys, consensus_frequencies, frequency_bounds
@@ -11110,6 +11212,152 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return [float(_lower), float(_upper)]
 
 
+    def _consensus_get_registered_period_constraint_bounds(self, keys):
+        """Return live period_length constraint bounds for diagnostics."""
+        model_pars = getattr(self, "_model_pars", None)
+        period_key = keys.get("period_length") if isinstance(keys, dict) else None
+
+        if not isinstance(model_pars, dict) or period_key not in model_pars:
+            return None
+
+        meta = model_pars[period_key]
+        if not isinstance(meta, dict):
+            return None
+
+        module = meta.get("module")
+        if module is None:
+            return None
+
+        raw_name = (
+            f"raw_{period_key.split('.')[-1]}"
+            if "raw_" not in period_key
+            else period_key.split(".")[-1]
+        )
+        constraint = getattr(module, f"{raw_name}_constraint", None)
+        if constraint is None:
+            return None
+
+        lower = getattr(constraint, "lower_bound", None)
+        upper = getattr(constraint, "upper_bound", None)
+        if lower is None or upper is None:
+            return None
+
+        return [float(lower), float(upper)]
+
+    def _consensus_frequency_bounds_to_period_bounds(self, frequency_bounds):
+        """Convert frequency bounds to period_length bounds."""
+        if frequency_bounds is None:
+            return None
+        lower_f, upper_f = [float(v) for v in frequency_bounds]
+        if not (
+            np.isfinite(lower_f)
+            and np.isfinite(upper_f)
+            and lower_f > 0
+            and upper_f > lower_f
+        ):
+            raise ValueError(
+                "frequency_bounds must be finite positive increasing values "
+                f"before conversion to period bounds (got {frequency_bounds})."
+            )
+        return (float(1.0 / upper_f), float(1.0 / lower_f))
+
+    def _consensus_validate_applied_period_constraints(
+        self, keys, consensus_frequencies, period_bounds
+    ):
+        """Verify that consensus constraints were applied to period_length."""
+        if period_bounds is None:
+            return
+        model_pars = getattr(self, "_model_pars", None)
+        available_keys = (
+            sorted(model_pars.keys())
+            if isinstance(model_pars, dict)
+            else f"<non-dict:{type(model_pars).__name__}>"
+        )
+        period_key = keys.get("period_length") if isinstance(keys, dict) else None
+        if period_key is None:
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: resolved keys "
+                "do not contain 'period_length'. "
+                f"resolved_keys={sorted(keys.keys()) if isinstance(keys, dict) else keys}, "
+                f"available_model_parameter_keys={available_keys}, "
+                f"expected_period_bounds={period_bounds}."
+            )
+        if not isinstance(model_pars, dict) or period_key not in model_pars:
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: period_length "
+                f"key {period_key!r} is missing from model parameters. "
+                f"available_model_parameter_keys={available_keys}, "
+                f"expected_period_bounds={period_bounds}."
+            )
+        meta = model_pars[period_key]
+        if not isinstance(meta, dict):
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: metadata for "
+                f"{period_key!r} must be a dict, got {type(meta).__name__}."
+            )
+        module = meta.get("module")
+        if module is None:
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: no module found "
+                f"for {period_key!r}."
+            )
+        raw_name = (
+            f"raw_{period_key.split('.')[-1]}"
+            if "raw_" not in period_key
+            else period_key.split(".")[-1]
+        )
+        constraint_key = raw_name + "_constraint"
+        try:
+            registered = dict(module.named_constraints())
+        except Exception as exc:
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: unable to "
+                "inspect registered constraints via named_constraints(). "
+                f"period_length_key={period_key!r}, "
+                f"expected_raw_constraint={constraint_key!r}, "
+                f"expected_period_bounds={period_bounds}, detail={exc!r}."
+            ) from exc
+        found = registered.get(constraint_key)
+        if found is None:
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: no constraint "
+                f"found for raw parameter {constraint_key!r}. "
+                f"registered_constraint_names={sorted(registered.keys())}, "
+                f"period_length_key={period_key!r}, "
+                f"expected_period_bounds={period_bounds}."
+            )
+
+        freqs = np.asarray(consensus_frequencies, dtype=float).ravel()
+        if freqs.size == 0 or not np.all(np.isfinite(freqs) & (freqs > 0)):
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: "
+                "consensus_frequencies must be non-empty, finite, and positive "
+                f"for validation. got={freqs.tolist()}."
+            )
+        target_period = float(1.0 / np.median(freqs))
+        try:
+            lower = float(getattr(found, "lower_bound"))
+            upper = float(getattr(found, "upper_bound"))
+        except Exception as exc:
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: unable to parse "
+                f"registered period bounds for {period_key!r}. detail={exc!r}."
+            ) from exc
+        if not (np.isfinite(lower) and np.isfinite(upper) and lower < upper):
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: registered "
+                f"period_length bounds are invalid [{lower:.6g}, {upper:.6g}]."
+            )
+        if not (lower <= target_period <= upper):
+            raise ConsensusFitError(
+                "Consensus period constraint validation failed: consensus "
+                "period lies outside the registered period_length constraint "
+                f"bounds. period_length_key={period_key!r}, "
+                f"registered_bounds=[{lower:.6g}, {upper:.6g}], "
+                f"consensus_period={target_period:.6g}."
+            )
+
+
     def _consensus_build_spectral_mixture_initialization(
         self,
         frequencies,
@@ -11243,6 +11491,72 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             guess[keys["mixture_scales"]] = init["mixture_scales"]
 
         return guess
+
+    def _consensus_build_period_length_guess(
+        self,
+        frequencies,
+        dtype=None,
+        device=None,
+    ):
+        """Build a period_length init dictionary from consensus frequency."""
+        keys = {"period_length": self._consensus_resolve_time_period_length_key()}
+        xdata_tensor = (
+            self.xdata
+            if hasattr(self, "xdata") and isinstance(self.xdata, torch.Tensor)
+            else None
+        )
+        if dtype is None:
+            dtype = (
+                xdata_tensor.dtype
+                if xdata_tensor is not None
+                else DEFAULT_DTYPE
+            )
+        if device is None:
+            device = (
+                xdata_tensor.device
+                if xdata_tensor is not None
+                else torch.device("cpu")
+            )
+        freq_tensor = torch.as_tensor(frequencies, dtype=dtype, device=device).reshape(-1)
+        if freq_tensor.numel() == 0:
+            raise ValueError("frequencies must not be empty.")
+        if not torch.all(torch.isfinite(freq_tensor)):
+            raise ValueError("frequencies must contain only finite values.")
+        if not torch.all(freq_tensor > 0):
+            raise ValueError("frequencies must be strictly positive.")
+
+        # Standard consensus is single-component even when a manual caller
+        # supplies multiple candidate frequencies.  A period-based kernel has
+        # only one period_length, so initialize it from the robust median
+        # frequency rather than pretending it can represent multiple periods.
+        period = 1.0 / torch.median(freq_tensor)
+        return {keys["period_length"]: period.reshape(1)}
+
+    def _consensus_build_time_kernel_guess(
+        self,
+        frequencies,
+        scales=None,
+        mode=None,
+        dtype=None,
+        device=None,
+    ):
+        """Build a consensus init dictionary for the resolved time kernel."""
+        if mode is None:
+            mode, _ = self._consensus_resolve_time_kernel_constraint_mode()
+        if mode == "spectral_mixture":
+            return self._consensus_build_guess(
+                frequencies=frequencies,
+                scales=scales,
+                dtype=dtype,
+                device=device,
+            )
+        if mode == "period_length":
+            return self._consensus_build_period_length_guess(
+                frequencies=frequencies,
+                dtype=dtype,
+                device=device,
+            )
+        raise ValueError(f"Unknown consensus time-kernel handoff mode {mode!r}.")
 
     def _consensus_extract_initialized_parameter_vector(
         self,
@@ -12863,7 +13177,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         # --- 1. Required top-level keys must all be present ---
-        missing_keys = _CONSENSUS_REQUIRED_RESULT_KEYS - diagnostics.keys()
+        _pr55_optional_top_level_keys = {
+            "consensus_time_kernel_constraint_mode",
+            "consensus_period_constraint_bounds",
+            "consensus_period_constraint_bounds_final",
+        }
+        missing_keys = _CONSENSUS_REQUIRED_RESULT_KEYS - (
+            set(diagnostics.keys()) | _pr55_optional_top_level_keys
+        )
         if missing_keys:
             raise RuntimeError(
                 "Consensus diagnostics is missing required top-level key(s): "
@@ -13789,6 +14110,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "'consensus_frequencies' were provided."
                 )
             if n_accepted_bands <= 0:
+                _manual_consensus_has_candidates = (
+                    diagnostics.get("mode") == "manual_consensus_frequencies"
+                    or diagnostics.get("consensus_generation_method")
+                    == "manual_consensus_frequencies"
+                ) and int(
+                    diagnostics.get("trusted_candidate_count")
+                    or diagnostics.get("candidate_count")
+                    or 0
+                ) > 0
+                if _manual_consensus_has_candidates:
+                    return
                 raise RuntimeError(
                     "consensus_success is True but 'n_accepted_bands' is "
                     f"{n_accepted_bands} (must be > 0)."
@@ -16606,19 +16938,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
         fit_kwargs["model"] = None
 
-        if apply_consensus_constraints:
-            # Validate that the freshly built model supports SM time-kernel
-            # constraints before attempting to resolve keys.
-            self._consensus_validate_final_model_supports_sm_time_kernel(
-                model_name=_requested_model,
-                time_kernel_type=fit_kwargs.get("time_kernel_type"),
+        try:
+            _constraint_mode, _keys = (
+                self._consensus_validate_final_model_supports_time_kernel_handoff(
+                    model_name=_requested_model,
+                    time_kernel_type=fit_kwargs.get("time_kernel_type"),
+                )
             )
+        except ConsensusFitError:
+            if apply_consensus_constraints:
+                raise
+            _constraint_mode, _keys = "spectral_mixture", {}
+        result_diagnostics["consensus_time_kernel_constraint_mode"] = (
+            _constraint_mode
+        )
+
+        _frequency_constraint_bounds = None
+        _period_constraint_bounds = None
+        _scale_upper = None
+        _scale_info = None
+
+        if apply_consensus_constraints:
             _constraint_dict = {}
-            _keys = self._consensus_resolve_time_spectral_mixture_keys()
-            _frequency_constraint_bounds = None
             # --- Step 1: apply default/LPV constraints as a base first -------
             # This ensures any constraint_set period bounds are registered
-            # before the consensus constraints override the mixture_means key.
+            # before the consensus constraints override the time-kernel target.
             # Calling set_default_constraints also sets __CONTRAINTS_SET=True
             # which prevents _fit_core from re-applying defaults and
             # overwriting the consensus constraints below.
@@ -16659,25 +17003,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _uppers = _freqs + _k * _widths
                 _global_lower = float(_lowers.min())
                 _global_upper = float(_uppers.max())
-                _constraint_dict[_keys["mixture_means"]] = Interval(
-                    _global_lower, _global_upper
-                )
                 _frequency_constraint_bounds = (_global_lower, _global_upper)
+                if _constraint_mode == "spectral_mixture":
+                    _constraint_dict[_keys["mixture_means"]] = Interval(
+                        _global_lower, _global_upper
+                    )
+                elif _constraint_mode == "period_length":
+                    _period_constraint_bounds = (
+                        self._consensus_frequency_bounds_to_period_bounds(
+                            _frequency_constraint_bounds
+                        )
+                    )
+                    _constraint_dict[_keys["period_length"]] = Interval(
+                        *_period_constraint_bounds
+                    )
 
             _freqs_arr = np.asarray(
                 consensus_frequencies, dtype=float
             ).ravel()
-            _scale_info = self._consensus_resolve_scale_constraint_upper(
-                _freqs_arr,
-                consensus_frequency_width=consensus_frequency_width,
-                consensus_scale_max_factor=consensus_scale_max_factor,
-                consensus_scale_width_factor=consensus_scale_width_factor,
-            )
-            _scale_upper = float(_scale_info["upper"])
-            # Practical lower bound - scales must be positive.
-            _constraint_dict[_keys["mixture_scales"]] = Interval(
-                _CONSENSUS_MIN_SCALE_BOUND, _scale_upper
-            )
+            _scale_info = None
+            _scale_upper = None
+            if _constraint_mode == "spectral_mixture":
+                _scale_info = self._consensus_resolve_scale_constraint_upper(
+                    _freqs_arr,
+                    consensus_frequency_width=consensus_frequency_width,
+                    consensus_scale_max_factor=consensus_scale_max_factor,
+                    consensus_scale_width_factor=consensus_scale_width_factor,
+                )
+                _scale_upper = float(_scale_info["upper"])
+                # Practical lower bound - scales must be positive.
+                _constraint_dict[_keys["mixture_scales"]] = Interval(
+                    _CONSENSUS_MIN_SCALE_BOUND, _scale_upper
+                )
             # --- Step 3: apply consensus constraints on top of defaults ------
             # These must win over the defaults applied in step 1.
             if _constraint_dict:
@@ -16691,11 +17048,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "constraints_marked_set_after_consensus"
             ] = True
             # --- Step 5: validate that the consensus constraint took effect --
-            self._consensus_validate_applied_sm_constraints(
-                keys=_keys,
-                consensus_frequencies=consensus_frequencies,
-                frequency_bounds=_frequency_constraint_bounds,
-            )
+            if _constraint_mode == "spectral_mixture":
+                self._consensus_validate_applied_sm_constraints(
+                    keys=_keys,
+                    consensus_frequencies=consensus_frequencies,
+                    frequency_bounds=_frequency_constraint_bounds,
+                )
+            elif _constraint_mode == "period_length":
+                self._consensus_validate_applied_period_constraints(
+                    keys=_keys,
+                    consensus_frequencies=consensus_frequencies,
+                    period_bounds=_period_constraint_bounds,
+                )
             # --- Step 6: record constraint-handoff diagnostics ---------------
             result_diagnostics["consensus_constraints_applied"] = True
             result_diagnostics["consensus_constraint_bounds"] = (
@@ -16703,22 +17067,44 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if _frequency_constraint_bounds is not None
                 else None
             )
+            result_diagnostics["consensus_period_constraint_bounds"] = (
+                list(_period_constraint_bounds)
+                if _period_constraint_bounds is not None
+                else None
+            )
             result_diagnostics["consensus_constraint_target_key"] = (
                 _keys.get("mixture_means")
+                if _constraint_mode == "spectral_mixture"
+                else _keys.get("period_length")
             )
-            result_diagnostics["consensus_scale_constraint_bounds"] = [
-                float(_CONSENSUS_MIN_SCALE_BOUND), float(_scale_upper)
-            ]
-            result_diagnostics["consensus_scale_upper_strategy"] = _scale_info["strategy"]
-            result_diagnostics["consensus_scale_frequency_fraction_upper"] = (
-                _scale_info["frequency_fraction_upper"]
+            result_diagnostics["consensus_scale_constraint_bounds"] = (
+                [float(_CONSENSUS_MIN_SCALE_BOUND), float(_scale_upper)]
+                if _scale_upper is not None
+                else None
             )
-            result_diagnostics["consensus_scale_width_upper"] = _scale_info["width_upper"]
+            if _scale_info is not None:
+                result_diagnostics["consensus_scale_upper_strategy"] = _scale_info[
+                    "strategy"
+                ]
+                result_diagnostics["consensus_scale_frequency_fraction_upper"] = (
+                    _scale_info["frequency_fraction_upper"]
+                )
+                result_diagnostics["consensus_scale_width_upper"] = _scale_info[
+                    "width_upper"
+                ]
+            else:
+                result_diagnostics["consensus_scale_upper_strategy"] = None
+                result_diagnostics["consensus_scale_frequency_fraction_upper"] = None
+                result_diagnostics["consensus_scale_width_upper"] = None
             result_diagnostics["consensus_scale_width_factor"] = (
                 _scale_info["consensus_scale_width_factor"]
+                if _scale_info is not None
+                else None
             )
             result_diagnostics["consensus_scale_constraint_target_key"] = (
                 _keys.get("mixture_scales")
+                if _constraint_mode == "spectral_mixture"
+                else None
             )
         else:
             _frequency_constraint_bounds = None
@@ -16753,9 +17139,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "min_frequency_width_and_half_scale_upper"
             )
 
-        consensus_guess = self._consensus_build_guess(
+        consensus_guess = self._consensus_build_time_kernel_guess(
             frequencies=consensus_frequencies,
             scales=consensus_scales,
+            mode=_constraint_mode,
         )
 
         self._last_consensus_fit_info = {
@@ -16778,6 +17165,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _frequency_constraint_bounds
                 if _frequency_constraint_bounds is not None
                 else auto_constraint_bounds
+            ),
+            "consensus_period_bounds": (
+                _period_constraint_bounds
+                if _period_constraint_bounds is not None
+                else None
+            ),
+            "consensus_time_kernel_constraint_mode": _constraint_mode,
+            "consensus_constraint_target_key": (
+                _keys.get("mixture_means")
+                if _constraint_mode == "spectral_mixture"
+                else _keys.get("period_length")
             ),
             "consensus_scale_upper": (
                 float(_scale_upper) if _scale_upper is not None else None
@@ -16849,13 +17247,30 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._last_consensus_final_model_request = _requested_model
 
         if apply_consensus_constraints:
-            _final_bounds = self._consensus_get_registered_sm_constraint_bounds(_keys)
-            result_diagnostics["consensus_constraint_bounds_final"] = _final_bounds
-            self._consensus_validate_applied_sm_constraints(
-                keys=_keys,
-                consensus_frequencies=consensus_frequencies,
-                frequency_bounds=_frequency_constraint_bounds,
-            )
+            if _constraint_mode == "spectral_mixture":
+                _final_bounds = self._consensus_get_registered_sm_constraint_bounds(
+                    _keys
+                )
+                result_diagnostics[
+                    "consensus_constraint_bounds_final"
+                ] = _final_bounds
+                self._consensus_validate_applied_sm_constraints(
+                    keys=_keys,
+                    consensus_frequencies=consensus_frequencies,
+                    frequency_bounds=_frequency_constraint_bounds,
+                )
+            elif _constraint_mode == "period_length":
+                _final_bounds = self._consensus_get_registered_period_constraint_bounds(
+                    _keys
+                )
+                result_diagnostics[
+                    "consensus_period_constraint_bounds_final"
+                ] = _final_bounds
+                self._consensus_validate_applied_period_constraints(
+                    keys=_keys,
+                    consensus_frequencies=consensus_frequencies,
+                    period_bounds=_period_constraint_bounds,
+                )
 
         result_diagnostics["consensus_success"] = _consensus_ready_for_success
         self.consensus_diagnostics = self._consensus_finalize_result_structure(
@@ -17335,13 +17750,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 float(_CONSENSUS_MIN_SCALE_BOUND),
                 float(_scale_upper),
             ]
-            result_diagnostics["consensus_scale_upper_strategy"] = _scale_info["strategy"]
-            result_diagnostics["consensus_scale_frequency_fraction_upper"] = (
-                _scale_info["frequency_fraction_upper"]
-            )
-            result_diagnostics["consensus_scale_width_upper"] = _scale_info["width_upper"]
+            if _scale_info is not None:
+                result_diagnostics["consensus_scale_upper_strategy"] = _scale_info[
+                    "strategy"
+                ]
+                result_diagnostics["consensus_scale_frequency_fraction_upper"] = (
+                    _scale_info["frequency_fraction_upper"]
+                )
+                result_diagnostics["consensus_scale_width_upper"] = _scale_info[
+                    "width_upper"
+                ]
+            else:
+                result_diagnostics["consensus_scale_upper_strategy"] = None
+                result_diagnostics["consensus_scale_frequency_fraction_upper"] = None
+                result_diagnostics["consensus_scale_width_upper"] = None
             result_diagnostics["consensus_scale_width_factor"] = (
                 _scale_info["consensus_scale_width_factor"]
+                if _scale_info is not None
+                else None
             )
             result_diagnostics["consensus_scale_constraint_target_key"] = (
                 _keys.get("mixture_scales")
