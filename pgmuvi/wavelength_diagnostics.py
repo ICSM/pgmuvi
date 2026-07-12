@@ -4506,3 +4506,191 @@ def plot_period_independent_wavelength_fit_candidate_comparison(
             figures[key] = fig
 
     return figures
+
+
+# -----------------------------------------------------------------------------
+# Period-independent wavelength advisory workflow (Level 0i)
+# -----------------------------------------------------------------------------
+
+
+
+def _piwd_format_advisory_workflow_text_report(
+    workflow_report: dict[str, Any],
+    comparison_text_report: str | None,
+) -> str:
+    """Format a workflow-level advisory report.
+
+    The nested quality-score comparison report has ``runs_fits=False`` because
+    scoring/formatting does not itself execute fits.  The workflow report may
+    have ``runs_fits=True`` when it built and ran candidate fits before scoring.
+    Keep both scopes explicit so users do not mistake nested score-report
+    metadata for the workflow execution contract.
+    """
+    quality_report = workflow_report.get("quality_report") or {}
+    run_report = workflow_report.get("run_report") or {}
+
+    lines = [
+        "Period-independent wavelength advisory workflow",
+        "=" * 60,
+        f"kind: {workflow_report.get('kind')}",
+        f"advisory_only: {workflow_report.get('advisory_only')}",
+        f"workflow_runs_candidate_fits: {workflow_report.get('runs_fits')}",
+        f"candidate_runner_ran_fits: {run_report.get('runs_fits')}",
+        f"quality_score_report_runs_fits: {quality_report.get('runs_fits')}",
+        f"candidate_fit_state_isolated: {workflow_report.get('candidate_fit_state_isolated')}",
+        f"mutates_input_lightcurve: {workflow_report.get('mutates_input_lightcurve')}",
+        f"automatic_model_selection_applied: {workflow_report.get('automatic_model_selection_applied')}",
+        f"selected_model: {workflow_report.get('selected_model')}",
+        f"automatic_constraints_applied: {workflow_report.get('automatic_constraints_applied')}",
+        f"automatic_initialization_applied: {workflow_report.get('automatic_initialization_applied')}",
+        f"score_kind: {workflow_report.get('score_kind')}",
+        f"top_ranked_model: {workflow_report.get('top_ranked_model')}",
+        f"top_ranked_fit_quality_score: {workflow_report.get('top_ranked_fit_quality_score')}",
+        "",
+        "Scope note: workflow_runs_candidate_fits describes this one-shot wrapper. "
+        "quality_score_report_runs_fits describes the nested quality-score report; "
+        "it is expected to be False because scoring summarizes already-completed fits.",
+    ]
+
+    if comparison_text_report:
+        lines.extend(
+            [
+                "",
+                "Nested candidate comparison report",
+                "=" * 60,
+                comparison_text_report,
+            ]
+        )
+
+    return "\n".join(lines)
+
+def run_period_independent_wavelength_advisory_workflow(
+    lightcurve: Any,
+    *,
+    candidate_report: dict[str, Any] | None = None,
+    fit_candidate_report: dict[str, Any] | None = None,
+    run_report: dict[str, Any] | None = None,
+    quality_report: dict[str, Any] | None = None,
+    include_2d_baseline: bool = True,
+    base_fit_kwargs: dict[str, Any] | None = None,
+    include_models: list[str] | tuple[str, ...] | None = None,
+    candidate_limit: int | None = None,
+    max_candidates: int | None = None,
+    stop_on_error: bool = False,
+    make_text_report: bool = True,
+    make_plots: bool = False,
+) -> dict[str, Any]:
+    """Run the advisory wavelength-candidate workflow end to end.
+
+    The workflow is a convenience wrapper around the PR58--PR62 helpers:
+
+    1. build advisory fit-candidate configs,
+    2. run those candidate fits in isolated Lightcurve copies,
+    3. score completed candidates using training-residual diagnostics,
+    4. optionally format and/or plot the comparison report.
+
+    It is deliberately non-selecting.  It may report a top-ranked candidate for
+    inspection, but it does not install that candidate, set ``selected_model``,
+    mutate the input Lightcurve fit state, or apply wavelength-parameter
+    suggestions as constraints or initial values.
+    """
+    if candidate_report is not None and fit_candidate_report is not None:
+        raise ValueError(
+            "Specify only one of candidate_report or fit_candidate_report."
+        )
+    if fit_candidate_report is not None:
+        candidate_report = fit_candidate_report
+
+    if candidate_limit is not None and max_candidates is not None:
+        raise ValueError("Specify only one of candidate_limit or max_candidates.")
+    if max_candidates is not None:
+        candidate_limit = max_candidates
+
+    built_candidate_report = candidate_report is None
+    ran_candidate_fits = run_report is None
+    scored_quality = quality_report is None
+
+    if candidate_report is None:
+        candidate_report = build_period_independent_wavelength_fit_candidates(
+            lightcurve,
+            include_2d_baseline=include_2d_baseline,
+            base_fit_kwargs=base_fit_kwargs,
+            include_models=include_models,
+            candidate_limit=candidate_limit,
+        )
+
+    if run_report is None:
+        run_report = run_period_independent_wavelength_fit_candidates(
+            lightcurve,
+            candidate_report=candidate_report,
+            candidate_limit=candidate_limit,
+            stop_on_error=stop_on_error,
+        )
+
+    if quality_report is None:
+        quality_report = score_period_independent_wavelength_fit_candidate_quality(
+            run_report
+        )
+
+    comparison_text_report = None
+    if make_text_report:
+        comparison_text_report = format_period_independent_wavelength_fit_candidate_comparison_report(
+            quality_report
+        )
+
+    figures = None
+    if make_plots:
+        figures = plot_period_independent_wavelength_fit_candidate_comparison(
+            quality_report
+        )
+
+    workflow_report: dict[str, Any] = {
+        "kind": "period_independent_wavelength_advisory_workflow",
+        "stage": "candidate_build_run_quality_report",
+        "advisory_only": True,
+        "builds_candidate_configs": True,
+        "runs_fits": bool(ran_candidate_fits),
+        "scores_fit_quality": True,
+        "formats_report": bool(make_text_report),
+        "makes_plots": bool(make_plots),
+        "candidate_fit_state_isolated": bool(
+            run_report.get("candidate_fit_state_isolated", True)
+        ) if isinstance(run_report, dict) else True,
+        "mutates_input_lightcurve": False,
+        "automatic_model_selection_applied": False,
+        "selected_model": None,
+        "automatic_constraints_applied": False,
+        "automatic_initialization_applied": False,
+        "parameter_suggestions_applied": False,
+        "built_candidate_report": bool(built_candidate_report),
+        "ran_candidate_fits": bool(ran_candidate_fits),
+        "scored_quality": bool(scored_quality),
+        "top_ranked_model": (
+            quality_report.get("top_ranked_model")
+            if isinstance(quality_report, dict)
+            else None
+        ),
+        "top_ranked_fit_quality_score": (
+            quality_report.get("top_ranked_fit_quality_score")
+            if isinstance(quality_report, dict)
+            else None
+        ),
+        "score_kind": (
+            quality_report.get("score_kind")
+            if isinstance(quality_report, dict)
+            else None
+        ),
+        "candidate_report": candidate_report,
+        "run_report": run_report,
+        "quality_report": quality_report,
+        "comparison_text_report": comparison_text_report,
+        "text_report": None,
+    }
+    if make_text_report:
+        workflow_report["text_report"] = _piwd_format_advisory_workflow_text_report(
+            workflow_report,
+            comparison_text_report,
+        )
+    if figures is not None:
+        workflow_report["figures"] = figures
+    return workflow_report

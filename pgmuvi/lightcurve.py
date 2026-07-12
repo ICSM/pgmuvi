@@ -9484,6 +9484,48 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             max_rows=max_rows,
         )
 
+    def run_period_independent_wavelength_advisory_workflow(
+        self,
+        *,
+        candidate_report: dict | None = None,
+        fit_candidate_report: dict | None = None,
+        run_report: dict | None = None,
+        quality_report: dict | None = None,
+        include_2d_baseline: bool = True,
+        base_fit_kwargs: dict | None = None,
+        include_models: list[str] | tuple[str, ...] | None = None,
+        candidate_limit: int | None = None,
+        max_candidates: int | None = None,
+        stop_on_error: bool = False,
+        make_text_report: bool = True,
+        make_plots: bool = False,
+    ) -> dict:
+        """Run the advisory wavelength-candidate workflow.
+
+        This method builds candidate configs, runs candidate fits in isolated
+        copies, scores training-residual quality, and optionally creates text
+        and plot reports. It does not select or install a winning model.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            run_period_independent_wavelength_advisory_workflow,
+        )
+
+        return run_period_independent_wavelength_advisory_workflow(
+            self,
+            candidate_report=candidate_report,
+            fit_candidate_report=fit_candidate_report,
+            run_report=run_report,
+            quality_report=quality_report,
+            include_2d_baseline=include_2d_baseline,
+            base_fit_kwargs=base_fit_kwargs,
+            include_models=include_models,
+            candidate_limit=candidate_limit,
+            max_candidates=max_candidates,
+            stop_on_error=stop_on_error,
+            make_text_report=make_text_report,
+            make_plots=make_plots,
+        )
+
     def diagnose_period_independent_wavelength_structure(
         self,
         *,
