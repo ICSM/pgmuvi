@@ -4292,3 +4292,217 @@ def score_period_independent_wavelength_fit_candidate_quality(
             ],
         }
     )
+
+
+# -----------------------------------------------------------------------------
+# Period-independent wavelength candidate comparison presentation (Level 0h)
+# -----------------------------------------------------------------------------
+
+def _piwd_candidate_comparison_results(score_report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return ranked candidate comparison rows from a PR60/PR61 report."""
+    if not isinstance(score_report, dict):
+        raise ValueError("candidate comparison report must be a dict")
+    kind = score_report.get("kind")
+    allowed = {
+        "period_independent_wavelength_fit_candidate_scores",
+        "period_independent_wavelength_fit_candidate_quality_scores",
+    }
+    if kind not in allowed:
+        raise ValueError(
+            "candidate comparison helpers require a wavelength fit-candidate "
+            "score or quality-score report."
+        )
+
+    rows = score_report.get("ranked_results")
+    if rows is None:
+        rows = score_report.get("quality_ranked_results")
+    if rows is None:
+        rows = score_report.get("viability_ranked_results")
+    if not isinstance(rows, list):
+        raise ValueError("score report must contain ranked_results")
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _piwd_format_float(value: Any, precision: int = 4) -> str:
+    """Format a scalar for compact human-readable reports."""
+    try:
+        val = float(value)
+    except Exception:
+        return "-" if value is None else str(value)
+    if not np.isfinite(val):
+        return "-"
+    if abs(val) >= 1.0e4 or (abs(val) < 1.0e-3 and val != 0.0):
+        return f"{val:.{precision}e}"
+    return f"{val:.{precision}g}"
+
+
+def format_period_independent_wavelength_fit_candidate_comparison_report(
+    score_report: dict[str, Any],
+    *,
+    max_rows: int | None = None,
+) -> str:
+    """Format a PR60/PR61 wavelength candidate comparison as plain text.
+
+    The formatter is deliberately non-selecting: it reports the top-ranked
+    candidate in the supplied score report, but it also repeats the advisory
+    contract fields so the formatted report cannot be mistaken for an automatic
+    model-selection step.
+    """
+    rows = _piwd_candidate_comparison_results(score_report)
+    if max_rows is not None:
+        max_rows = int(max_rows)
+        if max_rows <= 0:
+            raise ValueError("max_rows must be positive when supplied")
+        rows = rows[:max_rows]
+
+    lines: list[str] = []
+    lines.append("Period-independent wavelength fit-candidate comparison")
+    lines.append("=" * 63)
+    lines.append(f"kind: {score_report.get('kind')}")
+    lines.append(f"score_kind: {score_report.get('score_kind')}")
+    lines.append(f"scores_fit_quality: {score_report.get('scores_fit_quality')}")
+    lines.append(f"runs_fits: {score_report.get('runs_fits')}")
+    lines.append(f"applies_to_fit: {score_report.get('applies_to_fit')}")
+    lines.append(f"advisory_only: {score_report.get('advisory_only')}")
+    lines.append(
+        "automatic_model_selection_applied: "
+        f"{score_report.get('automatic_model_selection_applied')}"
+    )
+    lines.append(f"selected_model: {score_report.get('selected_model')}")
+    lines.append(f"top_ranked_model: {score_report.get('top_ranked_model')}")
+    if score_report.get("score_interpretation"):
+        lines.append(f"score_interpretation: {score_report.get('score_interpretation')}")
+    lines.append("")
+
+    header = (
+        "rank | model | score | fit_success | consensus | period | "
+        "kernel_mode | nrmse | med_abs_std | red_chi2"
+    )
+    lines.append(header)
+    lines.append("-" * len(header))
+    for row in rows:
+        rank = row.get("quality_rank") or row.get("score_rank") or row.get("rank")
+        score = row.get("fit_quality_score")
+        if score is None:
+            score = row.get("viability_score", row.get("score"))
+        lines.append(
+            " | ".join(
+                [
+                    str(rank),
+                    str(row.get("model")),
+                    _piwd_format_float(score),
+                    str(row.get("fit_success")),
+                    str(row.get("consensus_success")),
+                    _piwd_format_float(row.get("consensus_period")),
+                    str(row.get("consensus_time_kernel_constraint_mode")),
+                    _piwd_format_float(row.get("training_nrmse_by_target_scale")),
+                    _piwd_format_float(row.get("training_median_abs_standardized_residual")),
+                    _piwd_format_float(row.get("training_reduced_chi2")),
+                ]
+            )
+        )
+
+    lines.append("")
+    lines.append(
+        "Note: this report summarizes an advisory comparison. It does not choose "
+        "or install a winning model."
+    )
+    return "\n".join(lines)
+
+
+def _piwd_plot_metric_bar(
+    rows: list[dict[str, Any]],
+    metric_key: str,
+    *,
+    title: str,
+    ylabel: str,
+):
+    """Return a simple one-metric bar figure, or None if no values exist."""
+    values: list[float] = []
+    labels: list[str] = []
+    for row in rows:
+        value = row.get(metric_key)
+        try:
+            val = float(value)
+        except Exception:
+            continue
+        if not np.isfinite(val):
+            continue
+        labels.append(str(row.get("model")))
+        values.append(val)
+    if not values:
+        return None
+
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    ax.bar(range(len(values)), values)
+    ax.set_xticks(range(len(values)))
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel("candidate model")
+    fig.tight_layout()
+    return fig
+
+
+def plot_period_independent_wavelength_fit_candidate_comparison(
+    score_report: dict[str, Any],
+    *,
+    max_rows: int | None = None,
+) -> dict[str, Any]:
+    """Create simple diagnostic plots for a PR60/PR61 candidate comparison.
+
+    Each metric is plotted in its own figure.  The helper does not run fits,
+    rescore candidates, or select a model.
+    """
+    rows = _piwd_candidate_comparison_results(score_report)
+    if max_rows is not None:
+        max_rows = int(max_rows)
+        if max_rows <= 0:
+            raise ValueError("max_rows must be positive when supplied")
+        rows = rows[:max_rows]
+
+    figures: dict[str, Any] = {}
+    score_key = "fit_quality_score" if any("fit_quality_score" in row for row in rows) else "score"
+    score_title = (
+        "Training-residual fit-quality score"
+        if score_key == "fit_quality_score"
+        else "Completion/diagnostic viability score"
+    )
+    fig = _piwd_plot_metric_bar(
+        rows,
+        score_key,
+        title=score_title,
+        ylabel=score_key,
+    )
+    if fig is not None:
+        figures["score"] = fig
+
+    for key, title, ylabel in [
+        (
+            "training_nrmse_by_target_scale",
+            "Training normalized RMSE by target scale",
+            "normalized RMSE",
+        ),
+        (
+            "training_median_abs_standardized_residual",
+            "Training median absolute standardized residual",
+            "median |standardized residual|",
+        ),
+        (
+            "training_reduced_chi2",
+            "Training reduced chi-square",
+            "reduced chi-square",
+        ),
+        (
+            "training_outlier_fraction_3sigma",
+            "Training 3-sigma outlier fraction",
+            "outlier fraction",
+        ),
+    ]:
+        fig = _piwd_plot_metric_bar(rows, key, title=title, ylabel=ylabel)
+        if fig is not None:
+            figures[key] = fig
+
+    return figures

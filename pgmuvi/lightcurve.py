@@ -9444,6 +9444,46 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return score_period_independent_wavelength_fit_candidate_quality(run_report)
 
+    def format_period_independent_wavelength_fit_candidate_comparison_report(
+        self,
+        score_report: dict,
+        *,
+        max_rows: int | None = None,
+    ) -> str:
+        """Format a wavelength fit-candidate score report for inspection.
+
+        This method is presentation-only. It does not run fits, choose a
+        winner, install a model, or mutate this Lightcurve's fit state.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            format_period_independent_wavelength_fit_candidate_comparison_report,
+        )
+
+        return format_period_independent_wavelength_fit_candidate_comparison_report(
+            score_report,
+            max_rows=max_rows,
+        )
+
+    def plot_period_independent_wavelength_fit_candidate_comparison(
+        self,
+        score_report: dict,
+        *,
+        max_rows: int | None = None,
+    ) -> dict:
+        """Plot a wavelength fit-candidate score report for inspection.
+
+        This method is presentation-only. It does not run fits, choose a
+        winner, install a model, or mutate this Lightcurve's fit state.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            plot_period_independent_wavelength_fit_candidate_comparison,
+        )
+
+        return plot_period_independent_wavelength_fit_candidate_comparison(
+            score_report,
+            max_rows=max_rows,
+        )
+
     def diagnose_period_independent_wavelength_structure(
         self,
         *,
