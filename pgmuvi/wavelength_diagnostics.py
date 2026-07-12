@@ -963,6 +963,8 @@ def _comparison_result_entry(
         "priority": candidate.get("priority"),
         "reason": candidate.get("reason"),
         "status": status,
+        "fit_success": bool(status == "passed"),
+        "fit_failed": bool(status == "failed"),
         "success": bool(status == "success"),
         "failed": bool(status == "failed"),
         "skipped": bool(status == "skipped"),
@@ -3450,6 +3452,234 @@ def build_period_independent_wavelength_fit_candidates(
                 "Parameter suggestions are metadata only and are not inserted into fit_kwargs.",
                 "LPV separable candidates default to time_kernel_type='quasi_periodic' to use the PR55 period_length handoff.",
                 "The 2D baseline keeps its existing spectral-mixture time-kernel default unless base_fit_kwargs overrides it.",
+            ],
+        }
+    )
+
+
+# -----------------------------------------------------------------------------
+# Period-independent wavelength fit-candidate execution (Level 0d)
+# -----------------------------------------------------------------------------
+
+def _piwd_validate_fit_candidate_report(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return fit candidates from a PR58 report, or raise a schema error."""
+    if not isinstance(report, dict) or report.get("kind") != "period_independent_wavelength_fit_candidates":
+        raise ValueError(
+            "run_period_independent_wavelength_fit_candidates() requires a "
+            "period-independent wavelength fit-candidate report."
+        )
+    candidates = report.get("fit_candidates")
+    if not isinstance(candidates, list):
+        raise ValueError("fit-candidate report must contain a 'fit_candidates' list")
+    normalized: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates, start=1):
+        if not isinstance(candidate, dict):
+            raise ValueError("every fit candidate must be a dict")
+        fit_kwargs = candidate.get("fit_kwargs")
+        if not isinstance(fit_kwargs, dict):
+            raise ValueError("every fit candidate must contain a fit_kwargs dict")
+        if not candidate.get("model") and not fit_kwargs.get("model"):
+            raise ValueError("every fit candidate must specify a model")
+        copied = dict(candidate)
+        copied["rank"] = int(copied.get("rank") or index)
+        copied["model"] = str(copied.get("model") or fit_kwargs.get("model"))
+        copied["fit_kwargs"] = dict(fit_kwargs)
+        normalized.append(copied)
+    return normalized
+
+
+def _piwd_extract_fit_outcome(
+    candidate: dict[str, Any],
+    *,
+    status: str,
+    fitted_lightcurve=None,
+    fit_result: Any = None,
+    exception: BaseException | None = None,
+) -> dict[str, Any]:
+    """Build a JSON-safe outcome record for one candidate execution."""
+    diagnostics = None
+    if fitted_lightcurve is not None:
+        diagnostics = getattr(fitted_lightcurve, "consensus_diagnostics", None)
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+
+    outcome: dict[str, Any] = {
+        "candidate_id": candidate.get("candidate_id"),
+        "rank": candidate.get("rank"),
+        "model": candidate.get("model"),
+        "status": status,
+
+        "fit_success": bool(status == "passed"),
+
+        "fit_failed": bool(status == "failed"),
+        "fit_kwargs": dict(candidate.get("fit_kwargs") or {}),
+        "recommendation_strength": candidate.get("recommendation_strength"),
+        "hard_exclusion": bool(candidate.get("hard_exclusion", False)),
+        "source": candidate.get("source"),
+        "parameter_suggestions_applied": bool(
+            candidate.get(
+                "parameter_suggestions_applied",
+                candidate.get("applies_parameter_suggestions", False),
+            )
+        ),
+        "constraints_applied_from_plan": bool(candidate.get("applies_constraints", False)),
+        "consensus_success": diagnostics.get("consensus_success"),
+        "consensus_frequency": diagnostics.get("consensus_frequency"),
+        "consensus_period": diagnostics.get("consensus_period"),
+        "consensus_time_kernel_constraint_mode": diagnostics.get(
+            "consensus_time_kernel_constraint_mode"
+        ),
+        "n_accepted_bands": diagnostics.get("n_accepted_bands"),
+        "n_rejected_bands": diagnostics.get("n_rejected_bands"),
+        "accepted_bands": diagnostics.get("accepted_bands"),
+        "rejected_bands": diagnostics.get("rejected_bands"),
+        "fit_result_type": type(fit_result).__name__ if fit_result is not None else None,
+    }
+
+    if exception is not None:
+        import traceback as _traceback
+
+        outcome.update(
+            {
+                "exception_type": type(exception).__name__,
+                "exception_message": str(exception),
+                "traceback": "".join(
+                    _traceback.format_exception(
+                        type(exception), exception, exception.__traceback__
+                    )
+                ),
+            }
+        )
+
+    return _clean_scalar_dict(outcome)
+
+
+def run_period_independent_wavelength_fit_candidates(
+    lightcurve,
+    *,
+    candidate_report: dict[str, Any] | None = None,
+    fit_candidate_report: dict[str, Any] | None = None,
+    candidate_limit: int | None = None,
+    max_candidates: int | None = None,
+    stop_on_error: bool = False,
+    fit_runner=None,
+    copy_lightcurve: bool = True,
+    **candidate_builder_kwargs,
+) -> dict[str, Any]:
+    """Run PR58 wavelength fit candidates and return an outcome summary.
+
+    This helper executes candidate ``fit_kwargs`` but deliberately does not
+    install a winner, mutate the caller's main Lightcurve state, or apply PR57
+    parameter suggestions as hyperparameters/constraints.  By default each
+    candidate is run on a deep copy of the input Lightcurve.  ``fit_runner`` is
+    an optional test/integration hook with signature
+    ``fit_runner(lightcurve_copy, fit_kwargs, candidate)``.
+    """
+    if candidate_report is not None and fit_candidate_report is not None:
+        raise ValueError(
+            "Pass only one of candidate_report or fit_candidate_report, not both."
+        )
+    if candidate_report is None and fit_candidate_report is not None:
+        candidate_report = fit_candidate_report
+
+    if candidate_limit is not None and max_candidates is not None:
+        raise ValueError(
+            "Pass only one of candidate_limit or max_candidates, not both."
+        )
+    if candidate_limit is None and max_candidates is not None:
+        candidate_limit = max_candidates
+
+    if candidate_report is None:
+        candidate_report = build_period_independent_wavelength_fit_candidates(
+            lightcurve, **candidate_builder_kwargs
+        )
+    elif candidate_builder_kwargs:
+        raise ValueError(
+            "candidate_builder_kwargs may only be supplied when candidate_report is None"
+        )
+
+    candidates = _piwd_validate_fit_candidate_report(candidate_report)
+
+    if candidate_limit is not None:
+        candidate_limit = int(candidate_limit)
+        if candidate_limit < 1:
+            raise ValueError("candidate_limit must be >= 1 when provided")
+        candidates = candidates[:candidate_limit]
+
+    outcomes: list[dict[str, Any]] = []
+    for candidate in candidates:
+        import copy as _copy
+
+        if copy_lightcurve:
+            try:
+                lc_to_fit = _copy.deepcopy(lightcurve)
+            except Exception as exc:  # pragma: no cover - defensive path
+                raise RuntimeError(
+                    "Could not deep-copy the Lightcurve for isolated candidate fitting."
+                ) from exc
+        else:
+            lc_to_fit = lightcurve
+
+        fit_kwargs = dict(candidate.get("fit_kwargs") or {})
+        try:
+            if fit_runner is None:
+                fit_result = lc_to_fit.fit(**fit_kwargs)
+            else:
+                fit_result = fit_runner(lc_to_fit, fit_kwargs, candidate)
+            outcomes.append(
+                _piwd_extract_fit_outcome(
+                    candidate,
+                    status="passed",
+                    fitted_lightcurve=lc_to_fit,
+                    fit_result=fit_result,
+                )
+            )
+        except Exception as exc:
+            outcomes.append(
+                _piwd_extract_fit_outcome(
+                    candidate,
+                    status="failed",
+                    fitted_lightcurve=lc_to_fit,
+                    exception=exc,
+                )
+            )
+            if stop_on_error:
+                raise
+
+    passed = [outcome for outcome in outcomes if outcome.get("status") == "passed"]
+    failed = [outcome for outcome in outcomes if outcome.get("status") == "failed"]
+
+    return _clean_scalar_dict(
+        {
+            "kind": "period_independent_wavelength_fit_candidate_results",
+            "stage": "candidate_fit_execution_summary",
+            "source_candidate_report_kind": candidate_report.get("kind"),
+            "is_period_independent": True,
+            "uses_temporal_consensus": True,
+            "uses_period_or_frequency": True,
+            "runs_fits": True,
+            "applies_to_fit": True,
+            "mutates_input_lightcurve": bool(not copy_lightcurve),
+            "candidate_fit_state_isolated": bool(copy_lightcurve),
+            "advisory_only": True,
+            "automatic_model_selection_applied": False,
+            "selected_model": None,
+            "hard_model_exclusions": False,
+            "automatic_constraints_applied": False,
+            "automatic_initialization_applied": False,
+            "parameter_suggestions_applied": False,
+            "n_candidates": len(candidates),
+            "n_attempted": len(outcomes),
+            "n_passed": len(passed),
+            "n_failed": len(failed),
+            "passed_models": [outcome.get("model") for outcome in passed],
+            "failed_models": [outcome.get("model") for outcome in failed],
+            "outcomes": outcomes,
+            "candidate_results": outcomes,
+            "notes": [
+                "Candidate fits were executed for comparison/reporting only.",
+                "No winning model is selected automatically.",
+                "The input Lightcurve is deep-copied for each candidate by default.",
+                "PR57 parameter suggestions remain metadata and are not applied as fit kwargs.",
             ],
         }
     )

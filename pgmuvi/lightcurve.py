@@ -9375,6 +9375,40 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             include_parameter_suggestions=include_parameter_suggestions,
         )
 
+    def run_period_independent_wavelength_fit_candidates(
+        self,
+        *,
+        candidate_report: dict | None = None,
+        fit_candidate_report: dict | None = None,
+        candidate_limit: int | None = None,
+        max_candidates: int | None = None,
+        stop_on_error: bool = False,
+        fit_runner=None,
+        copy_lightcurve: bool = True,
+        **candidate_builder_kwargs,
+    ) -> dict:
+        """Run advisory wavelength fit candidates on isolated Lightcurve copies.
+
+        This method executes candidate fits for comparison/reporting only.  It
+        does not choose a winner, apply parameter suggestions, or mutate this
+        Lightcurve's fit state when ``copy_lightcurve=True``.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            run_period_independent_wavelength_fit_candidates,
+        )
+
+        return run_period_independent_wavelength_fit_candidates(
+            self,
+            candidate_report=candidate_report,
+            fit_candidate_report=fit_candidate_report,
+            candidate_limit=candidate_limit,
+            max_candidates=max_candidates,
+            stop_on_error=stop_on_error,
+            fit_runner=fit_runner,
+            copy_lightcurve=copy_lightcurve,
+            **candidate_builder_kwargs,
+        )
+
     def diagnose_period_independent_wavelength_structure(
         self,
         *,
