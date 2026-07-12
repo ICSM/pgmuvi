@@ -9310,6 +9310,33 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
 
 
+
+    def build_period_independent_wavelength_parameter_plan(
+        self,
+        *,
+        diagnostics_report: dict | None = None,
+        min_points_per_band: int = 5,
+        padding_factor: float = 2.0,
+        positive_floor: float = 1.0e-12,
+    ) -> dict:
+        """Return advisory wavelength-parameter initialization/constraint suggestions.
+
+        This method uses only period-independent Level-0 wavelength diagnostics.
+        It does not mutate fit state, set hyperparameters, register constraints,
+        or run a GP fit.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            build_period_independent_wavelength_parameter_plan,
+        )
+
+        return build_period_independent_wavelength_parameter_plan(
+            self,
+            diagnostics_report=diagnostics_report,
+            min_points_per_band=min_points_per_band,
+            padding_factor=padding_factor,
+            positive_floor=positive_floor,
+        )
+
     def diagnose_period_independent_wavelength_structure(
         self,
         *,

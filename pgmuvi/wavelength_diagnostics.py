@@ -2737,3 +2737,496 @@ def diagnose_wavelength_dependence_prefit(
     ]
 
     return report
+
+
+# -----------------------------------------------------------------------------
+# Period-independent wavelength initialization / constraint planning (Level 0b)
+# -----------------------------------------------------------------------------
+
+def _piwd_plan_positive_floor(values: list[float | None], floor: float) -> float:
+    finite = []
+    for value in values:
+        value_f = _piwd_float(value)
+        if value_f is not None and value_f > 0.0:
+            finite.append(value_f)
+    if not finite:
+        return float(floor)
+    return float(max(min(finite) * 1.0e-6, floor))
+
+
+def _piwd_plan_extract_arrays(report: dict[str, Any]) -> dict[str, Any]:
+    """Extract finite per-band arrays from a PR56 diagnostics report."""
+    rows = report.get("band_table", [])
+    extracted: list[dict[str, float]] = []
+    for row in rows:
+        summary = row.get("period_independent_flux_summary", {})
+        if summary.get("available") is not True:
+            continue
+        wl = _piwd_float(row.get("wavelength"))
+        median = _piwd_float(summary.get("median_flux"))
+        amp = _piwd_float(summary.get("raw_half_amplitude_q05_q95"))
+        scatter = _piwd_float(summary.get("robust_scatter"))
+        q05 = _piwd_float(summary.get("q05_flux"))
+        q95 = _piwd_float(summary.get("q95_flux"))
+        if wl is None or median is None or wl <= 0.0:
+            continue
+        extracted.append(
+            {
+                "wavelength": wl,
+                "median_flux": median,
+                "raw_half_amplitude_q05_q95": amp if amp is not None else 0.0,
+                "robust_scatter": scatter if scatter is not None else 0.0,
+                "q05_flux": q05 if q05 is not None else median,
+                "q95_flux": q95 if q95 is not None else median,
+            }
+        )
+
+    extracted.sort(key=lambda item: item["wavelength"])
+    return {
+        "rows": extracted,
+        "wavelengths": [row["wavelength"] for row in extracted],
+        "median_fluxes": [row["median_flux"] for row in extracted],
+        "amplitudes": [row["raw_half_amplitude_q05_q95"] for row in extracted],
+        "scatters": [row["robust_scatter"] for row in extracted],
+        "q05_fluxes": [row["q05_flux"] for row in extracted],
+        "q95_fluxes": [row["q95_flux"] for row in extracted],
+    }
+
+
+def _piwd_plan_loglog_fit(
+    wavelengths: list[float],
+    values: list[float],
+    *,
+    positive_floor: float,
+) -> dict[str, Any]:
+    pairs: list[tuple[float, float]] = []
+    for wl, value in zip(wavelengths, values, strict=False):
+        wl_f = _piwd_float(wl)
+        value_f = _piwd_float(value)
+        if wl_f is None or value_f is None:
+            continue
+        if wl_f <= 0.0:
+            continue
+        value_abs = max(abs(value_f), positive_floor)
+        pairs.append((wl_f, value_abs))
+
+    if len(pairs) < 2:
+        return {
+            "available": False,
+            "slope": None,
+            "intercept": None,
+            "normalization": None,
+            "reason": "fewer_than_two_positive_wavelength_points",
+        }
+
+    x = np.log(np.asarray([p[0] for p in pairs], dtype=float))
+    y = np.log(np.asarray([p[1] for p in pairs], dtype=float))
+    if not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+        return {
+            "available": False,
+            "slope": None,
+            "intercept": None,
+            "normalization": None,
+            "reason": "nonfinite_log_values",
+        }
+    if float(np.nanmax(x) - np.nanmin(x)) <= 0.0:
+        return {
+            "available": False,
+            "slope": None,
+            "intercept": None,
+            "normalization": None,
+            "reason": "zero_wavelength_span",
+        }
+
+    slope, intercept = np.polyfit(x, y, deg=1)
+    return {
+        "available": True,
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "normalization": float(np.exp(intercept)),
+        "reason": None,
+    }
+
+
+def _piwd_plan_quadratic_fit(
+    wavelengths: list[float], values: list[float]) -> dict[str, Any]:
+    if len(wavelengths) < 2:
+        return {
+            "available": False,
+            "bias": None,
+            "weights": None,
+            "coordinate_basis": "raw_wavelength",
+            "reason": "fewer_than_two_wavelength_points",
+        }
+    x = np.asarray(wavelengths, dtype=float)
+    y = np.asarray(values, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    x = x[finite]
+    y = y[finite]
+    if x.size < 2:
+        return {
+            "available": False,
+            "bias": None,
+            "weights": None,
+            "coordinate_basis": "raw_wavelength",
+            "reason": "fewer_than_two_finite_points",
+        }
+    degree = 2 if x.size >= 3 else 1
+    coeff = np.polyfit(x, y, deg=degree)
+    if degree == 1:
+        slope, intercept = coeff
+        weights = [float(slope), 0.0]
+        bias = float(intercept)
+    else:
+        quad, linear, intercept = coeff
+        weights = [float(linear), float(quad)]
+        bias = float(intercept)
+    return {
+        "available": True,
+        "bias": bias,
+        "weights": weights,
+        "coordinate_basis": "raw_wavelength",
+        "reason": None,
+        "warning": (
+            "Advisory only: these coefficients are in the raw wavelength basis. "
+            "Do not apply directly when the fit uses a transformed wavelength coordinate."
+        ),
+    }
+
+
+def _piwd_plan_recommended_models(
+    *,
+    median_trend: str,
+    median_slope: float | None,
+    amplitude_trend: str,
+) -> list[dict[str, Any]]:
+    """Rank LPV-relevant wavelength model candidates from Level-0 summaries."""
+    candidates: list[dict[str, Any]] = []
+    slope = _piwd_float(median_slope)
+
+    if median_trend == "non_monotonic" or amplitude_trend == "non_monotonic":
+        candidates.append(
+            {
+                "model": "2DWavelengthDependent",
+                "rank": 1,
+                "reason": (
+                    "The period-independent median-flux or amplitude trend is "
+                    "non-monotonic, so a flexible wavelength-dependent mean/covariance "
+                    "is safer than forcing a monotonic parametric mean."
+                ),
+            }
+        )
+        candidates.append(
+            {
+                "model": "2DDustMean",
+                "rank": 2,
+                "reason": "Retain as an LPV physically motivated monotonic mean comparison.",
+            }
+        )
+        candidates.append(
+            {
+                "model": "2DPowerLawMean",
+                "rank": 3,
+                "reason": "Retain as a simple parametric wavelength-mean comparison.",
+            }
+        )
+    elif slope is not None and slope > 0.0:
+        candidates.append(
+            {
+                "model": "2DDustMean",
+                "rank": 1,
+                "reason": (
+                    "The median flux rises with wavelength, consistent with an "
+                    "attenuated short-wavelength mean for dusty LPVs."
+                ),
+            }
+        )
+        candidates.append(
+            {
+                "model": "2DPowerLawMean",
+                "rank": 2,
+                "reason": "The positive log-log slope can also be represented by a power-law mean.",
+            }
+        )
+        candidates.append(
+            {
+                "model": "2DWavelengthDependent",
+                "rank": 3,
+                "reason": "Flexible fallback if the parametric monotonic means underfit.",
+            }
+        )
+    elif slope is not None and slope < 0.0:
+        candidates.append(
+            {
+                "model": "2DPowerLawMean",
+                "rank": 1,
+                "reason": "The median flux decreases with wavelength; a signed power-law mean is the least restrictive parametric option.",
+            }
+        )
+        candidates.append(
+            {
+                "model": "2DWavelengthDependent",
+                "rank": 2,
+                "reason": "Flexible fallback for non-power-law wavelength structure.",
+            }
+        )
+        candidates.append(
+            {
+                "model": "2DDustMean",
+                "rank": 3,
+                "reason": "Lower priority because the simple dust mean is naturally increasing with wavelength for positive amplitude/tau/alpha.",
+            }
+        )
+    else:
+        candidates.append(
+            {
+                "model": "2DWavelengthDependent",
+                "rank": 1,
+                "reason": "The period-independent wavelength trend is flat or unavailable; use the flexible separable baseline first.",
+            }
+        )
+        candidates.append(
+            {
+                "model": "2DDustMean",
+                "rank": 2,
+                "reason": "Retain as an LPV motivated comparison.",
+            }
+        )
+        candidates.append(
+            {
+                "model": "2DPowerLawMean",
+                "rank": 3,
+                "reason": "Retain as a simple parametric comparison.",
+            }
+        )
+
+    return candidates
+
+
+def build_period_independent_wavelength_parameter_plan(
+    lightcurve_or_report,
+    *,
+    diagnostics_report: dict[str, Any] | None = None,
+    min_points_per_band: int = 5,
+    padding_factor: float = 2.0,
+    positive_floor: float = 1.0e-12,
+) -> dict[str, Any]:
+    """Build advisory initialization/constraint suggestions from PR56 diagnostics.
+
+    The returned plan is intentionally advisory.  It does not apply parameter
+    values, register constraints, run consensus, or mutate a Lightcurve.  It is
+    the bridge between Level-0 wavelength diagnostics and a later explicit
+    parameter-workflow integration step.
+    """
+    padding_factor = float(padding_factor)
+    if padding_factor < 1.0:
+        raise ValueError("padding_factor must be >= 1.0")
+    positive_floor = float(positive_floor)
+    if positive_floor <= 0.0:
+        raise ValueError("positive_floor must be > 0")
+
+    if diagnostics_report is not None:
+        report = diagnostics_report
+    elif isinstance(lightcurve_or_report, dict):
+        report = lightcurve_or_report
+    else:
+        report = diagnose_period_independent_wavelength_structure(
+            lightcurve_or_report,
+            min_points_per_band=min_points_per_band,
+        )
+
+    if report.get("kind") != "period_independent_wavelength_diagnostics":
+        raise ValueError(
+            "build_period_independent_wavelength_parameter_plan() requires a "
+            "period-independent wavelength diagnostics report."
+        )
+
+    arrays = _piwd_plan_extract_arrays(report)
+    rows = arrays["rows"]
+    wavelengths = arrays["wavelengths"]
+    medians = arrays["median_fluxes"]
+    amps = arrays["amplitudes"]
+    scatters = arrays["scatters"]
+    q05 = arrays["q05_fluxes"]
+    q95 = arrays["q95_fluxes"]
+
+    warnings = list(report.get("warnings", []))
+    if len(rows) < 2:
+        warnings.append(
+            "Fewer than two usable bands are available; wavelength-parameter "
+            "initialization suggestions are limited."
+        )
+
+    finite_flux_values = [v for v in q05 + q95 + medians if _piwd_float(v) is not None]
+    if finite_flux_values:
+        flux_min = float(np.nanmin(np.asarray(finite_flux_values, dtype=float)))
+        flux_max = float(np.nanmax(np.asarray(finite_flux_values, dtype=float)))
+    else:
+        flux_min = 0.0
+        flux_max = positive_floor
+    flux_span = max(float(flux_max - flux_min), positive_floor)
+    median_flux = float(np.nanmedian(np.asarray(medians, dtype=float))) if medians else 0.0
+    amplitude_scale = max(
+        [positive_floor]
+        + [float(v) for v in amps if _piwd_float(v) is not None and float(v) > 0.0]
+    )
+    scatter_scale = max(
+        [positive_floor]
+        + [float(v) for v in scatters if _piwd_float(v) is not None and float(v) > 0.0]
+    )
+    floor = _piwd_plan_positive_floor(medians + amps + scatters, positive_floor)
+
+    loglog = _piwd_plan_loglog_fit(
+        wavelengths,
+        medians,
+        positive_floor=floor,
+    )
+    median_slope = loglog.get("slope")
+    alpha_guess = abs(float(median_slope)) if median_slope is not None else 1.7
+    alpha_guess = float(np.clip(alpha_guess, 0.1, 10.0))
+
+    offset_low = float(flux_min - padding_factor * flux_span)
+    offset_high = float(flux_max + padding_factor * flux_span)
+    positive_amp_high = float(max(padding_factor * flux_span, amplitude_scale, floor))
+
+    powerlaw_weight = loglog.get("normalization")
+    if powerlaw_weight is None:
+        powerlaw_weight = float(np.sign(median_flux) * max(abs(median_flux), floor))
+    powerlaw_exponent = float(median_slope) if median_slope is not None else 0.0
+
+    dust_offset = max(0.0, float(flux_min - 0.25 * flux_span))
+    dust_amplitude = max(float(flux_max - dust_offset), amplitude_scale, floor)
+
+    quadratic = _piwd_plan_quadratic_fit(wavelengths, medians)
+
+    median_trend = report.get("summary", {}).get("median_flux_monotonicity_class")
+    amplitude_trend = report.get("summary", {}).get(
+        "raw_half_amplitude_q05_q95_monotonicity_class"
+    )
+    candidates = _piwd_plan_recommended_models(
+        median_trend=str(median_trend),
+        median_slope=median_slope,
+        amplitude_trend=str(amplitude_trend),
+    )
+
+    suggestions = {
+        "2DPowerLawMean": {
+            "parameter_basis": "physical_flux_and_raw_wavelength_advisory",
+            "initial_values": {
+                "mean_module.offset": 0.0,
+                "mean_module.weight": float(powerlaw_weight),
+                "mean_module.exponent": powerlaw_exponent,
+            },
+            "constraints": {
+                "mean_module.offset": [offset_low, offset_high],
+                "mean_module.weight": [-positive_amp_high, positive_amp_high],
+                "mean_module.exponent": [-10.0, 10.0],
+            },
+        },
+        "2DDustMean": {
+            "parameter_basis": "physical_flux_advisory",
+            "initial_values": {
+                "mean_module.offset": float(dust_offset),
+                "mean_module.log_amplitude": float(np.log(dust_amplitude)),
+                "mean_module.log_tau": 0.0,
+                "mean_module.log_alpha": float(np.log(alpha_guess)),
+            },
+            "physical_initial_values": {
+                "amplitude": float(dust_amplitude),
+                "tau": 1.0,
+                "alpha": float(alpha_guess),
+            },
+            "constraints": {
+                "mean_module.offset": [max(0.0, offset_low), max(offset_high, floor)],
+                "mean_module.log_amplitude": [float(np.log(floor)), float(np.log(positive_amp_high))],
+                "mean_module.log_tau": [float(np.log(1.0e-3)), float(np.log(1.0e3))],
+                "mean_module.log_alpha": [float(np.log(0.1)), float(np.log(10.0))],
+            },
+        },
+        "2DWavelengthDependent": {
+            "parameter_basis": quadratic.get("coordinate_basis"),
+            "initial_values": {
+                "mean_module.bias": quadratic.get("bias"),
+                "mean_module.weights": quadratic.get("weights"),
+            },
+            "constraints": {
+                "mean_module.bias": [offset_low, offset_high],
+                "mean_module.weights": None,
+            },
+            "warning": quadratic.get("warning"),
+        },
+        "shared_wavelength_kernel": {
+            "parameter_basis": "raw_wavelength_advisory",
+            "initial_values": {
+                "wavelength_lengthscale": (
+                    float(0.5 * (max(wavelengths) - min(wavelengths)))
+                    if len(wavelengths) >= 2
+                    else None
+                )
+            },
+            "constraints": {
+                "wavelength_lengthscale": (
+                    [positive_floor, float(max(wavelengths) - min(wavelengths)) * padding_factor]
+                    if len(wavelengths) >= 2
+                    else None
+                )
+            },
+        },
+        "shared_flux_scales": {
+            "median_flux": median_flux,
+            "flux_min": flux_min,
+            "flux_max": flux_max,
+            "flux_span": flux_span,
+            "amplitude_scale_q05_q95": amplitude_scale,
+            "robust_scatter_scale": scatter_scale,
+        },
+    }
+
+    return _clean_scalar_dict(
+        {
+            "kind": "period_independent_wavelength_parameter_plan",
+            "stage": "prefit_period_independent_advisory",
+            "source_report_kind": report.get("kind"),
+            "is_period_independent": True,
+            "uses_temporal_consensus": False,
+            "uses_period_or_frequency": False,
+            "applies_to_fit": False,
+            "advisory_only": True,
+            "hard_model_exclusions": False,
+            "automatic_constraints_applied": False,
+            "automatic_initialization_applied": False,
+            "n_usable_bands": len(rows),
+            "recommended_models": candidates,
+            "ranked_candidates": [
+                {
+                    "rank": candidate.get("rank"),
+                    "model": candidate.get("model"),
+                    "recommendation_strength": "advisory",
+                    "hard_exclusion": False,
+                    "primary_reason": candidate.get("reason"),
+                    "reason": candidate.get("reason"),
+                }
+                for candidate in candidates
+            ],
+            "primary_recommended_model": candidates[0]["model"] if candidates else None,
+            "summary": {
+                "median_flux_monotonicity_class": median_trend,
+                "raw_half_amplitude_q05_q95_monotonicity_class": amplitude_trend,
+                "median_flux_loglog_slope": median_slope,
+                "median_flux_loglog_intercept": loglog.get("intercept"),
+                "median_flux_loglog_normalization": loglog.get("normalization"),
+                "flux_min": flux_min,
+                "flux_max": flux_max,
+                "flux_span": flux_span,
+                "amplitude_scale_q05_q95": amplitude_scale,
+                "robust_scatter_scale": scatter_scale,
+            },
+            "model_parameter_suggestions": suggestions,
+            "warnings": warnings,
+            "notes": [
+                "This is an advisory Level-0 plan. It does not mutate the Lightcurve, register constraints, set hypers, or run a GP fit.",
+                "Parameter suggestions are derived from raw per-band flux distributions, not from temporal consensus or phase-folded amplitudes.",
+                "Raw-wavelength polynomial coefficients must not be applied blindly if the fit uses a transformed wavelength coordinate.",
+            ],
+        }
+    )
