@@ -4694,3 +4694,190 @@ def run_period_independent_wavelength_advisory_workflow(
     if figures is not None:
         workflow_report["figures"] = figures
     return workflow_report
+
+
+def _piwd_export_json_safe(value):
+    """Return a JSON-serializable copy of a wavelength-workflow payload.
+
+    Matplotlib figures and other non-serializable objects are represented by
+    strings rather than being embedded in the JSON export.  This helper is
+    intentionally local to the export path so it does not change the schema of
+    the in-memory advisory workflow report.
+    """
+    import math
+
+    try:
+        import numpy as _np
+    except Exception:  # pragma: no cover - numpy is expected but not required here
+        _np = None
+
+    try:
+        import torch as _torch
+    except Exception:  # pragma: no cover - torch may not be importable in minimal envs
+        _torch = None
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if _np is not None and isinstance(value, _np.generic):
+        return _piwd_export_json_safe(value.item())
+    if _np is not None and isinstance(value, _np.ndarray):
+        return _piwd_export_json_safe(value.tolist())
+    if _torch is not None and isinstance(value, _torch.Tensor):
+        return _piwd_export_json_safe(value.detach().cpu().tolist())
+    if isinstance(value, dict):
+        return {str(k): _piwd_export_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_piwd_export_json_safe(v) for v in value]
+    if hasattr(value, "savefig"):
+        return f"<{type(value).__name__}>"
+    return str(value)
+
+
+def _piwd_export_sanitize_filename_component(name):
+    """Make a short filesystem-safe component for exported plot names."""
+    text = str(name).strip() or "figure"
+    safe = []
+    for char in text:
+        if char.isalnum() or char in ("-", "_", "."):
+            safe.append(char)
+        else:
+            safe.append("_")
+    cleaned = "".join(safe).strip("._")
+    return cleaned or "figure"
+
+
+def export_period_independent_wavelength_advisory_workflow(
+    workflow,
+    output_dir,
+    *,
+    prefix="wavelength_advisory_workflow",
+    save_json=True,
+    save_text=True,
+    save_figures=True,
+    figure_format="png",
+    figure_dpi=150,
+    close_figures=False,
+):
+    """Export a period-independent wavelength advisory workflow report.
+
+    This helper is an output/export layer only.  It writes the already-produced
+    workflow dictionary, optional text reports, and optional matplotlib figures
+    to ``output_dir``.  It does not run fits, score candidates, select a model,
+    apply constraints, or apply initialization.
+
+    Parameters
+    ----------
+    workflow : dict
+        Output of ``run_period_independent_wavelength_advisory_workflow``.
+    output_dir : str or pathlib.Path
+        Directory where files should be written.
+    prefix : str, optional
+        Prefix used for all exported files.
+    save_json, save_text, save_figures : bool, optional
+        Control which output products are written.
+    figure_format : str, optional
+        Figure extension/format passed to matplotlib ``savefig``.
+    figure_dpi : int or float, optional
+        Resolution for saved figures.
+    close_figures : bool, optional
+        If true, close figures after saving them.
+
+    Returns
+    -------
+    dict
+        JSON-safe export manifest with paths to written files.
+    """
+    import json
+    from pathlib import Path
+
+    if not isinstance(workflow, dict):
+        raise ValueError("workflow must be a period-independent wavelength advisory workflow dict")
+    if workflow.get("kind") != "period_independent_wavelength_advisory_workflow":
+        raise ValueError(
+            "workflow must be a period-independent wavelength advisory workflow dict "
+            "with kind='period_independent_wavelength_advisory_workflow'."
+        )
+
+    outdir = Path(output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    safe_prefix = _piwd_export_sanitize_filename_component(prefix)
+    fig_format = str(figure_format).lstrip(".") or "png"
+
+    manifest = {
+        "kind": "period_independent_wavelength_advisory_workflow_export",
+        "source_workflow_kind": workflow.get("kind"),
+        "output_dir": str(outdir),
+        "prefix": safe_prefix,
+        "exports_workflow_outputs": True,
+        "runs_fits": False,
+        "applies_to_fit": False,
+        "advisory_only": True,
+        "mutates_input_lightcurve": False,
+        "automatic_model_selection_applied": False,
+        "selected_model": None,
+        "automatic_constraints_applied": False,
+        "automatic_initialization_applied": False,
+        "wrote_json": False,
+        "wrote_text_report": False,
+        "wrote_comparison_text_report": False,
+        "wrote_figures": False,
+        "json_path": None,
+        "text_report_path": None,
+        "comparison_text_report_path": None,
+        "figure_paths": {},
+        "exported_files": [],
+    }
+
+    if save_json:
+        json_payload = {k: v for k, v in workflow.items() if k != "figures"}
+        json_path = outdir / f"{safe_prefix}.json"
+        json_path.write_text(
+            json.dumps(_piwd_export_json_safe(json_payload), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        manifest["wrote_json"] = True
+        manifest["json_path"] = str(json_path)
+        manifest["exported_files"].append(str(json_path))
+
+    if save_text:
+        text_report = workflow.get("text_report")
+        if text_report:
+            text_path = outdir / f"{safe_prefix}.txt"
+            text_path.write_text(str(text_report), encoding="utf-8")
+            manifest["wrote_text_report"] = True
+            manifest["text_report_path"] = str(text_path)
+            manifest["exported_files"].append(str(text_path))
+
+        comparison_text = workflow.get("comparison_text_report")
+        if comparison_text and comparison_text != text_report:
+            comparison_path = outdir / f"{safe_prefix}_comparison.txt"
+            comparison_path.write_text(str(comparison_text), encoding="utf-8")
+            manifest["wrote_comparison_text_report"] = True
+            manifest["comparison_text_report_path"] = str(comparison_path)
+            manifest["exported_files"].append(str(comparison_path))
+
+    if save_figures:
+        figures = workflow.get("figures") or {}
+        if figures:
+            for fig_name, fig in figures.items():
+                if not hasattr(fig, "savefig"):
+                    continue
+                safe_name = _piwd_export_sanitize_filename_component(fig_name)
+                fig_path = outdir / f"{safe_prefix}_{safe_name}.{fig_format}"
+                fig.savefig(fig_path, dpi=figure_dpi)
+                manifest["figure_paths"][str(fig_name)] = str(fig_path)
+                manifest["exported_files"].append(str(fig_path))
+                if close_figures:
+                    try:
+                        import matplotlib.pyplot as _plt
+
+                        _plt.close(fig)
+                    except Exception:  # pragma: no cover - best-effort cleanup only
+                        pass
+            manifest["wrote_figures"] = bool(manifest["figure_paths"])
+
+    return manifest
+

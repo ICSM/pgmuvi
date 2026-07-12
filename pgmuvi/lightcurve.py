@@ -9484,6 +9484,50 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             max_rows=max_rows,
         )
 
+
+
+    def export_period_independent_wavelength_advisory_workflow(
+        self,
+        workflow=None,
+        output_dir="wavelength_advisory_workflow",
+        *,
+        prefix="wavelength_advisory_workflow",
+        run_workflow_kwargs=None,
+        save_json=True,
+        save_text=True,
+        save_figures=True,
+        figure_format="png",
+        figure_dpi=150,
+        close_figures=False,
+    ):
+        """Export a period-independent wavelength advisory workflow report.
+
+        If ``workflow`` is not supplied, this method first runs
+        :meth:`run_period_independent_wavelength_advisory_workflow` using
+        ``run_workflow_kwargs``.  The export itself does not choose or install a
+        model, apply constraints, or apply initialization.
+        """
+        from .wavelength_diagnostics import (
+            export_period_independent_wavelength_advisory_workflow,
+        )
+
+        if workflow is None:
+            workflow = self.run_period_independent_wavelength_advisory_workflow(
+                **(run_workflow_kwargs or {})
+            )
+
+        return export_period_independent_wavelength_advisory_workflow(
+            workflow,
+            output_dir,
+            prefix=prefix,
+            save_json=save_json,
+            save_text=save_text,
+            save_figures=save_figures,
+            figure_format=figure_format,
+            figure_dpi=figure_dpi,
+            close_figures=close_figures,
+        )
+
     def run_period_independent_wavelength_advisory_workflow(
         self,
         *,
