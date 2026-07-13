@@ -30,8 +30,8 @@ The kernel structure is selected with
    * - Model identifier
      - Description
    * - ``'1D'``
-     - Default.  Pure spectral mixture kernel for single-band data;
-       highly flexible.
+     - Pure spectral mixture kernel for single-band data; highly flexible.
+       ``fit()`` does not choose this automatically; pass ``model='1D'`` explicitly.
    * - ``'1DLinear'``
      - Spectral mixture with a linear mean function; useful when a
        long-term linear trend is expected.
@@ -96,10 +96,10 @@ The Bayesian Information Criterion (BIC) or Leave-One-Out cross-validation can b
 used for formal model comparison, but visual inspection of the PSD and residuals is
 often sufficient.
 
-Automatic Model Selection
---------------------------
+Legacy Automatic Recommendation
+-------------------------------
 
-``pgmuvi`` provides an automated model selection method based on data
+``pgmuvi`` provides a legacy convenience recommender based on data
 characteristics::
 
     recommended, diagnostics = lc.auto_select_model()
@@ -119,13 +119,20 @@ can be passed directly to :meth:`~pgmuvi.lightcurve.Lightcurve.set_model`::
     lc.set_model(recommended)
 
 
-Wavelength-Dependence Diagnostics for 2D Light Curves
-------------------------------------------------------
+Legacy Wavelength-Dependence Diagnostics for 2D Light Curves
+----------------------------------------------------------------
 
 For multiwavelength light curves, choosing a model is not only a question of
-period recovery.  You often need to decide whether the variability is
-approximately achromatic, smoothly wavelength-dependent, power-law-like,
-dust-like, lagged, or too band-specific for a shared 2D model.
+period recovery.  You often need to inspect whether the variability is shared
+across bands, whether its amplitude changes smoothly with wavelength, and
+whether the data show possible wavelength-dependent phase or lag structure.
+
+.. note::
+
+   This section documents the older staged diagnostic/comparison API. The newer
+   period-independent wavelength advisory workflow introduced after PR56 uses
+   model/kernel configurations and batch reports rather than automatic model
+   selection. A dedicated guide for that current workflow is planned.
 
 Use :meth:`~pgmuvi.lightcurve.Lightcurve.diagnose_wavelength_dependence` before
 running a model grid.  This pre-fit stage is cheap: it builds a band-by-band
@@ -159,16 +166,14 @@ model is correct; they identify plausible next fits.  Typical outcomes are:
      - ``model="2DWavelengthDependent"``
    * - Power-law-like wavelength trend
      - ``model="2DPowerLawMean"`` or ``model="2DPowerLaw"``
-   * - Dust/extinction-like mean trend
-     - ``model="2DDustMean"`` or ``model="2DDust"``
    * - Multiple shared components
      - ``fit_strategy="consensus_multicomp"`` with an appropriate final model
    * - Strong wavelength-dependent lag
      - Treat as a warning: current separable wavelength models do not explicitly
        encode deterministic wavelength-dependent delays.
 
-After inspecting the pre-fit diagnostics, you can run the recommended candidate
-models through the normal fitting pathway with
+After inspecting the pre-fit diagnostics, you can run the recommended follow-up
+fits through the normal fitting pathway with
 :meth:`~pgmuvi.lightcurve.Lightcurve.compare_wavelength_models`::
 
     comparison = lc.compare_wavelength_models(
@@ -182,7 +187,7 @@ models through the normal fitting pathway with
         residual_diagnostic_kwargs={"period": 350.0},
     )
 
-The comparison report records successful, failed, and skipped candidates; fit
+The comparison report records successful, failed, and skipped follow-up fits; fit
 history summaries; learned-noise summaries; residual/predictive scores; and
 quality flags.  A lower predictive score is useful evidence, but it is not a
 standalone scientific decision.  Always inspect residuals, coverage, rejected
@@ -210,7 +215,7 @@ For a deterministic smoke validation of the full public workflow, run::
     PYTHONPATH=. python3 examples/validate_wavelength_model_selection_workflow.py
 
 This writes JSON, Markdown, and plot artifacts to
-``wavelength_diagnostics_validation/``.  To also exercise candidate GP fitting
+``wavelength_diagnostics_validation/``.  To also exercise optional follow-up GP fitting
 and comparison scoring, run::
 
     PYTHONPATH=. python3 examples/validate_wavelength_model_selection_workflow.py \
@@ -248,12 +253,9 @@ See the ``alternative_kernels_1d.py`` example script for a full illustration.
 
    :mod:`pgmuvi.kernels` — Custom kernel definitions.
 
-Model Selection Tutorial
--------------------------
+Tutorial status
+---------------
 
-A notebook tutorial on model selection is provided in the User Guide:
-
-.. toctree::
-   :maxdepth: 1
-
-   ../notebooks/tutorial_model_selection
+The old model-selection tutorial notebook was an unfinished skeleton and is no
+longer listed in the public tutorial toctree. Updated wavelength-advisory and
+consensus-fitting tutorials are planned.

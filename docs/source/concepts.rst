@@ -76,18 +76,24 @@ See :doc:`howto/priors_constraints` for practical guidance, and the
 Data Transformations
 ---------------------
 
-Raw observational data often span many orders of magnitude or have units that are
-inconvenient for numerical optimisation.  ``pgmuvi`` provides built-in data
-transformations:
+Raw observational data often span many orders of magnitude or use large absolute
+time stamps that are inconvenient for numerical optimisation. ``pgmuvi`` provides
+built-in data transformations:
 
+* **TimeCenter:** subtracts a reference time from the time coordinate. This is the
+  default x-axis behaviour when no explicit ``xtransform`` is supplied
+  (``center_time="auto"``). It improves numerical conditioning while preserving
+  period and frequency interpretation.
+* **Shift:** subtracts a user-specified or automatically determined offset.
 * **MinMax:** rescales data to the range [0, 1].
 * **ZScore:** standardises data to zero mean and unit variance.
 * **RobustZScore:** standardises using the median and median absolute deviation (MAD),
   making it robust to outliers.
 
 Transformations can be applied to the time axis (``xtransform``) or the flux/magnitude
-axis (``ytransform``).  All predictions are automatically inverse-transformed back to
-the original units when plotting or reporting results.
+axis (``ytransform``). All predictions are automatically inverse-transformed back to
+the original units when plotting or reporting results. Pass ``center_time=False`` to
+turn off the default time-centering behaviour.
 
 1D vs 2D Models
 ----------------
@@ -110,20 +116,25 @@ the original units when plotting or reporting results.
 
   See :doc:`howto/multiband` for details on choosing between these families.
 
-Model Selection
-----------------
+Model Choice and Advisory Workflows
+-----------------------------------
 
-``pgmuvi`` provides several GP models with different kernel structures:
+``pgmuvi`` provides several GP model families with different kernel structures:
 
-* **Spectral Mixture (default):** Flexible, non-parametric PSD representation.
-* **Spectral Mixture + RBF:** Adds a smooth long-term trend.
-* **Spectral Mixture + Flicker:** Adds a :math:`1/f` noise component.
-* **Periodic** and **Quasi-Periodic** kernels: Useful when a strict periodic signal
-  is expected.
+* **Spectral Mixture:** flexible, non-parametric PSD representation.
+* **Matérn/RBF-style kernels:** smoother aperiodic variability models.
+* **Periodic and quasi-periodic kernels:** useful when a coherent or slowly
+  decorrelating periodic signal is expected.
+* **2D spectral-mixture models:** non-separable models over time and wavelength.
+* **Separable multiwavelength models:** product kernels combining a temporal kernel
+  with a wavelength kernel and optional wavelength-dependent mean structure.
 
-The :meth:`~pgmuvi.lightcurve.Lightcurve.auto_select_model` method can recommend a
-model based on the data's characteristics (periodicity strength, inter-band
-consistency).  See :doc:`howto/model_selection` for details.
+Older helper methods such as :meth:`~pgmuvi.lightcurve.Lightcurve.auto_select_model`
+can recommend a model identifier from coarse data characteristics. Newer wavelength
+workflows are advisory rather than automatic: they evaluate and rank plausible
+model/kernel configurations but do not install a winning model. See
+:doc:`howto/model_selection` for the legacy recommendation API; current
+wavelength-advisory documentation is being added separately.
 
 Sampling Metrics and Data Quality
 -----------------------------------

@@ -48,7 +48,10 @@ New to Gaussian processes or spectral mixture kernels? Start here.
 Tutorials
 ---------
 
-Step-by-step notebooks introducing the main workflows in `pgmuvi`.
+Step-by-step notebooks introducing maintained workflows in `pgmuvi`.
+Unfinished TODO/stub notebooks are intentionally excluded from the public
+tutorial toctree until they are completed and re-executed under the current
+package defaults.
 
 .. toctree::
    :maxdepth: 1
@@ -58,10 +61,6 @@ Step-by-step notebooks introducing the main workflows in `pgmuvi`.
    notebooks/PGMUVI_Gaussian_Process_fitting
    notebooks/PGMUVI_comparison_with_other_codes
    notebooks/pgmuvi_tutorial
-   notebooks/pgmuvi_tutorial_2d
-   notebooks/tutorial_preprocessing
-   notebooks/tutorial_synthetic
-   notebooks/tutorial_model_selection
 
 How-To Guides
 -------------

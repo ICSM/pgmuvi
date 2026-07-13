@@ -5,7 +5,7 @@ Python gaussian processes for multiwavelength variability inference
 [![DOI](https://zenodo.org/badge/387371146.svg)](https://zenodo.org/badge/latestdoi/387371146)
 
 
-pgmuvi is based on GPyTorch and intended for us in infering the properties of astronomical sources with multiwavelength variability. It uses spectral-mixture kernels to learn an approximation of the PSD of the variability, which have been shown to be very effective for pattern discovery (see https://arxiv.org/pdf/1302.4245.pdf).
+pgmuvi is based on GPyTorch and intended for use in inferring the properties of astronomical sources with multiwavelength variability. It uses spectral-mixture kernels to learn an approximation of the PSD of the variability, which have been shown to be very effective for pattern discovery (see https://arxiv.org/pdf/1302.4245.pdf).
 
 ## Installation and Quickstart
 
@@ -46,7 +46,7 @@ You can find full documentation for pgmuvi at [https://pgmuvi.readthedocs.io/](h
 
 ## Sampling Quality Assessment
 
-Before fitting a GP, you can check whether your lightcurve has adequate temporal sampling:
+Before fitting a GP, you can check whether your light curve has adequate temporal sampling:
 
 ```python
 # Compute sampling metrics
@@ -58,17 +58,25 @@ print(f"Detectable range: {metrics['nyquist_period']:.1f}"
 # Full quality assessment with detailed report
 passes, diagnostics = lc.assess_sampling_quality(verbose=True)
 if diagnostics['recommendation'] == 'PROCEED':
-    lc.fit(...)
+    lc.fit(model='1D')
 ```
 
-By default, `fit()` automatically checks sampling quality:
+Sampling gates are controlled when the `Lightcurve` is constructed, not by
+passing `check_sampling` to `fit()`:
 
 ```python
-lc.fit(model='1D', ...)  # Raises ValueError if sampling is poor
-lc.fit(model='1D', ..., check_sampling=False)  # Force fitting anyway
+from pgmuvi.lightcurve import Lightcurve
 
+lc = Lightcurve(t, y, yerr, check_sampling=True)
+# or, for CSV input:
+lc = Lightcurve.from_csv("source.csv", check_sampling=True)
+
+lc.fit(model='1D')
+```
 
 For multiband data:
+
+```python
 # Check each wavelength band
 results = lc2d.assess_sampling_quality_per_band()
 print(f"{results['summary']['n_passing']}/{results['summary']['n_bands']} bands pass")
@@ -78,13 +86,13 @@ band_metrics = lc2d.compute_sampling_metrics_per_band()
 
 # Filter to well-sampled bands only
 lc_good = lc2d.filter_well_sampled_bands()
-lc_good.fit(model='2D', ...)
+lc_good.fit(model='2D')
 ```
 
 
 ## Variability Detection
 
-Before fitting a GP, you can check if your lightcurve shows significant variability
+Before fitting a GP, you can check if your light curve shows significant variability
 using the built-in three-tier statistical testing framework
 (weighted chi-square, F_var excess variance, and Stetson K index):
 
@@ -93,24 +101,22 @@ from pgmuvi.lightcurve import Lightcurve
 
 lc = Lightcurve(t, y, yerr)
 
-# Check variability
 diagnostics = lc.check_variability(verbose=True)
 
 if diagnostics['decision'] == 'VARIABLE':
-    # Proceed with fitting
-    lc.fit(...)
+    lc.fit(model='1D')
 else:
     print(f"Not variable: {diagnostics['decision']}")
 ```
 
-You can also enable automatic variability checking inside `fit()`:
+Automatic variability gating is also a constructor-time option for 1-D light
+curves. Do not pass `check_variability` to `fit()`; `fit()` does not perform this
+gate.
 
 ```python
-# Raises ValueError if lightcurve is not variable
-lc.fit(..., check_variability=True)
-
-# To force fitting of a non-variable source:
-lc.fit(..., check_variability=False)
+# Raises ValueError during construction if the light curve is not variable.
+lc = Lightcurve(t, y, yerr, check_variability=True)
+lc.fit(model='1D')
 ```
 
 For multiband data, each band can be checked independently:
@@ -118,37 +124,35 @@ For multiband data, each band can be checked independently:
 ```python
 lc2d = Lightcurve(xdata_2d, flux, error)
 
-
-# Check each band
 results = lc2d.check_variability_per_band(verbose=True)
 print(f"{results['summary']['n_variable']} variable bands")
 
 # Create a new Lightcurve with only variable bands retained
 lc_var = lc2d.filter_variable_bands()
-lc_var.fit(...)
+lc_var.fit(model='2D')
 ```
 
 
-## Wavelength-Dependence Model-Selection Diagnostics
+## Wavelength-dependence diagnostics and advisory workflows
 
-For 2D multiwavelength light curves, ``pgmuvi`` provides a staged diagnostic
-workflow for deciding which wavelength-dependent GP model families are plausible.
-The first stage is pre-fit and cheap:
+For 2D multiwavelength light curves, `pgmuvi` includes diagnostic and advisory
+workflows for assessing how variability changes with wavelength. These workflows
+are advisory: they rank or compare plausible model families/configurations, but
+they do **not** automatically select, install, or endorse a final science model.
+
+> **Documentation status:** the detailed wavelength-advisory documentation is
+> being updated after the PR56--PR71 workflow changes.
+> **TBD[wavelength-advisory-docs]:** add the full single-source and batch user
+> guide, including the JSON, Markdown, and CSV output schemas.
+
+The older staged API remains available for pre-fit diagnostics and optional
+comparison of plausible follow-up fits:
 
 ```python
 # If the period is known from LS/ACF/consensus diagnostics, provide it here.
 diag = lc2d.diagnose_wavelength_dependence(period=350.0)
 print(lc2d.format_wavelength_diagnostics_report(diag))
-```
 
-The report summarizes sampling quality, variability, robust amplitude,
-period-locked amplitude, phase/lag, diagnostic classification, and recommended
-candidate model families.  The recommendations are conservative; they identify
-plausible next fits rather than declaring a final science model.
-
-Candidate models can then be compared through the normal ``fit()`` pathway:
-
-```python
 comparison = lc2d.compare_wavelength_models(
     diagnostic_report=diag,
     base_fit_kwargs={
@@ -159,23 +163,16 @@ comparison = lc2d.compare_wavelength_models(
     },
     residual_diagnostic_kwargs={"period": 350.0},
 )
-print(lc2d.format_wavelength_diagnostics_report(
-    diag,
-    comparison_report=comparison,
-))
 ```
 
-Plotting helpers return Matplotlib figures without recomputing diagnostics:
+This report summarizes sampling quality, variability, robust amplitude,
+period-locked amplitude, phase/lag, diagnostic classification, and conservative
+follow-up-fit recommendations. It can flag smooth wavelength-dependent amplitude
+structure, power-law-like trends, and possible wavelength-dependent lags, but its
+recommendations are not final model-selection decisions.
 
-```python
-figs = lc2d.plot_wavelength_diagnostics(diag, show=False)
-comparison_figs = lc2d.plot_wavelength_model_comparison(comparison, show=False)
-```
-
-Use this workflow to distinguish achromatic shared variability, smooth
-wavelength-dependent amplitude, power-law-like trends, dust/extinction-like
-trends, possible wavelength-dependent lags, and cases where independent per-band
-behavior or multi-component consensus should be considered.
+The newer period-independent advisory batch workflow is exposed through
+`examples/run_wavelength_advisory_batch.py`; detailed documentation is forthcoming.
 
 ### Parameter workflow initialization
 
