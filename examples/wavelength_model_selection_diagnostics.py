@@ -1,10 +1,15 @@
-"""Example: wavelength-dependence diagnostics for 2D light curves.
+"""Legacy example: wavelength-candidate diagnostics for 2D light curves.
 
-This script demonstrates the diagnostics workflow for deciding which
-multiwavelength GP model families are plausible.  The pre-fit diagnostic stage
-is cheap and does not run a GP fit.  The optional comparison stage runs the
-recommended candidate models through the normal ``Lightcurve.fit`` pathway and
-summarizes residual/predictive diagnostics.
+Status: LEGACY.  This script demonstrates the older candidate-based
+``diagnose_wavelength_dependence`` / ``compare_wavelength_models`` workflow.
+It is retained for users maintaining that API and for comparison with older
+analyses.
+
+For the current LPV-relevant wavelength workflow, prefer the advisory pages in
+``docs/source/howto/wavelength_advisory.rst`` and
+``docs/source/howto/wavelength_advisory_batch.rst``.  The current workflow
+reports advisory model/kernel configs and keeps ``selected_model=None`` instead
+of automatically choosing or installing a winning model.
 
 Usage::
 

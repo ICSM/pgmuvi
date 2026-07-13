@@ -1,8 +1,7 @@
-"""Validation script for the wavelength model-selection diagnostics workflow.
+"""Legacy validation script for wavelength-candidate diagnostics.
 
-This script is intentionally not a unit test.  It is a deterministic smoke /
-validation run that exercises the public science-facing workflow on a synthetic
-multiwavelength long-period-variable-like light curve:
+Status: LEGACY.  This deterministic smoke script exercises the older
+candidate-based wavelength diagnostic workflow:
 
 1. build a 2D chromatic sinusoid,
 2. run pre-fit wavelength diagnostics,
@@ -11,9 +10,16 @@ multiwavelength long-period-variable-like light curve:
 5. optionally run candidate GP model comparison,
 6. format and plot the comparison report.
 
+For the current advisory workflow, use
+``examples/run_wavelength_advisory_batch.py`` and the how-to pages
+``docs/source/howto/wavelength_advisory.rst`` and
+``docs/source/howto/wavelength_advisory_batch.rst``.  The current workflow
+uses model/kernel config terminology and does not automatically select or
+install a winning model.
+
 The default mode avoids GP fitting and should run quickly.  Use
-``--run-model-comparison`` for a fuller, slower validation that exercises the
-normal Lightcurve.fit() pathway through compare_wavelength_models().
+``--run-model-comparison`` for a fuller, slower legacy validation that exercises
+``compare_wavelength_models()``.
 
 Examples
 --------

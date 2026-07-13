@@ -175,7 +175,10 @@ The newer period-independent advisory workflow evaluates explicit model/kernel
 configs and is documented in:
 
 - `docs/source/howto/wavelength_advisory.rst` for the single-source workflow;
-- `docs/source/howto/wavelength_advisory_batch.rst` for the batch workflow and
+- `docs/source/howto/wavelength_advisory_batch.rst
+
+The older candidate-based wavelength diagnostic API is still available for maintenance and comparison use, but it is now documented as a legacy workflow in `docs/source/howto/legacy_wavelength_candidates.rst`.  In current documentation, `candidate` is reserved for period/consensus candidates and that legacy API; the current wavelength advisory outputs use `model/kernel config` terminology.
+` for the batch workflow and
   output artifact schemas.
 
 The command-line batch wrapper is available at

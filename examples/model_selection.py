@@ -1,8 +1,14 @@
-"""Example: Auto model selection for astronomical light curves.
+"""Legacy example: convenience model recommendation.
 
-This script demonstrates ``Lightcurve.auto_select_model()``, which
-automatically recommends the best GP kernel based on the data
-characteristics (periodicity strength, wavelength consistency).
+Status: LEGACY.  This script demonstrates ``Lightcurve.auto_select_model()``,
+which recommends a GP kernel family from simple diagnostics.  It is not the
+current period-independent wavelength advisory workflow and should not be read
+as automatic scientific model selection.
+
+For current multiwavelength LPV model-family comparison, use the advisory
+workflow documented in ``docs/source/howto/wavelength_advisory.rst`` and
+``docs/source/howto/wavelength_advisory_batch.rst``.  That workflow evaluates
+model/kernel configs and keeps ``selected_model=None``.
 
 Usage::
 
