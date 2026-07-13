@@ -212,6 +212,31 @@ print(batch["source_results"][0]["n_model_kernel_configs"])
 Both helpers evaluate and report model/kernel configs.  They do not install a
 winning fit into the input light curve, and `selected_model` remains `None`.
 
+## Consensus multiband fitting
+
+For coherent multiwavelength variability, the recommended direct fitting path is
+explicit consensus fitting:
+
+```python
+result = lc2d.fit(
+    model="2D",
+    fit_strategy="consensus",
+    training_iter=500,
+    miniter=100,
+    learn_additional_noise=True,
+    verbose=True,
+)
+```
+
+Consensus fitting uses multiband period/frequency agreement to initialize or
+constrain the temporal part of the GP fit.  It is the direct single-model fit
+path underlying many of the wavelength advisory model/kernel configs.
+
+See `docs/source/howto/consensus_fitting.rst` and
+`examples/consensus_multiband_fit.py` for the full workflow, including
+accepted/rejected bands, `ConsensusFitError`, and separable LPV-relevant models
+such as `2DWavelengthDependent`, `2DDustMean`, and `2DPowerLawMean`.
+
 ### Parameter workflow initialization
 
 Schema-enabled models can automatically initialize supported model

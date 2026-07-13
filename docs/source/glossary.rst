@@ -179,3 +179,20 @@ Glossary
    White noise
       Stochastic variability that is uncorrelated between observations (flat PSD).
       Modelled in ``pgmuvi`` by the GP likelihood noise parameter.
+
+Consensus fitting
+    A fitting strategy for multiband light curves that first builds a shared
+    period/frequency interpretation from the usable bands and then fits the
+    requested GP model using that consensus information.  Enabled with
+    ``fit_strategy="consensus"``.
+
+Consensus period
+    The period supported by the accepted bands in a consensus fit.  It may be
+    used to initialize a spectral-mixture frequency or to set the period length
+    of a quasi-periodic time kernel in separable LPV-relevant models.
+
+ConsensusFitError
+    Exception raised when a requested consensus fit cannot construct a reliable
+    shared-period model, for example because too few bands are usable or the
+    dominant periods are mutually inconsistent.  This is often a data-quality or
+    model-support result rather than a package crash.

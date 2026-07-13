@@ -10,6 +10,7 @@ Each guide is focused on a single workflow and assumes you have already read the
 
    loading_data
    preprocessing
+   consensus_fitting
    model_selection
    wavelength_advisory
    wavelength_advisory_batch
