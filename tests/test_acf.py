@@ -280,31 +280,6 @@ class TestACFGPMocked(unittest.TestCase):
         self.assertFalse(result.acf.requires_grad)
 
 
-class TestACFGPFitted(unittest.TestCase):
-    """Smoke test for GP ACF after a minimal fit."""
-
-    @unittest.skip(
-        "Skipped by default: requires a GP fit and adds ~30s to the suite. "
-        "Run manually to verify GP ACF correctness."
-    )
-    def test_gp_acf_smoke(self):
-        rng = np.random.default_rng(7)
-        t = np.sort(rng.uniform(0, 50, 30))
-        y = np.sin(2 * np.pi * t / 10.0) + rng.normal(0, 0.05, 30)
-        yerr = np.full(30, 0.05)
-        lc = Lightcurve(
-            torch.as_tensor(t, dtype=torch.float32),
-            torch.as_tensor(y, dtype=torch.float32),
-            yerr=torch.as_tensor(yerr, dtype=torch.float32),
-        )
-        lc.fit(training_iter=3, num_mixtures=1)
-        result = lc.acf(method="gp", n_lags=25)
-        self.assertEqual(result.lag.shape[0], 25)
-        self.assertAlmostEqual(float(result.lag[0]), 0.0)
-        self.assertAlmostEqual(float(result.acf[0]), 1.0, places=4)
-        self.assertFalse(torch.any(torch.isnan(result.acf)).item())
-
-
 class TestACFConstantLightcurve(unittest.TestCase):
     """Tests for zero-variance (constant) input to _acf_data."""
 

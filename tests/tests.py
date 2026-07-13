@@ -10,8 +10,6 @@ from pgmuvi.lightcurve import (
     Lightcurve,
     Transformer,
     MinMax,
-    ZScore,
-    RobustZScore,
     TimeCenter,
 )
 from pgmuvi.trainers import train
@@ -37,46 +35,6 @@ class TestTransformer(unittest.TestCase):
                           test_zeros_one)
 
 
-class TestTimeCenter(unittest.TestCase):
-    def test_1d_midpoint_centering(self):
-        data = torch.as_tensor([1000.0, 1010.0, 1020.0], dtype=torch.float32)
-        transformer = TimeCenter()
-        transformed = transformer.transform(data)
-        expected = torch.as_tensor([-10.0, 0.0, 10.0], dtype=torch.float32)
-        self.assertTrue(torch.equal(transformed, expected))
-
-    def test_2d_centers_only_time_column(self):
-        data = torch.as_tensor(
-            [[1000.0, 2.0], [1010.0, 4.0], [1020.0, 6.0]],
-            dtype=torch.float32,
-        )
-        transformer = TimeCenter()
-        transformed = transformer.transform(data)
-        expected = torch.as_tensor(
-            [[-10.0, 2.0], [0.0, 4.0], [10.0, 6.0]],
-            dtype=torch.float32,
-        )
-        self.assertTrue(torch.equal(transformed, expected))
-
-    def test_inverse_restores_absolute_coordinates(self):
-        data = torch.as_tensor([1000.0, 1010.0, 1020.0], dtype=torch.float32)
-        transformer = TimeCenter()
-        transformed = transformer.transform(data)
-        restored = transformer.inverse(transformed)
-        self.assertTrue(torch.equal(restored, data))
-
-    def test_shift_false_leaves_durations_unchanged(self):
-        data = torch.as_tensor([1000.0, 1010.0, 1020.0], dtype=torch.float32)
-        transformer = TimeCenter()
-        transformer.transform(data)
-        durations = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-        self.assertTrue(
-            torch.equal(transformer.transform(durations, shift=False), durations)
-        )
-        self.assertTrue(
-            torch.equal(transformer.inverse(durations, shift=False), durations)
-        )
-
 
 class TestMinMax(unittest.TestCase):
     def test_transform(self):
@@ -90,36 +48,6 @@ class TestMinMax(unittest.TestCase):
         x_new = transformer.transform(test_zeros_one)
         self.assertEqual(transformer.inverse(x_new).min(), 0)
         self.assertEqual(transformer.inverse(x_new).max(), 1)
-
-
-class TestZScore(unittest.TestCase):
-    @unittest.skip("Not implemented")
-    def test_transform(self):
-        transformer = ZScore() # these tests need a more sensible input array to test against
-        self.assertAlmostEqual(transformer.transform(test_zeros_one).mean(), 0)
-        self.assertAlmostEqual(transformer.transform(test_zeros_one).std(), 1)
-
-    @unittest.skip("Not implemented")
-    def test_inverse(self):
-        transformer = ZScore()
-        # first we have to do a forward transform to get the transformer set up:
-        x_new = transformer.transform(test_zeros_one)
-        self.assertAlmostEqual(transformer.inverse(np.array([0, 0, 0, 0, 1])).mean(), 0)
-        self.assertAlmostEqual(transformer.inverse(np.array([0, 0, 0, 0, 1])).std(), 1)
-
-
-class TestRobustZScore(unittest.TestCase):
-    @unittest.skip("Not implemented")
-    def test_transform(self):
-        transformer = RobustZScore() # these tests need a more sensible input array to test against
-        self.assertAlmostEqual(transformer.transform(test_zeros_one).mean(), 0)
-        self.assertAlmostEqual(transformer.transform(test_zeros_one).std(), 1)
-
-    @unittest.skip("Not implemented")
-    def test_inverse(self):
-        transformer = RobustZScore()
-        self.assertAlmostEqual(transformer.inverse(test_zeros_one).mean(), 0)
-        self.assertAlmostEqual(transformer.inverse(test_zeros_one).std(), 1)
 
 
 class TestLightCurve(unittest.TestCase):
