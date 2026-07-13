@@ -432,7 +432,7 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         self.assertEqual(classification["primary_class"], "insufficient_data")
         self.assertEqual(report["recommended_candidate_models"], [])
 
-    def test_compare_wavelength_models_runs_fit_candidates_and_skips_next_steps(self):
+    def test_compare_wavelength_models_runs_model_kernel_configs_and_skips_next_steps(self):
         fake_lc = _FakeLightcurveForComparison()
         candidates = [
             {
@@ -448,7 +448,7 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
                 "model": None,
                 "fit_strategy": "consensus",
                 "priority": "next_step",
-                "reason": "not a fit candidate",
+                "reason": "not a model/kernel config",
             },
         ]
 
@@ -460,8 +460,8 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         )
 
         self.assertEqual(report["kind"], "wavelength_model_comparison")
-        self.assertEqual(report["summary"]["n_candidates"], 2)
-        self.assertEqual(report["summary"]["n_fit_candidates"], 1)
+        self.assertEqual(report["summary"]["n_model_kernel_config_entries"], 2)
+        self.assertEqual(report["summary"]["n_model_kernel_configs"], 1)
         self.assertEqual(report["summary"]["n_successful"], 1)
         self.assertEqual(report["summary"]["n_skipped"], 1)
         self.assertEqual(fake_lc.calls[0]["model"], "2D")
@@ -490,7 +490,7 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
             copy_lightcurve=False,
         )
 
-        self.assertEqual(report["summary"]["n_fit_candidates"], 2)
+        self.assertEqual(report["summary"]["n_model_kernel_configs"], 2)
         self.assertEqual(report["summary"]["n_failed"], 1)
         self.assertEqual(report["summary"]["n_successful"], 1)
         failed = report["results"][0]
@@ -571,7 +571,7 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
             self.assertIn("fixed_frequency_residual", row)
             self.assertLess(row["fixed_frequency_residual"]["amplitude"], 1e-12)
 
-    def test_compare_wavelength_models_scores_successful_candidates(self):
+    def test_compare_wavelength_models_scores_successful_model_kernel_configs(self):
         fake_lc = _FakeLightcurveForComparison(
             prediction_offsets={"2D": 0.0, "2DAchromatic": 0.5}
         )
@@ -587,7 +587,7 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         self.assertEqual(report["summary"]["n_successful"], 2)
         self.assertEqual(report["summary"]["n_scored_successful"], 2)
         self.assertEqual(report["summary"]["selection_status"], "scored_predictive")
-        self.assertEqual(report["summary"]["best_candidate"]["model"], "2D")
+        self.assertEqual(report["summary"]["best_model_kernel_config"]["model"], "2D")
         for result in report["results"]:
             self.assertIn("residual_diagnostics", result)
             self.assertIn("predictive_score", result)
@@ -650,8 +650,8 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         interpretation = report["interpretation"]
         self.assertTrue(interpretation["available"])
         self.assertEqual(interpretation["decision"], "scores_indistinguishable")
-        self.assertEqual(len(interpretation["candidate_rankings"]), 2)
-        self.assertEqual(interpretation["candidate_rankings"][0]["model"], "2D")
+        self.assertEqual(len(interpretation["model_kernel_config_rankings"]), 2)
+        self.assertEqual(interpretation["model_kernel_config_rankings"][0]["model"], "2D")
 
     def test_interpret_wavelength_model_comparison_flags_poor_residual_quality(self):
         fake_lc = _FakeLightcurveForComparison(prediction_offsets={"2D": 0.5})
@@ -742,11 +742,11 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         comparison = {
             "kind": "wavelength_model_comparison",
             "summary": {
-                "n_fit_candidates": 2,
+                "n_model_kernel_configs": 2,
                 "n_successful": 1,
                 "n_failed": 1,
                 "n_skipped": 0,
-                "best_candidate": {
+                "best_model_kernel_config": {
                     "name": "baseline",
                     "model": "2D",
                     "mean_negative_log_predictive_density": 1.23,
@@ -761,7 +761,7 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         )
 
         self.assertIn("## Model-comparison summary", text)
-        self.assertIn("Best scored candidate", text)
+        self.assertIn("Best scored model/kernel config", text)
         self.assertIn("single_scored_candidate", text)
 
     def test_plot_wavelength_diagnostics_returns_prefit_figures(self):

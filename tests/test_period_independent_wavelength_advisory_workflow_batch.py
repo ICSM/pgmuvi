@@ -25,7 +25,7 @@ class _FakeLightcurve:
             "kind": "period_independent_wavelength_advisory_workflow",
             "advisory_only": True,
             "runs_fits": True,
-            "candidate_fit_state_isolated": True,
+            "model_kernel_config_state_isolated": True,
             "mutates_input_lightcurve": False,
             "automatic_model_selection_applied": False,
             "selected_model": None,
@@ -93,7 +93,7 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         self.assertTrue(report["advisory_only"])
         self.assertTrue(report["runs_fits"])
         self.assertTrue(report["applies_to_fit"])
-        self.assertTrue(report["candidate_fit_state_isolated"])
+        self.assertTrue(report["model_kernel_config_state_isolated"])
         self.assertFalse(report["mutates_input_lightcurve"])
         self.assertFalse(report["automatic_model_selection_applied"])
         self.assertIsNone(report["selected_model"])
@@ -143,14 +143,14 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                 self.assertTrue(Path(row["export_json_path"]).exists())
                 self.assertTrue(Path(row["export_text_report_path"]).exists())
 
-    def test_counts_nested_pr63_workflow_candidate_results(self):
+    def test_counts_nested_pr63_workflow_model_kernel_config_results(self):
         class NestedWorkflowLightcurve(_FakeLightcurve):
             def run_period_independent_wavelength_advisory_workflow(self, **kwargs):
                 return {
                     "kind": "period_independent_wavelength_advisory_workflow",
                     "advisory_only": True,
                     "runs_fits": True,
-                    "candidate_fit_state_isolated": True,
+                    "model_kernel_config_state_isolated": True,
                     "mutates_input_lightcurve": False,
                     "automatic_model_selection_applied": False,
                     "selected_model": None,
@@ -160,15 +160,15 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                     "top_ranked_fit_quality_score": 42.0,
                     "score_kind": "training_residual_fit_quality",
                     "run_report": {
-                        "kind": "period_independent_wavelength_fit_candidate_results",
-                        "candidate_results": [
+                        "kind": "period_independent_wavelength_model_kernel_config_results",
+                        "model_kernel_config_results": [
                             {"model": "2DDustMean", "fit_success": True},
                             {"model": "2DWavelengthDependent", "fit_success": True},
                             {"model": "2D", "fit_success": False},
                         ],
                     },
                     "quality_report": {
-                        "kind": "period_independent_wavelength_fit_candidate_quality_scores",
+                        "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
                         "ranked_results": [
                             {"model": "2DDustMean", "fit_success": True},
                             {"model": "2DWavelengthDependent", "fit_success": True},
@@ -185,9 +185,6 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         self.assertEqual(row["n_model_kernel_configs"], 3)
         self.assertEqual(row["n_successful_model_kernel_configs"], 2)
         self.assertEqual(row["n_failed_model_kernel_configs"], 1)
-        # Backward-compatible aliases are retained but should not be preferred in new code.
-        self.assertEqual(row["n_candidates"], 3)
-        self.assertEqual(row["n_passed_candidates"], 2)
 
     def test_lightcurve_static_method_delegates(self):
         report = Lightcurve.run_period_independent_wavelength_advisory_workflow_batch(

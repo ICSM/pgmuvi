@@ -1286,7 +1286,7 @@ def compute_wavelength_residual_diagnostics(
 
 
 def _score_comparison_results(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarise scored successful candidate fits."""
+    """Summarise scored successful model/kernel config fits."""
     scored: list[tuple[float, dict[str, Any]]] = []
     for result in results:
         if result.get("status") != "success":
@@ -1299,7 +1299,7 @@ def _score_comparison_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     if not scored:
         return {
             "n_scored_successful": 0,
-            "best_candidate": None,
+            "best_model_kernel_config": None,
             "selection_status": "not_scored",
             "selection_basis": None,
         }
@@ -1308,7 +1308,7 @@ def _score_comparison_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     best_value, best = scored[0]
     return {
         "n_scored_successful": int(len(scored)),
-        "best_candidate": {
+        "best_model_kernel_config": {
             "name": best.get("name"),
             "model": best.get("model"),
             "fit_strategy": best.get("fit_strategy"),
@@ -1433,9 +1433,9 @@ def interpret_wavelength_model_comparison(
     The interpretation layer does not declare a final science model.  It turns
     PR45 predictive/residual scores into a compact ranking and explicit quality
     warnings.  The output is intended to help users decide whether the current
-    candidate set is informative, whether scores are effectively tied, and
+    model/kernel config set is informative, whether scores are effectively tied, and
     whether residual structure argues against trusting the provisional best
-    candidate.
+    model/kernel config.
     """
     if comparison_report.get("kind") != "wavelength_model_comparison":
         raise ValueError(
@@ -1465,8 +1465,8 @@ def interpret_wavelength_model_comparison(
         "available": False,
         "status": "not_interpretable",
         "decision": "no_successful_fit",
-        "provisional_best_candidate": None,
-        "candidate_rankings": [],
+        "provisional_best_model_kernel_config": None,
+        "model_kernel_config_rankings": [],
         "quality_flags": [],
         "warnings": warnings,
         "notes": [
@@ -1478,9 +1478,9 @@ def interpret_wavelength_model_comparison(
 
     if int(summary.get("n_successful", 0) or 0) == 0:
         warnings.append(
-            "No candidate model fit succeeded, so wavelength-model comparison "
+            "No model/kernel config fit succeeded, so wavelength-model comparison "
             "cannot be interpreted. Inspect failure categories before changing "
-            "the candidate set."
+            "the model/kernel config set."
         )
         return _clean_scalar_dict(interpretation)
 
@@ -1493,7 +1493,7 @@ def interpret_wavelength_model_comparison(
             }
         )
         warnings.append(
-            "At least one candidate fit succeeded, but predictive scores were "
+            "At least one model/kernel config fit succeeded, but predictive scores were "
             "not available. Use fit-status and residual diagnostics only."
         )
         return _clean_scalar_dict(interpretation)
@@ -1518,8 +1518,8 @@ def interpret_wavelength_model_comparison(
             "available": True,
             "status": "ok",
             "decision": "provisional_predictive_preference",
-            "provisional_best_candidate": rankings[0],
-            "candidate_rankings": rankings,
+            "provisional_best_model_kernel_config": rankings[0],
+            "model_kernel_config_rankings": rankings,
             "selection_basis": "lowest training-point mean negative log predictive density",
         }
     )
@@ -1527,7 +1527,7 @@ def interpret_wavelength_model_comparison(
     if len(scored) == 1:
         interpretation["decision"] = "single_scored_candidate"
         warnings.append(
-            "Only one successful candidate was scored. Treat it as a fitted "
+            "Only one successful model/kernel config was scored. Treat it as a fitted "
             "baseline, not as evidence that it is preferred over alternatives."
         )
     else:
@@ -1715,16 +1715,16 @@ def format_wavelength_diagnostics_report(
         lines.append("")
         lines.append("## Model-comparison summary")
         lines.append(
-            "- Fit candidates: "
-            f"{_format_value(comp_summary.get('n_fit_candidates'), precision=0)}; "
+            "- Model/kernel configs: "
+            f"{_format_value(comp_summary.get('n_model_kernel_configs'), precision=0)}; "
             f"successful={_format_value(comp_summary.get('n_successful'), precision=0)}, "
             f"failed={_format_value(comp_summary.get('n_failed'), precision=0)}, "
             f"skipped={_format_value(comp_summary.get('n_skipped'), precision=0)}."
         )
-        best = comp_summary.get("best_candidate")
+        best = comp_summary.get("best_model_kernel_config")
         if isinstance(best, dict):
             lines.append(
-                "- Best scored candidate: "
+                "- Best scored model/kernel config: "
                 f"{best.get('name')} / {best.get('model')} "
                 "by mean NLPD="
                 f"{_format_value(best.get('mean_negative_log_predictive_density'))}."
@@ -1956,7 +1956,7 @@ def compare_wavelength_candidate_models(
 
     This is an additive diagnostic wrapper around ``Lightcurve.fit``.  It does
     not change the behaviour of any model, trainer, constraint, or consensus
-    pathway.  The function records which candidate fits succeeded or failed and
+    pathway.  The function records which model/kernel config fits succeeded or failed and
     returns lightweight fit-history/noise diagnostics for later residual and
     predictive-scoring PRs.
 
@@ -1972,7 +1972,7 @@ def compare_wavelength_candidate_models(
         Candidate model specifications.  Each item may be a model string or a
         dictionary with keys compatible with ``recommended_candidate_models``.
     base_fit_kwargs : dict or None, optional
-        Fit keyword arguments applied to every fit candidate, e.g.
+        Fit keyword arguments applied to every model/kernel config, e.g.
         ``training_iter``, ``miniter``, ``lr``, or ``learn_additional_noise``.
     per_candidate_fit_kwargs : dict or None, optional
         Additional kwargs keyed by candidate ``name`` or ``model``.
@@ -1981,7 +1981,7 @@ def compare_wavelength_candidate_models(
         after each successful fit.
     score_successful_fits : bool, optional
         If True, compute residual and predictive diagnostics immediately after
-        each successful candidate fit.
+        each successful model/kernel config fit.
     interpretation_kwargs : dict or None, optional
         Keyword arguments passed to :func:`interpret_wavelength_model_comparison`
         when ``interpret_results`` is True.
@@ -2016,7 +2016,7 @@ def compare_wavelength_candidate_models(
 
     normalised = _normalise_candidate_models(candidates)
     results: list[dict[str, Any]] = []
-    n_fit_candidates = 0
+    n_model_kernel_configs = 0
     n_successful = 0
     n_failed = 0
     n_skipped = 0
@@ -2029,7 +2029,7 @@ def compare_wavelength_candidate_models(
             )
             continue
 
-        n_fit_candidates += 1
+        n_model_kernel_configs += 1
         fit_kwargs = _build_candidate_fit_kwargs(
             candidate,
             base_fit_kwargs=base_fit_kwargs,
@@ -2099,17 +2099,17 @@ def compare_wavelength_candidate_models(
         "kind": "wavelength_model_comparison",
         "stage": "model_comparison",
         "summary": {
-            "n_candidates": int(len(normalised)),
-            "n_fit_candidates": int(n_fit_candidates),
+            "n_model_kernel_config_entries": int(len(normalised)),
+            "n_model_kernel_configs": int(n_model_kernel_configs),
             "n_successful": int(n_successful),
             "n_failed": int(n_failed),
             "n_skipped": int(n_skipped),
-            "all_fit_candidates_succeeded": bool(
-                n_fit_candidates > 0 and n_successful == n_fit_candidates
+            "all_model_kernel_configs_succeeded": bool(
+                n_model_kernel_configs > 0 and n_successful == n_model_kernel_configs
             ),
-            "any_fit_candidate_succeeded": bool(n_successful > 0),
+            "any_model_kernel_config_succeeded": bool(n_successful > 0),
             "n_scored_successful": scoring_summary["n_scored_successful"],
-            "best_candidate": scoring_summary["best_candidate"],
+            "best_model_kernel_config": scoring_summary["best_model_kernel_config"],
             "selection_status": scoring_summary["selection_status"],
             "selection_basis": scoring_summary["selection_basis"],
         },
@@ -3235,7 +3235,7 @@ def build_period_independent_wavelength_parameter_plan(
 
 
 # -----------------------------------------------------------------------------
-# Period-independent wavelength fit-candidate config generation (Level 0c)
+# Period-independent wavelength model/kernel-config config generation (Level 0c)
 # -----------------------------------------------------------------------------
 
 _PIWD_LPV_SEPARABLE_MODELS = {
@@ -3304,7 +3304,7 @@ def _piwd_candidate_fit_kwargs(
     return kwargs
 
 
-def build_period_independent_wavelength_fit_candidates(
+def build_period_independent_wavelength_model_kernel_configs(
     lightcurve_or_plan,
     *,
     parameter_plan: dict[str, Any] | None = None,
@@ -3315,10 +3315,10 @@ def build_period_independent_wavelength_fit_candidates(
     fit_strategy: str = "consensus",
     lpv_time_kernel_type: str = "quasi_periodic",
     learn_additional_noise: bool | None = True,
-    candidate_limit: int | None = None,
+    model_kernel_config_limit: int | None = None,
     include_parameter_suggestions: bool = True,
 ) -> dict[str, Any]:
-    """Build advisory fit-candidate configurations from a PR57 plan.
+    """Build advisory model/kernel-config configurations from a PR57 plan.
 
     The returned object is a planning artifact only.  It does not call ``fit``,
     mutate the Lightcurve, set hyperparameters, register constraints, or apply
@@ -3333,7 +3333,7 @@ def build_period_independent_wavelength_fit_candidates(
             plan = lightcurve_or_plan
         else:
             raise ValueError(
-                "build_period_independent_wavelength_fit_candidates() requires a "
+                "build_period_independent_wavelength_model_kernel_configs() requires a "
                 "period-independent wavelength parameter plan when a dict is passed."
             )
     else:
@@ -3344,7 +3344,7 @@ def build_period_independent_wavelength_fit_candidates(
 
     if plan.get("kind") != "period_independent_wavelength_parameter_plan":
         raise ValueError(
-            "build_period_independent_wavelength_fit_candidates() requires a "
+            "build_period_independent_wavelength_model_kernel_configs() requires a "
             "period-independent wavelength parameter plan."
         )
 
@@ -3369,7 +3369,7 @@ def build_period_independent_wavelength_fit_candidates(
             learn_additional_noise=learn_additional_noise,
         )
         candidate = {
-            "candidate_id": f"rank{len(candidates) + 1}_{model}",
+            "model_kernel_config_id": f"rank{len(candidates) + 1}_{model}",
             "rank": len(candidates) + 1,
             "source": "parameter_plan",
             "source_plan_rank": entry.get("rank"),
@@ -3398,7 +3398,7 @@ def build_period_independent_wavelength_fit_candidates(
         )
         candidates.append(
             {
-                "candidate_id": f"rank{len(candidates) + 1}_2D_baseline",
+                "model_kernel_config_id": f"rank{len(candidates) + 1}_2D_baseline",
                 "rank": len(candidates) + 1,
                 "source": "baseline_comparison",
                 "source_plan_rank": None,
@@ -3421,19 +3421,19 @@ def build_period_independent_wavelength_fit_candidates(
             }
         )
 
-    if candidate_limit is not None:
-        candidate_limit = int(candidate_limit)
-        if candidate_limit < 1:
-            raise ValueError("candidate_limit must be >= 1 when provided")
-        candidates = candidates[:candidate_limit]
+    if model_kernel_config_limit is not None:
+        model_kernel_config_limit = int(model_kernel_config_limit)
+        if model_kernel_config_limit < 1:
+            raise ValueError("model_kernel_config_limit must be >= 1 when provided")
+        candidates = candidates[:model_kernel_config_limit]
         for index, candidate in enumerate(candidates, start=1):
             candidate["rank"] = index
-            candidate["candidate_id"] = f"rank{index}_{candidate['model']}"
+            candidate["model_kernel_config_id"] = f"rank{index}_{candidate['model']}"
 
     return _clean_scalar_dict(
         {
-            "kind": "period_independent_wavelength_fit_candidates",
-            "stage": "prefit_period_independent_candidate_config",
+            "kind": "period_independent_wavelength_model_kernel_configs",
+            "stage": "prefit_period_independent_model_kernel_config",
             "source_plan_kind": plan.get("kind"),
             "is_period_independent": True,
             "uses_temporal_consensus": False,
@@ -3444,11 +3444,11 @@ def build_period_independent_wavelength_fit_candidates(
             "hard_model_exclusions": False,
             "automatic_constraints_applied": False,
             "automatic_initialization_applied": False,
-            "n_candidates": len(candidates),
-            "primary_candidate_model": candidates[0]["model"] if candidates else None,
-            "fit_candidates": candidates,
+            "n_model_kernel_configs": len(candidates),
+            "primary_model_kernel_config_model": candidates[0]["model"] if candidates else None,
+            "model_kernel_configs": candidates,
             "notes": [
-                "This object only contains candidate fit kwargs; no GP fit has been run.",
+                "This object only contains model/kernel config fit kwargs; no GP fit has been run.",
                 "Parameter suggestions are metadata only and are not inserted into fit_kwargs.",
                 "LPV separable candidates default to time_kernel_type='quasi_periodic' to use the PR55 period_length handoff.",
                 "The 2D baseline keeps its existing spectral-mixture time-kernel default unless base_fit_kwargs overrides it.",
@@ -3458,28 +3458,28 @@ def build_period_independent_wavelength_fit_candidates(
 
 
 # -----------------------------------------------------------------------------
-# Period-independent wavelength fit-candidate execution (Level 0d)
+# Period-independent wavelength model/kernel-config execution (Level 0d)
 # -----------------------------------------------------------------------------
 
-def _piwd_validate_fit_candidate_report(report: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return fit candidates from a PR58 report, or raise a schema error."""
-    if not isinstance(report, dict) or report.get("kind") != "period_independent_wavelength_fit_candidates":
+def _piwd_validate_model_kernel_config_report(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return model/kernel configs from a PR58 report, or raise a schema error."""
+    if not isinstance(report, dict) or report.get("kind") != "period_independent_wavelength_model_kernel_configs":
         raise ValueError(
-            "run_period_independent_wavelength_fit_candidates() requires a "
-            "period-independent wavelength fit-candidate report."
+            "run_period_independent_wavelength_model_kernel_configs() requires a "
+            "period-independent wavelength model/kernel-config report."
         )
-    candidates = report.get("fit_candidates")
+    candidates = report.get("model_kernel_configs")
     if not isinstance(candidates, list):
-        raise ValueError("fit-candidate report must contain a 'fit_candidates' list")
+        raise ValueError("model/kernel-config report must contain a 'model_kernel_configs' list")
     normalized: list[dict[str, Any]] = []
     for index, candidate in enumerate(candidates, start=1):
         if not isinstance(candidate, dict):
-            raise ValueError("every fit candidate must be a dict")
+            raise ValueError("every model/kernel config must be a dict")
         fit_kwargs = candidate.get("fit_kwargs")
         if not isinstance(fit_kwargs, dict):
-            raise ValueError("every fit candidate must contain a fit_kwargs dict")
+            raise ValueError("every model/kernel config must contain a fit_kwargs dict")
         if not candidate.get("model") and not fit_kwargs.get("model"):
-            raise ValueError("every fit candidate must specify a model")
+            raise ValueError("every model/kernel config must specify a model")
         copied = dict(candidate)
         copied["rank"] = int(copied.get("rank") or index)
         copied["model"] = str(copied.get("model") or fit_kwargs.get("model"))
@@ -3538,7 +3538,7 @@ def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]
     These diagnostics are intentionally descriptive.  They use predictions at
     the training coordinates in the transformed space used by the GP.  They are
     not cross-validation, AIC, BIC, or posterior predictive checks, but they are
-    real fit-quality quantities and can distinguish candidate fits that all pass
+    real fit-quality quantities and can distinguish model/kernel config fits that all pass
     the consensus/viability checks.
     """
     if fitted_lightcurve is None:
@@ -3715,11 +3715,11 @@ def _piwd_extract_fit_outcome(
     fit_quality = (
         _piwd_compute_training_fit_quality(fitted_lightcurve)
         if status == "passed"
-        else _piwd_training_fit_quality_unavailable("candidate fit did not complete")
+        else _piwd_training_fit_quality_unavailable("model/kernel config fit did not complete")
     )
 
     outcome: dict[str, Any] = {
-        "candidate_id": candidate.get("candidate_id"),
+        "model_kernel_config_id": candidate.get("model_kernel_config_id"),
         "rank": candidate.get("rank"),
         "model": candidate.get("model"),
         "status": status,
@@ -3780,19 +3780,17 @@ def _piwd_extract_fit_outcome(
     return _clean_scalar_dict(outcome)
 
 
-def run_period_independent_wavelength_fit_candidates(
+def run_period_independent_wavelength_model_kernel_configs(
     lightcurve,
     *,
-    candidate_report: dict[str, Any] | None = None,
-    fit_candidate_report: dict[str, Any] | None = None,
-    candidate_limit: int | None = None,
-    max_candidates: int | None = None,
+    model_kernel_config_report: dict[str, Any] | None = None,
+    model_kernel_config_limit: int | None = None,
     stop_on_error: bool = False,
     fit_runner=None,
     copy_lightcurve: bool = True,
-    **candidate_builder_kwargs,
+    **model_kernel_config_builder_kwargs,
 ) -> dict[str, Any]:
-    """Run PR58 wavelength fit candidates and return an outcome summary.
+    """Run PR58 wavelength model/kernel configs and return an outcome summary.
 
     This helper executes candidate ``fit_kwargs`` but deliberately does not
     install a winner, mutate the caller's main Lightcurve state, or apply PR57
@@ -3801,36 +3799,22 @@ def run_period_independent_wavelength_fit_candidates(
     an optional test/integration hook with signature
     ``fit_runner(lightcurve_copy, fit_kwargs, candidate)``.
     """
-    if candidate_report is not None and fit_candidate_report is not None:
+    if model_kernel_config_report is None:
+        model_kernel_config_report = build_period_independent_wavelength_model_kernel_configs(
+            lightcurve, **model_kernel_config_builder_kwargs
+        )
+    elif model_kernel_config_builder_kwargs:
         raise ValueError(
-            "Pass only one of candidate_report or fit_candidate_report, not both."
-        )
-    if candidate_report is None and fit_candidate_report is not None:
-        candidate_report = fit_candidate_report
-
-    if candidate_limit is not None and max_candidates is not None:
-        raise ValueError(
-            "Pass only one of candidate_limit or max_candidates, not both."
-        )
-    if candidate_limit is None and max_candidates is not None:
-        candidate_limit = max_candidates
-
-    if candidate_report is None:
-        candidate_report = build_period_independent_wavelength_fit_candidates(
-            lightcurve, **candidate_builder_kwargs
-        )
-    elif candidate_builder_kwargs:
-        raise ValueError(
-            "candidate_builder_kwargs may only be supplied when candidate_report is None"
+            "model_kernel_config_builder_kwargs may only be supplied when model_kernel_config_report is None"
         )
 
-    candidates = _piwd_validate_fit_candidate_report(candidate_report)
+    candidates = _piwd_validate_model_kernel_config_report(model_kernel_config_report)
 
-    if candidate_limit is not None:
-        candidate_limit = int(candidate_limit)
-        if candidate_limit < 1:
-            raise ValueError("candidate_limit must be >= 1 when provided")
-        candidates = candidates[:candidate_limit]
+    if model_kernel_config_limit is not None:
+        model_kernel_config_limit = int(model_kernel_config_limit)
+        if model_kernel_config_limit < 1:
+            raise ValueError("model_kernel_config_limit must be >= 1 when provided")
+        candidates = candidates[:model_kernel_config_limit]
 
     outcomes: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -3841,7 +3825,7 @@ def run_period_independent_wavelength_fit_candidates(
                 lc_to_fit = _copy.deepcopy(lightcurve)
             except Exception as exc:  # pragma: no cover - defensive path
                 raise RuntimeError(
-                    "Could not deep-copy the Lightcurve for isolated candidate fitting."
+                    "Could not deep-copy the Lightcurve for isolated model/kernel config fitting."
                 ) from exc
         else:
             lc_to_fit = lightcurve
@@ -3877,16 +3861,16 @@ def run_period_independent_wavelength_fit_candidates(
 
     return _clean_scalar_dict(
         {
-            "kind": "period_independent_wavelength_fit_candidate_results",
-            "stage": "candidate_fit_execution_summary",
-            "source_candidate_report_kind": candidate_report.get("kind"),
+            "kind": "period_independent_wavelength_model_kernel_config_results",
+            "stage": "model_kernel_config_fit_execution_summary",
+            "source_model_kernel_config_report_kind": model_kernel_config_report.get("kind"),
             "is_period_independent": True,
             "uses_temporal_consensus": True,
             "uses_period_or_frequency": True,
             "runs_fits": True,
             "applies_to_fit": True,
             "mutates_input_lightcurve": bool(not copy_lightcurve),
-            "candidate_fit_state_isolated": bool(copy_lightcurve),
+            "model_kernel_config_state_isolated": bool(copy_lightcurve),
             "advisory_only": True,
             "automatic_model_selection_applied": False,
             "selected_model": None,
@@ -3894,14 +3878,14 @@ def run_period_independent_wavelength_fit_candidates(
             "automatic_constraints_applied": False,
             "automatic_initialization_applied": False,
             "parameter_suggestions_applied": False,
-            "n_candidates": len(candidates),
+            "n_model_kernel_configs": len(candidates),
             "n_attempted": len(outcomes),
             "n_passed": len(passed),
             "n_failed": len(failed),
             "passed_models": [outcome.get("model") for outcome in passed],
             "failed_models": [outcome.get("model") for outcome in failed],
             "outcomes": outcomes,
-            "candidate_results": outcomes,
+            "model_kernel_config_results": outcomes,
             "notes": [
                 "Candidate fits were executed for comparison/reporting only.",
                 "No winning model is selected automatically.",
@@ -3913,7 +3897,7 @@ def run_period_independent_wavelength_fit_candidates(
 
 
 # -----------------------------------------------------------------------------
-# Period-independent wavelength fit-candidate scoring (Level 0e)
+# Period-independent wavelength model/kernel-config scoring (Level 0e)
 # -----------------------------------------------------------------------------
 
 def _piwd_bool_from_status(value: Any, *, status: str | None = None) -> bool:
@@ -3963,10 +3947,10 @@ def _piwd_score_one_wavelength_fit_outcome(
 
     if fit_success:
         score += weights["fit_success"]
-        reasons.append("candidate fit completed")
+        reasons.append("model/kernel config fit completed")
     else:
         score -= weights["fit_failure"]
-        reasons.append("candidate fit failed")
+        reasons.append("model/kernel config fit failed")
 
     if consensus_success:
         score += weights["consensus_success"]
@@ -4017,22 +4001,22 @@ def _piwd_score_one_wavelength_fit_outcome(
     )
 
 
-def score_period_independent_wavelength_fit_candidate_runs(
+def score_period_independent_wavelength_model_kernel_config_runs(
     run_report: dict[str, Any],
     *,
     weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Score and rank a PR59 wavelength fit-candidate run report.
+    """Score and rank a PR59 wavelength model/kernel-config run report.
 
     This is a comparison report only.  It intentionally does not apply model
     selection, does not install a winning fit on any Lightcurve, and leaves
     ``selected_model`` as ``None``.  The highest-scoring candidate is exposed as
     ``top_ranked_model`` for user inspection, not as an automatic decision.
     """
-    if not isinstance(run_report, dict) or run_report.get("kind") != "period_independent_wavelength_fit_candidate_results":
+    if not isinstance(run_report, dict) or run_report.get("kind") != "period_independent_wavelength_model_kernel_config_results":
         raise ValueError(
-            "score_period_independent_wavelength_fit_candidate_runs() requires a "
-            "period-independent wavelength fit-candidate results report."
+            "score_period_independent_wavelength_model_kernel_config_runs() requires a "
+            "period-independent wavelength model/kernel-config results report."
         )
 
     default_weights = {
@@ -4051,11 +4035,11 @@ def score_period_independent_wavelength_fit_candidate_runs(
                 raise ValueError(f"Unknown scoring weight: {key!r}")
             default_weights[key] = float(value)
 
-    outcomes = run_report.get("candidate_results")
+    outcomes = run_report.get("model_kernel_config_results")
     if outcomes is None:
         outcomes = run_report.get("outcomes")
     if not isinstance(outcomes, list):
-        raise ValueError("run report must contain an 'outcomes' or 'candidate_results' list")
+        raise ValueError("run report must contain an 'outcomes' or 'model_kernel_config_results' list")
 
     scored = [
         _piwd_score_one_wavelength_fit_outcome(outcome, weights=default_weights)
@@ -4075,8 +4059,8 @@ def score_period_independent_wavelength_fit_candidate_runs(
 
     return _clean_scalar_dict(
         {
-            "kind": "period_independent_wavelength_fit_candidate_scores",
-            "stage": "candidate_fit_scoring_summary",
+            "kind": "period_independent_wavelength_model_kernel_config_scores",
+            "stage": "model_kernel_config_scoring_summary",
             "source_run_report_kind": run_report.get("kind"),
             "is_period_independent": True,
             "uses_temporal_consensus": True,
@@ -4102,13 +4086,13 @@ def score_period_independent_wavelength_fit_candidate_runs(
             "automatic_constraints_applied": False,
             "automatic_initialization_applied": False,
             "parameter_suggestions_applied": False,
-            "n_candidates": len(outcomes),
+            "n_model_kernel_configs": len(outcomes),
             "n_scored": len(ranked_results),
             "n_passed": sum(1 for item in ranked_results if item.get("fit_success")),
             "n_failed": sum(1 for item in ranked_results if not item.get("fit_success")),
             "scoring_weights": dict(default_weights),
             "ranked_results": ranked_results,
-            "scored_candidates": ranked_results,
+            "scored_model_kernel_configs": ranked_results,
             "notes": [
                 "Scores are completion/diagnostic viability summaries only, not scientific fit-quality scores.",
                 "No likelihood, residual, predictive, cross-validation, AIC, or BIC metric is used by this scorer.",
@@ -4207,25 +4191,25 @@ def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) ->
     )
 
 
-def score_period_independent_wavelength_fit_candidate_quality(
+def score_period_independent_wavelength_model_kernel_config_quality(
     run_report: dict[str, Any],
 ) -> dict[str, Any]:
-    """Score completed wavelength candidate fits using training residual diagnostics.
+    """Score completed wavelength model/kernel config fits using training residual diagnostics.
 
     This is still advisory-only and non-selecting.  It uses actual fit-quality
     summaries recorded by the PR61 runner, but it does not install the top model
     on any Lightcurve and it does not claim to be cross-validation or evidence.
     """
-    if not isinstance(run_report, dict) or run_report.get("kind") != "period_independent_wavelength_fit_candidate_results":
+    if not isinstance(run_report, dict) or run_report.get("kind") != "period_independent_wavelength_model_kernel_config_results":
         raise ValueError(
-            "score_period_independent_wavelength_fit_candidate_quality() requires a "
-            "period-independent wavelength fit-candidate results report."
+            "score_period_independent_wavelength_model_kernel_config_quality() requires a "
+            "period-independent wavelength model/kernel-config results report."
         )
-    outcomes = run_report.get("candidate_results")
+    outcomes = run_report.get("model_kernel_config_results")
     if outcomes is None:
         outcomes = run_report.get("outcomes")
     if not isinstance(outcomes, list):
-        raise ValueError("run report must contain an 'outcomes' or 'candidate_results' list")
+        raise ValueError("run report must contain an 'outcomes' or 'model_kernel_config_results' list")
 
     scored = [
         _piwd_score_one_wavelength_fit_quality(outcome)
@@ -4250,8 +4234,8 @@ def score_period_independent_wavelength_fit_candidate_quality(
 
     return _clean_scalar_dict(
         {
-            "kind": "period_independent_wavelength_fit_candidate_quality_scores",
-            "stage": "candidate_fit_training_residual_quality_summary",
+            "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
+            "stage": "model_kernel_config_training_residual_quality_summary",
             "source_run_report_kind": run_report.get("kind"),
             "is_period_independent": True,
             "uses_temporal_consensus": True,
@@ -4280,13 +4264,13 @@ def score_period_independent_wavelength_fit_candidate_quality(
             "automatic_constraints_applied": False,
             "automatic_initialization_applied": False,
             "parameter_suggestions_applied": False,
-            "n_candidates": len(outcomes),
+            "n_model_kernel_configs": len(outcomes),
             "n_scored": len(ranked_results),
             "n_with_fit_quality": sum(1 for item in ranked_results if item.get("fit_quality_available")),
             "ranked_results": ranked_results,
             "quality_ranked_results": ranked_results,
             "notes": [
-                "Fit-quality scores use training residual diagnostics from completed candidate fits.",
+                "Fit-quality scores use training residual diagnostics from completed model/kernel config fits.",
                 "No model is selected or installed automatically.",
                 "Use cross-validation or held-out diagnostics before treating this as scientific model selection.",
             ],
@@ -4304,12 +4288,12 @@ def _piwd_candidate_comparison_results(score_report: dict[str, Any]) -> list[dic
         raise ValueError("candidate comparison report must be a dict")
     kind = score_report.get("kind")
     allowed = {
-        "period_independent_wavelength_fit_candidate_scores",
-        "period_independent_wavelength_fit_candidate_quality_scores",
+        "period_independent_wavelength_model_kernel_config_scores",
+        "period_independent_wavelength_model_kernel_config_quality_scores",
     }
     if kind not in allowed:
         raise ValueError(
-            "candidate comparison helpers require a wavelength fit-candidate "
+            "candidate comparison helpers require a wavelength model/kernel-config "
             "score or quality-score report."
         )
 
@@ -4336,7 +4320,7 @@ def _piwd_format_float(value: Any, precision: int = 4) -> str:
     return f"{val:.{precision}g}"
 
 
-def format_period_independent_wavelength_fit_candidate_comparison_report(
+def format_period_independent_wavelength_model_kernel_config_comparison_report(
     score_report: dict[str, Any],
     *,
     max_rows: int | None = None,
@@ -4356,7 +4340,7 @@ def format_period_independent_wavelength_fit_candidate_comparison_report(
         rows = rows[:max_rows]
 
     lines: list[str] = []
-    lines.append("Period-independent wavelength fit-candidate comparison")
+    lines.append("Period-independent wavelength model/kernel-config comparison")
     lines.append("=" * 63)
     lines.append(f"kind: {score_report.get('kind')}")
     lines.append(f"score_kind: {score_report.get('score_kind')}")
@@ -4446,7 +4430,7 @@ def _piwd_plot_metric_bar(
     return fig
 
 
-def plot_period_independent_wavelength_fit_candidate_comparison(
+def plot_period_independent_wavelength_model_kernel_config_comparison(
     score_report: dict[str, Any],
     *,
     max_rows: int | None = None,
@@ -4522,7 +4506,7 @@ def _piwd_format_advisory_workflow_text_report(
 
     The nested quality-score comparison report has ``runs_fits=False`` because
     scoring/formatting does not itself execute fits.  The workflow report may
-    have ``runs_fits=True`` when it built and ran candidate fits before scoring.
+    have ``runs_fits=True`` when it built and ran model/kernel config fits before scoring.
     Keep both scopes explicit so users do not mistake nested score-report
     metadata for the workflow execution contract.
     """
@@ -4534,10 +4518,10 @@ def _piwd_format_advisory_workflow_text_report(
         "=" * 60,
         f"kind: {workflow_report.get('kind')}",
         f"advisory_only: {workflow_report.get('advisory_only')}",
-        f"workflow_runs_candidate_fits: {workflow_report.get('runs_fits')}",
-        f"candidate_runner_ran_fits: {run_report.get('runs_fits')}",
+        f"workflow_runs_model_kernel_config_fits: {workflow_report.get('runs_fits')}",
+        f"model_kernel_config_runner_ran_fits: {run_report.get('runs_fits')}",
         f"quality_score_report_runs_fits: {quality_report.get('runs_fits')}",
-        f"candidate_fit_state_isolated: {workflow_report.get('candidate_fit_state_isolated')}",
+        f"model_kernel_config_state_isolated: {workflow_report.get('model_kernel_config_state_isolated')}",
         f"mutates_input_lightcurve: {workflow_report.get('mutates_input_lightcurve')}",
         f"automatic_model_selection_applied: {workflow_report.get('automatic_model_selection_applied')}",
         f"selected_model: {workflow_report.get('selected_model')}",
@@ -4547,7 +4531,7 @@ def _piwd_format_advisory_workflow_text_report(
         f"top_ranked_model: {workflow_report.get('top_ranked_model')}",
         f"top_ranked_fit_quality_score: {workflow_report.get('top_ranked_fit_quality_score')}",
         "",
-        "Scope note: workflow_runs_candidate_fits describes this one-shot wrapper. "
+        "Scope note: workflow_runs_model_kernel_config_fits describes this one-shot wrapper. "
         "quality_score_report_runs_fits describes the nested quality-score report; "
         "it is expected to be False because scoring summarizes already-completed fits.",
     ]
@@ -4556,7 +4540,7 @@ def _piwd_format_advisory_workflow_text_report(
         lines.extend(
             [
                 "",
-                "Nested candidate comparison report",
+                "Nested model/kernel config comparison report",
                 "=" * 60,
                 comparison_text_report,
             ]
@@ -4567,15 +4551,13 @@ def _piwd_format_advisory_workflow_text_report(
 def run_period_independent_wavelength_advisory_workflow(
     lightcurve: Any,
     *,
-    candidate_report: dict[str, Any] | None = None,
-    fit_candidate_report: dict[str, Any] | None = None,
+    model_kernel_config_report: dict[str, Any] | None = None,
     run_report: dict[str, Any] | None = None,
     quality_report: dict[str, Any] | None = None,
     include_2d_baseline: bool = True,
     base_fit_kwargs: dict[str, Any] | None = None,
     include_models: list[str] | tuple[str, ...] | None = None,
-    candidate_limit: int | None = None,
-    max_candidates: int | None = None,
+    model_kernel_config_limit: int | None = None,
     stop_on_error: bool = False,
     make_text_report: bool = True,
     make_plots: bool = False,
@@ -4584,8 +4566,8 @@ def run_period_independent_wavelength_advisory_workflow(
 
     The workflow is a convenience wrapper around the PR58--PR62 helpers:
 
-    1. build advisory fit-candidate configs,
-    2. run those candidate fits in isolated Lightcurve copies,
+    1. build advisory model/kernel-config configs,
+    2. run those model/kernel config fits in isolated Lightcurve copies,
     3. score completed candidates using training-residual diagnostics,
     4. optionally format and/or plot the comparison report.
 
@@ -4594,67 +4576,55 @@ def run_period_independent_wavelength_advisory_workflow(
     mutate the input Lightcurve fit state, or apply wavelength-parameter
     suggestions as constraints or initial values.
     """
-    if candidate_report is not None and fit_candidate_report is not None:
-        raise ValueError(
-            "Specify only one of candidate_report or fit_candidate_report."
-        )
-    if fit_candidate_report is not None:
-        candidate_report = fit_candidate_report
-
-    if candidate_limit is not None and max_candidates is not None:
-        raise ValueError("Specify only one of candidate_limit or max_candidates.")
-    if max_candidates is not None:
-        candidate_limit = max_candidates
-
-    built_candidate_report = candidate_report is None
-    ran_candidate_fits = run_report is None
+    built_model_kernel_config_report = model_kernel_config_report is None
+    ran_model_kernel_config_fits = run_report is None
     scored_quality = quality_report is None
 
-    if candidate_report is None:
-        candidate_report = build_period_independent_wavelength_fit_candidates(
+    if model_kernel_config_report is None:
+        model_kernel_config_report = build_period_independent_wavelength_model_kernel_configs(
             lightcurve,
             include_2d_baseline=include_2d_baseline,
             base_fit_kwargs=base_fit_kwargs,
             include_models=include_models,
-            candidate_limit=candidate_limit,
+            model_kernel_config_limit=model_kernel_config_limit,
         )
 
     if run_report is None:
-        run_report = run_period_independent_wavelength_fit_candidates(
+        run_report = run_period_independent_wavelength_model_kernel_configs(
             lightcurve,
-            candidate_report=candidate_report,
-            candidate_limit=candidate_limit,
+            model_kernel_config_report=model_kernel_config_report,
+            model_kernel_config_limit=model_kernel_config_limit,
             stop_on_error=stop_on_error,
         )
 
     if quality_report is None:
-        quality_report = score_period_independent_wavelength_fit_candidate_quality(
+        quality_report = score_period_independent_wavelength_model_kernel_config_quality(
             run_report
         )
 
     comparison_text_report = None
     if make_text_report:
-        comparison_text_report = format_period_independent_wavelength_fit_candidate_comparison_report(
+        comparison_text_report = format_period_independent_wavelength_model_kernel_config_comparison_report(
             quality_report
         )
 
     figures = None
     if make_plots:
-        figures = plot_period_independent_wavelength_fit_candidate_comparison(
+        figures = plot_period_independent_wavelength_model_kernel_config_comparison(
             quality_report
         )
 
     workflow_report: dict[str, Any] = {
         "kind": "period_independent_wavelength_advisory_workflow",
-        "stage": "candidate_build_run_quality_report",
+        "stage": "model_kernel_config_build_run_quality_report",
         "advisory_only": True,
-        "builds_candidate_configs": True,
-        "runs_fits": bool(ran_candidate_fits),
+        "builds_model_kernel_configs": True,
+        "runs_fits": bool(ran_model_kernel_config_fits),
         "scores_fit_quality": True,
         "formats_report": bool(make_text_report),
         "makes_plots": bool(make_plots),
-        "candidate_fit_state_isolated": bool(
-            run_report.get("candidate_fit_state_isolated", True)
+        "model_kernel_config_state_isolated": bool(
+            run_report.get("model_kernel_config_state_isolated", True)
         ) if isinstance(run_report, dict) else True,
         "mutates_input_lightcurve": False,
         "automatic_model_selection_applied": False,
@@ -4662,8 +4632,8 @@ def run_period_independent_wavelength_advisory_workflow(
         "automatic_constraints_applied": False,
         "automatic_initialization_applied": False,
         "parameter_suggestions_applied": False,
-        "built_candidate_report": bool(built_candidate_report),
-        "ran_candidate_fits": bool(ran_candidate_fits),
+        "built_model_kernel_config_report": bool(built_model_kernel_config_report),
+        "ran_model_kernel_config_fits": bool(ran_model_kernel_config_fits),
         "scored_quality": bool(scored_quality),
         "top_ranked_model": (
             quality_report.get("top_ranked_model")
@@ -4680,7 +4650,7 @@ def run_period_independent_wavelength_advisory_workflow(
             if isinstance(quality_report, dict)
             else None
         ),
-        "candidate_report": candidate_report,
+        "model_kernel_config_report": model_kernel_config_report,
         "run_report": run_report,
         "quality_report": quality_report,
         "comparison_text_report": comparison_text_report,
@@ -4972,8 +4942,6 @@ def _piwd_batch_write_summary_csv(path, rows):
         "n_model_kernel_configs",
         "n_successful_model_kernel_configs",
         "n_failed_model_kernel_configs",
-        "n_candidates",
-        "n_passed_candidates",
         "exception_type",
         "exception_message",
         "export_json_path",
@@ -5000,7 +4968,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
     """Run the advisory wavelength workflow over multiple sources.
 
     This helper orchestrates the PR63/PR64 workflow per source.  It may run
-    candidate fits because each per-source advisory workflow may run candidate
+    model/kernel config fits because each per-source advisory workflow may run candidate
     fits, but it still does not apply automatic model selection, install a
     winning model, apply constraints, or apply initialization.
 
@@ -5065,7 +5033,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
             "advisory_only": True,
             "runs_fits": True,
             "applies_to_fit": True,
-            "candidate_fit_state_isolated": True,
+            "model_kernel_config_state_isolated": True,
             "mutates_input_lightcurve": False,
             "automatic_model_selection_applied": False,
             "selected_model": None,
@@ -5077,8 +5045,6 @@ def run_period_independent_wavelength_advisory_workflow_batch(
             "n_model_kernel_configs": 0,
             "n_successful_model_kernel_configs": 0,
             "n_failed_model_kernel_configs": 0,
-            "n_candidates": 0,  # Backward-compatible alias; ambiguous, prefer n_model_kernel_configs.
-            "n_passed_candidates": 0,  # Backward-compatible alias; ambiguous, prefer n_successful_model_kernel_configs.
             "exception_type": None,
             "exception_message": None,
             "traceback": None,
@@ -5100,9 +5066,9 @@ def run_period_independent_wavelength_advisory_workflow_batch(
             run_report = workflow.get("run_report") or {}
             quality_report = workflow.get("quality_report") or {}
             candidate_rows = (
-                run_report.get("candidate_results")
+                run_report.get("model_kernel_config_results")
                 or run_report.get("outcomes")
-                or workflow.get("candidate_results")
+                or workflow.get("model_kernel_config_results")
                 or workflow.get("outcomes")
                 or quality_report.get("ranked_results")
                 or workflow.get("ranked_results")
@@ -5128,8 +5094,6 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                     "n_model_kernel_configs": n_model_kernel_configs,
                     "n_successful_model_kernel_configs": n_successful_model_kernel_configs,
                     "n_failed_model_kernel_configs": n_failed_model_kernel_configs,
-                    "n_candidates": n_model_kernel_configs,  # Backward-compatible alias; ambiguous.
-                    "n_passed_candidates": n_successful_model_kernel_configs,  # Backward-compatible alias; ambiguous.
                     "workflow_summary": {
                         "kind": workflow.get("kind"),
                         "top_ranked_model": workflow.get("top_ranked_model"),
@@ -5179,7 +5143,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         "advisory_only": True,
         "runs_fits": True,
         "applies_to_fit": True,
-        "candidate_fit_state_isolated": True,
+        "model_kernel_config_state_isolated": True,
         "mutates_input_lightcurve": False,
         "automatic_model_selection_applied": False,
         "selected_model": None,

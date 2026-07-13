@@ -9337,7 +9337,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             positive_floor=positive_floor,
         )
 
-    def build_period_independent_wavelength_fit_candidates(
+    def build_period_independent_wavelength_model_kernel_configs(
         self,
         *,
         parameter_plan: dict | None = None,
@@ -9348,20 +9348,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         fit_strategy: str = "consensus",
         lpv_time_kernel_type: str = "quasi_periodic",
         learn_additional_noise: bool | None = True,
-        candidate_limit: int | None = None,
+        model_kernel_config_limit: int | None = None,
         include_parameter_suggestions: bool = True,
     ) -> dict:
-        """Return advisory fit-candidate configs from wavelength diagnostics.
+        """Return advisory model/kernel configs from wavelength diagnostics.
 
         This method does not run fits, set hyperparameters, register constraints,
-        or mutate fit state.  It only builds explicit candidate kwargs for a
+        or mutate fit state. It only builds explicit model+kernel kwargs for a
         later user-controlled comparison.
         """
         from pgmuvi.wavelength_diagnostics import (
-            build_period_independent_wavelength_fit_candidates,
+            build_period_independent_wavelength_model_kernel_configs,
         )
 
-        return build_period_independent_wavelength_fit_candidates(
+        return build_period_independent_wavelength_model_kernel_configs(
             self,
             parameter_plan=parameter_plan,
             diagnostics_report=diagnostics_report,
@@ -9371,122 +9371,106 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             fit_strategy=fit_strategy,
             lpv_time_kernel_type=lpv_time_kernel_type,
             learn_additional_noise=learn_additional_noise,
-            candidate_limit=candidate_limit,
+            model_kernel_config_limit=model_kernel_config_limit,
             include_parameter_suggestions=include_parameter_suggestions,
         )
 
-    def run_period_independent_wavelength_fit_candidates(
+    def run_period_independent_wavelength_model_kernel_configs(
         self,
         *,
-        candidate_report: dict | None = None,
-        fit_candidate_report: dict | None = None,
-        candidate_limit: int | None = None,
-        max_candidates: int | None = None,
+        model_kernel_config_report: dict | None = None,
+        model_kernel_config_limit: int | None = None,
         stop_on_error: bool = False,
         fit_runner=None,
         copy_lightcurve: bool = True,
-        **candidate_builder_kwargs,
+        **model_kernel_config_builder_kwargs,
     ) -> dict:
-        """Run advisory wavelength fit candidates on isolated Lightcurve copies.
+        """Run advisory wavelength model/kernel configs on isolated copies.
 
-        This method executes candidate fits for comparison/reporting only.  It
-        does not choose a winner, apply parameter suggestions, or mutate this
-        Lightcurve's fit state when ``copy_lightcurve=True``.
+        This method executes model/kernel-config fits for comparison/reporting
+        only. It does not choose a winner, apply parameter suggestions, or mutate
+        this Lightcurve's fit state when ``copy_lightcurve=True``.
         """
         from pgmuvi.wavelength_diagnostics import (
-            run_period_independent_wavelength_fit_candidates,
+            run_period_independent_wavelength_model_kernel_configs,
         )
 
-        return run_period_independent_wavelength_fit_candidates(
+        return run_period_independent_wavelength_model_kernel_configs(
             self,
-            candidate_report=candidate_report,
-            fit_candidate_report=fit_candidate_report,
-            candidate_limit=candidate_limit,
-            max_candidates=max_candidates,
+            model_kernel_config_report=model_kernel_config_report,
+            model_kernel_config_limit=model_kernel_config_limit,
             stop_on_error=stop_on_error,
             fit_runner=fit_runner,
             copy_lightcurve=copy_lightcurve,
-            **candidate_builder_kwargs,
+            **model_kernel_config_builder_kwargs,
         )
 
-    def score_period_independent_wavelength_fit_candidate_runs(
+    def score_period_independent_wavelength_model_kernel_config_runs(
         self,
         run_report: dict,
         *,
         weights: dict | None = None,
     ) -> dict:
-        """Score a completed advisory wavelength fit-candidate run report.
-
-        This method returns an advisory ranking only.  It does not choose a
-        winner, install a fit, or mutate this Lightcurve's fit state.
-        """
-        from pgmuvi.wavelength_diagnostics import (
-            score_period_independent_wavelength_fit_candidate_runs,
-        )
-
-        return score_period_independent_wavelength_fit_candidate_runs(
-            run_report,
-            weights=weights,
-        )
-
-    def score_period_independent_wavelength_fit_candidate_quality(
-        self,
-        run_report: dict,
-    ) -> dict:
-        """Score completed wavelength candidate fits using training residual diagnostics.
+        """Score a completed advisory model/kernel-config run report.
 
         This method returns an advisory ranking only. It does not choose a
         winner, install a fit, or mutate this Lightcurve's fit state.
         """
         from pgmuvi.wavelength_diagnostics import (
-            score_period_independent_wavelength_fit_candidate_quality,
+            score_period_independent_wavelength_model_kernel_config_runs,
         )
 
-        return score_period_independent_wavelength_fit_candidate_quality(run_report)
+        return score_period_independent_wavelength_model_kernel_config_runs(
+            run_report,
+            weights=weights,
+        )
 
-    def format_period_independent_wavelength_fit_candidate_comparison_report(
+    def score_period_independent_wavelength_model_kernel_config_quality(
+        self,
+        run_report: dict,
+    ) -> dict:
+        """Score completed model/kernel-config fits using training residuals.
+
+        This method returns an advisory ranking only. It does not choose a
+        winner, install a fit, or mutate this Lightcurve's fit state.
+        """
+        from pgmuvi.wavelength_diagnostics import (
+            score_period_independent_wavelength_model_kernel_config_quality,
+        )
+
+        return score_period_independent_wavelength_model_kernel_config_quality(run_report)
+
+    def format_period_independent_wavelength_model_kernel_config_comparison_report(
         self,
         score_report: dict,
         *,
         max_rows: int | None = None,
     ) -> str:
-        """Format a wavelength fit-candidate score report for inspection.
-
-        This method is presentation-only. It does not run fits, choose a
-        winner, install a model, or mutate this Lightcurve's fit state.
-        """
+        """Format a wavelength model/kernel-config score report for inspection."""
         from pgmuvi.wavelength_diagnostics import (
-            format_period_independent_wavelength_fit_candidate_comparison_report,
+            format_period_independent_wavelength_model_kernel_config_comparison_report,
         )
 
-        return format_period_independent_wavelength_fit_candidate_comparison_report(
+        return format_period_independent_wavelength_model_kernel_config_comparison_report(
             score_report,
             max_rows=max_rows,
         )
 
-    def plot_period_independent_wavelength_fit_candidate_comparison(
+    def plot_period_independent_wavelength_model_kernel_config_comparison(
         self,
         score_report: dict,
         *,
         max_rows: int | None = None,
     ) -> dict:
-        """Plot a wavelength fit-candidate score report for inspection.
-
-        This method is presentation-only. It does not run fits, choose a
-        winner, install a model, or mutate this Lightcurve's fit state.
-        """
+        """Plot a wavelength model/kernel-config score report for inspection."""
         from pgmuvi.wavelength_diagnostics import (
-            plot_period_independent_wavelength_fit_candidate_comparison,
+            plot_period_independent_wavelength_model_kernel_config_comparison,
         )
 
-        return plot_period_independent_wavelength_fit_candidate_comparison(
+        return plot_period_independent_wavelength_model_kernel_config_comparison(
             score_report,
             max_rows=max_rows,
         )
-
-
-
-
 
     @staticmethod
     def run_period_independent_wavelength_advisory_workflow_batch(
@@ -9503,7 +9487,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Run the period-independent wavelength advisory workflow over sources.
 
         This static convenience wrapper delegates to the module-level batch
-        helper.  It does not select or install a winning model.
+        helper. It does not select or install a winning model.
         """
         from .wavelength_diagnostics import (
             run_period_independent_wavelength_advisory_workflow_batch,
@@ -9538,7 +9522,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         If ``workflow`` is not supplied, this method first runs
         :meth:`run_period_independent_wavelength_advisory_workflow` using
-        ``run_workflow_kwargs``.  The export itself does not choose or install a
+        ``run_workflow_kwargs``. The export itself does not choose or install a
         model, apply constraints, or apply initialization.
         """
         from .wavelength_diagnostics import (
@@ -9565,22 +9549,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def run_period_independent_wavelength_advisory_workflow(
         self,
         *,
-        candidate_report: dict | None = None,
-        fit_candidate_report: dict | None = None,
+        model_kernel_config_report: dict | None = None,
         run_report: dict | None = None,
         quality_report: dict | None = None,
         include_2d_baseline: bool = True,
         base_fit_kwargs: dict | None = None,
         include_models: list[str] | tuple[str, ...] | None = None,
-        candidate_limit: int | None = None,
-        max_candidates: int | None = None,
+        model_kernel_config_limit: int | None = None,
         stop_on_error: bool = False,
         make_text_report: bool = True,
         make_plots: bool = False,
     ) -> dict:
-        """Run the advisory wavelength-candidate workflow.
+        """Run the advisory wavelength model/kernel-config workflow.
 
-        This method builds candidate configs, runs candidate fits in isolated
+        This method builds model/kernel configs, runs their fits in isolated
         copies, scores training-residual quality, and optionally creates text
         and plot reports. It does not select or install a winning model.
         """
@@ -9590,15 +9572,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return run_period_independent_wavelength_advisory_workflow(
             self,
-            candidate_report=candidate_report,
-            fit_candidate_report=fit_candidate_report,
+            model_kernel_config_report=model_kernel_config_report,
             run_report=run_report,
             quality_report=quality_report,
             include_2d_baseline=include_2d_baseline,
             base_fit_kwargs=base_fit_kwargs,
             include_models=include_models,
-            candidate_limit=candidate_limit,
-            max_candidates=max_candidates,
+            model_kernel_config_limit=model_kernel_config_limit,
             stop_on_error=stop_on_error,
             make_text_report=make_text_report,
             make_plots=make_plots,

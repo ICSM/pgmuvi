@@ -21,7 +21,7 @@ def _workflow_with_outputs():
         "kind": "period_independent_wavelength_advisory_workflow",
         "advisory_only": True,
         "runs_fits": True,
-        "candidate_fit_state_isolated": True,
+        "model_kernel_config_state_isolated": True,
         "mutates_input_lightcurve": False,
         "automatic_model_selection_applied": False,
         "selected_model": None,
@@ -29,7 +29,7 @@ def _workflow_with_outputs():
         "automatic_initialization_applied": False,
         "top_ranked_model": "2DDustMean",
         "score_kind": "training_residual_fit_quality",
-        "text_report": "Workflow-level report\nworkflow_runs_candidate_fits: True\n",
+        "text_report": "Workflow-level report\nworkflow_runs_model_kernel_config_fits: True\n",
         "comparison_text_report": "Nested comparison report\nquality_score_report_runs_fits: False\n",
         "figures": {"quality_scores": fig},
     }
@@ -70,7 +70,7 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowExport(unittest.TestCase):
             payload = json.loads(json_path.read_text())
             self.assertNotIn("figures", payload)
             self.assertEqual(payload["top_ranked_model"], "2DDustMean")
-            self.assertIn("workflow_runs_candidate_fits", text_path.read_text())
+            self.assertIn("workflow_runs_model_kernel_config_fits", text_path.read_text())
             self.assertIn("quality_score_report_runs_fits", comparison_path.read_text())
 
     def test_export_manifest_is_advisory_and_does_not_run_fits(self):
@@ -110,7 +110,7 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowExport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, "advisory workflow"):
                 export_period_independent_wavelength_advisory_workflow(
-                    {"kind": "period_independent_wavelength_fit_candidate_scores"},
+                    {"kind": "period_independent_wavelength_model_kernel_config_scores"},
                     tmp,
                 )
 
