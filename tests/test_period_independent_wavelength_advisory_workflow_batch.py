@@ -186,6 +186,116 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         self.assertEqual(row["n_successful_model_kernel_configs"], 2)
         self.assertEqual(row["n_failed_model_kernel_configs"], 1)
 
+
+    def test_writes_long_form_model_kernel_config_csv(self):
+        nested_workflow = {
+            "kind": "period_independent_wavelength_advisory_workflow",
+            "top_ranked_model": "2DDustMean",
+            "top_ranked_fit_quality_score": 42.0,
+            "score_kind": "training_residual_fit_quality",
+            "automatic_model_selection_applied": False,
+            "selected_model": None,
+            "run_report": {
+                "kind": "period_independent_wavelength_model_kernel_config_results",
+                "model_kernel_config_results": [
+                    {
+                        "model_kernel_config_id": "rank1_2DWavelengthDependent",
+                        "rank": 1,
+                        "model": "2DWavelengthDependent",
+                        "status": "passed",
+                        "fit_success": True,
+                        "fit_kwargs": {
+                            "fit_strategy": "consensus",
+                            "time_kernel_type": "quasi_periodic",
+                            "training_iter": 7,
+                            "miniter": 3,
+                            "learn_additional_noise": True,
+                        },
+                        "consensus_period": 603.0,
+                        "training_nrmse_by_target_scale": 1.3,
+                    },
+                    {
+                        "model_kernel_config_id": "rank2_2DDustMean",
+                        "rank": 2,
+                        "model": "2DDustMean",
+                        "status": "passed",
+                        "fit_success": True,
+                        "fit_kwargs": {
+                            "fit_strategy": "consensus",
+                            "time_kernel_type": "quasi_periodic",
+                            "training_iter": 7,
+                            "miniter": 3,
+                            "learn_additional_noise": True,
+                        },
+                        "consensus_period": 603.0,
+                        "training_nrmse_by_target_scale": 1.2,
+                    },
+                ],
+            },
+            "quality_report": {
+                "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
+                "score_kind": "training_residual_fit_quality",
+                # Real workflow quality rows may omit model_kernel_config_id and
+                # model-kernel-config rank.  They must merge by model name into
+                # the execution rows rather than becoming duplicate CSV rows.
+                "ranked_results": [
+                    {
+                        "quality_rank": 1,
+                        "is_top_ranked": True,
+                        "model": "2DDustMean",
+                        "fit_success": True,
+                        "fit_quality_score": 42.0,
+                        "training_reduced_chi2": 0.5,
+                    },
+                    {
+                        "quality_rank": 2,
+                        "is_top_ranked": False,
+                        "model": "2DWavelengthDependent",
+                        "fit_success": True,
+                        "fit_quality_score": 41.0,
+                        "training_reduced_chi2": 0.6,
+                    },
+                ],
+            },
+        }
+
+        class NestedFake(_FakeLightcurve):
+            def run_period_independent_wavelength_advisory_workflow(self, **kwargs):
+                return nested_workflow
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_period_independent_wavelength_advisory_workflow_batch(
+                [{"source_id": "src", "lightcurve": NestedFake()}],
+                output_dir=tmp,
+                export=False,
+                batch_prefix="batch",
+            )
+            detail_path = Path(report["batch_model_kernel_config_csv_path"])
+            self.assertTrue(detail_path.exists())
+
+            import csv
+
+            with detail_path.open(newline="", encoding="utf-8") as handle:
+                csv_rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(report["model_kernel_config_results"]), 2)
+        self.assertEqual(len(csv_rows), 2)
+
+        by_model = {
+            row["model"]: row for row in report["model_kernel_config_results"]
+        }
+        dust = by_model["2DDustMean"]
+        self.assertEqual(dust["model_kernel_config_id"], "rank2_2DDustMean")
+        self.assertEqual(dust["model_kernel_config_rank"], 2)
+        self.assertEqual(dust["quality_rank"], 1)
+        self.assertEqual(dust["time_kernel_type"], "quasi_periodic")
+        self.assertEqual(dust["fit_quality_score"], 42.0)
+
+        csv_by_model = {row["model"]: row for row in csv_rows}
+        self.assertEqual(csv_by_model["2DDustMean"]["model_kernel_config_id"], "rank2_2DDustMean")
+        self.assertEqual(csv_by_model["2DDustMean"]["quality_rank"], "1")
+        self.assertEqual(csv_by_model["2DWavelengthDependent"]["quality_rank"], "2")
+
     def test_lightcurve_static_method_delegates(self):
         report = Lightcurve.run_period_independent_wavelength_advisory_workflow_batch(
             [{"source_id": "src", "lightcurve": _FakeLightcurve()}],

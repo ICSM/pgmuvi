@@ -74,6 +74,7 @@ class TestRunWavelengthAdvisoryBatchExample(unittest.TestCase):
             "n_failed": 0,
             "batch_json_path": "out/batch_summary.json",
             "batch_csv_path": "out/batch_summary.csv",
+            "batch_model_kernel_config_csv_path": "out/batch_model_kernel_configs.csv",
             "source_results": [
                 {
                     "source_id": "one",

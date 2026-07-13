@@ -260,6 +260,7 @@ def _print_batch_summary(report: dict[str, Any]) -> None:
     print("n_failed:", report.get("n_failed"))
     print("batch_json_path:", report.get("batch_json_path"))
     print("batch_csv_path:", report.get("batch_csv_path"))
+    print("batch_model_kernel_config_csv_path:", report.get("batch_model_kernel_config_csv_path"))
 
     print("\nSource rows:")
     for row in report.get("source_results", []):

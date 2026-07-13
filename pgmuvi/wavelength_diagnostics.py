@@ -4954,6 +4954,250 @@ def _piwd_batch_write_summary_csv(path, rows):
             writer.writerow({field: row.get(field) for field in fields})
 
 
+
+def _piwd_batch_nonempty(value):
+    """Return True for values that can safely identify a model/kernel config."""
+    return value is not None and value != ""
+
+
+def _piwd_batch_nonempty(value):
+    """Return True for values that can safely identify or enrich a row."""
+    return value is not None and value != ""
+
+
+def _piwd_batch_index_model_kernel_config_row(row, *, by_id, by_model):
+    """Index a merged execution row by stable identifiers.
+
+    A model name is only used as a merge key when it is unique among the
+    execution rows.  That keeps the current one-row-per-model workflow simple
+    while avoiding an unsafe merge if a future workflow evaluates the same
+    model with multiple kernel settings.
+    """
+    if not isinstance(row, dict):
+        return
+
+    config_id = row.get("model_kernel_config_id")
+    if _piwd_batch_nonempty(config_id):
+        by_id[config_id] = row
+
+    model = row.get("model")
+    if _piwd_batch_nonempty(model):
+        if model in by_model and by_model[model] is not row:
+            by_model[model] = None
+        else:
+            by_model[model] = row
+
+
+def _piwd_batch_merge_nonempty_fields(target, source):
+    """Merge source fields into target without erasing execution metadata."""
+    if not isinstance(target, dict) or not isinstance(source, dict):
+        return target
+
+    for key, value in source.items():
+        if not _piwd_batch_nonempty(value):
+            if key not in target:
+                target[key] = value
+            continue
+
+        # ``rank`` in execution rows is the model/kernel-config rank.  Ranking
+        # rows may also carry rank-like information, but quality ordering must
+        # be represented by ``quality_rank`` and must not overwrite the run
+        # configuration rank.
+        if key == "rank" and _piwd_batch_nonempty(target.get("rank")):
+            continue
+
+        # Preserve execution fit kwargs unless the execution row omitted them.
+        if key == "fit_kwargs" and isinstance(target.get("fit_kwargs"), dict):
+            if isinstance(value, dict):
+                merged = dict(target["fit_kwargs"])
+                for subkey, subvalue in value.items():
+                    if _piwd_batch_nonempty(subvalue) or subkey not in merged:
+                        merged[subkey] = subvalue
+                target["fit_kwargs"] = merged
+            continue
+
+        target[key] = value
+
+    return target
+
+
+def _piwd_batch_merge_model_kernel_config_rows(run_rows, ranked_rows):
+    """Merge execution and quality rows without duplicating configs.
+
+    ``run_rows`` come from the candidate/model-kernel-config runner and contain
+    execution metadata such as model_kernel_config_id, fit kwargs, status, and
+    consensus diagnostics.  ``ranked_rows`` come from the quality scorer and may
+    contain only the model name plus quality_rank/fit_quality_score.  A ranked
+    row must enrich the corresponding execution row rather than becoming a
+    second long-form CSV row.
+    """
+    merged = []
+    by_id = {}
+    by_model = {}
+
+    for row in run_rows or []:
+        if not isinstance(row, dict):
+            continue
+        copied = dict(row)
+        merged.append(copied)
+        _piwd_batch_index_model_kernel_config_row(copied, by_id=by_id, by_model=by_model)
+
+    for row in ranked_rows or []:
+        if not isinstance(row, dict):
+            continue
+
+        target = None
+        config_id = row.get("model_kernel_config_id")
+        if _piwd_batch_nonempty(config_id):
+            target = by_id.get(config_id)
+
+        if target is None:
+            model = row.get("model")
+            if _piwd_batch_nonempty(model):
+                target = by_model.get(model)
+
+        if target is None:
+            copied = dict(row)
+            merged.append(copied)
+            _piwd_batch_index_model_kernel_config_row(copied, by_id=by_id, by_model=by_model)
+        else:
+            _piwd_batch_merge_nonempty_fields(target, row)
+            _piwd_batch_index_model_kernel_config_row(target, by_id=by_id, by_model=by_model)
+
+    return merged
+
+
+def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
+    """Return long-form rows for a source's evaluated model/kernel configs.
+
+    Each output row is suitable for a batch-level source-by-model CSV.  It is
+    intentionally flattened so downstream inspection does not require parsing
+    the full nested workflow JSON for every source.
+    """
+    workflow = workflow if isinstance(workflow, dict) else {}
+    source_row = source_row if isinstance(source_row, dict) else {}
+    run_report = workflow.get("run_report") or {}
+    quality_report = workflow.get("quality_report") or {}
+
+    run_rows = (
+        run_report.get("model_kernel_config_results")
+        or run_report.get("outcomes")
+        or workflow.get("model_kernel_config_results")
+        or workflow.get("outcomes")
+        or []
+    )
+    ranked_rows = quality_report.get("ranked_results") or workflow.get("ranked_results") or []
+    rows = _piwd_batch_merge_model_kernel_config_rows(run_rows, ranked_rows)
+
+    out = []
+    for item in rows:
+        fit_kwargs = item.get("fit_kwargs") if isinstance(item.get("fit_kwargs"), dict) else {}
+        flattened = {
+            "source_index": source_row.get("source_index"),
+            "source_id": source_row.get("source_id"),
+            "source_status": source_row.get("status"),
+            "workflow_kind": workflow.get("kind"),
+            "score_kind": quality_report.get("score_kind") or workflow.get("score_kind"),
+            "model_kernel_config_id": item.get("model_kernel_config_id"),
+            "model_kernel_config_rank": item.get("rank"),
+            "quality_rank": item.get("quality_rank"),
+            "is_top_ranked": item.get("is_top_ranked"),
+            "model": item.get("model"),
+            "status": item.get("status"),
+            "fit_success": item.get("fit_success"),
+            "fit_failed": item.get("fit_failed"),
+            "fit_quality_score": item.get("fit_quality_score"),
+            "fit_quality_available": item.get("fit_quality_available"),
+            "fit_strategy": fit_kwargs.get("fit_strategy"),
+            "time_kernel_type": fit_kwargs.get("time_kernel_type"),
+            "wavelength_kernel_type": fit_kwargs.get("wavelength_kernel_type"),
+            "learn_additional_noise": fit_kwargs.get("learn_additional_noise"),
+            "training_iter": fit_kwargs.get("training_iter"),
+            "miniter": fit_kwargs.get("miniter"),
+            "consensus_success": item.get("consensus_success"),
+            "consensus_period": item.get("consensus_period"),
+            "consensus_frequency": item.get("consensus_frequency"),
+            "consensus_time_kernel_constraint_mode": item.get(
+                "consensus_time_kernel_constraint_mode"
+            ),
+            "n_accepted_bands": item.get("n_accepted_bands"),
+            "n_rejected_bands": item.get("n_rejected_bands"),
+            "training_rmse": item.get("training_rmse"),
+            "training_mae": item.get("training_mae"),
+            "training_nrmse_by_target_scale": item.get(
+                "training_nrmse_by_target_scale"
+            ),
+            "training_median_abs_standardized_residual": item.get(
+                "training_median_abs_standardized_residual"
+            ),
+            "training_outlier_fraction_3sigma": item.get(
+                "training_outlier_fraction_3sigma"
+            ),
+            "training_reduced_chi2": item.get("training_reduced_chi2"),
+            "training_log_marginal_likelihood": item.get(
+                "training_log_marginal_likelihood"
+            ),
+            "exception_type": item.get("exception_type"),
+            "exception_message": item.get("exception_message"),
+        }
+        out.append(_clean_scalar_dict(flattened))
+    return out
+
+
+def _piwd_batch_model_kernel_config_csv_fields():
+    """Return stable field order for the long-form model/kernel-config CSV."""
+    return [
+        "source_index",
+        "source_id",
+        "source_status",
+        "workflow_kind",
+        "score_kind",
+        "model_kernel_config_id",
+        "model_kernel_config_rank",
+        "quality_rank",
+        "is_top_ranked",
+        "model",
+        "status",
+        "fit_success",
+        "fit_failed",
+        "fit_quality_score",
+        "fit_quality_available",
+        "fit_strategy",
+        "time_kernel_type",
+        "wavelength_kernel_type",
+        "learn_additional_noise",
+        "training_iter",
+        "miniter",
+        "consensus_success",
+        "consensus_period",
+        "consensus_frequency",
+        "consensus_time_kernel_constraint_mode",
+        "n_accepted_bands",
+        "n_rejected_bands",
+        "training_rmse",
+        "training_mae",
+        "training_nrmse_by_target_scale",
+        "training_median_abs_standardized_residual",
+        "training_outlier_fraction_3sigma",
+        "training_reduced_chi2",
+        "training_log_marginal_likelihood",
+        "exception_type",
+        "exception_message",
+    ]
+
+
+def _piwd_batch_write_model_kernel_config_csv(path, rows):
+    """Write a long-form source-by-model/kernel-config batch CSV."""
+    import csv
+
+    fields = _piwd_batch_model_kernel_config_csv_fields()
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field) for field in fields})
+
+
 def run_period_independent_wavelength_advisory_workflow_batch(
     sources,
     *,
@@ -4968,8 +5212,8 @@ def run_period_independent_wavelength_advisory_workflow_batch(
     """Run the advisory wavelength workflow over multiple sources.
 
     This helper orchestrates the PR63/PR64 workflow per source.  It may run
-    model/kernel config fits because each per-source advisory workflow may run candidate
-    fits, but it still does not apply automatic model selection, install a
+    model/kernel config fits because each per-source advisory workflow may run
+    model/kernel config fits, but it still does not apply automatic model selection, install a
     winning model, apply constraints, or apply initialization.
 
     Parameters
@@ -5022,6 +5266,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         outdir.mkdir(parents=True, exist_ok=True)
 
     rows = []
+    model_kernel_config_rows = []
     exported_files = []
 
     for index, source in enumerate(source_list):
@@ -5109,6 +5354,12 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                 }
             )
 
+            source_model_kernel_config_rows = _piwd_batch_extract_model_kernel_config_rows(
+                source_row=row,
+                workflow=workflow,
+            )
+            model_kernel_config_rows.extend(source_model_kernel_config_rows)
+
             if export and outdir is not None:
                 source_component = _piwd_batch_safe_path_component(source_id, index)
                 source_outdir = outdir / source_component
@@ -5153,23 +5404,32 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         "n_succeeded": sum(1 for row in rows if row.get("status") == "passed"),
         "n_failed": sum(1 for row in rows if row.get("status") == "failed"),
         "source_results": rows,
+        "model_kernel_config_results": model_kernel_config_rows,
         "exported_files": exported_files,
         "batch_json_path": None,
         "batch_csv_path": None,
+        "batch_model_kernel_config_csv_path": None,
     }
 
     if outdir is not None:
         safe_prefix = _piwd_batch_safe_path_component(batch_prefix, 0)
         json_path = outdir / f"{safe_prefix}_summary.json"
         csv_path = outdir / f"{safe_prefix}_summary.csv"
+        model_kernel_config_csv_path = outdir / f"{safe_prefix}_model_kernel_configs.csv"
         json_path.write_text(
             json.dumps(_piwd_export_json_safe(manifest), indent=2, sort_keys=True),
             encoding="utf-8",
         )
         _piwd_batch_write_summary_csv(csv_path, rows)
+        _piwd_batch_write_model_kernel_config_csv(
+            model_kernel_config_csv_path, model_kernel_config_rows
+        )
         manifest["batch_json_path"] = str(json_path)
         manifest["batch_csv_path"] = str(csv_path)
-        manifest["exported_files"].extend([str(json_path), str(csv_path)])
+        manifest["batch_model_kernel_config_csv_path"] = str(model_kernel_config_csv_path)
+        manifest["exported_files"].extend(
+            [str(json_path), str(csv_path), str(model_kernel_config_csv_path)]
+        )
 
     return manifest
 
