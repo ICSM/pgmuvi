@@ -61,6 +61,8 @@ package defaults.
    notebooks/PGMUVI_Gaussian_Process_fitting
    notebooks/PGMUVI_comparison_with_other_codes
    notebooks/pgmuvi_tutorial
+   notebooks/PGMUVI_QuasiPeriodic_and_Mean_Functions
+   notebook_status
 
 How-To Guides
 -------------
