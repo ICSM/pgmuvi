@@ -274,6 +274,10 @@ def _print_batch_summary(report: dict[str, Any]) -> None:
         "batch_model_kernel_config_summary_csv_path:",
         report.get("batch_model_kernel_config_summary_csv_path"),
     )
+    print(
+        "batch_markdown_report_path:",
+        report.get("batch_markdown_report_path"),
+    )
 
     print("\nModel/kernel config summary:")
     for row in report.get("model_kernel_config_summary", []):

@@ -5399,6 +5399,115 @@ def _piwd_batch_write_model_kernel_config_summary_csv(path, rows):
         for row in rows:
             writer.writerow({field: row.get(field) for field in fields})
 
+
+
+def _piwd_batch_markdown_value(value):
+    """Format a scalar value for the batch Markdown report."""
+    if value is None or value == "":
+        return "—"
+    return str(value)
+
+
+def _piwd_batch_markdown_cell(value):
+    """Format a scalar value for a Markdown table cell."""
+    text = _piwd_batch_markdown_value(value)
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def _piwd_batch_format_markdown_report(manifest):
+    """Return a human-readable Markdown report for a batch advisory run."""
+    if not isinstance(manifest, dict):
+        raise TypeError("manifest must be a dictionary")
+
+    lines = [
+        "# Period-independent wavelength advisory batch report",
+        "",
+        "## Batch contract",
+        f"- kind: {_piwd_batch_markdown_value(manifest.get('kind'))}",
+        f"- advisory_only: {_piwd_batch_markdown_value(manifest.get('advisory_only'))}",
+        f"- runs_fits: {_piwd_batch_markdown_value(manifest.get('runs_fits'))}",
+        f"- applies_to_fit: {_piwd_batch_markdown_value(manifest.get('applies_to_fit'))}",
+        f"- model_kernel_config_state_isolated: {_piwd_batch_markdown_value(manifest.get('model_kernel_config_state_isolated'))}",
+        f"- mutates_input_lightcurve: {_piwd_batch_markdown_value(manifest.get('mutates_input_lightcurve'))}",
+        f"- automatic_model_selection_applied: {_piwd_batch_markdown_value(manifest.get('automatic_model_selection_applied'))}",
+        f"- selected_model: {_piwd_batch_markdown_value(manifest.get('selected_model'))}",
+        "",
+        "## Source totals",
+        f"- n_sources: {_piwd_batch_markdown_value(manifest.get('n_sources'))}",
+        f"- n_succeeded: {_piwd_batch_markdown_value(manifest.get('n_succeeded'))}",
+        f"- n_failed: {_piwd_batch_markdown_value(manifest.get('n_failed'))}",
+        "",
+        "## Output files",
+        f"- batch_json_path: {_piwd_batch_markdown_value(manifest.get('batch_json_path'))}",
+        f"- batch_csv_path: {_piwd_batch_markdown_value(manifest.get('batch_csv_path'))}",
+        f"- batch_model_kernel_config_csv_path: {_piwd_batch_markdown_value(manifest.get('batch_model_kernel_config_csv_path'))}",
+        f"- batch_model_kernel_config_summary_csv_path: {_piwd_batch_markdown_value(manifest.get('batch_model_kernel_config_summary_csv_path'))}",
+        f"- batch_markdown_report_path: {_piwd_batch_markdown_value(manifest.get('batch_markdown_report_path'))}",
+        "",
+        "## Model/kernel config aggregate summary",
+    ]
+
+    summary_rows = manifest.get("model_kernel_config_summary") or []
+    if summary_rows:
+        fields = [
+            "model",
+            "fit_strategy",
+            "time_kernel_type",
+            "n_sources_evaluated",
+            "n_successful_sources",
+            "n_failed_sources",
+            "n_top_ranked_sources",
+            "success_fraction",
+            "top_ranked_fraction",
+            "median_fit_quality_score",
+            "median_training_nrmse_by_target_scale",
+        ]
+        lines.append("| " + " | ".join(fields) + " |")
+        lines.append("|" + "|".join(["---"] * len(fields)) + "|")
+        for row in summary_rows:
+            lines.append(
+                "| "
+                + " | ".join(_piwd_batch_markdown_cell(row.get(field)) for field in fields)
+                + " |"
+            )
+    else:
+        lines.append("No model/kernel config aggregate rows were produced.")
+
+    lines.extend(["", "## Source summary"])
+    source_rows = manifest.get("source_results") or []
+    if source_rows:
+        fields = [
+            "source_id",
+            "status",
+            "top_ranked_model",
+            "top_ranked_fit_quality_score",
+            "score_kind",
+            "n_model_kernel_configs",
+            "n_successful_model_kernel_configs",
+            "n_failed_model_kernel_configs",
+            "exception_type",
+            "exception_message",
+        ]
+        lines.append("| " + " | ".join(fields) + " |")
+        lines.append("|" + "|".join(["---"] * len(fields)) + "|")
+        for row in source_rows:
+            lines.append(
+                "| "
+                + " | ".join(_piwd_batch_markdown_cell(row.get(field)) for field in fields)
+                + " |"
+            )
+    else:
+        lines.append("No source rows were produced.")
+
+    return "\n".join(lines) + "\n"
+
+
+def _piwd_batch_write_markdown_report(path, manifest):
+    """Write a human-readable batch advisory Markdown report."""
+    text = _piwd_batch_format_markdown_report(manifest)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
 def run_period_independent_wavelength_advisory_workflow_batch(
     sources,
     *,
@@ -5616,6 +5725,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         "batch_csv_path": None,
         "batch_model_kernel_config_csv_path": None,
         "batch_model_kernel_config_summary_csv_path": None,
+        "batch_markdown_report_path": None,
     }
 
     if outdir is not None:
@@ -5624,10 +5734,25 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         csv_path = outdir / f"{safe_prefix}_summary.csv"
         model_kernel_config_csv_path = outdir / f"{safe_prefix}_model_kernel_configs.csv"
         model_kernel_config_summary_csv_path = outdir / f"{safe_prefix}_model_kernel_config_summary.csv"
-        json_path.write_text(
-            json.dumps(_piwd_export_json_safe(manifest), indent=2, sort_keys=True),
-            encoding="utf-8",
+        markdown_report_path = outdir / f"{safe_prefix}_report.md"
+
+        manifest["batch_json_path"] = str(json_path)
+        manifest["batch_csv_path"] = str(csv_path)
+        manifest["batch_model_kernel_config_csv_path"] = str(model_kernel_config_csv_path)
+        manifest["batch_model_kernel_config_summary_csv_path"] = str(
+            model_kernel_config_summary_csv_path
         )
+        manifest["batch_markdown_report_path"] = str(markdown_report_path)
+        manifest["exported_files"].extend(
+            [
+                str(json_path),
+                str(csv_path),
+                str(model_kernel_config_csv_path),
+                str(model_kernel_config_summary_csv_path),
+                str(markdown_report_path),
+            ]
+        )
+
         _piwd_batch_write_summary_csv(csv_path, rows)
         _piwd_batch_write_model_kernel_config_csv(
             model_kernel_config_csv_path, model_kernel_config_rows
@@ -5635,19 +5760,10 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         _piwd_batch_write_model_kernel_config_summary_csv(
             model_kernel_config_summary_csv_path, model_kernel_config_summary
         )
-        manifest["batch_json_path"] = str(json_path)
-        manifest["batch_csv_path"] = str(csv_path)
-        manifest["batch_model_kernel_config_csv_path"] = str(model_kernel_config_csv_path)
-        manifest["batch_model_kernel_config_summary_csv_path"] = str(
-            model_kernel_config_summary_csv_path
-        )
-        manifest["exported_files"].extend(
-            [
-                str(json_path),
-                str(csv_path),
-                str(model_kernel_config_csv_path),
-                str(model_kernel_config_summary_csv_path),
-            ]
+        _piwd_batch_write_markdown_report(markdown_report_path, manifest)
+        json_path.write_text(
+            json.dumps(_piwd_export_json_safe(manifest), indent=2, sort_keys=True),
+            encoding="utf-8",
         )
 
     return manifest

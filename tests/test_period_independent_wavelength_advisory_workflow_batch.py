@@ -412,5 +412,36 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
 
 
 
+    def test_writes_markdown_report_and_final_manifest_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_period_independent_wavelength_advisory_workflow_batch(
+                [{"source_id": "src", "lightcurve": _FakeLightcurve("2DDustMean", 12.0)}],
+                output_dir=tmp,
+                export=False,
+                batch_prefix="batch",
+            )
+
+            markdown_path = Path(report["batch_markdown_report_path"])
+            json_path = Path(report["batch_json_path"])
+            self.assertTrue(markdown_path.exists())
+            self.assertTrue(json_path.exists())
+
+            markdown = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("# Period-independent wavelength advisory batch report", markdown)
+            self.assertIn("2DDustMean", markdown)
+            self.assertIn("batch_markdown_report_path", markdown)
+
+            written_manifest = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                written_manifest["batch_markdown_report_path"],
+                report["batch_markdown_report_path"],
+            )
+            self.assertEqual(
+                written_manifest["batch_model_kernel_config_summary_csv_path"],
+                report["batch_model_kernel_config_summary_csv_path"],
+            )
+            self.assertIn(report["batch_markdown_report_path"], report["exported_files"])
+
+
 if __name__ == "__main__":
     unittest.main()

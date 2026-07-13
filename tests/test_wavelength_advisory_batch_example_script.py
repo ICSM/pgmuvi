@@ -76,6 +76,7 @@ class TestRunWavelengthAdvisoryBatchExample(unittest.TestCase):
             "batch_csv_path": "out/batch_summary.csv",
             "batch_model_kernel_config_csv_path": "out/batch_model_kernel_configs.csv",
             "batch_model_kernel_config_summary_csv_path": "out/batch_model_kernel_config_summary.csv",
+            "batch_markdown_report_path": "out/batch_report.md",
             "model_kernel_config_summary": [
                 {
                     "model": "2DDustMean",
