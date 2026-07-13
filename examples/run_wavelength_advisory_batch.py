@@ -251,16 +251,41 @@ def _print_batch_summary(report: dict[str, Any]) -> None:
     print("advisory_only:", report.get("advisory_only"))
     print("runs_fits:", report.get("runs_fits"))
     print("applies_to_fit:", report.get("applies_to_fit"))
-    print("model_kernel_config_state_isolated:", report.get("model_kernel_config_state_isolated"))
+    print(
+        "model_kernel_config_state_isolated:",
+        report.get("model_kernel_config_state_isolated"),
+    )
     print("mutates_input_lightcurve:", report.get("mutates_input_lightcurve"))
-    print("automatic_model_selection_applied:", report.get("automatic_model_selection_applied"))
+    print(
+        "automatic_model_selection_applied:",
+        report.get("automatic_model_selection_applied"),
+    )
     print("selected_model:", report.get("selected_model"))
     print("n_sources:", report.get("n_sources"))
     print("n_succeeded:", report.get("n_succeeded"))
     print("n_failed:", report.get("n_failed"))
     print("batch_json_path:", report.get("batch_json_path"))
     print("batch_csv_path:", report.get("batch_csv_path"))
-    print("batch_model_kernel_config_csv_path:", report.get("batch_model_kernel_config_csv_path"))
+    print(
+        "batch_model_kernel_config_csv_path:",
+        report.get("batch_model_kernel_config_csv_path"),
+    )
+    print(
+        "batch_model_kernel_config_summary_csv_path:",
+        report.get("batch_model_kernel_config_summary_csv_path"),
+    )
+
+    print("\nModel/kernel config summary:")
+    for row in report.get("model_kernel_config_summary", []):
+        print(
+            row.get("model"),
+            "fit_strategy=", row.get("fit_strategy"),
+            "time_kernel_type=", row.get("time_kernel_type"),
+            "n_sources_evaluated=", row.get("n_sources_evaluated"),
+            "n_successful_sources=", row.get("n_successful_sources"),
+            "n_top_ranked_sources=", row.get("n_top_ranked_sources"),
+            "median_fit_quality_score=", row.get("median_fit_quality_score"),
+        )
 
     print("\nSource rows:")
     for row in report.get("source_results", []):
@@ -271,8 +296,10 @@ def _print_batch_summary(report: dict[str, Any]) -> None:
             row.get("top_ranked_fit_quality_score"),
             row.get("score_kind"),
             "n_model_kernel_configs=", row.get("n_model_kernel_configs"),
-            "n_successful_model_kernel_configs=", row.get("n_successful_model_kernel_configs"),
-            "n_failed_model_kernel_configs=", row.get("n_failed_model_kernel_configs"),
+            "n_successful_model_kernel_configs=",
+            row.get("n_successful_model_kernel_configs"),
+            "n_failed_model_kernel_configs=",
+            row.get("n_failed_model_kernel_configs"),
             "error=", row.get("exception_type"), row.get("exception_message"),
         )
 

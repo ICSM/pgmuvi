@@ -315,5 +315,102 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         self.assertIn("lightcurve", report["source_results"][0]["exception_message"])
 
 
+    def test_writes_aggregate_model_kernel_config_summary_csv(self):
+        workflow_template = {
+            "kind": "period_independent_wavelength_advisory_workflow",
+            "advisory_only": True,
+            "runs_fits": True,
+            "model_kernel_config_state_isolated": True,
+            "mutates_input_lightcurve": False,
+            "automatic_model_selection_applied": False,
+            "selected_model": None,
+            "top_ranked_model": "2DDustMean",
+            "top_ranked_fit_quality_score": 42.0,
+            "score_kind": "training_residual_fit_quality",
+            "run_report": {
+                "kind": "period_independent_wavelength_model_kernel_config_results",
+                "model_kernel_config_results": [
+                    {
+                        "model_kernel_config_id": "rank1_2DWavelengthDependent",
+                        "rank": 1,
+                        "model": "2DWavelengthDependent",
+                        "status": "passed",
+                        "fit_success": True,
+                        "fit_kwargs": {
+                            "fit_strategy": "consensus",
+                            "time_kernel_type": "quasi_periodic",
+                            "learn_additional_noise": True,
+                        },
+                        "training_nrmse_by_target_scale": 2.0,
+                    },
+                    {
+                        "model_kernel_config_id": "rank2_2DDustMean",
+                        "rank": 2,
+                        "model": "2DDustMean",
+                        "status": "passed",
+                        "fit_success": True,
+                        "fit_kwargs": {
+                            "fit_strategy": "consensus",
+                            "time_kernel_type": "quasi_periodic",
+                            "learn_additional_noise": True,
+                        },
+                        "training_nrmse_by_target_scale": 1.0,
+                    },
+                ],
+            },
+            "quality_report": {
+                "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
+                "score_kind": "training_residual_fit_quality",
+                "ranked_results": [
+                    {
+                        "quality_rank": 1,
+                        "is_top_ranked": True,
+                        "model": "2DDustMean",
+                        "fit_success": True,
+                        "fit_quality_score": 42.0,
+                    },
+                    {
+                        "quality_rank": 2,
+                        "is_top_ranked": False,
+                        "model": "2DWavelengthDependent",
+                        "fit_success": True,
+                        "fit_quality_score": 40.0,
+                    },
+                ],
+            },
+        }
+
+        class NestedFake(_FakeLightcurve):
+            def run_period_independent_wavelength_advisory_workflow(self, **kwargs):
+                return workflow_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_period_independent_wavelength_advisory_workflow_batch(
+                [
+                    {"source_id": "src-a", "lightcurve": NestedFake()},
+                    {"source_id": "src-b", "lightcurve": NestedFake()},
+                ],
+                output_dir=tmp,
+                export=False,
+                batch_prefix="batch",
+            )
+            summary_path = Path(report["batch_model_kernel_config_summary_csv_path"])
+            self.assertTrue(summary_path.exists())
+            text = summary_path.read_text(encoding="utf-8")
+
+        summary = report["model_kernel_config_summary"]
+        self.assertEqual(len(summary), 2)
+        by_model = {row["model"]: row for row in summary}
+        dust = by_model["2DDustMean"]
+        self.assertEqual(dust["n_sources_evaluated"], 2)
+        self.assertEqual(dust["n_successful_sources"], 2)
+        self.assertEqual(dust["n_top_ranked_sources"], 2)
+        self.assertEqual(dust["top_ranked_fraction"], 1.0)
+        self.assertEqual(dust["median_fit_quality_score"], 42.0)
+        self.assertIn("n_top_ranked_sources", text)
+        self.assertIn("2DDustMean", text)
+
+
+
 if __name__ == "__main__":
     unittest.main()

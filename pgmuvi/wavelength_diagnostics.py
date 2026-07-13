@@ -5198,6 +5198,207 @@ def _piwd_batch_write_model_kernel_config_csv(path, rows):
             writer.writerow({field: row.get(field) for field in fields})
 
 
+
+
+
+def _piwd_batch_to_float(value):
+    """Best-effort conversion of a scalar batch CSV/report value to float."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _piwd_batch_to_bool(value):
+    """Best-effort conversion of a scalar batch CSV/report value to bool."""
+    if isinstance(value, bool):
+        return value
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n"}:
+        return False
+    return None
+
+
+def _piwd_batch_median(values):
+    """Return the median of a non-empty numeric sequence."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    mid = n // 2
+    if n % 2:
+        return ordered[mid]
+    return 0.5 * (ordered[mid - 1] + ordered[mid])
+
+
+def _piwd_batch_mean(values):
+    """Return the arithmetic mean of a non-empty numeric sequence."""
+    if not values:
+        return None
+    return sum(values) / float(len(values))
+
+
+def _piwd_batch_model_kernel_config_group_key(row):
+    """Return the batch-aggregate key for one evaluated model/kernel config."""
+    if not isinstance(row, dict):
+        return (None, None, None, None, None)
+    return (
+        row.get("model"),
+        row.get("fit_strategy"),
+        row.get("time_kernel_type"),
+        row.get("wavelength_kernel_type"),
+        row.get("learn_additional_noise"),
+    )
+
+
+def _piwd_batch_summarize_model_kernel_config_rows(rows):
+    """Summarize the long-form source/model-kernel-config table by config.
+
+    The input rows are the PR69 one-row-per-source/model-kernel-config rows.
+    The output is one row per distinct model/kernel setup, suitable for asking
+    questions such as which model family most often ranked first across a batch.
+    """
+    groups = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = _piwd_batch_model_kernel_config_group_key(row)
+        if key not in groups:
+            model, fit_strategy, time_kernel_type, wavelength_kernel_type, learn_additional_noise = key
+            groups[key] = {
+                "model": model,
+                "fit_strategy": fit_strategy,
+                "time_kernel_type": time_kernel_type,
+                "wavelength_kernel_type": wavelength_kernel_type,
+                "learn_additional_noise": learn_additional_noise,
+                "n_sources_evaluated": 0,
+                "n_successful_sources": 0,
+                "n_failed_sources": 0,
+                "n_top_ranked_sources": 0,
+                "_fit_quality_score": [],
+                "_training_nrmse_by_target_scale": [],
+                "_training_median_abs_standardized_residual": [],
+                "_training_outlier_fraction_3sigma": [],
+                "_training_reduced_chi2": [],
+            }
+        group = groups[key]
+        group["n_sources_evaluated"] += 1
+
+        if _piwd_batch_to_bool(row.get("fit_success")) is True:
+            group["n_successful_sources"] += 1
+        elif _piwd_batch_to_bool(row.get("fit_failed")) is True or row.get("status") == "failed":
+            group["n_failed_sources"] += 1
+
+        is_top = _piwd_batch_to_bool(row.get("is_top_ranked"))
+        quality_rank = _piwd_batch_to_float(row.get("quality_rank"))
+        if is_top is True or quality_rank == 1.0:
+            group["n_top_ranked_sources"] += 1
+
+        for metric in [
+            "fit_quality_score",
+            "training_nrmse_by_target_scale",
+            "training_median_abs_standardized_residual",
+            "training_outlier_fraction_3sigma",
+            "training_reduced_chi2",
+        ]:
+            value = _piwd_batch_to_float(row.get(metric))
+            if value is not None:
+                group[f"_{metric}"].append(value)
+
+    out = []
+    for group in groups.values():
+        n_eval = group["n_sources_evaluated"]
+        n_success = group["n_successful_sources"]
+        n_top = group["n_top_ranked_sources"]
+        scores = group.pop("_fit_quality_score")
+        nrmse = group.pop("_training_nrmse_by_target_scale")
+        med_abs_std = group.pop("_training_median_abs_standardized_residual")
+        outlier = group.pop("_training_outlier_fraction_3sigma")
+        red_chi2 = group.pop("_training_reduced_chi2")
+        group.update(
+            {
+                "success_fraction": (n_success / n_eval) if n_eval else None,
+                "top_ranked_fraction": (n_top / n_eval) if n_eval else None,
+                "mean_fit_quality_score": _piwd_batch_mean(scores),
+                "median_fit_quality_score": _piwd_batch_median(scores),
+                "best_fit_quality_score": max(scores) if scores else None,
+                "worst_fit_quality_score": min(scores) if scores else None,
+                "mean_training_nrmse_by_target_scale": _piwd_batch_mean(nrmse),
+                "median_training_nrmse_by_target_scale": _piwd_batch_median(nrmse),
+                "mean_training_median_abs_standardized_residual": _piwd_batch_mean(med_abs_std),
+                "median_training_median_abs_standardized_residual": _piwd_batch_median(med_abs_std),
+                "mean_training_outlier_fraction_3sigma": _piwd_batch_mean(outlier),
+                "median_training_outlier_fraction_3sigma": _piwd_batch_median(outlier),
+                "mean_training_reduced_chi2": _piwd_batch_mean(red_chi2),
+                "median_training_reduced_chi2": _piwd_batch_median(red_chi2),
+            }
+        )
+        out.append(_clean_scalar_dict(group))
+
+    def _sort_key(row):
+        median_score = _piwd_batch_to_float(row.get("median_fit_quality_score"))
+        if median_score is None:
+            median_score = float("-inf")
+        return (
+            -int(row.get("n_top_ranked_sources") or 0),
+            -median_score,
+            str(row.get("model") or ""),
+            str(row.get("time_kernel_type") or ""),
+            str(row.get("wavelength_kernel_type") or ""),
+        )
+
+    out.sort(key=_sort_key)
+    return out
+
+
+def _piwd_batch_model_kernel_config_summary_csv_fields():
+    """Return stable field order for the aggregate model/kernel-config CSV."""
+    return [
+        "model",
+        "fit_strategy",
+        "time_kernel_type",
+        "wavelength_kernel_type",
+        "learn_additional_noise",
+        "n_sources_evaluated",
+        "n_successful_sources",
+        "n_failed_sources",
+        "n_top_ranked_sources",
+        "success_fraction",
+        "top_ranked_fraction",
+        "mean_fit_quality_score",
+        "median_fit_quality_score",
+        "best_fit_quality_score",
+        "worst_fit_quality_score",
+        "mean_training_nrmse_by_target_scale",
+        "median_training_nrmse_by_target_scale",
+        "mean_training_median_abs_standardized_residual",
+        "median_training_median_abs_standardized_residual",
+        "mean_training_outlier_fraction_3sigma",
+        "median_training_outlier_fraction_3sigma",
+        "mean_training_reduced_chi2",
+        "median_training_reduced_chi2",
+    ]
+
+
+def _piwd_batch_write_model_kernel_config_summary_csv(path, rows):
+    """Write the aggregate one-row-per-model/kernel-config summary CSV."""
+    import csv
+
+    fields = _piwd_batch_model_kernel_config_summary_csv_fields()
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field) for field in fields})
+
 def run_period_independent_wavelength_advisory_workflow_batch(
     sources,
     *,
@@ -5389,6 +5590,10 @@ def run_period_independent_wavelength_advisory_workflow_batch(
 
         rows.append(row)
 
+    model_kernel_config_summary = _piwd_batch_summarize_model_kernel_config_rows(
+        model_kernel_config_rows
+    )
+
     manifest = {
         "kind": "period_independent_wavelength_advisory_workflow_batch",
         "advisory_only": True,
@@ -5405,10 +5610,12 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         "n_failed": sum(1 for row in rows if row.get("status") == "failed"),
         "source_results": rows,
         "model_kernel_config_results": model_kernel_config_rows,
+        "model_kernel_config_summary": model_kernel_config_summary,
         "exported_files": exported_files,
         "batch_json_path": None,
         "batch_csv_path": None,
         "batch_model_kernel_config_csv_path": None,
+        "batch_model_kernel_config_summary_csv_path": None,
     }
 
     if outdir is not None:
@@ -5416,6 +5623,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         json_path = outdir / f"{safe_prefix}_summary.json"
         csv_path = outdir / f"{safe_prefix}_summary.csv"
         model_kernel_config_csv_path = outdir / f"{safe_prefix}_model_kernel_configs.csv"
+        model_kernel_config_summary_csv_path = outdir / f"{safe_prefix}_model_kernel_config_summary.csv"
         json_path.write_text(
             json.dumps(_piwd_export_json_safe(manifest), indent=2, sort_keys=True),
             encoding="utf-8",
@@ -5424,11 +5632,22 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         _piwd_batch_write_model_kernel_config_csv(
             model_kernel_config_csv_path, model_kernel_config_rows
         )
+        _piwd_batch_write_model_kernel_config_summary_csv(
+            model_kernel_config_summary_csv_path, model_kernel_config_summary
+        )
         manifest["batch_json_path"] = str(json_path)
         manifest["batch_csv_path"] = str(csv_path)
         manifest["batch_model_kernel_config_csv_path"] = str(model_kernel_config_csv_path)
+        manifest["batch_model_kernel_config_summary_csv_path"] = str(
+            model_kernel_config_summary_csv_path
+        )
         manifest["exported_files"].extend(
-            [str(json_path), str(csv_path), str(model_kernel_config_csv_path)]
+            [
+                str(json_path),
+                str(csv_path),
+                str(model_kernel_config_csv_path),
+                str(model_kernel_config_summary_csv_path),
+            ]
         )
 
     return manifest

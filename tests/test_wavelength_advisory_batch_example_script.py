@@ -75,6 +75,18 @@ class TestRunWavelengthAdvisoryBatchExample(unittest.TestCase):
             "batch_json_path": "out/batch_summary.json",
             "batch_csv_path": "out/batch_summary.csv",
             "batch_model_kernel_config_csv_path": "out/batch_model_kernel_configs.csv",
+            "batch_model_kernel_config_summary_csv_path": "out/batch_model_kernel_config_summary.csv",
+            "model_kernel_config_summary": [
+                {
+                    "model": "2DDustMean",
+                    "fit_strategy": "consensus",
+                    "time_kernel_type": "quasi_periodic",
+                    "n_sources_evaluated": 1,
+                    "n_successful_sources": 1,
+                    "n_top_ranked_sources": 1,
+                    "median_fit_quality_score": 42.0,
+                }
+            ],
             "source_results": [
                 {
                     "source_id": "one",
