@@ -4881,3 +4881,331 @@ def export_period_independent_wavelength_advisory_workflow(
 
     return manifest
 
+
+def _piwd_batch_safe_source_id(value, index):
+    """Return a stable source identifier for batch workflow rows and paths."""
+    if value is None or str(value).strip() == "":
+        return f"source_{index + 1:04d}"
+    return str(value)
+
+
+def _piwd_batch_safe_path_component(value, index):
+    """Return a filesystem-safe path component for a batch source."""
+    raw = _piwd_batch_safe_source_id(value, index)
+    safe = []
+    for char in raw:
+        if char.isalnum() or char in ("-", "_", "."):
+            safe.append(char)
+        else:
+            safe.append("_")
+    cleaned = "".join(safe).strip("._")
+    return cleaned or f"source_{index + 1:04d}"
+
+
+def _piwd_batch_resolve_source(source, index, *, from_csv_kwargs=None):
+    """Resolve a batch source specification to ``(source_id, lightcurve, metadata)``.
+
+    Supported source forms are intentionally small and explicit:
+
+    * ``{"source_id": ..., "lightcurve": lc}`` for preconstructed lightcurves;
+    * ``{"source_id": ..., "csv_path": ...}`` for CSV-backed sources;
+    * ``"path/to/source.csv"`` or ``Path(...)`` for CSV-backed sources.
+
+    The returned lightcurve object only needs to expose the advisory workflow
+    methods used by the batch runner, which keeps the helper easy to test with
+    lightweight fakes while supporting real ``Lightcurve`` instances.
+    """
+    from pathlib import Path
+
+    common_csv_kwargs = dict(from_csv_kwargs or {})
+
+    if isinstance(source, dict):
+        source_id = _piwd_batch_safe_source_id(
+            source.get("source_id")
+            or source.get("id")
+            or source.get("name")
+            or source.get("csv_path"),
+            index,
+        )
+        metadata = {
+            k: v
+            for k, v in source.items()
+            if k not in {"lightcurve", "csv_path", "from_csv_kwargs"}
+        }
+        if "lightcurve" in source:
+            return source_id, source["lightcurve"], metadata
+        if "csv_path" in source:
+            csv_kwargs = dict(common_csv_kwargs)
+            csv_kwargs.update(source.get("from_csv_kwargs") or {})
+            from .lightcurve import Lightcurve
+
+            return source_id, Lightcurve.from_csv(source["csv_path"], **csv_kwargs), metadata
+        raise ValueError(
+            "Each batch source dict must contain either 'lightcurve' or 'csv_path'."
+        )
+
+    if isinstance(source, (str, Path)):
+        path = Path(source)
+        source_id = _piwd_batch_safe_source_id(path.stem, index)
+        from .lightcurve import Lightcurve
+
+        return source_id, Lightcurve.from_csv(path, **common_csv_kwargs), {
+            "csv_path": str(path)
+        }
+
+    raise ValueError(
+        "Batch sources must be dictionaries, CSV paths, or path-like strings."
+    )
+
+
+def _piwd_batch_write_summary_csv(path, rows):
+    """Write a compact batch summary CSV."""
+    import csv
+
+    fields = [
+        "source_index",
+        "source_id",
+        "status",
+        "top_ranked_model",
+        "top_ranked_fit_quality_score",
+        "score_kind",
+        "n_model_kernel_configs",
+        "n_successful_model_kernel_configs",
+        "n_failed_model_kernel_configs",
+        "n_candidates",
+        "n_passed_candidates",
+        "exception_type",
+        "exception_message",
+        "export_json_path",
+        "export_text_report_path",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field) for field in fields})
+
+
+def run_period_independent_wavelength_advisory_workflow_batch(
+    sources,
+    *,
+    from_csv_kwargs=None,
+    workflow_kwargs=None,
+    output_dir=None,
+    export=True,
+    export_kwargs=None,
+    batch_prefix="wavelength_advisory_batch",
+    stop_on_error=False,
+):
+    """Run the advisory wavelength workflow over multiple sources.
+
+    This helper orchestrates the PR63/PR64 workflow per source.  It may run
+    candidate fits because each per-source advisory workflow may run candidate
+    fits, but it still does not apply automatic model selection, install a
+    winning model, apply constraints, or apply initialization.
+
+    Parameters
+    ----------
+    sources : iterable
+        Source specifications.  Each entry may be a dict containing a
+        preconstructed ``lightcurve`` object, a dict containing ``csv_path``, or
+        a path-like CSV filename.
+    from_csv_kwargs : dict, optional
+        Common keyword arguments passed to ``Lightcurve.from_csv`` for CSV
+        sources.  Per-source dicts may override these via ``from_csv_kwargs``.
+    workflow_kwargs : dict, optional
+        Keyword arguments passed to
+        ``run_period_independent_wavelength_advisory_workflow`` for each source.
+    output_dir : str or pathlib.Path, optional
+        If provided and ``export`` is true, per-source workflow outputs and a
+        batch summary are written here.
+    export : bool, optional
+        Whether to export each per-source workflow when ``output_dir`` is
+        provided.
+    export_kwargs : dict, optional
+        Extra keyword arguments passed to the per-source export helper.
+    batch_prefix : str, optional
+        Prefix for batch-level summary files.
+    stop_on_error : bool, optional
+        If true, re-raise the first source failure instead of recording it and
+        continuing.
+
+    Returns
+    -------
+    dict
+        Batch advisory manifest with one row per source and optional export
+        paths.  The manifest remains advisory and non-selecting.
+    """
+    import json
+    import traceback
+    from pathlib import Path
+
+    if sources is None:
+        raise ValueError("sources must be a non-empty iterable of source specifications.")
+    source_list = list(sources)
+    if not source_list:
+        raise ValueError("sources must be a non-empty iterable of source specifications.")
+
+    workflow_kwargs = dict(workflow_kwargs or {})
+    export_kwargs = dict(export_kwargs or {})
+
+    outdir = Path(output_dir) if output_dir is not None else None
+    if outdir is not None:
+        outdir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    exported_files = []
+
+    for index, source in enumerate(source_list):
+        source_id = _piwd_batch_safe_source_id(None, index)
+        row = {
+            "source_index": index,
+            "source_id": source_id,
+            "status": "not_started",
+            "advisory_only": True,
+            "runs_fits": True,
+            "applies_to_fit": True,
+            "candidate_fit_state_isolated": True,
+            "mutates_input_lightcurve": False,
+            "automatic_model_selection_applied": False,
+            "selected_model": None,
+            "automatic_constraints_applied": False,
+            "automatic_initialization_applied": False,
+            "top_ranked_model": None,
+            "top_ranked_fit_quality_score": None,
+            "score_kind": None,
+            "n_model_kernel_configs": 0,
+            "n_successful_model_kernel_configs": 0,
+            "n_failed_model_kernel_configs": 0,
+            "n_candidates": 0,  # Backward-compatible alias; ambiguous, prefer n_model_kernel_configs.
+            "n_passed_candidates": 0,  # Backward-compatible alias; ambiguous, prefer n_successful_model_kernel_configs.
+            "exception_type": None,
+            "exception_message": None,
+            "traceback": None,
+            "export_manifest": None,
+            "export_json_path": None,
+            "export_text_report_path": None,
+        }
+
+        try:
+            source_id, lc, metadata = _piwd_batch_resolve_source(
+                source, index, from_csv_kwargs=from_csv_kwargs
+            )
+            row["source_id"] = source_id
+            row["source_metadata"] = metadata
+
+            workflow = lc.run_period_independent_wavelength_advisory_workflow(
+                **workflow_kwargs
+            )
+            run_report = workflow.get("run_report") or {}
+            quality_report = workflow.get("quality_report") or {}
+            candidate_rows = (
+                run_report.get("candidate_results")
+                or run_report.get("outcomes")
+                or workflow.get("candidate_results")
+                or workflow.get("outcomes")
+                or quality_report.get("ranked_results")
+                or workflow.get("ranked_results")
+                or []
+            )
+            ranked = quality_report.get("ranked_results") or workflow.get("ranked_results") or []
+            n_model_kernel_configs = len(candidate_rows)
+            n_successful_model_kernel_configs = sum(
+                1 for item in candidate_rows if item.get("fit_success") is True
+            )
+            n_failed_model_kernel_configs = (
+                n_model_kernel_configs - n_successful_model_kernel_configs
+            )
+            row.update(
+                {
+                    "status": "passed",
+                    "workflow_kind": workflow.get("kind"),
+                    "top_ranked_model": workflow.get("top_ranked_model"),
+                    "top_ranked_fit_quality_score": workflow.get(
+                        "top_ranked_fit_quality_score"
+                    ),
+                    "score_kind": workflow.get("score_kind"),
+                    "n_model_kernel_configs": n_model_kernel_configs,
+                    "n_successful_model_kernel_configs": n_successful_model_kernel_configs,
+                    "n_failed_model_kernel_configs": n_failed_model_kernel_configs,
+                    "n_candidates": n_model_kernel_configs,  # Backward-compatible alias; ambiguous.
+                    "n_passed_candidates": n_successful_model_kernel_configs,  # Backward-compatible alias; ambiguous.
+                    "workflow_summary": {
+                        "kind": workflow.get("kind"),
+                        "top_ranked_model": workflow.get("top_ranked_model"),
+                        "top_ranked_fit_quality_score": workflow.get(
+                            "top_ranked_fit_quality_score"
+                        ),
+                        "score_kind": workflow.get("score_kind"),
+                        "automatic_model_selection_applied": workflow.get(
+                            "automatic_model_selection_applied"
+                        ),
+                        "selected_model": workflow.get("selected_model"),
+                    },
+                }
+            )
+
+            if export and outdir is not None:
+                source_component = _piwd_batch_safe_path_component(source_id, index)
+                source_outdir = outdir / source_component
+                source_prefix = f"{source_component}_wavelength_advisory"
+                manifest = lc.export_period_independent_wavelength_advisory_workflow(
+                    workflow=workflow,
+                    output_dir=source_outdir,
+                    prefix=source_prefix,
+                    **export_kwargs,
+                )
+                row["export_manifest"] = manifest
+                row["export_json_path"] = manifest.get("json_path")
+                row["export_text_report_path"] = manifest.get("text_report_path")
+                exported_files.extend(manifest.get("exported_files") or [])
+
+        except Exception as exc:
+            if stop_on_error:
+                raise
+            row.update(
+                {
+                    "status": "failed",
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                }
+            )
+
+        rows.append(row)
+
+    manifest = {
+        "kind": "period_independent_wavelength_advisory_workflow_batch",
+        "advisory_only": True,
+        "runs_fits": True,
+        "applies_to_fit": True,
+        "candidate_fit_state_isolated": True,
+        "mutates_input_lightcurve": False,
+        "automatic_model_selection_applied": False,
+        "selected_model": None,
+        "automatic_constraints_applied": False,
+        "automatic_initialization_applied": False,
+        "n_sources": len(rows),
+        "n_succeeded": sum(1 for row in rows if row.get("status") == "passed"),
+        "n_failed": sum(1 for row in rows if row.get("status") == "failed"),
+        "source_results": rows,
+        "exported_files": exported_files,
+        "batch_json_path": None,
+        "batch_csv_path": None,
+    }
+
+    if outdir is not None:
+        safe_prefix = _piwd_batch_safe_path_component(batch_prefix, 0)
+        json_path = outdir / f"{safe_prefix}_summary.json"
+        csv_path = outdir / f"{safe_prefix}_summary.csv"
+        json_path.write_text(
+            json.dumps(_piwd_export_json_safe(manifest), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        _piwd_batch_write_summary_csv(csv_path, rows)
+        manifest["batch_json_path"] = str(json_path)
+        manifest["batch_csv_path"] = str(csv_path)
+        manifest["exported_files"].extend([str(json_path), str(csv_path)])
+
+    return manifest
+

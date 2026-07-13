@@ -9486,6 +9486,40 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
 
 
+
+
+    @staticmethod
+    def run_period_independent_wavelength_advisory_workflow_batch(
+        sources,
+        *,
+        from_csv_kwargs=None,
+        workflow_kwargs=None,
+        output_dir=None,
+        export=True,
+        export_kwargs=None,
+        batch_prefix="wavelength_advisory_batch",
+        stop_on_error=False,
+    ):
+        """Run the period-independent wavelength advisory workflow over sources.
+
+        This static convenience wrapper delegates to the module-level batch
+        helper.  It does not select or install a winning model.
+        """
+        from .wavelength_diagnostics import (
+            run_period_independent_wavelength_advisory_workflow_batch,
+        )
+
+        return run_period_independent_wavelength_advisory_workflow_batch(
+            sources,
+            from_csv_kwargs=from_csv_kwargs,
+            workflow_kwargs=workflow_kwargs,
+            output_dir=output_dir,
+            export=export,
+            export_kwargs=export_kwargs,
+            batch_prefix=batch_prefix,
+            stop_on_error=stop_on_error,
+        )
+
     def export_period_independent_wavelength_advisory_workflow(
         self,
         workflow=None,
