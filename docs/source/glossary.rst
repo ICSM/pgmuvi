@@ -4,6 +4,31 @@ Glossary
 .. glossary::
    :sorted:
 
+
+   Advisory workflow
+      A non-selecting workflow that diagnoses, ranks, scores, reports, plots, or
+      exports information about plausible models or model/kernel configurations
+      without installing a winning model on the input ``Lightcurve``.  Current
+      wavelength advisory reports keep ``advisory_only=True`` and
+      ``selected_model=None``.
+
+   Model/kernel config
+      One advisory fitting configuration consisting of a model name plus the
+      fit and kernel choices needed to evaluate it.  Examples include
+      ``2DWavelengthDependent`` with ``time_kernel_type="quasi_periodic"`` or
+      the ``2D`` spectral-mixture baseline with ``fit_strategy="consensus"``.
+      A model/kernel config is not a wavelength band, period candidate, or
+      physical mixture component.
+
+   Selected model
+      A model that has actually been chosen and installed by an automatic
+      selection policy.  The current wavelength advisory workflow does not do
+      this, so ``selected_model`` remains ``None``.
+
+   Top-ranked model
+      The model name with the best score in an advisory ranking.  This is an
+      inspection summary, not an automatic model-selection decision.
+
    ARD
       *Automatic Relevance Determination.*  A setting that gives each input
       dimension its own length-scale parameter, allowing the model to determine

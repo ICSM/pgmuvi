@@ -171,8 +171,46 @@ follow-up-fit recommendations. It can flag smooth wavelength-dependent amplitude
 structure, power-law-like trends, and possible wavelength-dependent lags, but its
 recommendations are not final model-selection decisions.
 
-The newer period-independent advisory batch workflow is exposed through
-`examples/run_wavelength_advisory_batch.py`; detailed documentation is forthcoming.
+The newer period-independent advisory workflow evaluates explicit model/kernel
+configs and is documented in:
+
+- `docs/source/howto/wavelength_advisory.rst` for the single-source workflow;
+- `docs/source/howto/wavelength_advisory_batch.rst` for the batch workflow and
+  output artifact schemas.
+
+The command-line batch wrapper is available at
+`examples/run_wavelength_advisory_batch.py`.
+
+Minimal current entry points are:
+
+```python
+# Single-source advisory workflow.
+workflow = lc2d.run_period_independent_wavelength_advisory_workflow(
+    include_2d_baseline=True,
+    base_fit_kwargs={
+        "fit_strategy": "consensus",
+        "learn_additional_noise": True,
+        "training_iter": 500,
+        "miniter": 100,
+    },
+    make_text_report=True,
+    make_plots=True,
+)
+
+print(workflow["advisory_only"])   # True
+print(workflow["selected_model"])  # None in the current advisory workflow
+
+# Batch advisory workflow over CSV sources.
+batch = LC.run_period_independent_wavelength_advisory_workflow_batch(
+    [{"source_id": "source-1", "csv_path": "source-1.csv"}],
+    output_dir="wavelength_batch_outputs",
+    export=True,
+)
+print(batch["source_results"][0]["n_model_kernel_configs"])
+```
+
+Both helpers evaluate and report model/kernel configs.  They do not install a
+winning fit into the input light curve, and `selected_model` remains `None`.
 
 ### Parameter workflow initialization
 
