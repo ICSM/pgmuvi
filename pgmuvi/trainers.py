@@ -187,62 +187,68 @@ def train(
     restore_best_on_failure=True,
     **kwargs,
 ):
-    """Given a GP model, a likelihood, and some training data, optimise a
-    loss function to fit the training data.
-
+    """Optimise a GP model and likelihood against training data.
+    
+    The caller may either pass a fitted :class:`pgmuvi.lightcurve.Lightcurve`
+    instance or pass ``model``, ``likelihood``, ``train_x``, and ``train_y``
+    explicitly.
+    
     Parameters
     ----------
-    model : an instance of gpytorch.models.gp.GP or a subcluss thereof
-        The GP model whose (hyper-)parameters will be optimised.
-    likelihood : an instance of gpytorch.likelihoods.likelihood.Likelihood
-        The likelihood function for the Gaussian Process.
-    train_x : torch.Tensor or array-like
-        The values of the independent variables for training.
-    train_y : torch.Tensor or array-like
-        The values of the dependent variables for training.
-    maxiter : int, default 100
-        The maximum number of training iterations to use. If stop is not a
-        positive number, this will be the number of iterations used to train.
-    miniter : int, default 10
-        The minimum number of training iterations to use. This parameter is
-        only used if stop is a positive real number, in which case it is used
-        to ensure that a sufficient number of iterations have been performed
-        before terminating training.
-    stop : float, default None
-        The fractional change in the loss function below which training will be
-        terminated. If set to None, a negative value, not a number of a
-        non-numerical type, training will continue until maxiter is reached.
-    lr : float, default 1e-4
-        The learning rate for the optimiser. Increasing this number will
-        result in larger steps in the parameters each iteration. This will
-        make it easier to escape local minima, but may also result in
-        instability.
-    lossfn : string or instance of
-             gpytorch.mlls.marginal_log_likelihood.MarginalLogLikelihood,
-             default 'mll'
-        The loss function that will be used to evaluate the training.
-        If a string, it must take one of the values 'mll' or 'elbo'.
-    optim : string or instance of torch.optim.optimizer.Optimizer,
-            default 'SGD'
-        The optimizer that will be used to train the model.
-        If a string, it must take one of the values 'SGD', 'Adam', 'AdamW',
-        'NUTS'. Otherwise, it may be any torch or pyro optimiser. If passing a
-        torch or pyro optimiser, it should already have been initialised with
-        all arguments set
-    eps : float, default 1e-8.
-        term added to the denominator to improve numerical stability in some
-        optimisers (e.g. AdamW)
-    restore_best_on_failure : bool, default True
+    lightcurve : Lightcurve or None, optional
+        Light-curve object that already owns the model, likelihood, transformed
+        training inputs, and transformed training targets.  If supplied, explicit
+        ``model``, ``likelihood``, ``train_x``, and ``train_y`` arguments are
+        ignored.
+    model : gpytorch.models.GP or None, optional
+        GP model whose parameters will be optimised when ``lightcurve`` is not
+        supplied.
+    likelihood : gpytorch.likelihoods.Likelihood or None, optional
+        Likelihood associated with ``model`` when ``lightcurve`` is not supplied.
+    train_x : torch.Tensor or array-like, optional
+        Training coordinates when ``lightcurve`` is not supplied.
+    train_y : torch.Tensor or array-like, optional
+        Training targets when ``lightcurve`` is not supplied.
+    maxiter : int, default=100
+        Maximum number of training iterations.
+    miniter : int, default=10
+        Minimum number of iterations before early-stopping checks are allowed.
+    stop : float or None, optional
+        Fractional-loss-change threshold for early stopping.  If ``None`` or not a
+        positive finite value, training continues until ``maxiter``.
+    lr : float, default=1e-4
+        Optimiser learning rate.
+    lossfn : {"mll", "elbo"} or MarginalLogLikelihood, default="mll"
+        Loss function selector.  The public implementation currently supports the
+        exact marginal log likelihood path.
+    optim : {"SGD", "Adam", "AdamW", "NUTS"} or optimizer, default="SGD"
+        Optimiser selector or preconfigured optimiser object.
+    eps : float, default=1e-8
+        Small term added to denominators in some optimisers for numerical
+        stability.
+    stopavg : int, default=9
+        Window length used by the early-stopping loss-change estimate.
+    verbose : bool, default=True
+        Print training progress.
+    restore_best_on_failure : bool, default=True
         If training fails after at least one finite-loss iteration because of a
         recoverable numerical error, restore the best finite-loss model and
-        likelihood state and return the partial results instead of discarding
-        the fit.  This currently covers non-finite-loss/gradient failures and
-        GPyTorch/linear-operator NotPSDError failures.
-
-    Examples
-    --------
-
-    """
+        likelihood state and return partial training results.
+    **kwargs
+        Additional optimiser- or training-control keyword arguments.
+    
+    Returns
+    -------
+    dict
+        Training result dictionary containing the final loss history, fit status,
+        and any restored-best-state metadata.
+    
+    Raises
+    ------
+    ValueError
+        If required model, likelihood, or training data arguments are missing.
+    NotImplementedError
+        If an unsupported loss-function path is requested."""
 
     if lightcurve is not None:
         if any(

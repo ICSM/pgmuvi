@@ -52,65 +52,30 @@ def compute_sampling_metrics(
     y: np.ndarray = None,
     yerr: np.ndarray = None,
 ) -> dict:
-    """
-    Compute comprehensive temporal sampling quality metrics.
-
+    """Compute temporal sampling-quality metrics.
+    
     Parameters
     ----------
     t : np.ndarray
-        Observation times (any units)
+        Observation times in arbitrary but consistent units.
     y : np.ndarray, optional
-        Flux values (used for additional diagnostics if provided)
+        Flux values used for additional diagnostics when provided.
     yerr : np.ndarray, optional
-        Uncertainties (used for SNR metrics if provided)
-
+        Uncertainties used for signal-to-noise metrics when provided.
+    
     Returns
     -------
     dict
-        {
-            'n_points': int,
-            'baseline': float,
-                Total time span (max(t) - min(t))
-            'max_gap': float,
-                Largest gap between consecutive observations
-            'max_gap_fraction': float,
-                max_gap / baseline
-            'median_cadence': float,
-                Median time between observations
-            'mean_cadence': float,
-                Mean time between observations
-            'cadence_std': float,
-                Standard deviation of cadences
-            'nyquist_period': float,
-                2 * effective_cadence (shortest reliably detectable period),
-                where effective_cadence is the median cadence, or the mean
-                cadence if the median is zero (e.g. many duplicate timestamps)
-            'nyquist_frequency': float,
-                1 / (2 * effective_cadence), np.inf if effective_cadence == 0
-            'longest_detectable_period': float,
-                baseline / 2 (heuristic upper limit)
-            'duty_cycle': float,
-                Fraction of baseline with observations (simple estimate)
-            'sampling_uniformity': float,
-                1 - (std(cadences) / mean(cadences)), range [0,1]
-                1 = perfectly uniform, 0 = highly irregular
-        }
-
-        If y and yerr provided, also includes:
-        {
-            'median_snr': float,
-            'mean_snr': float,
-            'fraction_snr_gt_3': float,
-            'fraction_snr_gt_5': float
-        }
-
+        Sampling metrics such as ``n_points``, ``baseline``, ``max_gap``,
+        ``max_gap_fraction``, ``median_cadence``, ``mean_cadence``,
+        ``nyquist_period``, ``nyquist_frequency``, ``longest_detectable_period``,
+        ``duty_cycle``, and ``sampling_uniformity``.  When ``y`` and ``yerr`` are
+        supplied, signal-to-noise metrics are included as well.
+    
     Examples
     --------
     >>> metrics = compute_sampling_metrics(t, y, yerr)
-    >>> print(f"Nyquist period: {metrics['nyquist_period']:.2f} days")
-    >>> print(f"Detectable range: {metrics['nyquist_period']:.1f}"
-    ...       f" - {metrics['longest_detectable_period']:.1f} days")
-    """
+    >>> print(f"Nyquist period: {metrics['nyquist_period']:.2f} days")"""
     t = np.asarray(t)
     if len(t) < 2:
         return {"n_points": len(t), "error": "Too few points (N < 2)"}
@@ -230,59 +195,46 @@ def assess_sampling_quality(
     min_fraction_good_snr: float = 0.5,
     verbose: bool = False,
 ) -> tuple:
-    """
-    Assess whether lightcurve sampling is adequate for GP fitting.
-
-    Applies multiple quality gates to prevent fitting poorly sampled data.
-
+    """Assess whether light-curve sampling is adequate for GP fitting.
+    
+    The function applies simple quality gates to avoid fitting poorly sampled data.
+    
     Parameters
     ----------
     t : np.ndarray
-        Observation times
+        Observation times.
     y : np.ndarray, optional
-        Flux values (used for SNR assessment if provided)
+        Flux values used for signal-to-noise assessment when provided.
     yerr : np.ndarray, optional
-        Uncertainties (used for SNR assessment if provided)
-    min_points : int, default=6
-        Minimum number of observations required
+        Uncertainties used for signal-to-noise assessment when provided.
+    min_points : int, default=15
+        Minimum number of observations required.
     max_gap_fraction : float, default=0.3
-        Maximum allowed gap as fraction of baseline (e.g., 0.3 = 30%)
-        Large gaps cause extrapolation errors
+        Maximum allowed gap as a fraction of the temporal baseline.
     min_baseline_factor : float, default=3.0
-        Minimum baseline / median_cadence ratio
-        Ensures sufficient temporal coverage (e.g., 3 = at least 3 typical cadences)
+        Minimum baseline divided by median cadence.
     min_snr : float, default=3.0
-        Minimum median SNR required (if y, yerr provided)
+        Minimum median signal-to-noise ratio when ``y`` and ``yerr`` are provided.
     min_fraction_good_snr : float, default=0.5
-        Minimum fraction of points with SNR > min_snr (if y, yerr provided)
+        Minimum fraction of points with signal-to-noise ratio above ``min_snr``.
     verbose : bool, default=False
-        Print detailed assessment report
-
+        Print a detailed assessment report.
+    
     Returns
     -------
     passes : bool
-        True if all quality gates pass
+        ``True`` if all quality gates pass.
     diagnostics : dict
-        {
-            'metrics': dict (from compute_sampling_metrics),
-            'gates': {
-                'min_points': bool,
-                'max_gap': bool,
-                'min_baseline': bool,
-                'min_snr': bool (if applicable)
-            },
-            'warnings': list[str],
-            'recommendation': str  # 'PROCEED' or 'DO NOT FIT'
-        }
-
+        Diagnostics dictionary containing ``metrics``, ``gates``, ``warnings``, and
+        a string ``recommendation``.
+    
     Examples
     --------
     >>> passes, diag = assess_sampling_quality(t, y, yerr, verbose=True)
     >>> if passes:
     ...     print("Safe to fit GP")
     >>> else:
-    ...     print(f"Issues: {diag['warnings']}")
-    """
+    ...     print(f"Issues: {diag['warnings']}")"""
     metrics = compute_sampling_metrics(t, y, yerr)
 
     if "error" in metrics:

@@ -137,40 +137,30 @@ def weighted_chi2_test(
 
 
 def compute_fvar(y, yerr) -> float:
-    """
-    Compute normalized excess variance (F_var).
-
-    F_var = np.sqrt(max(s**2 - mean_err**2, 0)) / |ybar|
-
-    where:
-      s**2 = sample variance of y
-      mean_err**2 = mean(sig_i**2)
-
+    """Compute normalized excess variance.
+    
+    The normalized excess variance is computed from the sample variance after
+    subtracting the mean squared measurement uncertainty, and is normalized by the
+    absolute mean flux.
+    
     Parameters
     ----------
     y : array-like or torch.Tensor
-        Flux values (1-D).
+        Flux values.
     yerr : array-like or torch.Tensor
-        1-sigma uncertainties (1-D, positive).
-
+        One-sigma uncertainties.
+    
     Returns
     -------
-    fvar : float
-        Scale-free amplitude measure.
-        0 = no excess variance beyond errors
-        >0 = intrinsic variability detected
-
-    Notes
-    -----
-    This effect size prevents keeping bands that are statistically
-    significant but astrophysically tiny (common with large N).
-
+    float
+        Scale-free amplitude measure.  A value of zero means that no excess variance
+        beyond the quoted errors was detected.
+    
     Raises
     ------
     ValueError
-        If inputs are not 1-D, have mismatched shapes, have fewer than 2
-        points, contain non-finite values, or have non-positive yerr.
-    """
+        If inputs are not one-dimensional, have mismatched shapes, contain fewer
+        than two points, contain non-finite values, or have non-positive errors."""
     y = _to_numpy(y)
     yerr = _to_numpy(yerr)
     _validate_inputs(y, yerr)
@@ -187,48 +177,31 @@ def compute_fvar(y, yerr) -> float:
 
 
 def compute_stetson_k(y, yerr) -> float:
-    """
-    Compute Stetson K index for shape/coherence diagnostics.
-
-    K = (1/N) * sum(|delta_i|) / np.sqrt((1/N) * sum(delta_i**2))
-
-    where delta_i = sqrt(N/(N-1)) * (y_i - ybar) / sig_i and N is the number
-    of valid points used in the statistic.
-
+    """Compute the Stetson K index for shape/coherence diagnostics.
+    
     Parameters
     ----------
     y : array-like or torch.Tensor
-        Flux values (1-D).
+        Flux values.
     yerr : array-like or torch.Tensor
-        1-sigma uncertainties (1-D, positive).
-
+        One-sigma uncertainties.
+    
     Returns
     -------
-    K : float
-        Stetson K index.
-        ~0.798 for pure Gaussian noise
-        Larger values indicate more coherent/peaked residual structure.
+    float
+        Stetson K index.  Values near 0.798 are typical for pure Gaussian noise,
+        while larger values indicate more coherent or peaked residual structure.
         Returns ``np.nan`` when the statistic is not well-defined.
-
+    
     Notes
     -----
-    This implementation keeps the classic Stetson K form while handling
-    pathological inputs robustly.
-
-    - If finite, positive uncertainties are available, ``ybar`` is a weighted
-      mean using 1/sigma^2.
-    - If weighted averaging is not possible, ``ybar`` falls back to the
-      unweighted mean of finite flux points.
-    - ``delta_i`` uses the finite-sample factor sqrt(N/(N-1)) for N > 1.
-    - For invalid/pathological cases (N < 2, invalid denominators, etc.),
-      ``np.nan`` is returned instead of raising.
-
+    The implementation uses weighted centering when finite positive uncertainties
+    are available, falls back to finite unweighted centering when necessary, and
+    returns ``np.nan`` for pathological inputs instead of raising.
+    
     References
     ----------
-    Stetson, P. B. 1996, PASP, 108, 851
-
-    The public API and return type are preserved for backward compatibility.
-    """
+    Stetson, P. B. 1996, PASP, 108, 851"""
     y = _to_numpy(y)
     yerr = _to_numpy(yerr)
     if y.shape != yerr.shape:
@@ -288,72 +261,45 @@ def is_variable(
     min_points: int = 6,
     verbose: bool = False,
 ) -> tuple[bool, dict]:
-    """
-    Comprehensive variability assessment using required and diagnostic tests.
-
+    """Assess whether a light curve is variable.
+    
+    The required gates are a minimum number of points, a statistically significant
+    chi-square test against a constant mean, and a minimum fractional excess
+    variance.  The Stetson K statistic is retained as a reported diagnostic but does
+    not veto a light curve that passes the required gates.
+    
     Parameters
     ----------
     y : array-like or torch.Tensor
-        Flux measurements (1-D).
+        Flux measurements.
     yerr : array-like or torch.Tensor
-        1-sigma uncertainties (1-D, positive).
+        One-sigma uncertainties.
     alpha : float, default=0.01
-        Significance level for chi-square test
+        Significance level for the chi-square test.
     fvar_min : float, default=0.05
-        Minimum fractional excess variance (5%)
+        Minimum fractional excess variance.
     stetson_k_min : float, default=0.95
-        Diagnostic Stetson-K reference threshold used only to set
-        ``tests_passed['stetson_test']`` and reporting notes.
-        It is not required for the overall VARIABLE/NOT VARIABLE decision.
+        Diagnostic Stetson-K reference threshold used only for reporting.
     min_points : int, default=6
-        Minimum number of data points required
+        Minimum number of data points required.
     verbose : bool, default=False
-        Print diagnostic information
-
+        Print diagnostic information.
+    
     Returns
     -------
     is_var : bool
-        True if lightcurve passes the required variability gates
-        (min_points, chi2, and F_var).
+        ``True`` if the light curve passes the required variability gates.
     diagnostics : dict
-        {
-            'n_points': int,
-            'chi2': float,
-            'dof': int,
-            'p_value': float,
-            'fvar': float,
-            'stetson_k': float,
-            'decision': str,  # 'VARIABLE' or reason for rejection
-            'tests_passed': {
-                'chi2_test': bool,
-                'fvar_test': bool,
-                'stetson_test': bool,
-                'min_points': bool
-            }
-        }
-
-    Notes
-    -----
-    Decision logic (required gates):
-    1. N >= min_points
-    2. p_value < alpha (statistically significant)
-    3. F_var >= fvar_min (astrophysically significant)
-
-    Stetson K is retained as a shape/coherence diagnostic and reported in
-    diagnostics, but does not veto a lightcurve that already passes the
-    required gates.
-
-    Both numpy arrays and torch tensors (including CUDA tensors) are accepted.
-
+        Diagnostics dictionary containing counts, chi-square results, fractional
+        variability, Stetson K, a decision string, and gate flags.
+    
     Examples
     --------
-    >>> from pgmuvi.preprocess.variability import is_variable
     >>> is_var, diag = is_variable(y, yerr, verbose=True)
     >>> if is_var:
     ...     print("Proceed with GP fitting")
     ... else:
-    ...     print(f"Skipping: {diag['decision']}")
-    """
+    ...     print(f"Skipping: {diag['decision']}")"""
     # Convert once here; individual helpers also call _to_numpy but that is
     # idempotent for plain ndarray inputs.
     y = _to_numpy(y)

@@ -150,11 +150,13 @@ Quality Filtering
 Preprocessing Tutorial
 -----------------------
 
-A dedicated notebook tutorial covering the full preprocessing workflow — loading
-data, checking variability, assessing sampling quality, and subsampling — is
-provided in the User Guide:
+The older preprocessing notebook is currently quarantined from the public Sphinx
+build while the notebook set is being refreshed.  Use this how-to and the
+:mod:`pgmuvi.preprocess` API reference as the current preprocessing documentation
+until a replacement notebook is written.
 
-.. toctree::
-   :maxdepth: 1
+.. note::
 
-   ../notebooks/tutorial_preprocessing
+   **TBD[notebook-preprocessing]:** replace the quarantined preprocessing
+   notebook with an executed tutorial that reflects the current sampling,
+   variability, subsampling, dtype, and time-centering behaviour.

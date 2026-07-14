@@ -78,68 +78,11 @@ except ImportError:
 
 class ConsensusFitError(RuntimeError):
     """Raised when the consensus-fit pipeline cannot produce a valid result.
-
-    This exception is raised instead of a bare ``RuntimeError`` whenever the
-    consensus-fit algorithm determines that the data do not support a coherent
-    shared period.  It is **not** raised for unrelated optimisation or GP
-    errors; those continue to raise standard exceptions.
-
-    Attributes
-    ----------
-    failure_diagnostics : dict
-        A lightweight, JSON-safe structured description of the failure.
-        The dict always contains the key ``"status": "failed"`` and a
-        machine-readable ``"reason"`` string.  Additional keys vary by
-        failure mode and are described in the individual ``reason`` values
-        below.
-
-        Common ``reason`` values:
-
-        ``"no_accepted_bands"``
-            Every band was rejected by the pre-LS sampling quality gate
-            before any frequency could be extracted.  Extra keys:
-            ``rejection_reasons`` (dict).
-
-        ``"insufficient_consensus_inliers"``
-            Accepted bands carry mutually inconsistent frequencies; after
-            sigma-clipping fewer than ``min_consensus_inliers`` bands remain
-            in the inlier cluster.  Extra keys: ``n_inlier_bands`` (int),
-            ``required_inliers`` (int), ``n_candidate_bands`` (int),
-            ``candidate_periods`` (list[float | None]).
-
-        ``"frequency_aggregation_error"``
-            An unexpected error occurred during robust frequency aggregation.
-            Extra keys: ``detail`` (str).
-
-        ``"invalid_consensus_frequency"``
-            The aggregated consensus frequency is not finite or not strictly
-            positive.  Extra keys: ``frequency_value`` (float | None).
-
-    Parameters
-    ----------
-    message : str
-        Human-readable description of the failure.  Must be scientifically
-        informative and must not imply a software bug when the cause is a
-        data-quality issue.
-    failure_diagnostics : dict, optional
-        Structured diagnostics dict (see ``failure_diagnostics`` attribute).
-        If omitted, an empty ``{"status": "failed"}`` dict is attached.
-
-    Examples
-    --------
-    >>> raise ConsensusFitError(
-    ...     "Consensus fit failed: only 1 inlier band remained after period"
-    ...     " consistency filtering (minimum required: 2).",
-    ...     failure_diagnostics={
-    ...         "status": "failed",
-    ...         "reason": "insufficient_consensus_inliers",
-    ...         "n_inlier_bands": 1,
-    ...         "required_inliers": 2,
-    ...         "n_candidate_bands": 4,
-    ...         "candidate_periods": [18.0, 31.0, 47.0, 73.0],
-    ...     },
-    ... )
-    """
+    
+    The exception carries ``failure_diagnostics`` and, when available,
+    ``failure_summary`` attributes with JSON-safe information about the rejected
+    consensus fit.  It is intended for consensus-stage data-quality failures rather
+    than unrelated optimisation or linear-algebra errors."""
 
     def __init__(self, message, *, failure_diagnostics=None):
         super().__init__(message)
@@ -1629,23 +1572,12 @@ class PeriodPeakResult:
 
 @dataclasses.dataclass
 class ACFResult:
-    """Result container for :meth:`Lightcurve.acf`.
-
-    Attributes
-    ----------
-    lag : torch.Tensor
-        Lag values (same units as the time axis).
-    acf : torch.Tensor
-        Autocorrelation values at each lag.
-    method : str
-        The method used to compute the ACF (``"data"`` or ``"gp"``).
-    counts : torch.Tensor or None
-        Number of data pairs contributing to each lag bin (data method only).
-    normalized : bool
-        Whether the ACF has been normalised so that ``acf(0) == 1``.
-    band : str, float, or None
-        Band label or wavelength used when computing the ACF, if applicable.
-    """
+    """Result container returned by :meth:`Lightcurve.acf`.
+    
+    The container stores lag values, autocorrelation values, the method used to
+    compute the ACF, optional contributing-pair counts, a normalization flag, and
+    an optional band label.  Field names are documented by the dataclass signature
+    in the generated API reference."""
 
     lag: torch.Tensor
     acf: torch.Tensor
@@ -1657,35 +1589,15 @@ class ACFResult:
 
 class ComponentDiagnosticsResult:
     """Kernel-component diagnostic information for a spectral-mixture GP.
-
-    These values are extracted directly from GP hyperparameters and are
-    provided for diagnostic purposes only.  They must **not** be interpreted
-    as independent physical periods.  The literature-comparable period
-    estimates are the summed-PSD peaks stored in
-    :attr:`PeriodSummaryResult.peaks`.
-
-    Attributes
-    ----------
-    component_periods : numpy.ndarray
-        Centre period of each mixture component (1/frequency).
-    component_frequencies : numpy.ndarray
-        Centre frequency of each mixture component.
-    component_weights : numpy.ndarray
-        Relative amplitude weight of each mixture component.
-    component_period_scales : numpy.ndarray
-        Width (sigma) of each Gaussian component in period units.
-    component_frequency_scales : numpy.ndarray
-        Width (sigma) of each Gaussian component in frequency units.
-    n_components : int
-        Number of mixture components.
-    kernel_family : str
-        Name of the spectral-mixture kernel family.
-    notes : str
-        Diagnostic notes for this component set.
-    component_labels : list of str
-        Human-readable label for each component,
-        e.g. ``["SM component 1", "SM component 2"]``.
-    """
+    
+    These values are extracted directly from fitted GP hyperparameters and are
+    provided for diagnostic purposes only.  They should not be interpreted as
+    independent physical periods.  Literature-comparable period estimates are the
+    summed-PSD peaks stored in :attr:`PeriodSummaryResult.peaks`.
+    
+    The object stores component periods, frequencies, weights, period scales,
+    frequency scales, labels, a component count, a kernel-family label, and any
+    component-level diagnostic notes."""
 
     def __init__(
         self,
@@ -2707,7 +2619,10 @@ class FitFailureSummary:
         )
 
     def to_dict(self, include_fit_history=False, fit_history=None):
-        """Return a JSON-safe failure-summary dict with optional fit history."""
+        """Return a JSON-safe failure-summary dictionary.
+        
+        When requested, the returned dictionary also includes sanitized fit-history
+        information supplied by the caller."""
         payload = {
             "status": self.status,
             "reason": self.reason,
@@ -8019,101 +7934,49 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return_full: bool = False,
         **kwargs,
     ) -> tuple:
-        """
-        Compute the (multiband) Lomb-Scargle periodogram.
-        Periods returned for the num_peaks highest peaks in the periodogram.
-        For a 1D lightcurve, the false-alarm probability is used
-            to estimate the significance of the periods, which are also
-            returned. These can be used to filter out insignificant periods.
-        For multi-band lightcurves (2D data), LombScargleMultiband is used
-            to compute periods across all bands simultaneously.
-
-        The method can also be used to return the entire grid of frequencies,
-        which can be used by other methods such as compute_psd and plot_psd.
-
-        Parameters:
-        ----------------
-        - freq_only: bool, optional, default=False
-            If True, only the frequency grid will be returned.
-            This can be useful for methods such as compute_psd and plot_psd.
-        - num_peaks: int, optional, default=1
-            The number of peaks to extract from the Lomb-Scargle periodogram.
-            If fewer peaks are found, only the available peaks will be returned.
-        - single_threshold: float, optional, default=0.05
-            The false alarm probability threshold for a single peak to be
-            considered significant.
-        - Nyquist_factor: int, optional, default=5
-            The factor by which to multiply the Nyquist frequency to
-            determine the maximum frequency to search for in the
-            Lomb-Scargle periodogram.
-            This will be approximately the number of points sampling
-            the maximum in the resulting periodogram.
-        - fap_method: str or None, optional, default=None
-            Method used to compute the false-alarm probability (FAP) of the
-            *maximum* periodogram peak (the global significance test).
-            For 1D lightcurves the default is ``'davies'`` (fast analytical
-            upper bound; equivalent to ``'baluev'`` for practical purposes
-            but significantly faster). Other valid astropy options are
-            ``'baluev'`` and ``'bootstrap'``. Note: ``'single'`` is a
-            valid astropy option that computes the FAP for a single
-            pre-specified frequency and is not appropriate for ``fap_max``
-            (a warning is issued and ``'baluev'`` is used instead); it is
-            however used internally as the per-frequency p-value when
-            applying the Benjamini-Hochberg correction.
-            For multi-band lightcurves the default is ``'phase_scramble'``.
-            Slower but more accurate options are ``'bootstrap'``, ``'calibrated'``,
-            and ``'analytical'``  (fast Baluev-style approximation) (see
-            :class:`~pgmuvi.multiband_ls_significance.MultibandLSWithSignificance`).
-        - use_best_band_init: bool, optional, default=False
-            If True and the lightcurve is multiband (ndim > 1), the
-            Lomb-Scargle frequency grid is derived from the band with the
-            most observations rather than from the full multiband dataset.
-            This yields a finer frequency resolution focused on the most
-            informative band, which can speed up and improve the
-            periodogram search when sampling is highly heterogeneous
-            across bands.  Has no effect for 1D lightcurves.
-        - return_full: bool, optional, default=False
-            If True and ``freq_only=False``, also return the complete
-            frequency grid and power spectrum alongside the peak frequencies
-            and significance mask (see return values below).  Ignored when
-            ``freq_only=True``.  The periodogram itself is not recomputed,
-            but returning the full grid may still allocate and/or copy the
-            frequency and power tensors before returning them.
-        - kwargs: dict, optional
-            Additional keyword arguments to be passed to the
-            LombScargle(Multiband) constructor.
-
-        Returns:
-        ----------------
-        The return value depends on the combination of ``freq_only`` and
-        ``return_full``:
-
-        * ``freq_only=True`` (``return_full`` is ignored):
-          ``(freq_grid, power_grid)``
-
-          - freq_grid: torch.Tensor of floats — the full frequency grid.
-          - power_grid: torch.Tensor of floats — periodogram power at each
-            frequency.
-
-        * ``freq_only=False, return_full=False`` (default):
-          ``(peak_freqs, significance_mask)``
-
-          - peak_freqs: torch.Tensor of floats — frequencies of the
-            ``num_peaks`` highest periodogram peaks.
-          - significance_mask: torch.Tensor of bool — True for peaks that
-            are statistically significant after Benjamini-Hochberg FDR
-            correction.
-
-        * ``freq_only=False, return_full=True``:
-          ``(peak_freqs, significance_mask, freq_grid, power_grid)``
-
-          - peak_freqs: torch.Tensor of floats — as above.
-          - significance_mask: torch.Tensor of bool — as above.
-          - freq_grid: torch.Tensor of floats — the full frequency grid
-            (already computed internally; returned at no extra cost).
-          - power_grid: torch.Tensor of floats — periodogram power at each
-            frequency (already computed internally).
-        """
+        """Compute a one-band or multiband Lomb-Scargle periodogram.
+        
+        For one-dimensional light curves, the false-alarm probability is used to assess
+        period significance.  For multi-band light curves, ``LombScargleMultiband`` is
+        used to compute periods across all bands simultaneously.
+        
+        Parameters
+        ----------
+        freq_only : bool, default=False
+            If ``True``, return the full frequency grid and power grid instead of peak
+            frequencies.
+        num_peaks : int, default=1
+            Number of periodogram peaks to extract.  If fewer peaks are found, only the
+            available peaks are returned.
+        single_threshold : float, default=0.05
+            False-alarm-probability threshold used when deciding whether a peak is
+            significant.
+        Nyquist_factor : int, default=5
+            Factor used to set the maximum search frequency relative to the estimated
+            Nyquist frequency.
+        fap_method : str or None, optional
+            False-alarm-probability method.  For one-dimensional data the default is
+            ``"davies"``.  For multiband data the default is ``"phase_scramble"``.
+        use_best_band_init : bool, default=False
+            If ``True`` for multiband data, derive the Lomb-Scargle frequency grid from
+            the band with the most observations rather than from the full multiband
+            data set.
+        return_full : bool, default=False
+            If ``True`` and ``freq_only`` is ``False``, return the complete frequency
+            and power grids in addition to the peak frequencies and significance mask.
+        **kwargs
+            Additional keyword arguments passed to the Lomb-Scargle constructor.
+        
+        Returns
+        -------
+        tuple
+            The returned tuple depends on ``freq_only`` and ``return_full``:
+        
+            * ``freq_only=True`` returns ``(freq_grid, power_grid)``.
+            * ``freq_only=False`` and ``return_full=False`` returns
+              ``(peak_freqs, significance_mask)``.
+            * ``freq_only=False`` and ``return_full=True`` returns
+              ``(peak_freqs, significance_mask, freq_grid, power_grid)``."""
         from astropy.timeseries import LombScargle
         from scipy.signal import find_peaks
         from .multiband_ls_significance import MultibandLSWithSignificance
@@ -8883,31 +8746,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return passes, diagnostics
 
     def compute_sampling_metrics_per_band(self) -> dict:
-        """
-        Compute sampling metrics independently for each wavelength band.
-
-        Only applicable for 2D (multiband) lightcurves.
-
+        """Compute sampling metrics independently for each wavelength band.
+        
+        This method is only applicable to two-dimensional multiband light curves.
+        
         Returns
         -------
         dict
-        {
-                wavelength1: metrics_dict,
-                wavelength2: metrics_dict,
-                ...
-                'summary': {
-                    'n_bands': int,
-                    'min_points_across_bands': int,
-                    'max_gap_fraction_worst_band': float,
-                    'median_nyquist_period': float
-                }
-            }
-
+            Mapping from wavelength to the metrics returned by
+            :func:`pgmuvi.preprocess.quality.compute_sampling_metrics`, with an
+            additional ``"summary"`` entry containing aggregate per-band information.
+        
         Raises
         ------
         ValueError
-            If lightcurve is not 2D (multiband).
-        """
+            If the light curve is not two-dimensional multiband data."""
         from pgmuvi.preprocess.quality import compute_sampling_metrics
 
         if self.ndim <= 1:
@@ -8963,38 +8816,29 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def assess_sampling_quality_per_band(
         self, verbose: bool = True, **kwargs
     ) -> dict:
-        """
-        Assess sampling quality independently for each wavelength band.
-
-        Only applicable for 2D (multiband) lightcurves.
-
+        """Assess sampling quality independently for each wavelength band.
+        
+        This method is only applicable to two-dimensional multiband light curves.
+        
         Parameters
         ----------
         verbose : bool, default=True
-            Print assessment for each band
-        **kwargs : dict
-            Quality gate thresholds
-
+            Print the assessment for each band.
+        **kwargs
+            Quality-gate thresholds passed to
+            :func:`pgmuvi.preprocess.quality.assess_sampling_quality`.
+        
         Returns
         -------
         dict
-            {
-                wavelength1: diagnostics_dict,
-                wavelength2: diagnostics_dict,
-                ...
-                'summary': {
-                    'n_bands': int,
-                    'n_passing': int,
-                    'passing_wavelengths': list[float],
-                    'failing_wavelengths': list[float]
-                    }
-            }
-
+            Mapping from wavelength to per-band diagnostics, with an additional
+            ``"summary"`` entry containing the number of bands, passing wavelengths,
+            and failing wavelengths.
+        
         Raises
         ------
         ValueError
-            If lightcurve is not 2D (multiband).
-        """
+            If the light curve is not two-dimensional multiband data."""
         from pgmuvi.preprocess.quality import assess_sampling_quality
 
         if self.ndim <= 1:
@@ -9245,32 +9089,31 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
 
     def filter_variable_bands(self, **kwargs):
-        """
-        Create new Lightcurve with only variable bands retained.
-
-        Only applicable for multiband (2D) lightcurves where
-        ``xdata[:, 1]`` encodes the band/wavelength.
-
-
-         Parameters
-         ----------
-            Arguments passed to is_variable()
-
+        """Create a new light curve containing only variable bands.
+        
+        This method is only applicable to two-dimensional multiband light curves where
+        ``xdata[:, 1]`` encodes the band or wavelength.
+        
+        Parameters
+        ----------
+        **kwargs
+            Arguments passed to :meth:`check_variability_per_band`.
+        
         Returns
         -------
-        lightcurve : Lightcurve
-            New instance containing only wavelengths that pass variability tests
-        None
-            If no bands pass variability tests
-
+        Lightcurve
+            New instance containing only wavelengths that pass the variability tests.
+        
+        Raises
+        ------
+        ValueError
+            If no band passes the variability tests.
+        
         Examples
         --------
-        >>> lc2d = Lightcurve(xdata_2d, y, yerr)
         >>> lc_var = lc2d.filter_variable_bands()
-        >>> # Check how many bands were retained via the per-band summary
         >>> results = lc2d.check_variability_per_band()
-        >>> print(f"Retained {results['summary']['n_variable']} variable bands")
-        """
+        >>> print(f"Retained {results['summary']['n_variable']} variable bands")"""
         results = self.check_variability_per_band(**kwargs)
 
         if results["summary"]["n_variable"] == 0:
@@ -18444,35 +18287,35 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         cuda=False,
         **kwargs,
     ):
-        """Run an MCMC sampler on the model
-
-        This function runs an MCMC sampler on the model, using the sampler
-        specified in the `sampler` attribute. The results are stored in the
-        `mcmc_results` attribute.
-
+        """Run an MCMC sampler on the fitted model.
+        
+        This public method is currently unavailable and raises ``NotImplementedError``.
+        It is retained as a placeholder for a future posterior-sampling interface.
+        
         Parameters
         ----------
         sampler : str or MCMC, optional
-            The name of the sampler to use. If None, pyro.infer.mcmc.NUTS will
-            be used. If a string, it must be one of the following:
-                'NUTS': pyro.infer.mcmc.NUTS
-                'HMC': pyro.infer.mcmc.HMC
-            Otherwise, it must be an instance of pyro.infer.mcmc.MCMC.
-        num_samples : int, optional
-            The number of samples to draw from the posterior, by default 500.
-        warmup_steps : int, optional
-            The number of warmup steps to use, by default 100.
-        disable_progbar : bool, optional
-            Whether to disable the progress bar, by default False.
-        **kwargs : dict, optional
-
-        Returns
-        -------
-        mcmc_results : dict
-            A dictionary containing the results of the MCMC sampling. The
-            keys are the names of the parameters, and the values are the
-            samples of the parameters.
-        """
+            Sampler specification.  When the interface is re-enabled, string values are
+            expected to include ``"NUTS"`` and ``"HMC"``.
+        num_samples : int, default=500
+            Number of posterior samples to draw.
+        warmup_steps : int, default=100
+            Number of warmup steps.
+        num_chains : int, default=1
+            Number of MCMC chains.
+        disable_progbar : bool, default=False
+            Whether to disable progress-bar output.
+        max_cg_iterations : int or None, optional
+            Optional conjugate-gradient iteration limit.
+        cuda : bool, default=False
+            Whether to use CUDA when supported.
+        **kwargs
+            Additional sampler-specific keyword arguments.
+        
+        Raises
+        ------
+        NotImplementedError
+            Always raised in the current public API."""
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
         if sampler is None:
@@ -20899,120 +20742,59 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         classify_lsp=False,
     ):
         """Return a literature-comparable period summary for the fitted model.
-
-        Unlike :meth:`get_periods`, which returns the raw kernel-basis
-        parameters of each spectral-mixture component (component centres,
-        scales, and weights), this method aims to produce a *single dominant
-        period* that can be directly compared to published values.
-
-        The method dispatches to the appropriate backend based on the type of
-        kernel used by the model:
-
-        **Spectral-mixture models** (all ``"1D"``, ``"2D"``, ``"SKI"``,
-        ``"PowerLaw"``, ``"Dust"`` variants):
-            Constructs the total positive-frequency PSD as a sum of weighted
-            Gaussians, identifies the highest PSD peak, and returns its
-            location as the dominant period.  The half-maximum width of the
-            peak provides a practical uncertainty interval.
-
-        **Explicit-period models** (``"1DQuasiPeriodic"``,
-        ``"1DLinearQuasiPeriodic"``):
-            Reads the fitted ``period_length`` parameter directly from the
-            :class:`~gpytorch.kernels.PeriodicKernel`.  The RBF lengthscale
-            is used as a coherence proxy to derive a period interval and
-            Q-factor.
-
-        **Periodic-plus-stochastic** (``"1DPeriodicStochastic"``):
-            Extracts the period from the quasi-periodic sub-kernel.  The
-            summary notes flag the mixed periodic/stochastic nature of the
-            model.
-
-        **Separable 2D models** (``"2DSeparable"``, ``"2DAchromatic"``,
-        ``"2DWavelengthDependent"``, ``"2DDustMean"``,
-        ``"2DPowerLawMean"``):
-            Identifies the time sub-kernel (``active_dims = [0]``) and
-            applies the appropriate backend to that sub-kernel only.
-
-        **Non-periodic models** (``"1DMatern"``):
-            Returns a consistent summary dictionary with ``None`` values for
-            all period-related fields rather than raising an exception, so
-            that automated scripts can handle all model types gracefully.
-
-        .. note::
-            All uncertainty estimates are *practical proxies*, not posterior
-            credible intervals.  MCMC-based credible intervals are not yet
-            implemented.
-
+        
+        Unlike :meth:`get_periods`, which returns raw spectral-mixture component
+        centres, scales, and weights, this method aims to produce a dominant period
+        summary that can be compared to published period values.
+        
+        The backend is selected from the fitted kernel family.  Spectral-mixture models
+        construct a total positive-frequency PSD and identify the highest PSD peak.
+        Explicit-period models read the fitted ``period_length`` parameter from a
+        periodic kernel.  Separable two-dimensional models apply the relevant period
+        backend to the time sub-kernel.  Non-periodic models return a consistent summary
+        with no dominant period.
+        
+        Notes
+        -----
+        All uncertainty estimates are practical proxies, not posterior credible
+        intervals.  MCMC-based credible intervals are not yet implemented.
+        
         Parameters
         ----------
-        n_grid : int, optional
-            Number of points in the positive-frequency evaluation grid
-            (spectral-mixture backend only).  Default 5000.
+        n_grid : int, default=5000
+            Number of points in the positive-frequency evaluation grid for the
+            spectral-mixture backend.
         min_freq : float or None, optional
-            Minimum frequency for the evaluation grid (SM backend only).
-            Defaults to ``1 / time_span``.
+            Minimum frequency for the spectral-mixture evaluation grid.
         max_freq : float or None, optional
-            Maximum frequency for the evaluation grid (SM backend only).
-            Defaults to the highest component centre plus five sigma.
-        peak_threshold_rel : float, optional
-            Relative height threshold for significant peaks (SM backend).
-            Default 0.2.
-        uncertainty : str, optional
-            Uncertainty method.  Only ``"peak_mass"`` is supported for the
-            spectral-mixture backend (``"peak_width"`` raises
-            ``NotImplementedError``).  Non-SM backends always use their
-            native interval method and ignore this parameter.  Default
-            ``"peak_mass"``.
+            Maximum frequency for the spectral-mixture evaluation grid.
+        peak_threshold_rel : float, default=0.2
+            Relative height threshold for significant PSD peaks.
+        uncertainty : str, default="peak_mass"
+            Uncertainty proxy.  Only ``"peak_mass"`` is supported for the
+            spectral-mixture backend.
         n_peaks : int or None, optional
-            Number of peaks to analyze and return in ``peaks``.  If ``None``
-            (default), defaults to ``_fit_num_mixtures_effective`` when that
-            attribute is available (i.e. after a call to :meth:`fit` or
-            :meth:`set_model`), otherwise all detected peaks are returned.
-            Pass an explicit integer to override.
-        mass_level : float, optional
-            Fraction of basin mass to enclose in the equal-tail interval
-            (``"peak_mass"`` mode only).  Default 0.68 (~1 sigma).
-        classify_lsp : bool, optional
-            If ``True``, flag peaks whose period ratio to the dominant peak
-            falls within the Long Secondary Period range (5-15) and whose
-            basin area fraction exceeds 0.05.  Default ``False``.
-
+            Number of peaks to analyze and return.  If ``None``, use the effective
+            number of fitted mixture components when available, otherwise return all
+            detected peaks.
+        mass_level : float, default=0.68
+            Fraction of peak-basin mass to enclose in the equal-tail interval.
+        classify_lsp : bool, default=False
+            If ``True``, flag long-secondary-period-like peaks relative to the dominant
+            peak.
+        
         Returns
         -------
-        summary : dict
-            Dictionary with keys:
-
-            * ``component_periods``          - raw kernel component periods
-            * ``component_weights``          - raw kernel component weights
-            * ``component_period_scales``    - raw kernel period widths
-            * ``component_frequencies``      - raw kernel component freqs
-            * ``component_frequency_scales`` - raw kernel frequency widths
-            * ``freq_grid``  - evaluation grid (``None`` for non-PSD backends)
-            * ``psd``        - PSD values (``None`` for non-PSD backends)
-            * ``dominant_frequency`` - frequency of the dominant peak
-              (``None`` for non-periodic models)
-            * ``dominant_period``    - ``1 / dominant_frequency``
-              (``None`` for non-periodic models)
-            * ``period_interval_fwhm_like`` - ``(period_lo, period_hi)``
-              uncertainty interval (``None`` for non-periodic models;
-              kept for backward compatibility)
-            * ``period_interval`` - same as ``period_interval_fwhm_like``
-              (generic key independent of uncertainty method)
-            * ``interval_definition`` - string describing the interval type
-            * ``q_factor``        - coherence Q (``None`` if not defined)
-            * ``peak_fraction``   - dominant peak height / total weight
-            * ``n_significant_peaks`` - peaks above threshold
-            * ``significant_periods`` - periods of significant peaks
-            * ``method``  - string identifying the backend used
-            * ``notes``   - additional diagnostic notes
-
+        PeriodSummaryResult or dict
+            Structured summary of the dominant period, period interval, backend method,
+            peak list, and diagnostic notes.
+        
         Raises
         ------
         RuntimeError
-            If the model has not been initialised.
+            If the model has not been initialized.
         NotImplementedError
-            If an unsupported ``uncertainty`` method is requested.
-        """
+            If an unsupported uncertainty method is requested."""
         self._raise_if_fit_failed("GP period summary")
         _sm_uncertainties = {"peak_mass"}
         if uncertainty not in _sm_uncertainties:
