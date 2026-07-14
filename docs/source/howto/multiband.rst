@@ -156,13 +156,16 @@ family.
 In such cases, consider fitting each band independently and comparing the inferred
 periods, or contact the ``pgmuvi`` developers to discuss extensions.
 
-2D Tutorial
------------
+2D tutorial status
+------------------
 
-A dedicated notebook tutorial for 2D multiwavelength analysis is provided in the
-User Guide:
+The old 2-D tutorial notebook is currently quarantined because it is an
+unfinished, unexecuted stub.  For the maintained 2-D consensus-fitting path, see
+:doc:`consensus_fitting`.  Notebook refresh status is tracked in
+:doc:`../notebook_status`.
 
-.. toctree::
-   :maxdepth: 1
+.. note::
 
-   ../notebooks/pgmuvi_tutorial_2d
+   **TBD[notebook-2d-consensus]:** replace the quarantined 2-D notebook with a
+   complete 2-D consensus tutorial before adding it back to the public tutorial
+   index or to this page.

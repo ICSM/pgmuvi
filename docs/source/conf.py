@@ -54,7 +54,19 @@ templates_path = ["_templates"]
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ["test*", "old*"]
+# Keep unfinished or unavailable notebooks out of the Sphinx source graph.
+# Their status is tracked in notebook_status.rst; once a notebook is refreshed,
+# remove it from this list and add it back to the public Tutorials toctree.
+exclude_patterns = [
+    "test*",
+    "old*",
+    "notebooks/pgmuvi_tutorial_2d.ipynb",
+    "notebooks/tutorial_preprocessing.ipynb",
+    "notebooks/tutorial_synthetic.ipynb",
+    "notebooks/tutorial_model_selection.ipynb",
+    "notebooks/pgmuvi_tutorial_mcmc.ipynb",
+    "notebooks/pgmuvi_mock_data_from_gp.ipynb",
+]
 
 
 # -- Options for HTML output -------------------------------------------------

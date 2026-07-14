@@ -52,6 +52,25 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         self.assertIn("candidate", text)
         self.assertIn("TODO-placeholder", text)
 
+    def test_quarantined_notebooks_are_excluded_from_sphinx_source_discovery(self):
+        conf = (ROOT / "docs" / "source" / "conf.py").read_text(encoding="utf-8")
+        for notebook in [
+            "notebooks/pgmuvi_tutorial_2d.ipynb",
+            "notebooks/tutorial_preprocessing.ipynb",
+            "notebooks/tutorial_synthetic.ipynb",
+            "notebooks/tutorial_model_selection.ipynb",
+            "notebooks/pgmuvi_tutorial_mcmc.ipynb",
+            "notebooks/pgmuvi_mock_data_from_gp.ipynb",
+        ]:
+            self.assertIn(notebook, conf)
+
+    def test_multiband_page_does_not_link_quarantined_2d_notebook(self):
+        text = (ROOT / "docs" / "source" / "howto" / "multiband.rst").read_text(encoding="utf-8")
+        self.assertNotIn("../notebooks/pgmuvi_tutorial_2d", text)
+        self.assertIn("TBD[notebook-2d-consensus]", text)
+        self.assertIn(":doc:`consensus_fitting`", text)
+        self.assertIn(":doc:`../notebook_status`", text)
+
 
 if __name__ == "__main__":
     unittest.main()
