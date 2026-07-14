@@ -5871,6 +5871,56 @@ def _piwd_batch_format_markdown_report(manifest):
     return "\n".join(lines) + "\n"
 
 
+
+def _piwd_batch_failure_text_report(row):
+    """Return a compact human-readable report for one failed batch source."""
+    if not isinstance(row, dict):
+        row = {}
+    lines = [
+        "# Period-independent wavelength advisory source failure",
+        "",
+        f"source_index: {_piwd_batch_markdown_value(row.get('source_index'))}",
+        f"source_id: {_piwd_batch_markdown_value(row.get('source_id'))}",
+        f"status: {_piwd_batch_markdown_value(row.get('status'))}",
+        f"exception_type: {_piwd_batch_markdown_value(row.get('exception_type'))}",
+        f"exception_message: {_piwd_batch_markdown_value(row.get('exception_message'))}",
+        "",
+    ]
+    tb = row.get("traceback")
+    if tb:
+        lines.extend(["## Traceback", "", "```text", str(tb).rstrip(), "```", ""])
+    return "\n".join(lines)
+
+
+def _piwd_batch_write_failure_artifacts(output_dir, prefix, row):
+    """Write per-source JSON/text artifacts for a failed batch source."""
+    import json
+    from pathlib import Path
+
+    outdir = Path(output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    safe_prefix = _piwd_batch_safe_path_component(prefix, int(row.get("source_index") or 0))
+    json_path = outdir / f"{safe_prefix}_failure.json"
+    text_path = outdir / f"{safe_prefix}_failure.txt"
+    manifest = {
+        "kind": "period_independent_wavelength_advisory_workflow_failure_export",
+        "source_index": row.get("source_index"),
+        "source_id": row.get("source_id"),
+        "status": row.get("status"),
+        "exception_type": row.get("exception_type"),
+        "exception_message": row.get("exception_message"),
+        "traceback": row.get("traceback"),
+        "json_path": str(json_path),
+        "text_report_path": str(text_path),
+        "exported_files": [str(json_path), str(text_path)],
+    }
+    json_path.write_text(
+        json.dumps(_piwd_export_json_safe(manifest), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    text_path.write_text(_piwd_batch_failure_text_report(row), encoding="utf-8")
+    return manifest
+
 def _piwd_batch_write_markdown_report(path, manifest):
     """Write a human-readable batch advisory Markdown report."""
     text = _piwd_batch_format_markdown_report(manifest)
@@ -6089,6 +6139,21 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                     "traceback": traceback.format_exc(),
                 }
             )
+            if export and outdir is not None:
+                source_component = _piwd_batch_safe_path_component(
+                    row.get("source_id"), index
+                )
+                source_outdir = outdir / source_component
+                source_prefix = f"{source_component}_wavelength_advisory"
+                failure_manifest = _piwd_batch_write_failure_artifacts(
+                    source_outdir,
+                    source_prefix,
+                    row,
+                )
+                row["export_manifest"] = failure_manifest
+                row["export_json_path"] = failure_manifest.get("json_path")
+                row["export_text_report_path"] = failure_manifest.get("text_report_path")
+                exported_files.extend(failure_manifest.get("exported_files") or [])
 
         rows.append(row)
 

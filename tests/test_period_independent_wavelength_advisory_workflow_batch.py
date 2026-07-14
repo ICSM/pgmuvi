@@ -116,6 +116,42 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         self.assertEqual(failed["exception_type"], "RuntimeError")
         self.assertIn("synthetic workflow failure", failed["exception_message"])
 
+
+    def test_export_writes_per_source_failure_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_period_independent_wavelength_advisory_workflow_batch(
+                [{"source_id": "bad source", "lightcurve": _FakeLightcurve(fail=True)}],
+                output_dir=tmp,
+                export=True,
+                batch_prefix="batch",
+            )
+
+            self.assertEqual(report["n_failed"], 1)
+            failed = report["source_results"][0]
+            self.assertEqual(failed["status"], "failed")
+            self.assertIsNotNone(failed["export_json_path"])
+            self.assertIsNotNone(failed["export_text_report_path"])
+
+            json_path = Path(failed["export_json_path"])
+            text_path = Path(failed["export_text_report_path"])
+            self.assertTrue(json_path.exists())
+            self.assertTrue(text_path.exists())
+            self.assertIn("bad_source", str(json_path.parent))
+            self.assertIn(str(json_path), report["exported_files"])
+            self.assertIn(str(text_path), report["exported_files"])
+
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload["kind"],
+                "period_independent_wavelength_advisory_workflow_failure_export",
+            )
+            self.assertEqual(payload["exception_type"], "RuntimeError")
+            self.assertIn("synthetic workflow failure", payload["exception_message"])
+
+            failure_text = text_path.read_text(encoding="utf-8")
+            self.assertIn("Period-independent wavelength advisory source failure", failure_text)
+            self.assertIn("synthetic workflow failure", failure_text)
+
     def test_stop_on_error_reraises(self):
         with self.assertRaisesRegex(RuntimeError, "synthetic workflow failure"):
             run_period_independent_wavelength_advisory_workflow_batch(

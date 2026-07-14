@@ -363,3 +363,12 @@ fields are ``n_constrained_sm_ard_components``,
 triage: they help identify whether the time-frequency or wavelength-frequency
 ARD dimension is being pushed against the fitted scale constraint.
 
+Per-source failure artifacts
+----------------------------
+
+When ``output_dir`` is supplied and per-source export is enabled, failed sources
+also receive a per-source output directory.  The batch runner writes a compact
+failure JSON file and a text report containing the exception type, exception
+message, and traceback.  The corresponding paths are recorded in the source row
+as ``export_json_path`` and ``export_text_report_path`` so failures can be
+inspected without searching through the batch-level JSON manifest.
