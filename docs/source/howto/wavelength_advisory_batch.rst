@@ -350,3 +350,16 @@ Recommended workflow
    or where configs failed.
 6. Increase training controls for production-style runs.
 7. Treat all rankings as advisory until stronger validation metrics are added.
+
+Spectral-mixture ARD scale diagnostics
+--------------------------------------
+
+For advisory runs that evaluate the full ``2D`` spectral-mixture baseline, the
+long-form model/kernel-config CSV includes diagnostic columns that flag fitted
+spectral-mixture ARD scales near the consensus scale ceiling.  The most useful
+fields are ``n_constrained_sm_ard_components``,
+``n_constrained_sm_time_components``, and
+``n_constrained_sm_wavelength_components``.  These are advisory diagnostics for
+triage: they help identify whether the time-frequency or wavelength-frequency
+ARD dimension is being pushed against the fitted scale constraint.
+

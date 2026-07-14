@@ -3699,6 +3699,197 @@ def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]
         }
     )
 
+
+def _piwd_to_numpy_array(value: Any) -> np.ndarray | None:
+    """Best-effort conversion of tensors/arrays to a finite numpy array."""
+    if value is None:
+        return None
+    try:
+        if torch is not None and isinstance(value, torch.Tensor):
+            value = value.detach().cpu().numpy()
+        elif hasattr(value, "detach") and hasattr(value.detach(), "cpu"):
+            value = value.detach().cpu().numpy()
+        arr = np.asarray(value, dtype=float)
+    except Exception:
+        return None
+    if arr.size == 0:
+        return None
+    return arr
+
+
+def _piwd_iter_kernel_like_objects(obj: Any):
+    """Yield kernel-like objects reachable from a fitted lightcurve/model."""
+    seen: set[int] = set()
+    stack = []
+    model = getattr(obj, "model", None)
+    if model is not None:
+        stack.extend(
+            candidate
+            for candidate in (
+                getattr(model, "sci_kernel", None),
+                getattr(model, "covar_module", None),
+            )
+            if candidate is not None
+        )
+    if obj is not None:
+        stack.append(obj)
+
+    while stack:
+        item = stack.pop()
+        ident = id(item)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        yield item
+
+        for attr in (
+            "base_kernel",
+            "data_covar_module",
+            "covar_module",
+            "module",
+        ):
+            child = getattr(item, attr, None)
+            if child is not None:
+                stack.append(child)
+
+        kernels = getattr(item, "kernels", None)
+        if kernels is not None:
+            try:
+                stack.extend(k for k in kernels if k is not None)
+            except TypeError:
+                pass
+
+
+def _piwd_find_spectral_mixture_scale_array(fitted_lightcurve: Any) -> np.ndarray | None:
+    """Return a 2-D component-by-ARD-dimension SM scale array if available."""
+    for kernel in _piwd_iter_kernel_like_objects(fitted_lightcurve):
+        if not hasattr(kernel, "mixture_scales"):
+            continue
+        arr = _piwd_to_numpy_array(getattr(kernel, "mixture_scales"))
+        if arr is None:
+            continue
+        if arr.ndim == 0:
+            continue
+        if arr.ndim == 1:
+            arr2 = arr.reshape((arr.shape[0], 1))
+        elif arr.ndim == 2:
+            arr2 = arr
+        else:
+            arr2 = arr.reshape((arr.shape[0], int(np.prod(arr.shape[1:]))))
+        if arr2.size and np.all(np.isfinite(arr2)):
+            return arr2.astype(float, copy=False)
+    return None
+
+
+def _piwd_sm_ard_dimension_names(n_dimensions: int) -> list[str]:
+    """Return readable names for spectral-mixture ARD dimensions."""
+    names = []
+    for idx in range(int(n_dimensions)):
+        if idx == 0:
+            names.append("time_frequency")
+        elif idx == 1:
+            names.append("wavelength_frequency")
+        else:
+            names.append(f"ard_dimension_{idx}")
+    return names
+
+
+def _piwd_consensus_scale_upper_from_diagnostics(
+    diagnostics: dict[str, Any],
+) -> tuple[float | None, float | None]:
+    """Extract lower/upper consensus SM-scale bounds from diagnostics."""
+    bounds = diagnostics.get("consensus_scale_constraint_bounds")
+    if not isinstance(bounds, (list, tuple)) or len(bounds) < 2:
+        return None, None
+    try:
+        lower = float(bounds[0])
+        upper = float(bounds[1])
+    except (TypeError, ValueError):
+        return None, None
+    if not (np.isfinite(upper) and upper > 0):
+        return None, None
+    if not np.isfinite(lower):
+        lower = None
+    return lower, upper
+
+
+def _piwd_extract_sm_ard_scale_diagnostics(
+    fitted_lightcurve: Any,
+    diagnostics: dict[str, Any] | None = None,
+    *,
+    ceiling_tolerance_fraction: float = 0.05,
+) -> dict[str, Any]:
+    """Summarize fitted SM ARD scales near the consensus scale ceiling.
+
+    The primary use case is the full 2D spectral-mixture baseline in the
+    wavelength advisory workflow.  When a consensus fit applies a single SM
+    scale interval to an ARD kernel, this helper records which component and
+    which ARD dimension are near the upper bound.  Dimension 0 is interpreted
+    as the time-frequency axis and dimension 1 as the wavelength-frequency
+    axis for 2D kernels.
+    """
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    scales = _piwd_find_spectral_mixture_scale_array(fitted_lightcurve)
+    if scales is None:
+        return {
+            "available": False,
+            "reason": "fitted model does not expose spectral-mixture ARD scales",
+            "fitted_sm_ard_scales": None,
+            "sm_ard_dimension_names": [],
+            "sm_scale_constraint_lower": None,
+            "sm_scale_constraint_upper": None,
+            "sm_scale_ceiling_tolerance_fraction": float(ceiling_tolerance_fraction),
+            "constrained_sm_ard_components": [],
+            "n_constrained_sm_ard_components": 0,
+            "constrained_sm_ard_dimension_counts": {},
+        }
+
+    lower, upper = _piwd_consensus_scale_upper_from_diagnostics(diagnostics)
+    dim_names = _piwd_sm_ard_dimension_names(scales.shape[1])
+    tolerance = float(ceiling_tolerance_fraction)
+    if not (np.isfinite(tolerance) and 0.0 <= tolerance < 1.0):
+        tolerance = 0.05
+
+    constrained = []
+    counts = {name: 0 for name in dim_names}
+    if upper is not None:
+        threshold = (1.0 - tolerance) * upper
+        for component_index in range(scales.shape[0]):
+            for dimension_index in range(scales.shape[1]):
+                scale = float(scales[component_index, dimension_index])
+                if not np.isfinite(scale):
+                    continue
+                if scale >= threshold:
+                    dim_name = dim_names[dimension_index]
+                    counts[dim_name] += 1
+                    constrained.append(
+                        {
+                            "component_index": int(component_index),
+                            "dimension_index": int(dimension_index),
+                            "dimension_name": dim_name,
+                            "scale": scale,
+                            "constraint_upper": float(upper),
+                            "fraction_of_upper": float(scale / upper),
+                            "ceiling_tolerance_fraction": tolerance,
+                        }
+                    )
+
+    counts = {key: value for key, value in counts.items() if value}
+    return _clean_scalar_dict(
+        {
+            "available": True,
+            "reason": None if upper is not None else "no consensus SM scale upper bound was recorded",
+            "fitted_sm_ard_scales": scales.tolist(),
+            "sm_ard_dimension_names": dim_names,
+            "sm_scale_constraint_lower": lower,
+            "sm_scale_constraint_upper": upper,
+            "sm_scale_ceiling_tolerance_fraction": tolerance,
+            "constrained_sm_ard_components": constrained,
+            "n_constrained_sm_ard_components": int(len(constrained)),
+            "constrained_sm_ard_dimension_counts": counts,
+        }
+    )
+
 def _piwd_extract_fit_outcome(
     candidate: dict[str, Any],
     *,
@@ -3717,6 +3908,11 @@ def _piwd_extract_fit_outcome(
         if status == "passed"
         else _piwd_training_fit_quality_unavailable("model/kernel config fit did not complete")
     )
+    sm_ard_diagnostics = _piwd_extract_sm_ard_scale_diagnostics(
+        fitted_lightcurve,
+        diagnostics,
+    )
+    sm_ard_counts = sm_ard_diagnostics.get("constrained_sm_ard_dimension_counts") or {}
 
     outcome: dict[str, Any] = {
         "model_kernel_config_id": candidate.get("model_kernel_config_id"),
@@ -3760,6 +3956,18 @@ def _piwd_extract_fit_outcome(
         "training_median_abs_standardized_residual": fit_quality.get("median_abs_standardized_residual"),
         "training_outlier_fraction_3sigma": fit_quality.get("outlier_fraction_3sigma"),
         "training_log_marginal_likelihood": fit_quality.get("log_marginal_likelihood"),
+        "sm_ard_scale_diagnostics": sm_ard_diagnostics,
+        "constrained_sm_ard_components": sm_ard_diagnostics.get(
+            "constrained_sm_ard_components"
+        ),
+        "n_constrained_sm_ard_components": sm_ard_diagnostics.get(
+            "n_constrained_sm_ard_components"
+        ),
+        "constrained_sm_ard_dimension_counts": sm_ard_counts,
+        "n_constrained_sm_time_components": sm_ard_counts.get("time_frequency", 0),
+        "n_constrained_sm_wavelength_components": sm_ard_counts.get(
+            "wavelength_frequency", 0
+        ),
     }
 
     if exception is not None:
@@ -5277,6 +5485,19 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
             "training_log_marginal_likelihood": item.get(
                 "training_log_marginal_likelihood"
             ),
+            "n_constrained_sm_ard_components": item.get(
+                "n_constrained_sm_ard_components"
+            ),
+            "n_constrained_sm_time_components": item.get(
+                "n_constrained_sm_time_components"
+            ),
+            "n_constrained_sm_wavelength_components": item.get(
+                "n_constrained_sm_wavelength_components"
+            ),
+            "constrained_sm_ard_dimension_counts": item.get(
+                "constrained_sm_ard_dimension_counts"
+            ),
+            "constrained_sm_ard_components": item.get("constrained_sm_ard_components"),
             "exception_type": item.get("exception_type"),
             "exception_message": item.get("exception_message"),
         }
@@ -5321,6 +5542,11 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "training_outlier_fraction_3sigma",
         "training_reduced_chi2",
         "training_log_marginal_likelihood",
+        "n_constrained_sm_ard_components",
+        "n_constrained_sm_time_components",
+        "n_constrained_sm_wavelength_components",
+        "constrained_sm_ard_dimension_counts",
+        "constrained_sm_ard_components",
         "exception_type",
         "exception_message",
     ]
