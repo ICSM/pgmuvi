@@ -38,3 +38,19 @@ Prefer focused API pages for modules with stable, readable docstrings.  For
 large legacy modules whose implementation docstrings are not yet suitable for
 full autodoc expansion, use a short manual synopsis page and link users to the
 maintained high-level workflow documentation.
+
+Continuous integration
+----------------------
+
+The strict documentation contract is enforced by
+``.github/workflows/docs.yml``. The workflow installs the documentation
+requirements from ``docs/source/requirements.txt`` and runs::
+
+   cd docs
+   make html-strict
+
+This keeps the local maintenance command and the pull-request check aligned:
+warnings that fail locally should also fail in CI, and warnings that are
+accepted temporarily should be documented explicitly before they are allowed
+back into the public docs build.
+
