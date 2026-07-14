@@ -91,6 +91,15 @@ API reference
    api
 
 
+Developer documentation
+-----------------------
+
+.. toctree::
+   :maxdepth: 1
+
+   docs_maintenance
+
+
 Contributing
 ------------
 

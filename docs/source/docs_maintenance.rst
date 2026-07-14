@@ -1,0 +1,40 @@
+Documentation maintenance
+=========================
+
+The public documentation build is expected to complete without Sphinx warnings.
+Use the normal HTML build while iterating, but run the strict build before
+merging documentation changes.
+
+Strict local build
+------------------
+
+Run the strict build from a clean documentation tree::
+
+   cd docs
+   make clean
+   make html-strict
+
+The ``html-strict`` target treats warnings as errors and uses ``--keep-going``
+so that one warning does not hide later warnings in the same build.  This is the
+preferred final check after changing API reference pages, notebooks, toctrees,
+or Sphinx configuration.
+
+Notebook policy
+---------------
+
+Maintained public notebooks should be linked from the main tutorial toctree and
+should build cleanly under Sphinx.  Stub, unfinished, unavailable, or
+pending-refresh notebooks should be documented in ``notebook_status.rst`` and
+excluded from Sphinx source discovery until they are refreshed.
+
+Avoid leaving notebooks in an in-between state where they are excluded from the
+public tutorial list but still discovered as orphan Sphinx source files.  That
+state makes clean warning-free builds difficult to maintain.
+
+API-reference policy
+--------------------
+
+Prefer focused API pages for modules with stable, readable docstrings.  For
+large legacy modules whose implementation docstrings are not yet suitable for
+full autodoc expansion, use a short manual synopsis page and link users to the
+maintained high-level workflow documentation.
