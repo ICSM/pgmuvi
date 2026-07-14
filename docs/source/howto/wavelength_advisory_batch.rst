@@ -45,7 +45,10 @@ filter before advisory fits: rows with non-positive flux values or
 non-positive flux-error values are dropped after ``Lightcurve.from_csv`` has
 loaded the source.  Use ``--allow-nonpositive-flux`` or
 ``--allow-nonpositive-flux-error`` only when you intentionally want to inspect
-unfiltered input behavior.
+unfiltered input behavior.  Per-source JSON outputs include the underlying
+period-independent robust distribution diagnostics, including
+``raw_half_amplitude_q02_5_q97_5`` and the central-90%
+``raw_half_amplitude_q05_q95`` amplitude proxy.
 
 The same script also accepts a source-list file:
 

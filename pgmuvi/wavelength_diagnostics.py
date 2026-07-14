@@ -2272,6 +2272,7 @@ def _period_independent_band_summary(
         "median_flux": None,
         "trimmed_mean_flux_10_90": None,
         "mean_flux": None,
+        "q02_5_flux": None,
         "q05_flux": None,
         "q10_flux": None,
         "q16_flux": None,
@@ -2281,18 +2282,23 @@ def _period_independent_band_summary(
         "q84_flux": None,
         "q90_flux": None,
         "q95_flux": None,
+        "q97_5_flux": None,
         "mad_scatter": None,
         "iqr_scatter": None,
         "robust_scatter": None,
+        "raw_peak_to_peak_q02_5_q97_5": None,
+        "raw_half_amplitude_q02_5_q97_5": None,
         "raw_peak_to_peak_q05_q95": None,
         "raw_half_amplitude_q05_q95": None,
         "raw_peak_to_peak_q10_q90": None,
         "raw_half_amplitude_q10_q90": None,
+        "fractional_half_amplitude_q02_5_q97_5": None,
         "fractional_half_amplitude_q05_q95": None,
         "fractional_half_amplitude_q10_q90": None,
         "median_yerr": None,
         "mean_yerr": None,
         "noise_corrected_robust_scatter": None,
+        "noise_corrected_half_amplitude_q02_5_q97_5": None,
         "noise_corrected_half_amplitude_q05_q95": None,
         "noise_corrected_half_amplitude_q10_q90": None,
     }
@@ -2300,8 +2306,8 @@ def _period_independent_band_summary(
     if yf.size < min_points:
         return result
 
-    q05, q10, q16, q25, q50, q75, q84, q90, q95 = np.percentile(
-        yf, [5.0, 10.0, 16.0, 25.0, 50.0, 75.0, 84.0, 90.0, 95.0]
+    q02_5, q05, q10, q16, q25, q50, q75, q84, q90, q95, q97_5 = np.percentile(
+        yf, [2.5, 5.0, 10.0, 16.0, 25.0, 50.0, 75.0, 84.0, 90.0, 95.0, 97.5]
     )
     trimmed = yf[(yf >= q10) & (yf <= q90)]
     if trimmed.size == 0:
@@ -2314,6 +2320,7 @@ def _period_independent_band_summary(
     except Exception:
         robust = mad
 
+    amp_02_97 = float(0.5 * (q97_5 - q02_5))
     amp_05_95 = float(0.5 * (q95 - q05))
     amp_10_90 = float(0.5 * (q90 - q10))
     median_abs = abs(float(q50))
@@ -2325,6 +2332,7 @@ def _period_independent_band_summary(
             "median_flux": float(q50),
             "trimmed_mean_flux_10_90": float(np.mean(trimmed)),
             "mean_flux": float(np.mean(yf)),
+            "q02_5_flux": float(q02_5),
             "q05_flux": float(q05),
             "q10_flux": float(q10),
             "q16_flux": float(q16),
@@ -2334,13 +2342,19 @@ def _period_independent_band_summary(
             "q84_flux": float(q84),
             "q90_flux": float(q90),
             "q95_flux": float(q95),
+            "q97_5_flux": float(q97_5),
             "mad_scatter": mad,
             "iqr_scatter": iqr_scatter,
             "robust_scatter": robust,
+            "raw_peak_to_peak_q02_5_q97_5": float(q97_5 - q02_5),
+            "raw_half_amplitude_q02_5_q97_5": amp_02_97,
             "raw_peak_to_peak_q05_q95": float(q95 - q05),
             "raw_half_amplitude_q05_q95": amp_05_95,
             "raw_peak_to_peak_q10_q90": float(q90 - q10),
             "raw_half_amplitude_q10_q90": amp_10_90,
+            "fractional_half_amplitude_q02_5_q97_5": (
+                float(amp_02_97 / median_abs) if median_abs > 0.0 else None
+            ),
             "fractional_half_amplitude_q05_q95": (
                 float(amp_05_95 / median_abs) if median_abs > 0.0 else None
             ),
@@ -2361,6 +2375,9 @@ def _period_independent_band_summary(
                 robust, median_yerr
             )
             # Approximate Gaussian quantile factors for half central intervals.
+            result["noise_corrected_half_amplitude_q02_5_q97_5"] = _piwd_noise_corrected(
+                amp_02_97, 1.95996 * median_yerr
+            )
             result["noise_corrected_half_amplitude_q05_q95"] = _piwd_noise_corrected(
                 amp_05_95, 1.64485 * median_yerr
             )
@@ -2447,6 +2464,10 @@ def diagnose_period_independent_wavelength_structure(
         row["period_independent_flux_summary"].get("median_flux")
         for row in usable_rows
     ]
+    raw_amp_02_97 = [
+        row["period_independent_flux_summary"].get("raw_half_amplitude_q02_5_q97_5")
+        for row in usable_rows
+    ]
     raw_amp_05_95 = [
         row["period_independent_flux_summary"].get("raw_half_amplitude_q05_q95")
         for row in usable_rows
@@ -2488,12 +2509,16 @@ def diagnose_period_independent_wavelength_structure(
         "uses_temporal_consensus": False,
         "uses_period_or_frequency": False,
         "median_flux_ratio_max_to_min_abs": _piwd_ratio([abs(v) if v is not None else None for v in medians]),
+        "raw_half_amplitude_q02_5_q97_5_ratio_max_to_min": _piwd_ratio(raw_amp_02_97),
         "raw_half_amplitude_q05_q95_ratio_max_to_min": _piwd_ratio(raw_amp_05_95),
         "raw_half_amplitude_q10_q90_ratio_max_to_min": _piwd_ratio(raw_amp_10_90),
         "robust_scatter_ratio_max_to_min": _piwd_ratio(scatters),
         "noise_corrected_robust_scatter_ratio_max_to_min": _piwd_ratio(nc_scatters),
         "median_flux_monotonicity_class": _piwd_monotonic_class(
             usable_wavelengths, medians
+        ),
+        "raw_half_amplitude_q02_5_q97_5_monotonicity_class": _piwd_monotonic_class(
+            usable_wavelengths, raw_amp_02_97
         ),
         "raw_half_amplitude_q05_q95_monotonicity_class": _piwd_monotonic_class(
             usable_wavelengths, raw_amp_05_95
@@ -2507,6 +2532,9 @@ def diagnose_period_independent_wavelength_structure(
         ),
         "median_flux_loglog_slope": _piwd_loglog_slope(
             usable_wavelengths, [abs(v) if v is not None else None for v in medians]
+        ),
+        "raw_half_amplitude_q02_5_q97_5_loglog_slope": _piwd_loglog_slope(
+            usable_wavelengths, raw_amp_02_97
         ),
         "raw_half_amplitude_q05_q95_loglog_slope": _piwd_loglog_slope(
             usable_wavelengths, raw_amp_05_95

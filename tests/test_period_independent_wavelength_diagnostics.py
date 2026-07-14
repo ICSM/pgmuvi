@@ -76,14 +76,29 @@ class TestPeriodIndependentWavelengthDiagnostics(unittest.TestCase):
             row["period_independent_flux_summary"]["raw_half_amplitude_q05_q95"]
             for row in rows
         ]
+        wide_amps = [
+            row["period_independent_flux_summary"]["raw_half_amplitude_q02_5_q97_5"]
+            for row in rows
+        ]
 
         self.assertEqual(report["summary"]["n_bands"], 3)
         self.assertEqual(report["summary"]["n_usable_bands"], 3)
         self.assertGreater(amps[1], amps[0])
         self.assertGreater(amps[2], amps[1])
+        self.assertGreater(wide_amps[0], amps[0])
+        self.assertGreater(wide_amps[1], amps[1])
+        self.assertGreater(wide_amps[2], amps[2])
+        self.assertGreater(
+            report["summary"]["raw_half_amplitude_q02_5_q97_5_ratio_max_to_min"],
+            3.0,
+        )
         self.assertGreater(
             report["summary"]["raw_half_amplitude_q05_q95_ratio_max_to_min"],
             3.0,
+        )
+        self.assertEqual(
+            report["summary"]["raw_half_amplitude_q02_5_q97_5_monotonicity_class"],
+            "increasing",
         )
         self.assertEqual(
             report["summary"]["raw_half_amplitude_q05_q95_monotonicity_class"],
@@ -100,6 +115,10 @@ class TestPeriodIndependentWavelengthDiagnostics(unittest.TestCase):
             self.assertLessEqual(
                 flux["noise_corrected_robust_scatter"],
                 flux["robust_scatter"],
+            )
+            self.assertLessEqual(
+                flux["noise_corrected_half_amplitude_q02_5_q97_5"],
+                flux["raw_half_amplitude_q02_5_q97_5"],
             )
             self.assertLessEqual(
                 flux["noise_corrected_half_amplitude_q05_q95"],

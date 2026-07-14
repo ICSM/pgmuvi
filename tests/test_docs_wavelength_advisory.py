@@ -20,6 +20,7 @@ class TestWavelengthAdvisoryDocs(unittest.TestCase):
             "score_period_independent_wavelength_model_kernel_config_quality",
             "run_period_independent_wavelength_advisory_workflow",
             "export_period_independent_wavelength_advisory_workflow",
+            "raw_half_amplitude_q02_5_q97_5",
         ]
         for name in required:
             with self.subTest(name=name):

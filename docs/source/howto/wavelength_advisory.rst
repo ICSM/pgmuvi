@@ -123,8 +123,10 @@ Useful fields include:
      - Number of wavelength bands considered and retained.
    * - ``median_flux_monotonicity_class``
      - Descriptive monotonicity class for the per-band median flux.
+   * - ``raw_half_amplitude_q02_5_q97_5_monotonicity_class``
+     - Descriptive monotonicity class for the wider central-95% per-band amplitude proxy.
    * - ``raw_half_amplitude_q05_q95_monotonicity_class``
-     - Descriptive monotonicity class for a robust per-band amplitude proxy.
+     - Descriptive monotonicity class for the central-90% robust per-band amplitude proxy.
    * - ``robust_scatter_monotonicity_class``
      - Descriptive monotonicity class for robust scatter.
 
