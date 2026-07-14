@@ -2,6 +2,8 @@ How-To Guides
 =============
 
 These guides address specific tasks in ``pgmuvi``.
+For the broader documentation-expansion plan, including the expected concept/script/notebook layers for each major workflow, see :doc:`../documentation_roadmap`.
+
 Each guide is focused on a single workflow and assumes you have already read the
 :doc:`../background` and :doc:`../concepts` pages.
 

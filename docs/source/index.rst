@@ -98,6 +98,7 @@ Developer documentation
    :maxdepth: 1
 
    docs_maintenance
+   documentation_roadmap
 
 
 Contributing
