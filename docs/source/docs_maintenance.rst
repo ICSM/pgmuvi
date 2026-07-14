@@ -54,3 +54,20 @@ warnings that fail locally should also fail in CI, and warnings that are
 accepted temporarily should be documented explicitly before they are allowed
 back into the public docs build.
 
+Generated artifacts and source snapshots
+----------------------------------------
+
+Local documentation builds, warning logs, patch backups, and ad-hoc review
+archives should stay out of commits. The project ``.gitignore`` covers the
+standard local outputs used by the documentation and PR-review workflow,
+including ``docs/build/``, ``.ruff_cache/``, ``debug*.txt``, ``*.orig``,
+``*.rej``, and ``pgmuvi_current*.zip``.
+
+For a clean source snapshot, prefer a Git archive from the committed tree
+instead of zipping the working directory::
+
+   git archive --format=zip -o pgmuvi_current.zip HEAD
+
+This avoids bundling ``.git/``, local caches, Sphinx build output, and other
+untracked inspection artifacts.
+
