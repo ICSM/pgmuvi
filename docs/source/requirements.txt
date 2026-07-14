@@ -1,3 +1,8 @@
+# Documentation build requirements.
+#
+# This file is the single source of truth for local docs builds,
+# Read the Docs, and the GitHub Actions strict-docs workflow.
+-e .
+sphinx>=5.3
 nbsphinx
 ipykernel
--e .

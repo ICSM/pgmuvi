@@ -87,3 +87,15 @@ The archive is produced from tracked files only at the requested Git reference,
 so it excludes ``.git/``, local caches, Sphinx build output, debug logs, patch
 backups, and other untracked inspection artifacts.
 
+
+Documentation dependencies
+--------------------------
+
+The documentation dependency list is centralized in
+``docs/source/requirements.txt``.  That file is used by local strict builds,
+Read the Docs, and the GitHub Actions documentation workflow.
+
+When a documentation dependency is added, removed, or deliberately pinned,
+update ``docs/source/requirements.txt`` first.  Do not duplicate ad hoc docs
+installation commands in CI workflows unless there is a narrowly documented
+reason for doing so.

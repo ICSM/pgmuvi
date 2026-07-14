@@ -2,29 +2,30 @@ name: Documentation
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 jobs:
   strict-docs:
-    name: Strict Sphinx documentation build
+    name: Strict documentation build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
-      - name: Install documentation dependencies
+      - name: Install documentation requirements
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r docs/source/requirements.txt
 
       - name: Build documentation with warnings as errors
         run: |
-          cd docs
-          make html-strict
+          make -C docs clean
+          make -C docs html-strict

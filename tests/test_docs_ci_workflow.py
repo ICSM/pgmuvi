@@ -18,7 +18,10 @@ class TestStrictDocsCIWorkflow(unittest.TestCase):
 
     def test_workflow_runs_strict_docs_target(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("make html-strict", text)
+        self.assertRegex(
+            text,
+            r"make(?:\s+-C\s+docs)?\s+html-strict",
+        )
         self.assertIn("docs/source/requirements.txt", text)
         self.assertIn("actions/setup-python@v5", text)
         self.assertIn("actions/checkout@v4", text)
