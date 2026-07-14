@@ -1,19 +1,18 @@
-"""Alternative GP model classes for pgmuvi.
+"""Compatibility imports for GP model classes.
 
-.. deprecated::
-    This module is a compatibility shim. The models have been moved to
-    :mod:`pgmuvi.gps` where they belong alongside the other GP model classes.
-    Import them from there directly::
+This module is a deprecated compatibility shim.  The model classes have
+moved to :mod:`pgmuvi.gps`, where they live alongside the other GP model
+classes.  New code should import them from :mod:`pgmuvi.gps` directly::
 
-        from pgmuvi.gps import (
-            QuasiPeriodicGPModel,
-            MaternGPModel,
-            PeriodicPlusStochasticGPModel,
-            SeparableGPModel,
-            AchromaticGPModel,
-            WavelengthDependentGPModel,
-            LinearMeanQuasiPeriodicGPModel,
-        )
+    from pgmuvi.gps import (
+        QuasiPeriodicGPModel,
+        MaternGPModel,
+        PeriodicPlusStochasticGPModel,
+        SeparableGPModel,
+        AchromaticGPModel,
+        WavelengthDependentGPModel,
+        LinearMeanQuasiPeriodicGPModel,
+    )
 """
 
 from .gps import (  # noqa: F401
