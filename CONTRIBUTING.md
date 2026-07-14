@@ -138,3 +138,42 @@ If you just enjoy writing documentation, we welcome contributions to our
 documentation that are not attached to any particular code change. If you are
 not sure how to get started, please open an issue and we will be happy to help.
 Tutorials and examples are particularly welcome.
+
+## Documentation build and review workflow
+
+Documentation changes should be checked with the same strict build contract used
+by CI. This applies to changes in `docs/`, public notebooks, docstrings exposed
+through the API reference, documentation requirements, and documentation-related
+GitHub Actions workflows.
+
+Use the centralized documentation requirements file before building the docs:
+
+```bash
+python -m pip install -r docs/source/requirements.txt
+```
+
+Then run the warning-clean Sphinx build:
+
+```bash
+cd docs
+make clean
+make html-strict
+cd ..
+```
+
+The `html-strict` target treats warnings as errors. Do not work around a failure
+by switching back to the ordinary `html` target; fix the warning source or update
+the documented quarantine/legacy status if a notebook or page should not be part
+of the public build.
+
+Local review artifacts such as `debug_*.txt`, `debug_pr*.txt`, `docs/build/`,
+`pgmuvi_current*.zip`, patch backup files, and Python cache directories are
+ignored by the repository and should not be committed. When a clean source ZIP is
+needed for review, create it from tracked files only:
+
+```bash
+python scripts/create_source_snapshot.py --output pgmuvi_current.zip
+```
+
+See `docs/source/docs_maintenance.rst` for the maintainer-facing version of this
+contract.
