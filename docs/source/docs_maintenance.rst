@@ -71,3 +71,19 @@ instead of zipping the working directory::
 This avoids bundling ``.git/``, local caches, Sphinx build output, and other
 untracked inspection artifacts.
 
+Clean source snapshot helper
+----------------------------
+
+When a clean source snapshot is needed for review, prefer the helper script over
+zipping the working directory::
+
+   python scripts/create_source_snapshot.py --output pgmuvi_current.zip
+
+The helper is a small wrapper around::
+
+   git archive --format=zip -o pgmuvi_current.zip HEAD
+
+The archive is produced from tracked files only at the requested Git reference,
+so it excludes ``.git/``, local caches, Sphinx build output, debug logs, patch
+backups, and other untracked inspection artifacts.
+
