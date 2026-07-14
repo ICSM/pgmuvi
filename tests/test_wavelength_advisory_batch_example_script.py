@@ -98,6 +98,8 @@ class TestRunWavelengthAdvisoryBatchExample(unittest.TestCase):
                     "n_model_kernel_configs": 3,
                     "n_successful_model_kernel_configs": 3,
                     "n_failed_model_kernel_configs": 0,
+                    "source_output_dir": "out/one",
+                    "source_output_prefix": "one_wavelength_advisory",
                     "exception_type": None,
                     "exception_message": None,
                 }

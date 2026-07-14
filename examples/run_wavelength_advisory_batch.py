@@ -326,6 +326,8 @@ def _print_batch_summary(report: dict[str, Any]) -> None:
             row.get("n_rows_after_positive_filter"),
             "dropped=",
             row.get("n_rows_dropped_positive_filter"),
+            "output_dir=",
+            row.get("source_output_dir"),
             "error=", row.get("exception_type"), row.get("exception_message"),
         )
 

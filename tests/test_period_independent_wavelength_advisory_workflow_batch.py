@@ -129,6 +129,8 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
             self.assertEqual(report["n_failed"], 1)
             failed = report["source_results"][0]
             self.assertEqual(failed["status"], "failed")
+            self.assertIsNotNone(failed["source_output_dir"])
+            self.assertIsNotNone(failed["source_output_prefix"])
             self.assertIsNotNone(failed["export_json_path"])
             self.assertIsNotNone(failed["export_text_report_path"])
 
@@ -136,6 +138,8 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
             text_path = Path(failed["export_text_report_path"])
             self.assertTrue(json_path.exists())
             self.assertTrue(text_path.exists())
+            self.assertEqual(Path(failed["source_output_dir"]), json_path.parent)
+            self.assertEqual(failed["source_output_prefix"], "bad_source_wavelength_advisory")
             self.assertIn("bad_source", str(json_path.parent))
             self.assertIn(str(json_path), report["exported_files"])
             self.assertIn(str(text_path), report["exported_files"])
@@ -176,6 +180,10 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
             self.assertTrue(Path(report["batch_csv_path"]).exists())
             self.assertGreaterEqual(len(report["exported_files"]), 6)
             for row in report["source_results"]:
+                self.assertIsNotNone(row["source_output_dir"])
+                self.assertIsNotNone(row["source_output_prefix"])
+                self.assertTrue(Path(row["source_output_dir"]).is_dir())
+                self.assertTrue(row["source_output_prefix"].endswith("_wavelength_advisory"))
                 self.assertIsNotNone(row["export_json_path"])
                 self.assertTrue(Path(row["export_json_path"]).exists())
                 self.assertTrue(Path(row["export_text_report_path"]).exists())
@@ -314,6 +322,13 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
 
             with detail_path.open(newline="", encoding="utf-8") as handle:
                 csv_rows = list(csv.DictReader(handle))
+
+            summary_csv_path = Path(report["batch_csv_path"])
+            with summary_csv_path.open(newline="", encoding="utf-8") as handle:
+                summary_rows = list(csv.DictReader(handle))
+
+        self.assertIn("source_output_dir", summary_rows[0])
+        self.assertIn("source_output_prefix", summary_rows[0])
 
         self.assertEqual(len(report["model_kernel_config_results"]), 2)
         self.assertEqual(len(csv_rows), 2)

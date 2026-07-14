@@ -5292,6 +5292,8 @@ def _piwd_batch_write_summary_csv(path, rows):
         "n_rows_dropped_positive_filter",
         "exception_type",
         "exception_message",
+        "source_output_dir",
+        "source_output_prefix",
         "export_json_path",
         "export_text_report_path",
     ]
@@ -5856,6 +5858,8 @@ def _piwd_batch_format_markdown_report(manifest):
             "n_rows_dropped_positive_filter",
             "exception_type",
             "exception_message",
+            "source_output_dir",
+            "source_output_prefix",
         ]
         lines.append("| " + " | ".join(fields) + " |")
         lines.append("|" + "|".join(["---"] * len(fields)) + "|")
@@ -6031,6 +6035,8 @@ def run_period_independent_wavelength_advisory_workflow_batch(
             "n_rows_before_positive_filter": None,
             "n_rows_after_positive_filter": None,
             "n_rows_dropped_positive_filter": None,
+            "source_output_dir": None,
+            "source_output_prefix": None,
             "export_manifest": None,
             "export_json_path": None,
             "export_text_report_path": None,
@@ -6117,6 +6123,8 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                 source_component = _piwd_batch_safe_path_component(source_id, index)
                 source_outdir = outdir / source_component
                 source_prefix = f"{source_component}_wavelength_advisory"
+                row["source_output_dir"] = str(source_outdir)
+                row["source_output_prefix"] = source_prefix
                 manifest = lc.export_period_independent_wavelength_advisory_workflow(
                     workflow=workflow,
                     output_dir=source_outdir,
@@ -6145,6 +6153,8 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                 )
                 source_outdir = outdir / source_component
                 source_prefix = f"{source_component}_wavelength_advisory"
+                row["source_output_dir"] = str(source_outdir)
+                row["source_output_prefix"] = source_prefix
                 failure_manifest = _piwd_batch_write_failure_artifacts(
                     source_outdir,
                     source_prefix,

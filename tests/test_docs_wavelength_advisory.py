@@ -41,6 +41,8 @@ class TestWavelengthAdvisoryDocs(unittest.TestCase):
             "top_ranked_fraction",
             "positive_data_filter_kwargs",
             "n_rows_dropped_positive_filter",
+            "source_output_dir",
+            "source_output_prefix",
             "--allow-nonpositive-flux",
         ]
         for token in required:

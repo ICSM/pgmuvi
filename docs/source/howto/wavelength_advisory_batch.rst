@@ -209,6 +209,8 @@ Important columns include:
      - Number of rows removed by the optional strict positive flux/error filter.
    * - ``exception_type`` / ``exception_message``
      - Failure diagnostics for source-level failures.
+   * - ``source_output_dir`` / ``source_output_prefix``
+     - Per-source export directory and filename prefix used for successful workflow artifacts or failure artifacts.
 
 Long-form model/kernel-config CSV
 ---------------------------------
@@ -369,6 +371,8 @@ Per-source failure artifacts
 When ``output_dir`` is supplied and per-source export is enabled, failed sources
 also receive a per-source output directory.  The batch runner writes a compact
 failure JSON file and a text report containing the exception type, exception
-message, and traceback.  The corresponding paths are recorded in the source row
-as ``export_json_path`` and ``export_text_report_path`` so failures can be
-inspected without searching through the batch-level JSON manifest.
+message, and traceback.  The per-source directory and prefix are recorded as
+``source_output_dir`` and ``source_output_prefix``.  The corresponding artifact
+paths are recorded in the source row as ``export_json_path`` and
+``export_text_report_path`` so failures can be inspected without searching
+through the batch-level JSON manifest.
