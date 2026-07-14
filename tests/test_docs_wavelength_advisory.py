@@ -39,6 +39,9 @@ class TestWavelengthAdvisoryDocs(unittest.TestCase):
             "n_successful_model_kernel_configs",
             "n_failed_model_kernel_configs",
             "top_ranked_fraction",
+            "positive_data_filter_kwargs",
+            "n_rows_dropped_positive_filter",
+            "--allow-nonpositive-flux",
         ]
         for token in required:
             with self.subTest(token=token):

@@ -40,6 +40,13 @@ The high-level command-line entry point is:
      --max-samples 1000 \
      --max-samples-per-band 100
 
+By default, the example script applies a strict post-ingestion data hygiene
+filter before advisory fits: rows with non-positive flux values or
+non-positive flux-error values are dropped after ``Lightcurve.from_csv`` has
+loaded the source.  Use ``--allow-nonpositive-flux`` or
+``--allow-nonpositive-flux-error`` only when you intentionally want to inspect
+unfiltered input behavior.
+
 The same script also accepts a source-list file:
 
 .. code-block:: bash
@@ -75,6 +82,10 @@ The equivalent Python entry point is:
            "max_samples": 1000,
            "max_samples_per_band": 100,
            "verbose": True,
+       },
+       positive_data_filter_kwargs={
+           "require_positive_flux": True,
+           "require_positive_flux_error": True,
        },
        workflow_kwargs={
            "include_2d_baseline": True,
@@ -192,6 +203,10 @@ Important columns include:
      - Number of configs that completed successfully.
    * - ``n_failed_model_kernel_configs``
      - Number of configs that failed and were recorded.
+   * - ``n_rows_before_positive_filter`` / ``n_rows_after_positive_filter``
+     - Row counts before and after optional strict positive flux/error filtering.
+   * - ``n_rows_dropped_positive_filter``
+     - Number of rows removed by the optional strict positive flux/error filter.
    * - ``exception_type`` / ``exception_message``
      - Failure diagnostics for source-level failures.
 

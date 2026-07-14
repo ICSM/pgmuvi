@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.wavelength_diagnostics import (
+    _piwd_batch_apply_positive_data_filter,
     run_period_independent_wavelength_advisory_workflow_batch,
 )
 
@@ -295,6 +296,47 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         self.assertEqual(csv_by_model["2DDustMean"]["model_kernel_config_id"], "rank2_2DDustMean")
         self.assertEqual(csv_by_model["2DDustMean"]["quality_rank"], "1")
         self.assertEqual(csv_by_model["2DWavelengthDependent"]["quality_rank"], "2")
+
+
+    def test_positive_data_filter_drops_nonpositive_flux_and_errors(self):
+        import numpy as np
+
+        lc = Lightcurve(
+            xdata=np.array([[1.0, 1.2], [2.0, 1.2], [3.0, 2.2], [4.0, 2.2]]),
+            ydata=np.array([10.0, -1.0, 5.0, 7.0]),
+            yerr=np.array([0.1, 0.2, 0.0, 0.3]),
+            band=np.array(["J", "J", "K", "K"]),
+        )
+
+        filtered, report = _piwd_batch_apply_positive_data_filter(
+            lc,
+            require_positive_flux=True,
+            require_positive_flux_error=True,
+        )
+
+        self.assertEqual(report["n_rows_before"], 4)
+        self.assertEqual(report["n_rows_after"], 2)
+        self.assertEqual(report["n_rows_dropped"], 2)
+        self.assertTrue((filtered._ydata_raw.detach().cpu().numpy() > 0.0).all())
+        self.assertTrue((filtered._yerr_raw.detach().cpu().numpy() > 0.0).all())
+        self.assertEqual(filtered.band.tolist(), ["J", "K"])
+
+    def test_positive_data_filter_rejects_all_dropped_lightcurve(self):
+        import numpy as np
+
+        lc = Lightcurve(
+            xdata=np.array([[1.0, 1.2], [2.0, 1.2]]),
+            ydata=np.array([-1.0, 0.0]),
+            yerr=np.array([0.1, 0.2]),
+            band=np.array(["J", "J"]),
+        )
+
+        with self.assertRaisesRegex(ValueError, "No rows remain"):
+            _piwd_batch_apply_positive_data_filter(
+                lc,
+                require_positive_flux=True,
+                require_positive_flux_error=True,
+            )
 
     def test_lightcurve_static_method_delegates(self):
         report = Lightcurve.run_period_independent_wavelength_advisory_workflow_batch(

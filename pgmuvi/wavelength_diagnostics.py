@@ -4872,7 +4872,122 @@ def _piwd_batch_safe_path_component(value, index):
     return cleaned or f"source_{index + 1:04d}"
 
 
-def _piwd_batch_resolve_source(source, index, *, from_csv_kwargs=None):
+
+def _piwd_batch_apply_positive_data_filter(
+    lightcurve,
+    *,
+    require_positive_flux=False,
+    require_positive_flux_error=False,
+):
+    """Return ``(lightcurve, report)`` after optional positive-row filtering.
+
+    The batch runner uses this immediately after CSV ingestion so survey runs
+    can reject rows with non-positive fluxes or flux uncertainties before any
+    advisory fits are attempted.  The original light curve is returned
+    unchanged when no rows need to be dropped.
+    """
+    require_positive_flux = bool(require_positive_flux)
+    require_positive_flux_error = bool(require_positive_flux_error)
+
+    ydata = getattr(lightcurve, "_ydata_raw", None)
+    n_before = None
+    if ydata is not None:
+        try:
+            n_before = int(ydata.reshape(-1).shape[0])
+        except Exception:
+            n_before = None
+
+    report = {
+        "applied": bool(require_positive_flux or require_positive_flux_error),
+        "require_positive_flux": require_positive_flux,
+        "require_positive_flux_error": require_positive_flux_error,
+        "n_rows_before": n_before,
+        "n_rows_after": n_before,
+        "n_rows_dropped": 0,
+        "n_dropped_nonpositive_flux": 0,
+        "n_dropped_nonpositive_flux_error": 0,
+    }
+
+    if not report["applied"]:
+        return lightcurve, report
+
+    if torch is None:  # pragma: no cover - pgmuvi normally depends on torch
+        raise RuntimeError("positive light-curve filtering requires torch.")
+
+    xdata = getattr(lightcurve, "_xdata_raw", None)
+    if xdata is None or ydata is None:
+        raise ValueError(
+            "positive light-curve filtering requires a Lightcurve-like object "
+            "with _xdata_raw and _ydata_raw arrays."
+        )
+    if getattr(ydata, "dim", lambda: None)() != 1:
+        raise ValueError(
+            "positive light-curve filtering currently requires one-dimensional ydata."
+        )
+    if xdata.shape[0] != ydata.shape[0]:
+        raise ValueError(
+            "positive light-curve filtering requires matching xdata/ydata row counts."
+        )
+
+    keep = torch.ones(ydata.shape[0], dtype=torch.bool, device=ydata.device)
+
+    if require_positive_flux:
+        good_flux = torch.isfinite(ydata) & (ydata > 0.0)
+        report["n_dropped_nonpositive_flux"] = int((~good_flux).sum().item())
+        keep &= good_flux
+
+    yerr = getattr(lightcurve, "_yerr_raw", None)
+    if require_positive_flux_error:
+        if yerr is None:
+            raise ValueError(
+                "positive flux-error filtering was requested, but this light curve "
+                "has no yerr values."
+            )
+        if yerr.shape[0] != ydata.shape[0]:
+            raise ValueError(
+                "positive flux-error filtering requires matching ydata/yerr row counts."
+            )
+        good_yerr = torch.isfinite(yerr) & (yerr > 0.0)
+        report["n_dropped_nonpositive_flux_error"] = int((~good_yerr).sum().item())
+        keep &= good_yerr
+
+    n_after = int(keep.sum().item())
+    report["n_rows_after"] = n_after
+    report["n_rows_dropped"] = int(ydata.shape[0] - n_after)
+
+    if n_after <= 0:
+        raise ValueError(
+            "No rows remain after strictly positive flux/flux-error filtering."
+        )
+    if n_after == ydata.shape[0]:
+        return lightcurve, report
+
+    mask_np = keep.detach().cpu().numpy()
+    band = getattr(lightcurve, "band", None)
+    new_band = None
+    if band is not None:
+        band_arr = np.asarray(band, dtype=np.str_)
+        if band_arr.ndim == 1 and len(band_arr) == len(mask_np):
+            new_band = band_arr[mask_np]
+        else:
+            new_band = band_arr
+
+    from .lightcurve import Lightcurve
+
+    filtered = Lightcurve(
+        xdata[keep].clone(),
+        ydata[keep].clone(),
+        yerr=yerr[keep].clone() if yerr is not None else None,
+        xtransform=copy.deepcopy(getattr(lightcurve, "xtransform", None)),
+        ytransform=copy.deepcopy(getattr(lightcurve, "ytransform", None)),
+        name=getattr(lightcurve, "name", None),
+        band=new_band,
+    )
+    return filtered, report
+
+def _piwd_batch_resolve_source(
+    source, index, *, from_csv_kwargs=None, positive_data_filter_kwargs=None
+):
     """Resolve a batch source specification to ``(source_id, lightcurve, metadata)``.
 
     Supported source forms are intentionally small and explicit:
@@ -4888,6 +5003,7 @@ def _piwd_batch_resolve_source(source, index, *, from_csv_kwargs=None):
     from pathlib import Path
 
     common_csv_kwargs = dict(from_csv_kwargs or {})
+    positive_filter_kwargs = dict(positive_data_filter_kwargs or {})
 
     if isinstance(source, dict):
         source_id = _piwd_batch_safe_source_id(
@@ -4900,16 +5016,32 @@ def _piwd_batch_resolve_source(source, index, *, from_csv_kwargs=None):
         metadata = {
             k: v
             for k, v in source.items()
-            if k not in {"lightcurve", "csv_path", "from_csv_kwargs"}
+            if k not in {
+                "lightcurve",
+                "csv_path",
+                "from_csv_kwargs",
+                "positive_data_filter_kwargs",
+            }
         }
+        source_positive_filter_kwargs = dict(positive_filter_kwargs)
+        source_positive_filter_kwargs.update(source.get("positive_data_filter_kwargs") or {})
         if "lightcurve" in source:
-            return source_id, source["lightcurve"], metadata
+            lc, filter_report = _piwd_batch_apply_positive_data_filter(
+                source["lightcurve"], **source_positive_filter_kwargs
+            )
+            metadata["positive_data_filter"] = filter_report
+            return source_id, lc, metadata
         if "csv_path" in source:
             csv_kwargs = dict(common_csv_kwargs)
             csv_kwargs.update(source.get("from_csv_kwargs") or {})
             from .lightcurve import Lightcurve
 
-            return source_id, Lightcurve.from_csv(source["csv_path"], **csv_kwargs), metadata
+            lc = Lightcurve.from_csv(source["csv_path"], **csv_kwargs)
+            lc, filter_report = _piwd_batch_apply_positive_data_filter(
+                lc, **source_positive_filter_kwargs
+            )
+            metadata["positive_data_filter"] = filter_report
+            return source_id, lc, metadata
         raise ValueError(
             "Each batch source dict must contain either 'lightcurve' or 'csv_path'."
         )
@@ -4919,8 +5051,13 @@ def _piwd_batch_resolve_source(source, index, *, from_csv_kwargs=None):
         source_id = _piwd_batch_safe_source_id(path.stem, index)
         from .lightcurve import Lightcurve
 
-        return source_id, Lightcurve.from_csv(path, **common_csv_kwargs), {
-            "csv_path": str(path)
+        lc = Lightcurve.from_csv(path, **common_csv_kwargs)
+        lc, filter_report = _piwd_batch_apply_positive_data_filter(
+            lc, **positive_filter_kwargs
+        )
+        return source_id, lc, {
+            "csv_path": str(path),
+            "positive_data_filter": filter_report,
         }
 
     raise ValueError(
@@ -4942,6 +5079,9 @@ def _piwd_batch_write_summary_csv(path, rows):
         "n_model_kernel_configs",
         "n_successful_model_kernel_configs",
         "n_failed_model_kernel_configs",
+        "n_rows_before_positive_filter",
+        "n_rows_after_positive_filter",
+        "n_rows_dropped_positive_filter",
         "exception_type",
         "exception_message",
         "export_json_path",
@@ -5485,6 +5625,9 @@ def _piwd_batch_format_markdown_report(manifest):
             "n_model_kernel_configs",
             "n_successful_model_kernel_configs",
             "n_failed_model_kernel_configs",
+            "n_rows_before_positive_filter",
+            "n_rows_after_positive_filter",
+            "n_rows_dropped_positive_filter",
             "exception_type",
             "exception_message",
         ]
@@ -5512,6 +5655,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
     sources,
     *,
     from_csv_kwargs=None,
+    positive_data_filter_kwargs=None,
     workflow_kwargs=None,
     output_dir=None,
     export=True,
@@ -5535,6 +5679,10 @@ def run_period_independent_wavelength_advisory_workflow_batch(
     from_csv_kwargs : dict, optional
         Common keyword arguments passed to ``Lightcurve.from_csv`` for CSV
         sources.  Per-source dicts may override these via ``from_csv_kwargs``.
+    positive_data_filter_kwargs : dict, optional
+        Optional row filter applied after CSV ingestion and before advisory
+        fitting.  Supported keys are ``require_positive_flux`` and
+        ``require_positive_flux_error``.
     workflow_kwargs : dict, optional
         Keyword arguments passed to
         ``run_period_independent_wavelength_advisory_workflow`` for each source.
@@ -5603,6 +5751,10 @@ def run_period_independent_wavelength_advisory_workflow_batch(
             "exception_type": None,
             "exception_message": None,
             "traceback": None,
+            "positive_data_filter": None,
+            "n_rows_before_positive_filter": None,
+            "n_rows_after_positive_filter": None,
+            "n_rows_dropped_positive_filter": None,
             "export_manifest": None,
             "export_json_path": None,
             "export_text_report_path": None,
@@ -5610,10 +5762,25 @@ def run_period_independent_wavelength_advisory_workflow_batch(
 
         try:
             source_id, lc, metadata = _piwd_batch_resolve_source(
-                source, index, from_csv_kwargs=from_csv_kwargs
+                source,
+                index,
+                from_csv_kwargs=from_csv_kwargs,
+                positive_data_filter_kwargs=positive_data_filter_kwargs,
             )
             row["source_id"] = source_id
             row["source_metadata"] = metadata
+            positive_filter_report = metadata.get("positive_data_filter")
+            if isinstance(positive_filter_report, dict):
+                row["positive_data_filter"] = positive_filter_report
+                row["n_rows_before_positive_filter"] = positive_filter_report.get(
+                    "n_rows_before"
+                )
+                row["n_rows_after_positive_filter"] = positive_filter_report.get(
+                    "n_rows_after"
+                )
+                row["n_rows_dropped_positive_filter"] = positive_filter_report.get(
+                    "n_rows_dropped"
+                )
 
             workflow = lc.run_period_independent_wavelength_advisory_workflow(
                 **workflow_kwargs

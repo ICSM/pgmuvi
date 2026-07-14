@@ -195,6 +195,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Disable sampling checks in Lightcurve.from_csv.",
     )
     parser.add_argument(
+        "--allow-nonpositive-flux",
+        action="store_true",
+        help=(
+            "Disable the default post-ingestion filter that drops rows with "
+            "non-positive flux values before advisory fits."
+        ),
+    )
+    parser.add_argument(
+        "--allow-nonpositive-flux-error",
+        action="store_true",
+        help=(
+            "Disable the default post-ingestion filter that drops rows with "
+            "non-positive flux-error values before advisory fits."
+        ),
+    )
+    parser.add_argument(
         "--model-kernel-config-limit",
         type=int,
         default=None,
@@ -304,6 +320,12 @@ def _print_batch_summary(report: dict[str, Any]) -> None:
             row.get("n_successful_model_kernel_configs"),
             "n_failed_model_kernel_configs=",
             row.get("n_failed_model_kernel_configs"),
+            "rows=",
+            row.get("n_rows_before_positive_filter"),
+            "->",
+            row.get("n_rows_after_positive_filter"),
+            "dropped=",
+            row.get("n_rows_dropped_positive_filter"),
             "error=", row.get("exception_type"), row.get("exception_message"),
         )
 
@@ -335,6 +357,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         "max_samples_per_band": args.max_samples_per_band,
         "verbose": bool(args.verbose),
     }
+    positive_data_filter_kwargs = {
+        "require_positive_flux": not args.allow_nonpositive_flux,
+        "require_positive_flux_error": not args.allow_nonpositive_flux_error,
+    }
     workflow_kwargs = {
         "include_2d_baseline": not args.no_include_2d_baseline,
         "base_fit_kwargs": {
@@ -353,6 +379,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     report = _run_batch(
         sources,
         from_csv_kwargs=from_csv_kwargs,
+        positive_data_filter_kwargs=positive_data_filter_kwargs,
         workflow_kwargs=workflow_kwargs,
         output_dir=args.output_dir,
         export=not args.no_export,

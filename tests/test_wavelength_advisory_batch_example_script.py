@@ -139,6 +139,10 @@ class TestRunWavelengthAdvisoryBatchExample(unittest.TestCase):
                 "verbose": True,
             },
         )
+        self.assertEqual(
+            kwargs["positive_data_filter_kwargs"],
+            {"require_positive_flux": True, "require_positive_flux_error": True},
+        )
         self.assertEqual(kwargs["output_dir"], "out")
         self.assertFalse(kwargs["export"])
         self.assertEqual(kwargs["batch_prefix"], "batch")
@@ -150,6 +154,29 @@ class TestRunWavelengthAdvisoryBatchExample(unittest.TestCase):
         self.assertEqual(
             kwargs["workflow_kwargs"]["base_fit_kwargs"],
             {"training_iter": 7, "miniter": 3, "verbose": True},
+        )
+
+    def test_main_can_disable_default_positive_filters(self):
+        fake_report = {
+            "kind": "period_independent_wavelength_advisory_workflow_batch",
+            "n_failed": 0,
+            "source_results": [],
+        }
+        with patch.object(self.module, "_run_batch", return_value=fake_report) as mocked:
+            rc = self.module.main(
+                [
+                    "one.csv",
+                    "--no-export",
+                    "--allow-nonpositive-flux",
+                    "--allow-nonpositive-flux-error",
+                ]
+            )
+
+        self.assertEqual(rc, 0)
+        _, kwargs = mocked.call_args
+        self.assertEqual(
+            kwargs["positive_data_filter_kwargs"],
+            {"require_positive_flux": False, "require_positive_flux_error": False},
         )
 
     def test_main_returns_failure_status_when_source_rows_fail(self):
