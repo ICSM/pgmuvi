@@ -3918,6 +3918,81 @@ def _piwd_extract_sm_ard_scale_diagnostics(
         }
     )
 
+
+def _piwd_classify_model_kernel_config_failure(
+    exception: BaseException | None,
+) -> dict[str, Any]:
+    """Classify a failed advisory model/kernel-config fit for reporting.
+
+    The classification is intentionally descriptive.  It is used to make batch
+    reports and fallback summaries easier to triage; it does not affect scoring,
+    model ranking, fitting behavior, or automatic model selection.
+    """
+    if exception is None:
+        return {
+            "failure_stage": None,
+            "failure_stage_reason": None,
+            "is_consensus_failure": False,
+            "is_numerical_failure": False,
+            "is_input_validation_failure": False,
+        }
+
+    exception_type = type(exception).__name__
+    message = str(exception)
+    text = f"{exception_type} {message}".lower()
+
+    stage = "fit_execution"
+    reason = "model/kernel config fit raised an exception"
+    is_consensus = False
+    is_numerical = False
+    is_input_validation = False
+
+    if "consensus" in text or "period consensus" in text:
+        stage = "consensus"
+        reason = "fit failed while deriving or applying temporal consensus information"
+        is_consensus = True
+    elif (
+        "notpsd" in text
+        or "not positive definite" in text
+        or "cholesky" in text
+        or "psd" in text
+        or "singular" in text
+        or "nan" in text
+    ):
+        stage = "numerical_stability"
+        reason = "fit failed due to a numerical stability or covariance-matrix issue"
+        is_numerical = True
+    elif (
+        "constraint" in text
+        or "out of bounds" in text
+        or "interval" in text
+        or "invalid value" in text
+    ):
+        stage = "parameter_constraint"
+        reason = "fit failed while satisfying parameter values or constraints"
+    elif (
+        "sampling" in text
+        or "variability" in text
+        or "not enough" in text
+        or "insufficient" in text
+        or "no rows remain" in text
+    ):
+        stage = "data_quality"
+        reason = "fit failed because the input data did not satisfy a quality or availability requirement"
+        is_input_validation = True
+    elif isinstance(exception, (ValueError, TypeError, AttributeError, KeyError)):
+        stage = "input_validation"
+        reason = "fit failed due to invalid or unsupported input for this model/kernel config"
+        is_input_validation = True
+
+    return {
+        "failure_stage": stage,
+        "failure_stage_reason": reason,
+        "is_consensus_failure": bool(is_consensus),
+        "is_numerical_failure": bool(is_numerical),
+        "is_input_validation_failure": bool(is_input_validation),
+    }
+
 def _piwd_extract_fit_outcome(
     candidate: dict[str, Any],
     *,
@@ -3941,6 +4016,7 @@ def _piwd_extract_fit_outcome(
         diagnostics,
     )
     sm_ard_counts = sm_ard_diagnostics.get("constrained_sm_ard_dimension_counts") or {}
+    failure_info = _piwd_classify_model_kernel_config_failure(exception)
 
     outcome: dict[str, Any] = {
         "model_kernel_config_id": candidate.get("model_kernel_config_id"),
@@ -3951,6 +4027,12 @@ def _piwd_extract_fit_outcome(
         "fit_success": bool(status == "passed"),
 
         "fit_failed": bool(status == "failed"),
+        "failure_stage": failure_info.get("failure_stage"),
+        "failure_stage_reason": failure_info.get("failure_stage_reason"),
+        "is_consensus_failure": failure_info.get("is_consensus_failure"),
+        "is_numerical_failure": failure_info.get("is_numerical_failure"),
+        "is_input_validation_failure": failure_info.get("is_input_validation_failure"),
+        "fit_failure_diagnostics": failure_info,
         "fit_kwargs": dict(candidate.get("fit_kwargs") or {}),
         "recommendation_strength": candidate.get("recommendation_strength"),
         "hard_exclusion": bool(candidate.get("hard_exclusion", False)),
@@ -4734,6 +4816,102 @@ def plot_period_independent_wavelength_model_kernel_config_comparison(
 
 
 
+
+def _piwd_count_values(values: list[Any]) -> dict[str, int]:
+    """Count non-empty scalar values for JSON/report summaries."""
+    counts: dict[str, int] = {}
+    for value in values:
+        if value is None or value == "":
+            continue
+        key = str(value)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _piwd_build_advisory_workflow_fallback_summary(
+    run_report: dict[str, Any] | None,
+    quality_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize diagnostic-only fallback state for failed advisory fits.
+
+    This summary is activated when the advisory workflow attempted model/kernel
+    config fits but none completed successfully.  It makes the failure mode
+    inspectable without converting the workflow into automatic model selection
+    or silently treating a failed fit comparison as a selected model.
+    """
+    run_report = run_report if isinstance(run_report, dict) else {}
+    quality_report = quality_report if isinstance(quality_report, dict) else {}
+    outcomes = (
+        run_report.get("model_kernel_config_results")
+        or run_report.get("outcomes")
+        or []
+    )
+    outcomes = [item for item in outcomes if isinstance(item, dict)]
+    passed = [
+        item
+        for item in outcomes
+        if item.get("fit_success") is True or item.get("status") == "passed"
+    ]
+    failed = [
+        item
+        for item in outcomes
+        if item.get("fit_failed") is True or item.get("status") == "failed"
+    ]
+
+    failure_stage_counts = _piwd_count_values(
+        [item.get("failure_stage") for item in failed]
+    )
+    exception_type_counts = _piwd_count_values(
+        [item.get("exception_type") for item in failed]
+    )
+    consensus_failure_models = [
+        item.get("model") for item in failed if item.get("is_consensus_failure") is True
+    ]
+    numerical_failure_models = [
+        item.get("model") for item in failed if item.get("is_numerical_failure") is True
+    ]
+
+    all_attempted_failed = bool(outcomes) and not passed and bool(failed)
+    if all_attempted_failed:
+        reason = "all_model_kernel_config_fits_failed"
+        recommended_next_steps = [
+            "Inspect exception_type, exception_message, and failure_stage for each model/kernel config.",
+            "Use the period-independent wavelength diagnostics and parameter-plan metadata as the fallback interpretation; no model is selected automatically.",
+            "If failures are consensus dominated, inspect LS/ACF/consensus period diagnostics and consider rerunning with safer consensus settings or a smaller model/kernel-config set.",
+            "If failures are numerical, inspect constraints, learned noise, time-centering, and SM ARD scale-ceiling diagnostics before trusting fit-quality comparisons.",
+        ]
+    elif passed:
+        reason = "at_least_one_model_kernel_config_fit_passed"
+        recommended_next_steps = []
+    else:
+        reason = "no_model_kernel_config_fits_were_attempted"
+        recommended_next_steps = []
+
+    return _clean_scalar_dict(
+        {
+            "kind": "period_independent_wavelength_advisory_fallback_summary",
+            "available": bool(all_attempted_failed),
+            "reason": reason,
+            "diagnostic_only": True,
+            "advisory_only": True,
+            "automatic_model_selection_applied": False,
+            "selected_model": None,
+            "fit_based_model_ranking_available": bool(passed),
+            "top_ranked_model": quality_report.get("top_ranked_model"),
+            "n_attempted": int(len(outcomes)),
+            "n_passed": int(len(passed)),
+            "n_failed": int(len(failed)),
+            "failed_models": [item.get("model") for item in failed],
+            "failure_stage_counts": failure_stage_counts,
+            "exception_type_counts": exception_type_counts,
+            "consensus_failure_models": consensus_failure_models,
+            "n_consensus_failure_models": int(len(consensus_failure_models)),
+            "numerical_failure_models": numerical_failure_models,
+            "n_numerical_failure_models": int(len(numerical_failure_models)),
+            "recommended_next_steps": recommended_next_steps,
+        }
+    )
+
 def _piwd_format_advisory_workflow_text_report(
     workflow_report: dict[str, Any],
     comparison_text_report: str | None,
@@ -4748,6 +4926,8 @@ def _piwd_format_advisory_workflow_text_report(
     """
     quality_report = workflow_report.get("quality_report") or {}
     run_report = workflow_report.get("run_report") or {}
+
+    fallback_report = workflow_report.get("fallback_report") or {}
 
     lines = [
         "Period-independent wavelength advisory workflow",
@@ -4766,11 +4946,29 @@ def _piwd_format_advisory_workflow_text_report(
         f"score_kind: {workflow_report.get('score_kind')}",
         f"top_ranked_model: {workflow_report.get('top_ranked_model')}",
         f"top_ranked_fit_quality_score: {workflow_report.get('top_ranked_fit_quality_score')}",
+        f"fallback_diagnostics_available: {workflow_report.get('fallback_diagnostics_available')}",
+        f"fallback_reason: {fallback_report.get('reason')}",
         "",
         "Scope note: workflow_runs_model_kernel_config_fits describes this one-shot wrapper. "
         "quality_score_report_runs_fits describes the nested quality-score report; "
         "it is expected to be False because scoring summarizes already-completed fits.",
     ]
+
+    if fallback_report.get("available"):
+        lines.extend(
+            [
+                "",
+                "Fallback diagnostics",
+                "=" * 60,
+                f"failure_stage_counts: {fallback_report.get('failure_stage_counts')}",
+                f"exception_type_counts: {fallback_report.get('exception_type_counts')}",
+                f"consensus_failure_models: {fallback_report.get('consensus_failure_models')}",
+                f"numerical_failure_models: {fallback_report.get('numerical_failure_models')}",
+                "recommended_next_steps:",
+            ]
+        )
+        for step in fallback_report.get("recommended_next_steps") or []:
+            lines.append(f"- {step}")
 
     if comparison_text_report:
         lines.extend(
@@ -4838,6 +5036,11 @@ def run_period_independent_wavelength_advisory_workflow(
             run_report
         )
 
+    fallback_report = _piwd_build_advisory_workflow_fallback_summary(
+        run_report,
+        quality_report,
+    )
+
     comparison_text_report = None
     if make_text_report:
         comparison_text_report = format_period_independent_wavelength_model_kernel_config_comparison_report(
@@ -4886,6 +5089,8 @@ def run_period_independent_wavelength_advisory_workflow(
             if isinstance(quality_report, dict)
             else None
         ),
+        "fallback_diagnostics_available": fallback_report.get("available"),
+        "fallback_report": fallback_report,
         "model_kernel_config_report": model_kernel_config_report,
         "run_report": run_report,
         "quality_report": quality_report,
@@ -5484,6 +5689,11 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
             "status": item.get("status"),
             "fit_success": item.get("fit_success"),
             "fit_failed": item.get("fit_failed"),
+            "failure_stage": item.get("failure_stage"),
+            "failure_stage_reason": item.get("failure_stage_reason"),
+            "is_consensus_failure": item.get("is_consensus_failure"),
+            "is_numerical_failure": item.get("is_numerical_failure"),
+            "is_input_validation_failure": item.get("is_input_validation_failure"),
             "fit_quality_score": item.get("fit_quality_score"),
             "fit_quality_available": item.get("fit_quality_available"),
             "fit_strategy": fit_kwargs.get("fit_strategy"),
@@ -5551,6 +5761,11 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "status",
         "fit_success",
         "fit_failed",
+        "failure_stage",
+        "failure_stage_reason",
+        "is_consensus_failure",
+        "is_numerical_failure",
+        "is_input_validation_failure",
         "fit_quality_score",
         "fit_quality_available",
         "fit_strategy",

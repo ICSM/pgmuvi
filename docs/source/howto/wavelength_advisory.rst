@@ -330,3 +330,17 @@ For a real source, start with a short smoke run only to verify that the pipeline
 works.  Then increase ``training_iter`` and ``miniter`` for production-style
 comparison.  Keep the result advisory until stronger validation metrics are
 implemented.
+
+
+Advisory failure fallback reporting
+-----------------------------------
+
+The advisory workflow remains non-selecting even when every evaluated
+model/kernel configuration fails.  In that case the exported workflow includes
+``fallback_diagnostics_available=True`` and a ``fallback_report`` describing the
+failure stages, exception types, failed models, consensus-failure models, and
+recommended next inspection steps.  Long-form batch model/kernel-config CSVs
+also include ``failure_stage``, ``failure_stage_reason``,
+``is_consensus_failure``, ``is_numerical_failure``, and
+``is_input_validation_failure`` so failed real-source batches can be triaged
+without reading tracebacks first.
