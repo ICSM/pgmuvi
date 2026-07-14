@@ -3,7 +3,7 @@ Batch wavelength advisory workflow
 
 .. note::
 
-   **Documentation status:** current through PR71.
+   **Documentation status:** current through PR94.
 
    **Pipeline status:** the batch workflow runs the single-source advisory
    workflow over many sources, exports per-source products, and writes batch
@@ -26,6 +26,11 @@ The batch helper writes three levels of output:
 * one row per source,
 * one row per source and model/kernel config, and
 * one row per distinct model/kernel config aggregated across the batch.
+
+It also records data-hygiene metadata, per-source output directories, failure
+artifacts, spectral-mixture ARD scale-ceiling diagnostics, and fallback failure
+summaries.  These fields are intended to make a large real-source batch
+auditable without reconstructing state from console logs.
 
 The high-level command-line entry point is:
 
@@ -107,6 +112,22 @@ The equivalent Python entry point is:
        export_kwargs={"close_figures": True},
        batch_prefix="example_batch",
    )
+
+
+Input hygiene and per-source outputs
+------------------------------------
+
+The batch entry points can apply a strict post-ingestion filter after
+``Lightcurve.from_csv``.  With the default example-script settings, rows with
+non-positive fluxes or non-positive flux errors are dropped before advisory
+fits run.  Source rows record ``n_rows_before_positive_filter``,
+``n_rows_after_positive_filter``, and ``n_rows_dropped_positive_filter`` so the
+filtering decision remains visible in exported tables.
+
+Each source also has explicit output-location metadata.  ``source_output_dir``
+and ``source_output_prefix`` identify where that object's JSON, text report,
+comparison report, plots, or failure artifacts were written.  This applies to
+both successful sources and failed sources.
 
 Batch contract fields
 ---------------------
@@ -268,6 +289,17 @@ Important columns include:
      - Reduced-chi-square-like training residual diagnostic.
    * - ``exception_type`` / ``exception_message``
      - Per-config failure diagnostics.
+   * - ``failure_stage`` / ``failure_stage_reason``
+     - Broad failure classification and short reason for failed configs.
+   * - ``is_consensus_failure`` / ``is_numerical_failure`` / ``is_input_validation_failure``
+     - Boolean triage flags for common failure modes.
+   * - ``n_constrained_sm_ard_components``
+     - Number of full-``2D`` spectral-mixture ARD scale components near the scale ceiling.
+   * - ``n_constrained_sm_time_components`` / ``n_constrained_sm_wavelength_components``
+     - Whether constrained ARD scales are associated with time-frequency,
+       wavelength-frequency, or both.
+   * - ``constrained_sm_ard_components``
+     - Machine-readable details for constrained ARD scale components.
 
 Aggregate model/kernel-config CSV
 ---------------------------------
@@ -340,8 +372,36 @@ Failure handling
 
 Batch runs are designed to keep going when individual sources or individual
 configs fail.  Failures are recorded in the source summary and long-form tables
-using ``exception_type`` and ``exception_message`` fields.  Inspect those fields
-before interpreting aggregate success fractions.
+using ``exception_type`` and ``exception_message`` fields.  Per-config rows also
+record ``failure_stage``, ``failure_stage_reason``, ``is_consensus_failure``,
+``is_numerical_failure``, and ``is_input_validation_failure``.  Inspect these
+fields before interpreting aggregate success fractions.
+
+When ``output_dir`` is supplied, failed sources receive compact per-source
+failure artifacts: a structured JSON file and a readable text report containing
+the exception type, exception message, and traceback.  Their paths are recorded
+as ``export_json_path`` and ``export_text_report_path``.
+
+Spectral-mixture ARD scale diagnostics
+--------------------------------------
+
+For advisory runs that evaluate the full ``2D`` spectral-mixture baseline, the
+long-form model/kernel-config CSV flags fitted spectral-mixture ARD scales near
+the consensus scale ceiling.  The most useful summary fields are
+``n_constrained_sm_ard_components``, ``n_constrained_sm_time_components``, and
+``n_constrained_sm_wavelength_components``; the detailed component list is in
+``constrained_sm_ard_components``.  These fields help identify whether the
+fit is saturating in time-frequency, wavelength-frequency, or both.
+Advisory failure fallback reporting
+-----------------------------------
+
+If every model/kernel config for a source fails, the per-source workflow still
+exports diagnostic fallback metadata.  ``fallback_diagnostics_available`` marks
+that a fallback report is present, and ``fallback_report`` summarizes failure
+stages, exception types, failed models, consensus-failure models, and suggested
+next inspection steps.  Use this information to triage a source before deciding
+whether to rerun with different consensus settings, different model/kernel
+configs, or stricter input filtering.
 
 Recommended workflow
 --------------------
@@ -355,41 +415,3 @@ Recommended workflow
    or where configs failed.
 6. Increase training controls for production-style runs.
 7. Treat all rankings as advisory until stronger validation metrics are added.
-
-Spectral-mixture ARD scale diagnostics
---------------------------------------
-
-For advisory runs that evaluate the full ``2D`` spectral-mixture baseline, the
-long-form model/kernel-config CSV includes diagnostic columns that flag fitted
-spectral-mixture ARD scales near the consensus scale ceiling.  The most useful
-fields are ``n_constrained_sm_ard_components``,
-``n_constrained_sm_time_components``, and
-``n_constrained_sm_wavelength_components``.  These are advisory diagnostics for
-triage: they help identify whether the time-frequency or wavelength-frequency
-ARD dimension is being pushed against the fitted scale constraint.
-
-Per-source failure artifacts
-----------------------------
-
-When ``output_dir`` is supplied and per-source export is enabled, failed sources
-also receive a per-source output directory.  The batch runner writes a compact
-failure JSON file and a text report containing the exception type, exception
-message, and traceback.  The per-source directory and prefix are recorded as
-``source_output_dir`` and ``source_output_prefix``.  The corresponding artifact
-paths are recorded in the source row as ``export_json_path`` and
-``export_text_report_path`` so failures can be inspected without searching
-through the batch-level JSON manifest.
-
-
-Advisory failure fallback reporting
------------------------------------
-
-The advisory workflow remains non-selecting even when every evaluated
-model/kernel configuration fails.  In that case the exported workflow includes
-``fallback_diagnostics_available=True`` and a ``fallback_report`` describing the
-failure stages, exception types, failed models, consensus-failure models, and
-recommended next inspection steps.  Long-form batch model/kernel-config CSVs
-also include ``failure_stage``, ``failure_stage_reason``,
-``is_consensus_failure``, ``is_numerical_failure``, and
-``is_input_validation_failure`` so failed real-source batches can be triaged
-without reading tracebacks first.

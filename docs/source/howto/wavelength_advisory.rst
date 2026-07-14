@@ -3,7 +3,7 @@ Wavelength advisory workflow
 
 .. note::
 
-   **Documentation status:** current through PR71.
+   **Documentation status:** current through PR94.
 
    **Pipeline status:** the period-independent wavelength advisory workflow is
    implemented as an advisory ranking and reporting workflow.  It does **not**
@@ -11,6 +11,34 @@ Wavelength advisory workflow
 
    **TBD[held-out-validation]:** update this page after held-out validation,
    posterior-predictive scoring, or evidence-style scoring is implemented.
+
+
+Current workflow map
+--------------------
+
+The current advisory workflow has four distinct outputs that should be read
+together:
+
+.. list-table:: Advisory output layers
+   :header-rows: 1
+
+   * - Layer
+     - What it tells you
+   * - Period-independent diagnostics
+     - Per-band flux, scatter, and robust-amplitude behavior before any period
+       or GP fit is used.
+   * - Model/kernel-config runs
+     - Which LPV-relevant configurations completed, failed, or produced useful
+       training-residual diagnostics.
+   * - Advisory ranking
+     - A triage ordering of successful configs based on training residuals, not
+       a formal model-selection decision.
+   * - Failure fallback diagnostics
+     - A compact summary of why model/kernel fits failed when no advisory
+       ranking can be trusted.
+
+The high-level helper returns all of these pieces in one dictionary.  Batch
+runs export the same information per source and per model/kernel config.
 
 Purpose
 -------
@@ -26,9 +54,14 @@ The workflow answers questions such as:
 
 * Do the per-band flux distributions show wavelength-dependent structure before
   any period or GP fit is used?
+* Do robust central-90% and central-95% amplitude proxies change with
+  wavelength?
 * Which LPV-relevant model families should be evaluated explicitly?
 * Which model/kernel configurations completed successfully?
-* Which completed fits have better training-residual diagnostics?
+* Did the full ``2D`` spectral-mixture baseline push ARD scales toward the
+  consensus scale ceiling in time-frequency, wavelength-frequency, or both?
+* If advisory fits failed, were the failures mostly consensus, numerical, or
+  input-validation failures?
 * What should be inspected next before making a scientific choice?
 
 It does **not** answer, by itself:
@@ -135,6 +168,25 @@ Useful fields include:
    The monotonicity labels are descriptive diagnostics, not formal hypothesis
    tests.  They should guide inspection and later model/kernel-config choices,
    not serve as p-values.
+
+
+Robust amplitude diagnostics
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For each usable wavelength band, the period-independent report records both a
+central-90% and a central-95% robust amplitude proxy.  The central-90% fields
+use ``q05`` and ``q95`` flux levels.  The wider central-95% fields use
+``q02_5`` and ``q97_5`` flux levels and are useful when the extrema are noisy
+but the central distribution is still informative.
+
+Useful central-95% fields include
+``raw_peak_to_peak_q02_5_q97_5``,
+``raw_half_amplitude_q02_5_q97_5``,
+``fractional_half_amplitude_q02_5_q97_5``,
+``noise_corrected_half_amplitude_q02_5_q97_5``,
+``raw_half_amplitude_q02_5_q97_5_ratio_max_to_min``,
+``raw_half_amplitude_q02_5_q97_5_monotonicity_class``, and
+``raw_half_amplitude_q02_5_q97_5_loglog_slope``.
 
 Stage 1: advisory parameter/model plan
 --------------------------------------
@@ -336,11 +388,13 @@ Advisory failure fallback reporting
 -----------------------------------
 
 The advisory workflow remains non-selecting even when every evaluated
-model/kernel configuration fails.  In that case the exported workflow includes
-``fallback_diagnostics_available=True`` and a ``fallback_report`` describing the
-failure stages, exception types, failed models, consensus-failure models, and
-recommended next inspection steps.  Long-form batch model/kernel-config CSVs
-also include ``failure_stage``, ``failure_stage_reason``,
-``is_consensus_failure``, ``is_numerical_failure``, and
-``is_input_validation_failure`` so failed real-source batches can be triaged
-without reading tracebacks first.
+model/kernel configuration fails.  In that case the workflow includes
+``fallback_diagnostics_available=True`` and a ``fallback_report`` with a compact
+triage summary.  The fallback report records failure stages, exception types,
+failed models, consensus-failure models, numerical-failure models,
+input-validation failures, and recommended next inspection steps.
+
+Use these fields to decide whether to inspect the input data, relax consensus
+requirements, increase numerical safeguards, or rerun only a subset of
+model/kernel configs.  They are diagnostics for debugging a failed advisory run;
+they are not a substitute for a successful model comparison.
