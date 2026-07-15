@@ -61,7 +61,7 @@ class TestConsensusFittingDocumentation(unittest.TestCase):
             'fit_strategy="consensus_multicomp"',
             "component-specific constraints",
             "TBD: multi-periodic support",
-            "TBD: notebook tutorial",
+            ":doc:`../notebooks/pgmuvi_tutorial_2d`",
             "run_period_independent_wavelength_advisory_workflow",
         ]
         for token in required:

@@ -433,11 +433,14 @@ Common causes include:
 For batch work, record this failure and continue.  Do not silently relabel a
 rejected consensus as a successful model fit.
 
-.. admonition:: TBD: notebook tutorial
+Notebook tutorial
+-----------------
 
-   The public consensus notebook remains to be refreshed after the script and
-   guide are stable.  Until then, the runnable Python example is the maintained
-   execution reference.
+The maintained :doc:`../notebooks/pgmuvi_tutorial_2d` notebook provides an
+interactive baseline ``2D`` consensus workflow with deterministic data, an
+explicit no-training default, structured failure handling, and LPV-relevant
+follow-up configurations.  The runnable script remains the preferred reference
+for command-line execution and artifact export.
 
 Relationship to wavelength advisory
 -----------------------------------

@@ -3,7 +3,7 @@ Notebook status and triage
 
 .. note::
 
-   **Documentation status:** current through PR76.
+   **Documentation status:** current through PR103.
 
    This page is a maintenance index for the notebooks shipped in the repository.
    A notebook listed in the main Tutorials toctree is intended to be usable as
@@ -53,6 +53,9 @@ These notebooks are linked from the main Tutorials toctree:
    * - ``PGMUVI_QuasiPeriodic_and_Mean_Functions.ipynb``
      - Quasi-periodic kernels and mean functions.
      - Linked because it contains substantive material; it still needs a re-execution pass.
+   * - ``pgmuvi_tutorial_2d.ipynb``
+     - Maintained 2-D baseline and consensus-fitting tutorial.
+     - Refreshed in PR103 with deterministic data, an explicit no-training default, failure handling, and LPV-relevant follow-up configurations.
 
 Quarantined or pending-refresh notebooks
 ----------------------------------------
@@ -66,10 +69,6 @@ These notebooks are intentionally **not** linked from the main Tutorials toctree
      - Status
      - Reason
      - Replacement / next action
-   * - ``pgmuvi_tutorial_2d.ipynb``
-     - Quarantined stub.
-     - It is thin and unexecuted, but 2-D multiband fitting is central to the package.
-     - **TBD[notebook-2d-consensus]:** replace with a real 2-D consensus fitting notebook.  Until then, use :doc:`howto/consensus_fitting` and ``examples/consensus_multiband_fit.py``.
    * - ``tutorial_preprocessing.ipynb``
      - Pending refresh.
      - Thin and unexecuted relative to the current preprocessing and input-checking APIs.

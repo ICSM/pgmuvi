@@ -156,16 +156,11 @@ family.
 In such cases, consider fitting each band independently and comparing the inferred
 periods, or contact the ``pgmuvi`` developers to discuss extensions.
 
-2D tutorial status
-------------------
+2D tutorial
+-----------
 
-The old 2-D tutorial notebook is currently quarantined because it is an
-unfinished, unexecuted stub.  For the maintained 2-D consensus-fitting path, see
-:doc:`consensus_fitting`.  Notebook refresh status is tracked in
-:doc:`../notebook_status`.
-
-.. note::
-
-   **TBD[notebook-2d-consensus]:** replace the quarantined 2-D notebook with a
-   complete 2-D consensus tutorial before adding it back to the public tutorial
-   index or to this page.
+The maintained :doc:`../notebooks/pgmuvi_tutorial_2d` notebook builds a
+deterministic three-band light curve, prepares the baseline ``2D`` consensus
+workflow, handles ``ConsensusFitError``, and records LPV-relevant follow-up
+configurations.  Detailed controls remain documented in
+:doc:`consensus_fitting`.

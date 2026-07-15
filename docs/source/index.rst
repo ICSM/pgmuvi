@@ -63,6 +63,7 @@ package defaults.
    notebooks/PGMUVI_comparison_with_other_codes
    notebooks/pgmuvi_tutorial
    notebooks/PGMUVI_QuasiPeriodic_and_Mean_Functions
+   notebooks/pgmuvi_tutorial_2d
    notebook_status
 
 How-To Guides
