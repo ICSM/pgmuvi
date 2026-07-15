@@ -146,10 +146,11 @@ whether the data show possible wavelength-dependent phase or lag structure.
 
 .. note::
 
-   This section documents the older staged diagnostic/comparison API. The newer
-   period-independent wavelength advisory workflow introduced after PR56 uses
-   model/kernel configurations and batch reports rather than automatic model
-   selection. A dedicated guide for that current workflow is planned.
+   This section documents the older staged diagnostic/comparison API.  For the
+   current model-family assumptions and try-first guidance, see
+   :doc:`wavelength_models`.  The newer period-independent workflow is
+   documented in :doc:`wavelength_advisory` and uses model/kernel
+   configurations and batch reports rather than automatic model selection.
 
 Use :meth:`~pgmuvi.lightcurve.Lightcurve.diagnose_wavelength_dependence` before
 running a model grid.  This pre-fit stage is cheap: it builds a band-by-band

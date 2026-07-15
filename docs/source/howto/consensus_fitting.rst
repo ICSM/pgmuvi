@@ -169,6 +169,10 @@ but its convenience interface does not accept ``time_kernel_type`` or
 ``wavelength_kernel_type`` selectors.  Use ``2DWavelengthDependent`` when you
 need those string-configurable kernels.
 
+For a model-by-model explanation of the wavelength means, covariance
+assumptions, coordinate requirements, and try-first ordering, see
+:doc:`wavelength_models`.
+
 Choosing the temporal kernel
 ----------------------------
 

@@ -13,6 +13,10 @@ Wavelength advisory workflow
    posterior-predictive scoring, or evidence-style scoring is implemented.
 
 
+Before running the advisory workflow, use :doc:`wavelength_models` to
+understand the distinct mean and covariance assumptions of each model
+family and the current try-first guidance.
+
 Current workflow map
 --------------------
 

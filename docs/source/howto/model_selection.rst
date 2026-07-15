@@ -32,9 +32,11 @@ a safe fit.
 Current wavelength advisory path
 --------------------------------
 
-Use :doc:`wavelength_advisory` when you want to compare LPV-relevant wavelength
-model families for one source without automatically choosing a winner.  Use
-:doc:`wavelength_advisory_batch` for the survey-scale version.
+Use :doc:`wavelength_models` for the model-family assumptions and try-first
+guidance.  Use :doc:`wavelength_advisory` when you want to compare
+LPV-relevant wavelength model families for one source without automatically
+choosing a winner.  Use :doc:`wavelength_advisory_batch` for the survey-scale
+version.
 
 The advisory workflow evaluates ``model/kernel config`` objects such as
 ``2DWavelengthDependent`` with a quasi-periodic time kernel, ``2DDustMean`` with

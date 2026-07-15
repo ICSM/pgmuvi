@@ -15,6 +15,7 @@ Each guide is focused on a single workflow and assumes you have already read the
    preprocessing
    consensus_fitting
    model_selection
+   wavelength_models
    wavelength_advisory
    wavelength_advisory_batch
    legacy_wavelength_candidates
