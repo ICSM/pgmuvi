@@ -10,15 +10,14 @@ class TestWavelengthAdvisoryDocsPolish(unittest.TestCase):
     def _read(self, relative_path):
         return (ROOT / relative_path).read_text(encoding="utf-8")
 
-    def test_docs_are_marked_current_after_failure_fallback_updates(self):
-        for relative_path in [
-            "docs/source/howto/wavelength_advisory.rst",
-            "docs/source/howto/wavelength_advisory_batch.rst",
-        ]:
-            text = self._read(relative_path)
-            with self.subTest(path=relative_path):
-                self.assertIn("current through PR94", text)
-                self.assertNotIn("current through PR71", text)
+    def test_docs_status_markers_track_the_current_documented_scope(self):
+        single_text = self._read("docs/source/howto/wavelength_advisory.rst")
+        batch_text = self._read("docs/source/howto/wavelength_advisory_batch.rst")
+
+        self.assertIn("current through PR94", single_text)
+        self.assertIn("current through PR101", batch_text)
+        self.assertNotIn("current through PR71", single_text)
+        self.assertNotIn("current through PR71", batch_text)
 
     def test_single_source_doc_has_coherent_current_workflow_map(self):
         text = self._read("docs/source/howto/wavelength_advisory.rst")

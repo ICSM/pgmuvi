@@ -3,7 +3,7 @@ Batch wavelength advisory workflow
 
 .. note::
 
-   **Documentation status:** current through PR94.
+   **Documentation status:** current through PR101.
 
    **Pipeline status:** the batch workflow runs the single-source advisory
    workflow over many sources, exports per-source products, and writes batch
@@ -31,6 +31,81 @@ It also records data-hygiene metadata, per-source output directories, failure
 artifacts, spectral-mixture ARD scale-ceiling diagnostics, and fallback failure
 summaries.  These fields are intended to make a large real-source batch
 auditable without reconstructing state from console logs.
+
+
+Toy batch walkthrough
+---------------------
+
+``examples/wavelength_advisory_batch_walkthrough.py`` creates two deterministic
+three-band toy light curves, a source-list file, and a machine-readable
+walkthrough manifest.  The synthetic inputs exercise file layout, orchestration,
+exports, continuation, and failure reporting.  They do not validate scientific
+ranking, period recovery, or the physical suitability of any model family.
+
+Prepare the workspace without starting GP training:
+
+.. code-block:: bash
+
+   PYTHONPATH=. python3 examples/wavelength_advisory_batch_walkthrough.py \
+     --workspace wavelength_batch_walkthrough \
+     --overwrite
+
+The final line should be:
+
+.. code-block:: text
+
+   PREPARE ONLY: batch fitting was not started.
+
+Inspect the generated inputs and command manifest:
+
+.. code-block:: bash
+
+   cat wavelength_batch_walkthrough/sources.txt
+   python3 -m json.tool \
+     wavelength_batch_walkthrough/walkthrough_manifest.json | less
+
+Run the deliberately small mechanical smoke test:
+
+.. code-block:: bash
+
+   PYTHONPATH=. python3 examples/wavelength_advisory_batch_walkthrough.py \
+     --workspace wavelength_batch_walkthrough \
+     --overwrite \
+     --run-batch \
+     --training-iter 20 \
+     --miniter 5 \
+     --model-kernel-config-limit 1
+
+The walkthrough disables sampling rejection and plot creation because its goal
+is to test plumbing with tiny synthetic files.  Do not copy those two choices
+blindly into a scientific run.  Increase the training controls, restore sampling
+checks, enable plots where useful, and evaluate the full relevant model set on
+real data.
+
+Input source-list formats
+-------------------------
+
+The maintained batch CLI accepts four input layouts:
+
+``Direct command-line tokens``
+   Supply ``path/to/source.csv`` or ``source_id=csv_path`` as positional
+   arguments.  A path-only token uses the filename stem as ``source_id``.
+
+``Newline-delimited text``
+   Each non-comment line may contain a path, ``source_id=csv_path``, or
+   ``source_id,csv_path``.  The toy walkthrough writes this format.
+
+``Headered CSV``
+   Include ``csv_path`` (or ``path``, ``filename``, or ``file``) and optionally
+   ``source_id`` or ``id`` columns.
+
+``JSON list``
+   Use a top-level list whose entries are either source strings or objects with
+   ``source_id`` and ``csv_path`` fields.
+
+Relative paths are resolved from the directory in which the batch command is
+run.  Use absolute paths in long-lived manifests when the working directory may
+change.
 
 The high-level command-line entry point is:
 
@@ -195,6 +270,39 @@ A successful batch run can write the following output bundle:
    * - Per-source export directories
      - ``<source_id_sanitized>/``
      - Single-source JSON, text, comparison text, and metric plots.
+
+
+Output directory anatomy
+------------------------
+
+A successful toy run with ``batch_prefix="toy_batch"`` has this approximate
+layout.  Figure files are omitted because the walkthrough uses ``--no-plots``.
+
+.. code-block:: text
+
+   wavelength_batch_walkthrough/
+   ├── inputs/
+   │   ├── toy_lpv_a.csv
+   │   └── toy_lpv_b.csv
+   ├── sources.txt
+   ├── walkthrough_manifest.json
+   └── outputs/
+       ├── toy_batch_summary.json
+       ├── toy_batch_summary.csv
+       ├── toy_batch_model_kernel_configs.csv
+       ├── toy_batch_model_kernel_config_summary.csv
+       ├── toy_batch_report.md
+       ├── toy_lpv_a/
+       │   ├── toy_lpv_a_wavelength_advisory.json
+       │   ├── toy_lpv_a_wavelength_advisory.txt
+       │   └── toy_lpv_a_wavelength_advisory_comparison.txt
+       └── toy_lpv_b/
+           └── ...
+
+A source that fails before producing a workflow receives
+``<source_prefix>_failure.json`` and ``<source_prefix>_failure.txt`` in its own
+source directory.  The batch-level summary files are still written unless the
+run is aborted with ``--stop-on-error``.
 
 Source summary CSV
 ------------------
@@ -382,6 +490,54 @@ failure artifacts: a structured JSON file and a readable text report containing
 the exception type, exception message, and traceback.  Their paths are recorded
 as ``export_json_path`` and ``export_text_report_path``.
 
+
+Exit status and continuation policy
+-----------------------------------
+
+By default, the batch helper records a source-level exception and continues to
+the next source.  The CLI then returns **status 1** when one or more source rows
+failed, even though batch summaries and failure artifacts may have been written.
+This is the safest default for CI and scripted production runs.
+
+``--allow-source-failures``
+   Keep the same record-and-continue behavior but return **status 0** after the
+   batch.  Use this only when a downstream step intentionally consumes partial
+   batches and checks ``n_failed`` itself.
+
+``--stop-on-error``
+   Re-raise the first source-level exception immediately.  Later sources are not
+   attempted, and the batch-level output bundle may be incomplete.
+
+A nonzero CLI status is therefore not evidence that no artifacts were produced.
+Inspect the batch manifest and source directories before rerunning.
+
+Triage failures in this order
+-----------------------------
+
+``source-level failure``
+   Start with the source-summary row, ``exception_type``, ``exception_message``,
+   positive-filter row counts, and the per-source ``*_failure.json`` or text
+   report.  This category includes CSV loading, input validation, and exceptions
+   that prevent the single-source workflow from returning.
+
+``per-config failure``
+   If the source row passed but ``n_failed_model_kernel_configs`` is nonzero,
+   inspect the long-form CSV.  Use ``failure_stage``, ``failure_stage_reason``,
+   ``is_consensus_failure``, ``is_numerical_failure``, and
+   ``is_input_validation_failure`` before comparing fit-quality scores.
+
+``all-config fallback``
+   When every config fails, read ``fallback_diagnostics_available`` and
+   ``fallback_report`` in the per-source workflow JSON.  The fallback summarizes
+   failed models and suggests the next diagnostic inspection; it does not repair
+   the fit or select a replacement model.
+
+``aggregate interpretation``
+   Only after the first three checks should you interpret ``success_fraction``,
+   ``top_ranked_fraction``, or median fit-quality fields across the batch.
+   Aggregate rankings are advisory and can be distorted by systematic failure
+   patterns.
+
 Spectral-mixture ARD scale diagnostics
 --------------------------------------
 
@@ -402,6 +558,14 @@ stages, exception types, failed models, consensus-failure models, and suggested
 next inspection steps.  Use this information to triage a source before deciding
 whether to rerun with different consensus settings, different model/kernel
 configs, or stricter input filtering.
+
+
+
+.. note::
+
+   **TBD[batch-notebook]:** add an interactive public notebook only after the
+   batch output schema and ranking-validation policy are stable.  Until then,
+   the maintained ``.py`` walkthrough is the reproducible entry point.
 
 Recommended workflow
 --------------------
