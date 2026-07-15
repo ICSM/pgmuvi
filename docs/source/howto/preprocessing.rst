@@ -150,13 +150,12 @@ Quality Filtering
 Preprocessing Tutorial
 -----------------------
 
-The older preprocessing notebook is currently quarantined from the public Sphinx
-build while the notebook set is being refreshed.  Use this how-to and the
-:mod:`pgmuvi.preprocess` API reference as the current preprocessing documentation
-until a replacement notebook is written.
+Use :doc:`../notebooks/tutorial_preprocessing` for a deterministic, executable
+walkthrough of mixed-band CSV validation, sampling and variability diagnostics,
+reproducible gap-aware subsampling, and per-band filtering.  The notebook does
+not start GP training and keeps the diagnostic decisions separate from model
+selection.
 
-.. note::
-
-   **TBD[notebook-preprocessing]:** replace the quarantined preprocessing
-   notebook with an executed tutorial that reflects the current sampling,
-   variability, subsampling, dtype, and time-centering behaviour.
+The notebook complements this reference page and the
+:mod:`pgmuvi.preprocess` API documentation; it does not replace the need to
+record the thresholds used for scientific filtering.

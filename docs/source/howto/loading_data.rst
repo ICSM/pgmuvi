@@ -377,15 +377,13 @@ Loaded data can be exported with::
     table = lc.to_table()
     lc.write_votable("lightcurve_output.xml")
 
-Notebook status
----------------
+Notebook tutorial
+-----------------
 
-The older preprocessing notebook is quarantined while the public notebook set
-is refreshed.  Use this guide, :doc:`preprocessing`, and the runnable script as
-the maintained workflow documentation.
+Use :doc:`../notebooks/tutorial_preprocessing` for an executable companion to
+this guide.  It demonstrates non-finite-row handling in a mixed-band CSV,
+separate sampling and variability diagnostics, reproducible subsampling, and
+per-band filtering under the current dtype and time-centering defaults.
 
-.. note::
-
-   **TBD[notebook-lightcurve-validation]:** add an executed notebook that
-   demonstrates malformed rows, mixed-band CSV input, sampling rejection, and
-   reproducible subsampling using the current constructor defaults.
+The command-line validator above remains the better interface for validating
+many external files or recording machine-readable input summaries.

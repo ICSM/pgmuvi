@@ -58,6 +58,7 @@ package defaults.
    :maxdepth: 1
 
    notebooks/PGMUVI_Lightcurve
+   notebooks/tutorial_preprocessing
    notebooks/PGMUVI_Lomb_Scargle
    notebooks/PGMUVI_Gaussian_Process_fitting
    notebooks/PGMUVI_comparison_with_other_codes

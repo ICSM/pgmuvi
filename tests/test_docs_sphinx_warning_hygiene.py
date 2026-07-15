@@ -39,12 +39,12 @@ class TestSphinxDocstringHygiene(unittest.TestCase):
             doc,
         )
 
-    def test_preprocessing_howto_does_not_link_quarantined_notebook(self):
+    def test_preprocessing_howto_links_refreshed_public_notebook(self):
         text = (ROOT / "docs" / "source" / "howto" / "preprocessing.rst").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn("../notebooks/tutorial_preprocessing", text)
-        self.assertIn("TBD[notebook-preprocessing]", text)
+        self.assertIn(":doc:`../notebooks/tutorial_preprocessing`", text)
+        self.assertNotIn("TBD[notebook-preprocessing]", text)
 
     def test_lightcurve_legacy_docstrings_are_not_expanded_in_api_page(self):
         page = (ROOT / "docs" / "source" / "pgmuvi.lightcurve.rst").read_text(

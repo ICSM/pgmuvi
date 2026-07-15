@@ -74,17 +74,21 @@ class TestLightcurveValidationDocs(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.guide)
 
-    def test_common_warnings_and_notebook_tbd_are_present(self):
+    def test_common_warnings_and_notebook_tutorial_are_present(self):
         required = [
             "Common warnings and what they mean",
             "Fewer than 10 elements remain",
             "Skipping band",
             "median_cadence is zero",
-            "TBD[notebook-lightcurve-validation]",
+            "Notebook tutorial",
+            ":doc:`../notebooks/tutorial_preprocessing`",
+            "non-finite-row handling",
+            "reproducible subsampling",
         ]
         for token in required:
             with self.subTest(token=token):
                 self.assertIn(token, self.guide)
+        self.assertNotIn("TBD[notebook-lightcurve-validation]", self.guide)
 
 
 if __name__ == "__main__":
