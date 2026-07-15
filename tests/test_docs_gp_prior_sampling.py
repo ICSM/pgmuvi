@@ -123,6 +123,9 @@ class TestGPriorSamplingDocumentation(unittest.TestCase):
         "gpytorch is required for the GP-prior notebook smoke test",
     )
     def test_all_code_cells_execute_without_fitting_or_files(self):
+        # Executed notebook cells set Torch's process-wide default dtype.
+        # Restore the incoming value after this test so later tests are isolated.
+        self.addCleanup(torch.set_default_dtype, torch.get_default_dtype())
         from pgmuvi.lightcurve import Lightcurve
 
         namespace = {"__name__": "__main__"}
