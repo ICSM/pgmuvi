@@ -50,9 +50,9 @@ Tutorials
 ---------
 
 Step-by-step notebooks introducing maintained workflows in `pgmuvi`.
-Unfinished TODO/stub notebooks are intentionally excluded from the public
-tutorial toctree until they are completed and re-executed under the current
-package defaults.
+Every notebook shipped in this documentation tree is intended to be a current
+public tutorial.  Unavailable future workflows are tracked in
+:doc:`notebook_status` without retaining nonfunctional notebook files.
 
 .. toctree::
    :maxdepth: 1

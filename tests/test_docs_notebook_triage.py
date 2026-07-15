@@ -6,12 +6,14 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "docs" / "source" / "index.rst"
 STATUS = ROOT / "docs" / "source" / "notebook_status.rst"
 CONF = ROOT / "docs" / "source" / "conf.py"
+NOTEBOOKS = ROOT / "docs" / "source" / "notebooks"
 
 
 class TestNotebookDocumentationTriage(unittest.TestCase):
-    def test_public_tutorial_toctree_excludes_remaining_quarantined_notebooks(self):
+    def test_public_tutorial_toctree_has_no_deleted_mcmc_notebook(self):
         text = INDEX.read_text(encoding="utf-8")
         self.assertNotIn("notebooks/pgmuvi_tutorial_mcmc", text)
+        self.assertIn("Unavailable future workflows", text)
 
     def test_public_tutorial_toctree_links_status_and_maintained_notebooks(self):
         text = INDEX.read_text(encoding="utf-8")
@@ -23,60 +25,48 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         self.assertIn("notebooks/tutorial_wavelength_advisory", text)
         self.assertIn("notebooks/pgmuvi_mock_data_from_gp", text)
 
-    def test_status_page_records_remaining_quarantined_notebook(self):
+    def test_status_page_records_notebook_refresh_completion(self):
         text = STATUS.read_text(encoding="utf-8")
+        self.assertIn("current through PR108", text)
+        self.assertIn("No quarantined or pending-refresh", text)
+        self.assertIn("notebook files remain in the repository", text)
         self.assertIn("pgmuvi_tutorial_mcmc.ipynb", text)
-        self.assertNotIn("tutorial_model_selection.ipynb", text)
-        quarantined = text.split("Quarantined or pending-refresh notebooks", 1)[1]
-        self.assertNotIn("pgmuvi_mock_data_from_gp.ipynb", quarantined)
+        self.assertIn("deleted in PR108", text)
         self.assertIn("NotImplementedError", text)
+        self.assertIn("TBD[mcmc-implementation]", text)
+        self.assertNotIn("TBD[mcmc-reenable]", text)
 
     def test_status_page_records_refreshed_notebooks_as_public(self):
         text = STATUS.read_text(encoding="utf-8")
-        self.assertIn("current through PR107", text)
         self.assertIn("Maintained 2-D baseline and consensus-fitting tutorial", text)
         self.assertIn("Refreshed in PR103", text)
         self.assertIn("Maintained preprocessing and data-quality tutorial", text)
         self.assertIn("Refreshed in PR104", text)
         self.assertIn("Maintained analytic synthetic-data tutorial", text)
         self.assertIn("Refreshed in PR105", text)
-        self.assertIn("Maintained period-independent wavelength advisory tutorial", text)
+        self.assertIn("Maintained period-independent wavelength-advisory tutorial", text)
         self.assertIn("Refreshed and renamed in PR106", text)
         self.assertIn("Maintained GP-prior mock-data tutorial", text)
         self.assertIn("Refreshed in PR107", text)
-        self.assertNotIn("TBD[notebook-2d-consensus]", text)
-        self.assertNotIn("TBD[notebook-preprocessing-refresh]", text)
-        self.assertNotIn("TBD[notebook-synthetic-refresh]", text)
-        self.assertNotIn("TBD[notebook-advisory-workflow]", text)
-        self.assertNotIn("TBD[notebook-mock-data-refresh]", text)
         self.assertNotIn("Quarantined stub", text)
         self.assertNotIn("Quarantined TODO skeleton", text)
 
-    def test_status_page_has_remaining_structured_maintenance_marker(self):
-        text = STATUS.read_text(encoding="utf-8")
-        self.assertIn("Documentation status", text)
-        self.assertIn("TBD[mcmc-reenable]", text)
-        self.assertNotIn("TBD[notebook-mock-data-refresh]", text)
-
     def test_status_page_defines_notebook_admission_rules(self):
         text = STATUS.read_text(encoding="utf-8")
-        self.assertIn("Before adding a notebook to the public Tutorials toctree", text)
+        self.assertIn("Before adding or retaining a notebook", text)
         self.assertIn("model/kernel config", text)
         self.assertIn("candidate", text)
         self.assertIn("TODO-placeholder", text)
+        self.assertIn("does not call unavailable APIs", text)
 
-    def test_only_unavailable_mcmc_notebook_remains_excluded_from_sphinx(self):
+    def test_no_notebook_is_hidden_from_sphinx(self):
         text = CONF.read_text(encoding="utf-8")
-        for notebook in [
-            "notebooks/pgmuvi_tutorial_2d.ipynb",
-            "notebooks/tutorial_preprocessing.ipynb",
-            "notebooks/tutorial_synthetic.ipynb",
-            "notebooks/tutorial_wavelength_advisory.ipynb",
-            "notebooks/tutorial_model_selection.ipynb",
-            "notebooks/pgmuvi_mock_data_from_gp.ipynb",
-        ]:
-            self.assertNotIn(notebook, text)
-        self.assertIn("notebooks/pgmuvi_tutorial_mcmc.ipynb", text)
+        self.assertNotIn("notebooks/", text)
+        self.assertIn('"test*"', text)
+        self.assertIn('"old*"', text)
+
+    def test_deleted_mcmc_notebook_is_absent(self):
+        self.assertFalse((NOTEBOOKS / "pgmuvi_tutorial_mcmc.ipynb").exists())
 
     def test_multiband_page_links_refreshed_2d_notebook(self):
         text = (

@@ -79,9 +79,11 @@ Result interpretation
     constrained spectral-mixture ARD diagnostics, and failure/fallback fields.
 
 Notebook refresh
-    Keep only maintained notebooks in the public tutorial toctree. Quarantined
-    notebooks should stay listed in :doc:`notebook_status` until they are
-    refreshed, replaced, or deleted.
+    **Completed in PR103--PR108.** Maintained notebooks are in the public
+    tutorial toctree, stale workflow notebooks were replaced, and the
+    unavailable MCMC notebook was deleted rather than retained as a
+    nonfunctional example. Future MCMC documentation remains explicitly marked
+    in :doc:`notebook_status`.
 
 Near-term documentation PR sequence
 -----------------------------------
@@ -94,7 +96,7 @@ The recommended order is:
 4. Wavelength-dependent model guidance expansion beyond the advisory reference.
 5. Batch advisory workflow walkthrough using a small synthetic or toy dataset.
 6. Interpretation guide for reports, fit quality, ARD diagnostics, and failures.
-7. Public notebook refresh, one notebook at a time.
+7. Public notebook refresh, one notebook at a time. **Completed in PR103--PR108.**
 
 Completion standard
 -------------------

@@ -184,15 +184,19 @@ class TestGPriorSamplingDocumentation(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, guide)
 
-    def test_status_page_records_pr107_and_only_mcmc_remains_quarantined(self):
+    def test_status_page_records_pr108_completion_and_public_gp_prior_notebook(self):
         text = STATUS.read_text(encoding="utf-8")
-        self.assertIn("current through PR107", text)
+        self.assertIn("current through PR108", text)
         self.assertIn("Maintained GP-prior mock-data tutorial", text)
         self.assertIn("Refreshed in PR107", text)
         self.assertNotIn("TBD[notebook-mock-data-refresh]", text)
-        quarantined = text.split("Quarantined or pending-refresh notebooks", 1)[1]
-        self.assertIn("pgmuvi_tutorial_mcmc.ipynb", quarantined)
-        self.assertNotIn("pgmuvi_mock_data_from_gp.ipynb", quarantined)
+        public = text.split("Current public tutorial notebooks", 1)[1].split(
+            "Unavailable future workflows", 1
+        )[0]
+        self.assertIn("pgmuvi_mock_data_from_gp.ipynb", public)
+        self.assertIn("No quarantined notebook files remain", text)
+        self.assertIn("pgmuvi_tutorial_mcmc.ipynb", text)
+        self.assertIn("deleted in PR108", text)
 
 
 if __name__ == "__main__":

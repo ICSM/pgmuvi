@@ -54,13 +54,12 @@ templates_path = ["_templates"]
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-# Keep unfinished or unavailable notebooks out of the Sphinx source graph.
-# Their status is tracked in notebook_status.rst; once a notebook is refreshed,
-# remove it from this list and add it back to the public Tutorials toctree.
+# All notebooks shipped under docs/source/notebooks are maintained public
+# tutorials.  Unavailable workflows should be documented as future work rather
+# than kept as nonfunctional notebook files.
 exclude_patterns = [
     "test*",
     "old*",
-    "notebooks/pgmuvi_tutorial_mcmc.ipynb",
 ]
 
 
