@@ -3,7 +3,7 @@ Notebook status and triage
 
 .. note::
 
-   **Documentation status:** current through PR104.
+   **Documentation status:** current through PR105.
 
    This page is a maintenance index for the notebooks shipped in the repository.
    A notebook listed in the main Tutorials toctree is intended to be usable as
@@ -41,6 +41,9 @@ These notebooks are linked from the main Tutorials toctree:
    * - ``tutorial_preprocessing.ipynb``
      - Maintained preprocessing and data-quality tutorial.
      - Refreshed in PR104 with deterministic CSV validation, sampling and variability diagnostics, reproducible subsampling, and per-band filtering.
+   * - ``tutorial_synthetic.ipynb``
+     - Maintained analytic synthetic-data tutorial.
+     - Refreshed in PR105 with all four public generators, reproducible noise modes, chromatic trends, and explicit GP-sampling boundaries.
    * - ``PGMUVI_Lomb_Scargle.ipynb``
      - Lomb--Scargle and period-candidate concepts.
      - Uses ``candidate`` in the period-search sense, which remains valid.
@@ -72,10 +75,6 @@ These notebooks are intentionally **not** linked from the main Tutorials toctree
      - Status
      - Reason
      - Replacement / next action
-   * - ``tutorial_synthetic.ipynb``
-     - Quarantined TODO skeleton.
-     - Contains placeholder/TODO material rather than a finished tutorial.
-     - **TBD[notebook-synthetic-refresh]:** rebuild around the current synthetic-data helpers.
    * - ``tutorial_model_selection.ipynb``
      - Quarantined legacy/stub notebook.
      - Uses old model-selection framing and TODO material.

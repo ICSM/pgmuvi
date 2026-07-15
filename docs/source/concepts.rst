@@ -169,12 +169,17 @@ Use :meth:`~pgmuvi.lightcurve.Lightcurve.check_variability` for single-band data
 Synthetic Data
 ---------------
 
-``pgmuvi`` can generate synthetic light curves from a GP model with known
-hyperparameters, which is useful for:
+The :mod:`pgmuvi.synthetic` helpers generate analytic sinusoidal light curves
+with known periods, amplitudes, phases, wavelength trends, and optional
+observational noise.  Each helper returns a
+:class:`~pgmuvi.lightcurve.Lightcurve`, which is useful for:
 
-* testing the fitting pipeline,
-* assessing parameter recovery,
-* creating simulated observations for survey planning.
+* testing validation and fitting pipelines;
+* measuring recovery of explicitly injected signals;
+* exploring cadence, baseline, and noise effects; and
+* creating controlled one-dimensional or multiwavelength examples.
 
-See the :mod:`pgmuvi.synthetic` module and the synthetic data tutorial notebook for
-usage examples.
+These helpers do not sample a Gaussian-process prior or posterior.  GP sampling
+requires an explicitly constructed model and kernel and is a separate advanced
+workflow.  See :doc:`notebooks/tutorial_synthetic` for the maintained analytic
+generator walkthrough and :mod:`pgmuvi.synthetic` for the full API.

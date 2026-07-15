@@ -11,7 +11,6 @@ CONF = ROOT / "docs" / "source" / "conf.py"
 class TestNotebookDocumentationTriage(unittest.TestCase):
     def test_public_tutorial_toctree_excludes_remaining_quarantined_notebooks(self):
         text = INDEX.read_text(encoding="utf-8")
-        self.assertNotIn("notebooks/tutorial_synthetic", text)
         self.assertNotIn("notebooks/tutorial_model_selection", text)
         self.assertNotIn("notebooks/pgmuvi_tutorial_mcmc", text)
         self.assertNotIn("notebooks/pgmuvi_mock_data_from_gp", text)
@@ -22,11 +21,11 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         self.assertIn("notebooks/PGMUVI_QuasiPeriodic_and_Mean_Functions", text)
         self.assertIn("notebooks/pgmuvi_tutorial_2d", text)
         self.assertIn("notebooks/tutorial_preprocessing", text)
+        self.assertIn("notebooks/tutorial_synthetic", text)
 
     def test_status_page_records_remaining_quarantined_notebooks_and_replacements(self):
         text = STATUS.read_text(encoding="utf-8")
         for notebook in [
-            "tutorial_synthetic.ipynb",
             "tutorial_model_selection.ipynb",
             "pgmuvi_tutorial_mcmc.ipynb",
             "pgmuvi_mock_data_from_gp.ipynb",
@@ -37,20 +36,25 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
 
     def test_status_page_records_refreshed_notebooks_as_public(self):
         text = STATUS.read_text(encoding="utf-8")
-        self.assertIn("current through PR104", text)
+        self.assertIn("current through PR105", text)
         self.assertIn("Maintained 2-D baseline and consensus-fitting tutorial", text)
         self.assertIn("Refreshed in PR103", text)
         self.assertIn("Maintained preprocessing and data-quality tutorial", text)
         self.assertIn("Refreshed in PR104", text)
+        self.assertIn("Maintained analytic synthetic-data tutorial", text)
+        self.assertIn("Refreshed in PR105", text)
         self.assertNotIn("TBD[notebook-2d-consensus]", text)
         self.assertNotIn("TBD[notebook-preprocessing-refresh]", text)
+        self.assertNotIn("TBD[notebook-synthetic-refresh]", text)
         self.assertNotIn("Quarantined stub", text)
+        self.assertNotIn("Quarantined TODO skeleton", text)
 
     def test_status_page_has_remaining_structured_maintenance_markers(self):
         text = STATUS.read_text(encoding="utf-8")
         self.assertIn("Documentation status", text)
         self.assertIn("TBD[notebook-advisory-workflow]", text)
         self.assertIn("TBD[mcmc-reenable]", text)
+        self.assertIn("TBD[notebook-mock-data-refresh]", text)
 
     def test_status_page_defines_notebook_admission_rules(self):
         text = STATUS.read_text(encoding="utf-8")
@@ -64,10 +68,10 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         for notebook in [
             "notebooks/pgmuvi_tutorial_2d.ipynb",
             "notebooks/tutorial_preprocessing.ipynb",
+            "notebooks/tutorial_synthetic.ipynb",
         ]:
             self.assertNotIn(notebook, text)
         for notebook in [
-            "notebooks/tutorial_synthetic.ipynb",
             "notebooks/tutorial_model_selection.ipynb",
             "notebooks/pgmuvi_tutorial_mcmc.ipynb",
             "notebooks/pgmuvi_mock_data_from_gp.ipynb",
@@ -93,6 +97,16 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
             self.assertIn(":doc:`../notebooks/tutorial_preprocessing`", text)
         self.assertNotIn("TBD[notebook-preprocessing]", preprocessing)
         self.assertNotIn("TBD[notebook-lightcurve-validation]", loading)
+
+    def test_synthetic_concepts_and_api_link_refreshed_notebook(self):
+        concepts = (ROOT / "docs" / "source" / "concepts.rst").read_text(
+            encoding="utf-8"
+        )
+        api = (ROOT / "docs" / "source" / "pgmuvi.synthetic.rst").read_text(
+            encoding="utf-8"
+        )
+        for text in [concepts, api]:
+            self.assertIn(":doc:`notebooks/tutorial_synthetic`", text)
 
 
 if __name__ == "__main__":

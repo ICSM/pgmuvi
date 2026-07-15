@@ -60,7 +60,6 @@ templates_path = ["_templates"]
 exclude_patterns = [
     "test*",
     "old*",
-    "notebooks/tutorial_synthetic.ipynb",
     "notebooks/tutorial_model_selection.ipynb",
     "notebooks/pgmuvi_tutorial_mcmc.ipynb",
     "notebooks/pgmuvi_mock_data_from_gp.ipynb",
