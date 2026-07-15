@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import torch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,11 @@ def load_module():
 
 
 class TestGPriorSamplingExample(unittest.TestCase):
+    def setUp(self):
+        # Tests in this class execute code that may change Torch's global dtype.
+        # Restore the incoming value after every test method.
+        self.addCleanup(torch.set_default_dtype, torch.get_default_dtype())
+
     def test_script_compiles_and_uses_current_parameter_layer(self):
         text = load_script_text()
         compile(text, str(SCRIPT), "exec")
