@@ -1,235 +1,360 @@
-Loading and Preparing Data
-==========================
+Loading and validating light curves
+===================================
 
-This guide shows how to load observational data into ``pgmuvi`` and prepare it for
-fitting.
+This guide explains the input contract for :class:`pgmuvi.lightcurve.Lightcurve`,
+how CSV columns are interpreted, which rows are removed automatically, and which
+quality decisions remain the user's responsibility.
 
 .. contents:: On this page
    :local:
    :depth: 2
 
-Overview
---------
+The validation sequence
+-----------------------
 
-``pgmuvi`` expects data as three parallel arrays:
+A reliable input workflow has five distinct stages:
 
-* **times** — observation epochs (any consistent time unit, e.g., days, MJD).
-* **fluxes** — flux or magnitude measurements.
-* **errors** — 1-σ uncertainties on the measurements.
+1. identify the time, measurement, uncertainty, wavelength, and band-label
+   columns;
+2. construct a 1-D or 2-D :class:`~pgmuvi.lightcurve.Lightcurve`;
+3. inspect rows removed because of non-finite values;
+4. decide whether non-positive fluxes or uncertainties are scientifically
+   acceptable for the intended workflow; and
+5. inspect sampling, variability, and any constructor-time subsampling before
+   fitting.
 
-All three arrays must have the same length.  For multiband data, each array has one
-row per observation across all bands (see :doc:`multiband`).
+Do not treat these stages as interchangeable.  In particular, successful CSV
+loading does not prove that the uncertainties are positive, the sampling is
+adequate, or the source is detectably variable.
 
-Creating a Lightcurve
-----------------------
+Array shapes
+------------
 
-Pass the arrays directly to the constructor::
-
-    import pgmuvi
-    import numpy as np
-
-    times  = np.array([...])   # shape (N,)
-    fluxes = np.array([...])   # shape (N,)
-    errors = np.array([...])   # shape (N,)
-
-    lc = pgmuvi.lightcurve.Lightcurve(times, fluxes, errors)
-
-The data are stored internally as PyTorch tensors.  You can retrieve them as NumPy
-arrays via ``lc.xdata.cpu().numpy()``, etc.
-
-Loading from a File
---------------------
-
-**From a CSV file**
-
-:meth:`~pgmuvi.lightcurve.Lightcurve.from_csv` reads a CSV file directly.
-Column names are matched case-insensitively using common aliases, so in most
-cases no extra arguments are required::
-
-    import pgmuvi
-
-    lc = pgmuvi.lightcurve.Lightcurve.from_csv("my_lightcurve.csv")
-
-For multiband CSV files that include a numeric wavelength column, pass the
-column name explicitly or let the method auto-detect it::
-
-    # Explicit wavelength column
-    lc = pgmuvi.lightcurve.Lightcurve.from_csv(
-        "multiband.csv", wavelcol="wavelength_um"
-    )
-
-    # Or specify time and wavelength together
-    lc = pgmuvi.lightcurve.Lightcurve.from_csv(
-        "multiband.csv", xcol=["mjd", "wavelength_um"]
-    )
-
-If the CSV contains a **string band-identifier column** (e.g. ``band`` or
-``filter`` with values like ``"V"``, ``"R"``), that column may be automatically
-stored in :attr:`~pgmuvi.lightcurve.Lightcurve.band` for labelling purposes.
-For **2-D (multiband) lightcurves** this happens automatically.  For **1-D
-lightcurves**, auto-population only occurs when the band-ID column contains
-exactly one distinct non-empty label (matching the 1-D constructor contract); if
-multiple distinct labels are present, ``band`` is left unset and a warning is
-emitted.
-Note that these string labels are for human readability only — the GP model
-requires a numeric wavelength in column 1 of ``xdata`` (see
-:doc:`multiband`).
-
-**From an Astropy-compatible format**
-
-:meth:`~pgmuvi.lightcurve.Lightcurve.from_table` builds a light curve from an
-:class:`astropy.table.Table` instance or any file format that Astropy can read
-(FITS, VOTable, many ASCII dialects)::
-
-    import pgmuvi
-
-    lc = pgmuvi.lightcurve.Lightcurve.from_table("my_lightcurve.vot")
-
-Example from an in-memory table::
-
-    from astropy.table import Table
-    import pgmuvi
-
-    t = Table.read("my_lightcurve.fits")
-    lc = pgmuvi.lightcurve.Lightcurve.from_table(t)
-
-**From raw arrays**
-
-For any other format, read the data manually and pass arrays directly::
+For a single-band light curve, provide three parallel one-dimensional arrays::
 
     import numpy as np
-    import pgmuvi
+    from pgmuvi.lightcurve import Lightcurve
 
-    data = np.loadtxt("my_lightcurve.csv", delimiter=",")
-    lc = pgmuvi.lightcurve.Lightcurve(data[:, 0], data[:, 1], data[:, 2])
+    times = np.asarray([...], dtype=float)
+    fluxes = np.asarray([...], dtype=float)
+    errors = np.asarray([...], dtype=float)
 
-Adding More Observations
---------------------------
+    lc = Lightcurve(times, fluxes, errors)
 
-**Merging a new band into an existing multiband lightcurve**
+The arrays must describe the same observations and therefore have the same
+length.  The uncertainty array is optional at construction time, but measured
+uncertainties are strongly recommended for scientific fitting and variability
+diagnostics.
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.merge` appends a new band to an
-existing 2-D light curve.  The calling object must already be 2-D; 1-D
-inputs are promoted automatically when a wavelength is supplied.  For 1-D
-inputs that have no ``band`` attribute set, you must also pass ``band=``
-explicitly (otherwise a :class:`ValueError` is raised)::
+For a multiband light curve, ``xdata`` must have shape ``(N, 2)``:
 
-    # lc2d is an existing 2-D lightcurve; lc_new is a new single-band lc
-    merged = lc2d.merge(lc_new, wavelength=0.80, band="I")   # 0.80 μm, band "I"
+* column 0 contains time;
+* column 1 contains a numeric wavelength coordinate; and
+* ``ydata`` and ``yerr`` remain one-dimensional arrays of length ``N``.
 
-You can also merge directly from a CSV path::
+For example::
 
-    merged = lc2d.merge("new_band.csv", wavelength=0.80, band="I")
+    xdata = np.column_stack([times, wavelengths_um])
+    lc = Lightcurve(xdata, fluxes, errors, band=band_labels)
 
-**Combining multiple lightcurves into one multiband object**
+String band labels are metadata for reporting and plotting.  They do not replace
+the numeric wavelength coordinate used by the GP.
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.concat` is a class method that builds a
-2-D light curve from a list of single-band (or already-multiband) objects.
-Every 1-D input must carry both band information (either set at construction
-time via ``band=`` or via :meth:`~pgmuvi.lightcurve.Lightcurve.from_csv`) **and**
-a scalar wavelength value (``lc.wavelength``, ``lc.wave``, or ``lc.lambda_``);
-``concat()`` raises a :exc:`ValueError` if either is missing::
+CSV input contract
+------------------
 
-    lc_V.band = "V";  lc_V.wavelength = 0.55
-    lc_R.band = "R";  lc_R.wavelength = 0.64
-    lc_I.band = "I";  lc_I.wavelength = 0.80
-    combined = pgmuvi.lightcurve.Lightcurve.concat([lc_V, lc_R, lc_I])
+:meth:`~pgmuvi.lightcurve.Lightcurve.from_csv` requires a header row.  Column
+matching is case-insensitive.  When column names are not passed explicitly, the
+loader searches the following aliases in order:
 
-Both methods accept ``on_conflict="skip"`` to drop duplicate bands and emit a
-:class:`UserWarning` rather than raising an error.
-
-**Concatenating arrays before construction**
-
-For simple cases where band information is not needed, concatenate the NumPy
-arrays before constructing the :class:`~pgmuvi.lightcurve.Lightcurve`::
-
-    import numpy as np
-    import pgmuvi
-
-    all_times  = np.concatenate([times,  new_times])
-    all_fluxes = np.concatenate([fluxes, new_fluxes])
-    all_errors = np.concatenate([errors, new_errors])
-
-    lc = pgmuvi.lightcurve.Lightcurve(all_times, all_fluxes, all_errors)
-
-.. note::
-
-   For 2D / multiband data, ``xdata`` must have shape ``(N, 2)`` with column 0
-   being time and column 1 being a numeric wavelength.  See :doc:`multiband`.
-
-Data Transformations
----------------------
-
-GP optimisation can be sensitive to the scale of the input data.  ``pgmuvi``
-provides built-in transformations to rescale the time and flux axes:
-
-.. list-table::
+.. list-table:: Auto-detected CSV columns
    :header-rows: 1
-   :widths: 20 50
+   :widths: 20 70
 
-   * - Transform
-     - Description
-   * - ``'minmax'``
-     - Rescale to [0, 1] using min and max.
-   * - ``'zscore'``
-     - Standardise to zero mean, unit variance.
-   * - ``'robust_score'``
-     - Standardise using median and MAD (median absolute deviation; robust to outliers).
+   * - Role
+     - Recognised names
+   * - Time
+     - ``x``, ``time``, ``t``, ``jd``, ``mjd``, ``date``, ``hjd``, ``bjd``,
+       ``epoch``
+   * - Measurement
+     - ``y``, ``magnitude``, ``mag``, ``flux``, ``value``, ``data``
+   * - Uncertainty
+     - ``yerr``, ``uncertainty``, ``error``, ``err``, ``unc``, ``sigma``,
+       ``e_magnitude``, ``e_mag``, ``e_flux``, ``flux_error``, ``mag_error``,
+       ``magnitude_error``, ``value_error``, ``data_error``, ``y_error``
+   * - Numeric wavelength
+     - ``wavelength``, ``wave``, ``wl``, ``lambda``, ``freq``, ``frequency``,
+       ``channel``
+   * - String band label
+     - ``band``, ``filter``, ``filtername``, ``filter_name``
 
-Apply a transformation at construction time via the ``xtransform`` and ``ytransform``
-keyword arguments::
+A minimal single-band file is therefore::
 
-    lc = pgmuvi.lightcurve.Lightcurve(
-        times, fluxes, errors,
-        xtransform="minmax",
-        ytransform="zscore",
+    time,flux,flux_error
+    59000.0,1.02,0.03
+    59005.0,0.98,0.03
+
+Load it with::
+
+    lc = Lightcurve.from_csv("single_band.csv")
+
+Use explicit names when the file uses project-specific headers::
+
+    lc = Lightcurve.from_csv(
+        "source.csv",
+        xcol="observation_epoch",
+        ycol="relative_flux",
+        yerrcol="relative_flux_error",
     )
 
-The GP is trained in the transformed space, but all results and plots are
-automatically inverse-transformed back to the original units.
+A multiband file should include both numeric wavelengths and, optionally,
+human-readable labels::
 
-.. _working-with-magnitudes:
+    mjd,wavelength_um,band,flux,flux_error
+    59000.0,0.55,V,1.02,0.03
+    59001.0,0.80,I,0.91,0.04
 
-Working with Magnitudes
-------------------------
+Load it with::
 
-Native magnitude support is planned for a future release but is not currently
-available.  If your data are in magnitudes, convert them to (relative) flux
-before constructing the :class:`~pgmuvi.lightcurve.Lightcurve`.  A common
-choice is:
+    lc = Lightcurve.from_csv(
+        "multiband.csv",
+        xcol="mjd",
+        wavelcol="wavelength_um",
+        ycol="flux",
+        yerrcol="flux_error",
+    )
 
-.. math::
+You can instead pass ``xcol=["mjd", "wavelength_um"]``.  A numeric wavelength
+column with more than one distinct value produces 2-D ``xdata``.  A single
+numeric wavelength value produces a 1-D light curve.
 
-   f \propto 10^{-0.4\,m}
+.. warning::
 
-In code::
+   Supplying string labels as the wavelength coordinate maps the labels to
+   arbitrary numeric indices.  That may be useful for categorical bookkeeping,
+   but it is not a physical wavelength scale.  Use actual numeric wavelengths
+   for ``2DWavelengthDependent``, ``2DDustMean``, ``2DPowerLawMean``, and other
+   workflows whose interpretation depends on wavelength.
 
-    import numpy as np
-    import pgmuvi
+Band labels and mixed-band input
+--------------------------------
 
-    # mags and mag_errors are your input magnitudes and uncertainties
-    fluxes = 10 ** (-0.4 * mags)
-    errors = fluxes * np.log(10) * 0.4 * mag_errors
+A recognised string band column is handled independently of the numeric
+wavelength column.  For 2-D data, the labels are stored row by row in
+``lc.band``.  For 1-D data, a single distinct non-empty label is stored as the
+single-band label.
 
-    lc = pgmuvi.lightcurve.Lightcurve(times, fluxes, errors)
+If a nominally 1-D file contains several distinct string labels but no usable
+numeric wavelength coordinate, :meth:`~pgmuvi.lightcurve.Lightcurve.from_csv`
+leaves ``lc.band`` unset and warns that the mixed-band input was not promoted to
+2-D.  Fix the file by supplying a numeric wavelength column rather than ignoring
+the warning.
 
-Only relative variations matter for most ``pgmuvi`` analyses, so the overall
-flux normalisation is arbitrary.
-
-Checking Data Quality
+Finite-value filtering
 ----------------------
 
-Before fitting, assess whether the observations are sufficient to detect the
-variability timescales you are interested in::
+For standard light curves, rows containing non-finite values in time,
+measurement, or uncertainty columns are removed before fitting:
 
-    lc.assess_sampling_quality()
+* CSV loading removes rows containing missing numeric values and empty required
+  strings;
+* the constructor subsequently removes remaining ``NaN`` or infinite values;
+* a :class:`UserWarning` reports the number of removed rows;
+* a :class:`ValueError` is raised if no valid rows remain; and
+* an additional warning is emitted when fewer than ten rows remain after
+  filtering.
 
-See :doc:`preprocessing` for more detail on sampling quality metrics and filtering.
+Always read these warnings.  A fit that proceeds after substantial row removal
+may no longer represent the intended time baseline or band coverage.
 
-Exporting Data
----------------
+Positive fluxes and uncertainties
+---------------------------------
 
-The loaded data can be exported to an Astropy table or a VO Table file::
+The base :class:`~pgmuvi.lightcurve.Lightcurve` constructor does **not** impose a
+universal positive-flux rule.  Negative or zero measurements can be legitimate
+for background-subtracted linear-flux data.  Do not remove them automatically
+without considering the measurement definition and the downstream model.
+
+Non-positive uncertainty values are different: zero or negative standard
+uncertainties are not scientifically meaningful.  Correct or remove those rows
+before using uncertainty-aware fits or variability diagnostics.  Some
+preprocessing diagnostics explicitly reject non-positive uncertainties even
+though the constructor itself does not.
+
+The wavelength-advisory batch workflow applies stricter defaults: it drops rows
+with non-positive fluxes or flux uncertainties unless its command-line override
+flags are used.  That policy belongs to the advisory workflow and should not be
+mistaken for a universal constructor rule.  See
+:doc:`wavelength_advisory_batch`.
+
+The runnable validation example supplied with PGMUVI can report or explicitly
+drop these rows::
+
+    python examples/validate_lightcurve_input.py source.csv \
+        --drop-nonpositive-errors
+
+Add ``--drop-nonpositive-flux`` only when positive flux is required by the
+scientific workflow.
+
+Time units and automatic centering
+----------------------------------
+
+Time values are assumed to be in days unless ``time_units=`` is supplied.  Any
+unit accepted by :mod:`astropy.units` can be converted to days during
+construction::
+
+    lc = Lightcurve(times_in_hours, fluxes, errors, time_units="hr")
+
+When no explicit ``xtransform`` is supplied, PGMUVI centers the time coordinate
+by default before GP training.  The raw time values remain available through
+``lc.xdata`` and reported results remain in the original physical time units.
+Use ``center_time=False`` only when you have a specific reason to disable this
+numerical-stability default.
+
+Sampling checks and band removal
+--------------------------------
+
+Construction does not check sampling unless ``check_sampling=True`` is passed::
+
+    lc = Lightcurve.from_csv(
+        "source.csv",
+        check_sampling=True,
+        sampling_kwargs={
+            "min_points": 20,
+            "max_gap_fraction": 0.3,
+        },
+    )
+
+The outcome differs by dimensionality:
+
+* for a 1-D light curve, poor sampling raises :class:`ValueError`;
+* for a 2-D light curve, each wavelength is assessed independently;
+* failing 2-D bands are removed with warnings; and
+* a :class:`ValueError` is raised only when no wavelength band passes.
+
+To inspect without constructor-time rejection or removal, construct with
+``check_sampling=False`` and then run::
+
+    metrics = lc.compute_sampling_metrics()
+    passes, diagnostics = lc.assess_sampling_quality(verbose=False)
+
+For multiband data use::
+
+    metrics_by_band = lc.compute_sampling_metrics_per_band()
+    diagnostics_by_band = lc.assess_sampling_quality_per_band(verbose=False)
+
+See :doc:`preprocessing` for the metric definitions and variability checks.
+
+Default subsampling behaviour
+-----------------------------
+
+The constructor's default ``max_samples=1000`` has different meanings for 1-D
+and 2-D light curves:
+
+* **1-D:** more than 1000 observations triggers permanent gap-preserving random
+  subsampling;
+* **2-D:** ``max_samples`` only emits a total-size advisory warning;
+* **2-D:** actual per-band subsampling is controlled by
+  ``max_samples_per_band`` and is disabled by default.
+
+Make the decision explicit in reproducible work::
+
+    lc = Lightcurve.from_csv(
+        "source.csv",
+        max_samples=1000,
+        max_samples_per_band=100,
+        subsample_seed=12345,
+    )
+
+Set ``max_samples=None`` to disable 1-D automatic subsampling or the 2-D total
+size warning.  Set ``max_samples_per_band=None`` to disable 2-D per-band
+subsampling.
+
+Variability checks
+------------------
+
+``check_variability=True`` is a constructor gate for 1-D light curves only.  It
+raises :class:`ValueError` when the source does not pass the configured
+variability tests::
+
+    lc = Lightcurve.from_csv(
+        "single_band.csv",
+        check_variability=True,
+        variability_kwargs={"fvar_min": 0.1},
+    )
+
+Pooling multiband measurements into a single variability test can be
+misleading, so constructor-time variability checking is rejected for 2-D input.
+Use ``check_variability_per_band()`` or ``filter_variable_bands()`` instead.
+
+Common warnings and what they mean
+----------------------------------
+
+.. list-table:: Input and validation warnings
+   :header-rows: 1
+   :widths: 38 62
+
+   * - Warning fragment
+     - Required interpretation
+   * - ``Dropped ... row(s)``
+     - Non-finite or missing input was removed.  Verify the retained baseline,
+       wavelength coverage, and row count.
+   * - ``Fewer than 10 elements remain``
+     - Construction succeeded, but the retained dataset is too small for a
+       routine fit to be trusted.
+   * - ``multiple distinct ... labels for 1-D input``
+     - Mixed bands were found without a numeric wavelength coordinate.  Repair
+       the input rather than treating it as a valid single-band series.
+   * - ``Skipping band ... due to poor temporal sampling``
+     - ``check_sampling=True`` removed that wavelength from a 2-D light curve.
+   * - ``Retaining ... wavelength bands``
+     - Only a subset of the original bands survived sampling validation.
+   * - ``exceeds max_samples``
+     - A 1-D series may have been subsampled, or a 2-D series exceeded the
+       advisory compute budget.  Read the full warning to distinguish them.
+   * - ``median_cadence is zero``
+     - Duplicate timestamps made the median cadence unusable; selected period
+       limits were computed from positive gaps instead.
+
+Runnable validation example
+---------------------------
+
+The example script loads the file without early subsampling, optionally removes
+non-positive rows, reconstructs the validated light curve with the requested
+sampling and subsampling settings, and prints a JSON summary::
+
+    python examples/validate_lightcurve_input.py source.csv \
+        --check-sampling \
+        --max-samples 1000 \
+        --max-samples-per-band 100 \
+        --subsample-seed 12345 \
+        --drop-nonpositive-errors
+
+Run ``python examples/validate_lightcurve_input.py --help`` for explicit column
+options and all validation switches.
+
+Other input formats
+-------------------
+
+:meth:`~pgmuvi.lightcurve.Lightcurve.from_table` accepts an in-memory
+:class:`astropy.table.Table` or an Astropy-readable file.  Raw arrays remain the
+most explicit route for formats whose column conventions do not match the CSV
+loader.
+
+Loaded data can be exported with::
 
     table = lc.to_table()
     lc.write_votable("lightcurve_output.xml")
+
+Notebook status
+---------------
+
+The older preprocessing notebook is quarantined while the public notebook set
+is refreshed.  Use this guide, :doc:`preprocessing`, and the runnable script as
+the maintained workflow documentation.
+
+.. note::
+
+   **TBD[notebook-lightcurve-validation]:** add an executed notebook that
+   demonstrates malformed rows, mixed-band CSV input, sampling rejection, and
+   reproducible subsampling using the current constructor defaults.
