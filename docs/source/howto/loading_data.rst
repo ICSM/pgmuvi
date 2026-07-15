@@ -196,6 +196,37 @@ drop these rows::
 Add ``--drop-nonpositive-flux`` only when positive flux is required by the
 scientific workflow.
 
+.. _working-with-magnitudes:
+
+Working with magnitudes
+-----------------------
+
+Native magnitude support is not currently implemented.  Convert magnitudes and
+their uncertainties to linear relative flux before constructing the light curve.
+For an arbitrary reference magnitude :math:`m_0`, one convenient convention is:
+
+.. math::
+
+   f = 10^{-0.4\,(m-m_0)}.
+
+Propagate a small magnitude uncertainty :math:`\sigma_m` to flux space with:
+
+.. math::
+
+   \sigma_f = \frac{\ln 10}{2.5}\,f\,\sigma_m.
+
+For example::
+
+    import numpy as np
+
+    reference_magnitude = np.nanmedian(magnitude)
+    flux = 10.0 ** (-0.4 * (magnitude - reference_magnitude))
+    flux_error = (np.log(10.0) / 2.5) * flux * magnitude_error
+
+The reference magnitude changes only the overall flux normalisation.  Preserve
+the sign convention: smaller magnitudes must map to larger fluxes.  Do not pass
+magnitude uncertainties unchanged as flux uncertainties.
+
 Time units and automatic centering
 ----------------------------------
 

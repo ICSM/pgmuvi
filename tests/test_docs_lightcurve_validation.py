@@ -46,6 +46,19 @@ class TestLightcurveValidationDocs(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.guide)
 
+    def test_magnitude_cross_reference_target_and_conversion_are_present(self):
+        required = [
+            ".. _working-with-magnitudes:",
+            "Working with magnitudes",
+            "Native magnitude support is not currently implemented",
+            "reference_magnitude = np.nanmedian(magnitude)",
+            "flux_error = (np.log(10.0) / 2.5)",
+            "smaller magnitudes must map to larger fluxes",
+        ]
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, self.guide)
+
     def test_sampling_subsampling_and_variability_behaviour_are_protected(self):
         required = [
             "Sampling checks and band removal",
