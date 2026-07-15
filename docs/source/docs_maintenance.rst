@@ -99,3 +99,21 @@ When a documentation dependency is added, removed, or deliberately pinned,
 update ``docs/source/requirements.txt`` first.  Do not duplicate ad hoc docs
 installation commands in CI workflows unless there is a narrowly documented
 reason for doing so.
+
+Future-work marker policy
+-------------------------
+
+Implementation-dependent documentation boundaries are registered in
+:doc:`future_work`. Use the literal ``TBD`` prefix followed by a bracketed,
+lowercase kebab-case identifier on the relevant user-facing page and register
+the same identifier centrally.
+
+Audit the registry from the repository root with::
+
+   python3 scripts/audit_docs_tbd_markers.py
+
+The audit rejects malformed markers, unregistered markers, and registry entries
+that have no user-facing owner. Run it together with the documentation
+regression tests and ``make html-strict`` before merging changes that add,
+rename, or resolve a future-work item.
+

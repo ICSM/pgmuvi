@@ -107,6 +107,25 @@ Terminology
    diagnose, rank, score, format, plot, or export, but does not mutate the input
    light curve by installing a winning fit.
 
+Known implementation-dependent extensions
+-----------------------------------------
+
+The current advisory workflow is intentionally bounded. The following markers
+record implementation work rather than missing explanatory prose:
+
+* **TBD[automatic-model-selection]:** define and validate a policy that can
+  populate ``selected_model`` and install a final model.
+* **TBD[multi-periodic-wavelength-models]:** add a validated multi-periodic fitting and
+  comparison workflow beyond the current limited multi-component diagnostics.
+* **TBD[non-monotonic-wavelength-kernels]:** add wavelength structures that can
+  represent physically meaningful non-monotonic behavior.
+* **TBD[physical-wavelength-kernels]:** add covariance kernels tied
+  directly to physical wavelength-dependence models.
+* **TBD[wavelength-dependent-lags]:** add models that explicitly encode
+  deterministic wavelength-dependent phase shifts or time delays.
+
+See :doc:`../future_work` for completion criteria and the full registry.
+
 Recommended single-source shortcut
 ----------------------------------
 

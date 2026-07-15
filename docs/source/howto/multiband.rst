@@ -111,8 +111,12 @@ Use :meth:`~pgmuvi.lightcurve.Lightcurve.plot` to visualise multiband fits. For
 2D data, it shows each band's observations together with the GP predictive mean and
 credible interval.
 
-The :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` method does not currently
-support 2D models; plotting PSDs in more than one dimension is not implemented.
+.. note::
+
+   **TBD[multidimensional-psd-plotting]:**
+   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` does not currently support
+   2-D models; a multidimensional PSD visualization contract is not yet
+   implemented.
 
 Kernel Choices for 2D Models
 ------------------------------

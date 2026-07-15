@@ -1,9 +1,14 @@
 Documentation expansion roadmap
 ===============================
 
-This page tracks the broader documentation-expansion project. It is separate
-from the documentation build cleanup and wavelength-advisory synchronization
-work that made the current docs warning-clean.
+.. note::
+
+   **Documentation status:** the PR97--PR109 expansion sequence is complete.
+   Ongoing documentation work is now implementation-dependent and is tracked in
+   :doc:`future_work`.
+
+This page records the completed documentation-expansion project. It is separate
+from the earlier documentation build cleanup and wavelength-advisory synchronization work that made the public docs warning-clean.
 
 Goal
 ----
@@ -16,14 +21,13 @@ from examples or notebooks.
 Documentation layers
 --------------------
 
-Each substantial user-facing workflow should eventually have all of the
-following layers:
+Each substantial user-facing workflow should have the following layers where
+appropriate:
 
 Concept background
     A short reStructuredText page explaining the scientific and statistical
-    concepts behind the workflow. These pages should explain what the workflow
-    is for, what assumptions it makes, and what outputs should be interpreted
-    cautiously.
+    concepts behind the workflow, its assumptions, and outputs that require
+    cautious interpretation.
 
 Runnable Python script
     A small ``.py`` example in ``examples/`` that can be run from a checkout.
@@ -32,71 +36,84 @@ Runnable Python script
 
 Notebook tutorial
     A notebook for interactive exploration once the workflow is stable. Public
-    notebooks should be executable with current package defaults and should not
+    notebooks should execute with current package defaults and should not
     duplicate dead or stale examples.
 
 API reference
     A concise API page or section for the objects used by the workflow. Large
     legacy modules may use manual synopsis pages rather than full autodoc when
-    the expanded docstrings are too noisy.
+    expanded docstrings are too noisy.
 
 TBD markers
-    Explicit ``TBD`` notes where documentation describes future work or where
-    the implementation is intentionally incomplete. TBD notes should be easy to
-    search for and should name the missing functionality.
+    Explicit searchable markers for implementation-dependent future work. The
+    marker registry and audit command are documented in :doc:`future_work` and
+    :doc:`docs_maintenance`.
 
-Workflow coverage plan
-----------------------
+Completed workflow coverage
+---------------------------
 
 Core package orientation
-    Explain what PGMUVI is for, what kinds of astronomical time-series problems
-    it targets, how wavelength enters the models, and what a user should try
-    first.
+    **Completed in PR97.** The overview and first-workflow material explains
+    what PGMUVI is for, the main workflow paths, model-family roles, and what a
+    new user should try first.
 
 Lightcurve creation and validation
-    Document CSV expectations, required columns, band and wavelength handling,
-    finite-value filtering, positive flux/error filtering, sampling diagnostics,
-    and common warnings.
+    **Completed in PR98, with a cross-reference repair in PR99.** The loading
+    guide and runnable example cover CSV expectations, array shapes, band and
+    wavelength handling, finite-value filtering, uncertainty requirements,
+    sampling checks, subsampling, magnitude conversion, and common warnings.
 
 Single-source fitting
-    Cover 1D fitting, 2D baseline fitting, consensus fitting, quasi-periodic
-    kernels, spectral-mixture kernels, separable wavelength models, learned
-    additional noise, and numerical-stability options.
+    **Completed in PR99.** The direct and consensus fitting guide covers 1-D and
+    2-D baselines, quasi-periodic and spectral-mixture handoff, separable models,
+    learned additional noise, time centering, numerical-stability settings, and
+    structured success or failure artifacts.
 
 Wavelength-dependent model guidance
-    Explain the advisory workflow, the difference between descriptive
-    diagnostics and model/kernel-config fitting, and when models such as
-    ``2DWavelengthDependent``, ``2DDustMean``, ``2DPowerLawMean``, and
-    ``2DSeparable`` should be considered.
+    **Completed in PR100.** The model-family guidance and advisory pages explain
+    the roles of ``2D``, ``2DSeparable``, ``2DWavelengthDependent``,
+    ``2DDustMean``, and ``2DPowerLawMean`` and distinguish advisory ranking from
+    validated model selection.
 
 Batch advisory workflows
-    Document input layout, per-source output folders, batch summaries, CSV
-    reports, Markdown reports, failure artifacts, and failure fallback
-    diagnostics.
+    **Completed in PR101.** The batch walkthrough documents source-list formats,
+    per-source folders, aggregate reports, continuation and exit semantics, and
+    ordered failure triage.
 
 Result interpretation
-    Explain periods, wavelength trends, robust amplitudes, fit-quality scores,
-    constrained spectral-mixture ARD diagnostics, and failure/fallback fields.
+    **Completed in PR102.** The interpretation guide and JSON-report helper cover
+    period provenance, PSD peaks, wavelength trends, fit-quality summaries,
+    spectral-mixture ARD diagnostics, and failure/fallback reports.
+
+Runnable examples
+    **Completed across PR97--PR102 and PR107.** Major workflows now have small
+    scripts that are syntax-checked and, where practical, exercised without
+    starting expensive GP training.
 
 Notebook refresh
     **Completed in PR103--PR108.** Maintained notebooks are in the public
     tutorial toctree, stale workflow notebooks were replaced, and the
     unavailable MCMC notebook was deleted rather than retained as a
-    nonfunctional example. Future MCMC documentation remains explicitly marked
-    in :doc:`notebook_status`.
+    nonfunctional example.
 
-Near-term documentation PR sequence
------------------------------------
+Future-work registry
+    **Completed in PR109.** Implementation-dependent documentation boundaries
+    are centralized in :doc:`future_work` and checked by
+    ``scripts/audit_docs_tbd_markers.py``.
 
-The recommended order is:
+Completed PR sequence
+---------------------
 
-1. Core package orientation and first-choice workflow guide.
-2. Lightcurve input and validation guide with a runnable example script.
-3. Single-source consensus fitting guide and runnable example updates.
-4. Wavelength-dependent model guidance expansion beyond the advisory reference.
-5. Batch advisory workflow walkthrough using a small synthetic or toy dataset.
-6. Interpretation guide for reports, fit quality, ARD diagnostics, and failures.
-7. Public notebook refresh, one notebook at a time. **Completed in PR103--PR108.**
+The documentation-expansion sequence was:
+
+1. PR97: core orientation and first-choice workflow guidance.
+2. PR98: light-curve input and validation documentation.
+3. PR99: single-source and consensus-fitting workflows.
+4. PR100: wavelength-dependent model-family guidance.
+5. PR101: batch advisory walkthrough and failure triage.
+6. PR102: result interpretation and report inspection.
+7. PR103--PR108: public notebook refresh and dead-notebook removal.
+8. PR109: roadmap closeout and explicit future-work registry.
 
 Completion standard
 -------------------
@@ -105,7 +122,11 @@ A documentation area is considered complete only when it has:
 
 - a current reStructuredText guide;
 - a runnable script or documented reason why no script is appropriate;
-- a notebook or an explicit ``TBD`` marker for future notebook work;
+- a notebook or an explicit implementation-dependent future-work marker;
 - links from the appropriate index page;
 - tests that protect the guide from losing key workflow terms; and
 - a clean ``make html-strict`` build.
+
+Completion of this roadmap does not mean the software has no missing features.
+It means current workflows are documented and known implementation boundaries
+are explicit rather than hidden in stale examples or vague promises.

@@ -274,6 +274,7 @@ See the ``alternative_kernels_1d.py`` example script for a full illustration.
 Tutorial status
 ---------------
 
-The old model-selection tutorial notebook was an unfinished skeleton and is no
-longer listed in the public tutorial toctree. Updated wavelength-advisory and
-consensus-fitting tutorials are planned.
+The old model-selection tutorial notebook was an unfinished skeleton and was
+replaced by the maintained :doc:`../notebooks/tutorial_wavelength_advisory`
+notebook. Multiwavelength consensus fitting is covered by
+:doc:`../notebooks/pgmuvi_tutorial_2d`.

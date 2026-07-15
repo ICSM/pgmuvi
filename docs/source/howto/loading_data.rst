@@ -201,6 +201,12 @@ scientific workflow.
 Working with magnitudes
 -----------------------
 
+.. note::
+
+   **TBD[native-magnitude-input]:** Native magnitude-domain input is not
+   currently available. Convert magnitudes and their uncertainties to
+   relative flux before constructing the light curve.
+
 Native magnitude support is not currently implemented.  Convert magnitudes and
 their uncertainties to linear relative flux before constructing the light curve.
 For an arbitrary reference magnitude :math:`m_0`, one convenient convention is:

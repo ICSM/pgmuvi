@@ -105,6 +105,7 @@ Developer documentation
 
    docs_maintenance
    documentation_roadmap
+   future_work
 
 
 Contributing
