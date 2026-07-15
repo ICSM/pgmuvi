@@ -17,6 +17,15 @@ Before running the advisory workflow, use :doc:`wavelength_models` to
 understand the distinct mean and covariance assumptions of each model
 family and the current try-first guidance.
 
+Runnable tutorial
+-----------------
+
+The maintained :doc:`../notebooks/tutorial_wavelength_advisory` notebook gives
+a deterministic no-fitting walkthrough of the period-independent diagnostics,
+parameter plan, and model/kernel-config preparation stages.  It replaces the
+older automatic-model-selection notebook and keeps ``RUN_FITS = False`` by
+default.
+
 Current workflow map
 --------------------
 

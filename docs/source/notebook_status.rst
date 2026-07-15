@@ -3,7 +3,7 @@ Notebook status and triage
 
 .. note::
 
-   **Documentation status:** current through PR105.
+   **Documentation status:** current through PR106.
 
    This page is a maintenance index for the notebooks shipped in the repository.
    A notebook listed in the main Tutorials toctree is intended to be usable as
@@ -44,6 +44,9 @@ These notebooks are linked from the main Tutorials toctree:
    * - ``tutorial_synthetic.ipynb``
      - Maintained analytic synthetic-data tutorial.
      - Refreshed in PR105 with all four public generators, reproducible noise modes, chromatic trends, and explicit GP-sampling boundaries.
+   * - ``tutorial_wavelength_advisory.ipynb``
+     - Maintained period-independent wavelength advisory tutorial.
+     - Refreshed and renamed in PR106 to replace the stale automatic-model-selection framing with diagnostics, parameter planning, model/kernel-config preparation, and an explicit no-fitting default.
    * - ``PGMUVI_Lomb_Scargle.ipynb``
      - Lomb--Scargle and period-candidate concepts.
      - Uses ``candidate`` in the period-search sense, which remains valid.
@@ -75,10 +78,6 @@ These notebooks are intentionally **not** linked from the main Tutorials toctree
      - Status
      - Reason
      - Replacement / next action
-   * - ``tutorial_model_selection.ipynb``
-     - Quarantined legacy/stub notebook.
-     - Uses old model-selection framing and TODO material.
-     - **TBD[notebook-advisory-workflow]:** replace with a period-independent wavelength advisory walkthrough.
    * - ``pgmuvi_tutorial_mcmc.ipynb``
      - Quarantined unavailable workflow.
      - Calls MCMC APIs that currently raise ``NotImplementedError``.
@@ -97,7 +96,7 @@ Use structured markers so pending work is easy to find:
 
 .. code-block:: bash
 
-   rg "TBD\\[" docs/source/notebook_status.rst docs/source/notebooks
+   rg "TBD\[" docs/source/notebook_status.rst docs/source/notebooks
 
 Before adding a notebook to the public Tutorials toctree, check that it satisfies
 all of the following:

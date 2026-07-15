@@ -9,6 +9,15 @@ workflow as automatic "model selection".
    :local:
    :depth: 2
 
+Current tutorial
+----------------
+
+For a deterministic, no-fitting walkthrough of the current wavelength advisory
+path, use :doc:`../notebooks/tutorial_wavelength_advisory`.  The notebook
+computes period-independent diagnostics, builds advisory parameter metadata,
+and prepares LPV-relevant model/kernel configs while leaving GP fits disabled
+unless the user opts in explicitly.
+
 Current direct fitting path
 ---------------------------
 
