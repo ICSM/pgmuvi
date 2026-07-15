@@ -41,6 +41,7 @@ New to Gaussian processes or spectral mixture kernels? Start here.
 .. toctree::
    :maxdepth: 1
 
+   overview
    background
    concepts
    glossary

@@ -10,6 +10,7 @@ Each guide is focused on a single workflow and assumes you have already read the
 .. toctree::
    :maxdepth: 1
 
+   first_workflow
    loading_data
    preprocessing
    consensus_fitting
