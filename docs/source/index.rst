@@ -60,6 +60,7 @@ package defaults.
    notebooks/PGMUVI_Lightcurve
    notebooks/tutorial_preprocessing
    notebooks/tutorial_synthetic
+   notebooks/pgmuvi_mock_data_from_gp
    notebooks/tutorial_wavelength_advisory
    notebooks/PGMUVI_Lomb_Scargle
    notebooks/PGMUVI_Gaussian_Process_fitting

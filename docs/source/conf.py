@@ -61,7 +61,6 @@ exclude_patterns = [
     "test*",
     "old*",
     "notebooks/pgmuvi_tutorial_mcmc.ipynb",
-    "notebooks/pgmuvi_mock_data_from_gp.ipynb",
 ]
 
 

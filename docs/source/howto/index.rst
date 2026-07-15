@@ -13,6 +13,7 @@ Each guide is focused on a single workflow and assumes you have already read the
    first_workflow
    loading_data
    preprocessing
+   gp_prior_sampling
    consensus_fitting
    model_selection
    wavelength_models

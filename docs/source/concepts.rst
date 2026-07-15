@@ -183,3 +183,8 @@ These helpers do not sample a Gaussian-process prior or posterior.  GP sampling
 requires an explicitly constructed model and kernel and is a separate advanced
 workflow.  See :doc:`notebooks/tutorial_synthetic` for the maintained analytic
 generator walkthrough and :mod:`pgmuvi.synthetic` for the full API.
+
+For random latent realizations from explicitly configured PGMUVI kernels, use
+:doc:`howto/gp_prior_sampling` and
+:doc:`notebooks/pgmuvi_mock_data_from_gp`.  That GP-prior workflow uses the
+current parameter schema/application layer and does not start a fit.

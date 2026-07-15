@@ -3,7 +3,7 @@ Notebook status and triage
 
 .. note::
 
-   **Documentation status:** current through PR106.
+   **Documentation status:** current through PR107.
 
    This page is a maintenance index for the notebooks shipped in the repository.
    A notebook listed in the main Tutorials toctree is intended to be usable as
@@ -47,6 +47,9 @@ These notebooks are linked from the main Tutorials toctree:
    * - ``tutorial_wavelength_advisory.ipynb``
      - Maintained period-independent wavelength advisory tutorial.
      - Refreshed and renamed in PR106 to replace the stale automatic-model-selection framing with diagnostics, parameter planning, model/kernel-config preparation, and an explicit no-fitting default.
+   * - ``pgmuvi_mock_data_from_gp.ipynb``
+     - Maintained GP-prior mock-data tutorial.
+     - Refreshed in PR107 with current parameter schemas, physical-space parameter application, reproducible quasi-periodic/Matérn/spectral-mixture prior draws, and an explicit no-fitting boundary.
    * - ``PGMUVI_Lomb_Scargle.ipynb``
      - Lomb--Scargle and period-candidate concepts.
      - Uses ``candidate`` in the period-search sense, which remains valid.
@@ -82,10 +85,6 @@ These notebooks are intentionally **not** linked from the main Tutorials toctree
      - Quarantined unavailable workflow.
      - Calls MCMC APIs that currently raise ``NotImplementedError``.
      - **TBD[mcmc-reenable]:** restore only after the MCMC workflow is implemented and tested.
-   * - ``pgmuvi_mock_data_from_gp.ipynb``
-     - Pending refresh / orphan.
-     - Uses older direct-hyperparameter patterns and should be reviewed against the current parameter workflow.
-     - **TBD[notebook-mock-data-refresh]:** modernise or remove.
 
 Notebook maintenance rules
 --------------------------

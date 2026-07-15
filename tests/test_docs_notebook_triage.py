@@ -12,7 +12,6 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
     def test_public_tutorial_toctree_excludes_remaining_quarantined_notebooks(self):
         text = INDEX.read_text(encoding="utf-8")
         self.assertNotIn("notebooks/pgmuvi_tutorial_mcmc", text)
-        self.assertNotIn("notebooks/pgmuvi_mock_data_from_gp", text)
 
     def test_public_tutorial_toctree_links_status_and_maintained_notebooks(self):
         text = INDEX.read_text(encoding="utf-8")
@@ -22,20 +21,19 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         self.assertIn("notebooks/tutorial_preprocessing", text)
         self.assertIn("notebooks/tutorial_synthetic", text)
         self.assertIn("notebooks/tutorial_wavelength_advisory", text)
+        self.assertIn("notebooks/pgmuvi_mock_data_from_gp", text)
 
-    def test_status_page_records_remaining_quarantined_notebooks_and_replacements(self):
+    def test_status_page_records_remaining_quarantined_notebook(self):
         text = STATUS.read_text(encoding="utf-8")
-        for notebook in [
-            "pgmuvi_tutorial_mcmc.ipynb",
-            "pgmuvi_mock_data_from_gp.ipynb",
-        ]:
-            self.assertIn(notebook, text)
+        self.assertIn("pgmuvi_tutorial_mcmc.ipynb", text)
         self.assertNotIn("tutorial_model_selection.ipynb", text)
+        quarantined = text.split("Quarantined or pending-refresh notebooks", 1)[1]
+        self.assertNotIn("pgmuvi_mock_data_from_gp.ipynb", quarantined)
         self.assertIn("NotImplementedError", text)
 
     def test_status_page_records_refreshed_notebooks_as_public(self):
         text = STATUS.read_text(encoding="utf-8")
-        self.assertIn("current through PR106", text)
+        self.assertIn("current through PR107", text)
         self.assertIn("Maintained 2-D baseline and consensus-fitting tutorial", text)
         self.assertIn("Refreshed in PR103", text)
         self.assertIn("Maintained preprocessing and data-quality tutorial", text)
@@ -44,19 +42,21 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         self.assertIn("Refreshed in PR105", text)
         self.assertIn("Maintained period-independent wavelength advisory tutorial", text)
         self.assertIn("Refreshed and renamed in PR106", text)
+        self.assertIn("Maintained GP-prior mock-data tutorial", text)
+        self.assertIn("Refreshed in PR107", text)
         self.assertNotIn("TBD[notebook-2d-consensus]", text)
         self.assertNotIn("TBD[notebook-preprocessing-refresh]", text)
         self.assertNotIn("TBD[notebook-synthetic-refresh]", text)
         self.assertNotIn("TBD[notebook-advisory-workflow]", text)
+        self.assertNotIn("TBD[notebook-mock-data-refresh]", text)
         self.assertNotIn("Quarantined stub", text)
         self.assertNotIn("Quarantined TODO skeleton", text)
 
-    def test_status_page_has_remaining_structured_maintenance_markers(self):
+    def test_status_page_has_remaining_structured_maintenance_marker(self):
         text = STATUS.read_text(encoding="utf-8")
         self.assertIn("Documentation status", text)
         self.assertIn("TBD[mcmc-reenable]", text)
-        self.assertIn("TBD[notebook-mock-data-refresh]", text)
-        self.assertNotIn("TBD[notebook-advisory-workflow]", text)
+        self.assertNotIn("TBD[notebook-mock-data-refresh]", text)
 
     def test_status_page_defines_notebook_admission_rules(self):
         text = STATUS.read_text(encoding="utf-8")
@@ -65,7 +65,7 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         self.assertIn("candidate", text)
         self.assertIn("TODO-placeholder", text)
 
-    def test_remaining_quarantined_notebooks_are_excluded_from_sphinx(self):
+    def test_only_unavailable_mcmc_notebook_remains_excluded_from_sphinx(self):
         text = CONF.read_text(encoding="utf-8")
         for notebook in [
             "notebooks/pgmuvi_tutorial_2d.ipynb",
@@ -73,13 +73,10 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
             "notebooks/tutorial_synthetic.ipynb",
             "notebooks/tutorial_wavelength_advisory.ipynb",
             "notebooks/tutorial_model_selection.ipynb",
-        ]:
-            self.assertNotIn(notebook, text)
-        for notebook in [
-            "notebooks/pgmuvi_tutorial_mcmc.ipynb",
             "notebooks/pgmuvi_mock_data_from_gp.ipynb",
         ]:
-            self.assertIn(notebook, text)
+            self.assertNotIn(notebook, text)
+        self.assertIn("notebooks/pgmuvi_tutorial_mcmc.ipynb", text)
 
     def test_multiband_page_links_refreshed_2d_notebook(self):
         text = (
@@ -123,6 +120,19 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
                 ":doc:`../notebooks/tutorial_wavelength_advisory`",
                 text,
             )
+
+    def test_gp_prior_guide_and_api_link_refreshed_notebook(self):
+        guide = (
+            ROOT / "docs" / "source" / "howto" / "gp_prior_sampling.rst"
+        ).read_text(encoding="utf-8")
+        concepts = (ROOT / "docs" / "source" / "concepts.rst").read_text(
+            encoding="utf-8"
+        )
+        api = (ROOT / "docs" / "source" / "pgmuvi.gps.rst").read_text(
+            encoding="utf-8"
+        )
+        for text in [guide, concepts, api]:
+            self.assertIn("pgmuvi_mock_data_from_gp", text)
 
 
 if __name__ == "__main__":
