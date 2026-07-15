@@ -1,175 +1,357 @@
-Interpreting Results
-=====================
+Interpreting PGMUVI results
+===========================
 
-This guide explains how to interpret the output of ``pgmuvi`` fits, including the
-fitted hyperparameters, diagnostic plots, and summary statistics.
+.. note::
+
+   **Documentation status:** current through PR102.
+
+   This guide explains how to read period summaries, wavelength-trend
+   diagnostics, training-residual fit-quality scores, spectral-mixture ARD
+   scale-ceiling diagnostics, and failure/fallback reports.  These outputs are
+   diagnostics.  They do not turn the current advisory workflow into automatic
+   model selection.
 
 .. contents:: On this page
    :local:
    :depth: 2
 
-Overview
---------
+Read outputs in this order
+--------------------------
 
-After fitting a ``pgmuvi`` model, you have access to:
+For a completed single-source analysis, inspect outputs in the following order:
 
-* fitted (or sampled) hyperparameter values,
-* predictive distributions (GP mean and variance at arbitrary times),
-* inferred power spectral density (PSD),
-* diagnostic and summary outputs.
+1. confirm whether the requested fit actually passed;
+2. inspect the period-summary method and kernel metadata;
+3. compare the primary period peak with other significant peaks;
+4. inspect wavelength-dependent descriptive trends;
+5. read training-residual fit-quality metrics and ARD boundary diagnostics;
+6. inspect consensus, numerical, or input-validation failures; and
+7. keep ``selected_model=None`` unless a separate, explicit scientific
+   selection procedure has been performed.
 
-Fitted Hyperparameters
------------------------
+For batch advisory work, start with the batch summary, then inspect each
+source-level JSON report, and finally inspect the long-form model/kernel-config
+CSV for individual failures and boundary hits.
 
-After calling :meth:`~pgmuvi.lightcurve.Lightcurve.fit`, the model
-hyperparameters are updated to their optimised (MAP) values.  Retrieve the
-current parameter values as a dictionary after ``fit()``::
+Period summaries
+----------------
 
-    params = lc.get_parameters()
-    print(params)
+After a fitted periodic or spectral-mixture model, request a kernel-aware
+period summary:
 
-Note that :meth:`~pgmuvi.lightcurve.Lightcurve.fit_LS` computes
-Lomb–Scargle peak frequencies for initialisation and does not update the model
-hyperparameters to MAP values.
+.. code-block:: python
 
-.. note::
+   summary = lc.get_period_summary()
+   print(summary.to_text())
 
-   Full posterior sampling via :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc` is
-   not yet available; the method currently raises ``NotImplementedError``.
-   MCMC support is planned for a future release.
+   primary = summary.get_primary_peak()
+   if primary is not None:
+       print(primary.period, primary.prominence, primary.area_fraction)
 
-The key parameters are:
+The summary records ``model_name``, ``method``, ``backend``, ``kernel_family``,
+``time_kernel_family``, and ``has_stochastic_background``.  Read these fields
+before interpreting any period because the meaning of the remaining fields
+changes with the kernel family.
 
-* ``mixture_means`` — optimised frequencies (in units of ``1 /`` the time
-  unit of ``xdata``).
-  Convert to periods by taking the reciprocal: ``periods = 1.0 / mixture_means``.
-* ``mixture_scales`` — bandwidths (coherence timescales).
-* ``mixture_weights`` — relative amplitudes.
-* ``likelihood.noise`` — inferred white-noise variance.
+Primary peak versus largest-area feature
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For convenience::
+``primary_peak_rank`` identifies the physically ranked primary candidate.  The
+ranking prioritizes prominence, then coherence, integrated area, and peak
+height.  ``largest_area_peak_rank`` identifies the feature with the largest
+integrated PSD area.  These ranks can differ.
 
-    lc.print_periods()         # prints inferred periods in human-readable form
-    lc.print_parameters()      # prints all hyperparameter values
+When ``primary_peak_rank != largest_area_peak_rank``, report both features.  Do
+not silently replace the primary candidate with the broadest integrated-power
+feature.  The convenience fields ``dominant_period`` and
+``dominant_frequency`` follow the primary peak, while
+``largest_area_period``, ``largest_area_frequency``, and
+``largest_area_fraction`` describe the largest-area feature.
 
-.. note::
+Intervals and coherence
+~~~~~~~~~~~~~~~~~~~~~~~
 
-   ``lc.summary()`` is an MCMC-only helper.  Calling it before running the
-   MCMC sampler raises ``RuntimeError("You must first run the MCMC sampler")``,
-   and since ``mcmc()`` is not yet available it will always raise.  Use
-   ``print_periods()`` and ``print_parameters()`` after a MAP ``fit()`` call
-   instead.
+``period_interval`` and the backward-compatible
+``period_interval_fwhm_like`` contain the interval identified by
+``interval_definition``.  They are peak-width summaries, not posterior
+credible intervals.  MAP optimisation does not provide formal posterior period
+uncertainty.
 
-Predictive Distribution
-------------------------
+``q_factor`` is a coherence proxy derived from the primary peak's frequency and
+frequency width.  A larger finite value indicates a narrower, more coherent
+feature.  It is not a detection significance and should not be compared across
+reports without checking that the same summary method and frequency grid were
+used.
 
-Once fitted, the GP predictive mean and credible interval can be visualised
-directly using :meth:`~pgmuvi.lightcurve.Lightcurve.plot`::
+Multiple peaks and multi-component consensus
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    fig = lc.plot()
+Use ``peaks``, ``n_peaks_detected``, ``n_significant_peaks``, and
+``significant_periods`` to inspect alternative periodic features.  Harmonics,
+aliases, window-function features, and genuinely multi-periodic variability can
+all produce more than one peak.  Compare every candidate with the observing
+baseline, sampling diagnostics, Lomb--Scargle results, and astrophysical
+expectations.
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.plot` shows the data alongside the GP
-predictive mean and shaded credible region when the model has been fitted.
-When the model has not yet been fitted, only the raw data are shown.
+For ``consensus_multicomp`` outputs, inspect ``component_summaries`` rather than
+only a single dominant period.  Compare ``consensus_period``,
+``initialized_mixture_period``, ``fitted_mixture_period``, member bands,
+``fitted_period_drift_flag``, and ``fitted_frequency_drift_flag``.  A
+component-identity warning or a large drift flag means the final fit may no
+longer represent the component handed off by consensus.
 
-Visualisation
---------------
+Kernel-component diagnostics are not final periods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.plot`
-    Raw data if the model is unfitted; after MAP fitting, also plots the GP
-    predictive mean and credible interval.  Returns a
-    ``matplotlib.pyplot.Figure`` (or a list of ``Figure`` objects for 2D
-    multiband data).
+``component_diagnostics`` contains fitted spectral-mixture component periods,
+frequencies, weights, and scales.  These are internal kernel diagnostics, not
+independent physical periods and not substitutes for the analyzed peaks in
+``peaks``.  Cite the analyzed peak result, while using component diagnostics to
+understand how the kernel represented the PSD.
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.plot_results`
-    Training-history diagnostics are not currently available via this
-    method in the current release.  Avoid calling
-    ``Lightcurve.plot_results()`` until its implementation is fixed.
+Writing period outputs
+~~~~~~~~~~~~~~~~~~~~~~
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd`
-    Inferred power spectral density.  Peaks correspond to inferred periods.
-    Broad, low-frequency power indicates stochastic variability.
-    With ``show=False``, returns ``(fig, ax)`` for further customisation.
-    With the default ``show=True``, calls :func:`matplotlib.pyplot.show` and
-    returns ``None``.
+Write text, JSON, and figure products together:
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.plot` and
-:meth:`~pgmuvi.lightcurve.Lightcurve.plot_psd` accept standard Matplotlib
-keyword arguments.
+.. code-block:: python
 
-MCMC Results (Planned)
------------------------
+   summary = lc.write_period_summary_outputs(
+       text_file="results/period_summary.txt",
+       json_file="results/period_summary.json",
+       png_file="results/period_summary.png",
+       include_fit_history=True,
+   )
 
-.. note::
+By default the JSON omits the full PSD arrays to keep the file compact.  Set
+``include_psd_in_json=True`` only when downstream analysis needs the complete
+frequency grid and PSD.
 
-   Full MCMC support is planned for a future release of ``pgmuvi``.
-   :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc`,
-   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_corner`, and
-   :meth:`~pgmuvi.lightcurve.Lightcurve.plot_trace` currently raise
-   ``NotImplementedError``.
+Predictive plots and fitted parameters
+--------------------------------------
 
-When MCMC becomes available, the full posterior distribution over
-hyperparameters will be accessible.  Planned visualisation methods include:
+``lc.plot()`` shows raw data before fitting and adds the GP predictive mean and
+credible region after fitting.  ``lc.plot_psd()`` shows the inferred PSD for
+compatible kernels.  Use ``show=False`` when a figure object is needed for
+saving or additional annotation.
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.plot_corner`
-    Corner plot (parameter covariance matrix).  Reveals correlations between
-    periods, amplitudes, and noise.
+Use ``lc.get_parameters()`` and ``lc.print_parameters()`` to inspect fitted MAP
+parameters.  ``lc.print_periods()`` remains a compact convenience display, but
+``get_period_summary()`` is the structured interpretation interface.
 
-:meth:`~pgmuvi.lightcurve.Lightcurve.plot_trace`
-    MCMC trace plots.  Use these to check convergence — well-mixed chains should
-    look like "fuzzy caterpillars".
+``Lightcurve.plot_results()`` is not a maintained training-history interface in
+the current release.  Use ``lc.get_fit_history_summary()`` and
+``lc.export_fit_history_json(...)`` instead.
 
-Posterior-summary helpers are also planned for MCMC output, including
-credible intervals, effective sample size, and :math:`\hat{R}` diagnostics.
+Interpreting wavelength trends
+------------------------------
 
-A :math:`\hat{R}` value close to 1.0 (< 1.01 is a common criterion) indicates
-that the chains have converged to the same distribution.
+The period-independent wavelength report summarizes each usable band before a
+temporal GP fit.  Read the per-band ``band_table`` together with the cross-band
+``summary``.
 
-Common Warning Signs
----------------------
+Median and robust amplitude fields
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``median_flux`` describes the central flux level in each band.  Robust
+half-amplitude proxies are half of a central quantile range:
+
+* ``raw_half_amplitude_q05_q95`` uses the central 90 percent of values;
+* ``raw_half_amplitude_q02_5_q97_5`` uses the central 95 percent of values;
+* ``fractional_half_amplitude_*`` divides the raw half-amplitude by the
+  absolute median flux; and
+* ``noise_corrected_half_amplitude_*`` subtracts an approximate measurement-
+  noise contribution in quadrature when positive uncertainties are available.
+
+The wider central-95-percent proxy is less dependent on individual extrema than
+raw peak-to-peak amplitude, but it is more sensitive to sparse tails than the
+central-90-percent proxy.  Inspect both when band sampling differs.
+
+Monotonicity and slopes are descriptive
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Fields such as
+``raw_half_amplitude_q02_5_q97_5_monotonicity_class`` and
+``median_flux_monotonicity_class`` are tolerance-rule descriptions, not
+hypothesis tests.  Log--log slope fields summarize the observed coordinate
+trend but do not prove a physical power law.  Do not use either field as a hard
+model veto or a hard parameter constraint.
+
+A trend is only interpretable when at least two bands are usable and the
+wavelength coordinate is physically meaningful.  Integer band codes are not
+physical wavelengths.
+
+Training-residual fit-quality scores
+------------------------------------
+
+The advisory workflow's ``fit_quality_score`` is a higher-is-better triage score
+computed from fitted training-coordinate residuals.  It combines:
+
+* ``training_nrmse_by_target_scale``;
+* ``training_median_abs_standardized_residual``;
+* ``training_outlier_fraction_3sigma``; and
+* ``training_reduced_chi2``.
+
+The score is useful for identifying obviously poor completed fits and ordering
+follow-up inspection.  It is not cross-validation, not held-out predictive
+performance, not AIC or BIC, and not marginal likelihood or model evidence.
+Small score differences do not establish a scientifically preferred model.
+
+A very low score or ``fit_quality_available=False`` should trigger inspection
+of the underlying metrics and fit state.  A high score can still represent
+overfitting because all metrics are evaluated at training coordinates.
+
+``top_ranked_model`` is therefore an advisory display field.  In the current
+workflow, ``automatic_model_selection_applied=False`` and
+``selected_model=None`` remain the scientific contract.
+
+Spectral-mixture ARD scale-ceiling diagnostics
+----------------------------------------------
+
+For the full ``2D`` spectral-mixture baseline, ARD diagnostics report fitted
+scale values by component and coordinate dimension.  Dimension names are:
+
+``time_frequency``
+   The spectral-mixture scale associated with the time coordinate.
+
+``wavelength_frequency``
+   The spectral-mixture scale associated with the wavelength coordinate.
+
+``constrained_sm_ard_components`` lists component/dimension pairs whose fitted
+scale lies within the configured tolerance of the consensus upper bound.
+``constrained_sm_ard_dimension_counts`` and
+``n_constrained_sm_ard_components`` summarize those hits.
+
+A ceiling hit means the optimum is boundary-limited under the current
+constraint and initialization.  It does not prove that the corresponding
+physical dependence is absent, infinitely broad, or scientifically preferred.
+Check the recorded upper bound, ``fraction_of_upper``, learned noise, time
+centering, training stability, and whether repeated fits reproduce the hit.
+
+Interpret the coordinate explicitly:
+
+* time-frequency ceiling hits concern temporal spectral width/coherence;
+* wavelength-frequency ceiling hits concern the wavelength-coordinate spectral
+  width; and
+* hits in both dimensions may indicate that the common ARD constraint is too
+  restrictive for that component or that the fit is weakly identified.
+
+Failure and fallback diagnostics
+--------------------------------
+
+A failed fit is not a low-quality successful fit.  Read ``status``,
+``fit_success``, ``fit_failed``, ``exception_type``, ``exception_message``, and
+``failure_stage`` before comparing scores.
+
+The advisory failure classifier uses descriptive stages:
+
+``input_validation``
+   The light curve or requested configuration did not satisfy an input
+   contract.
+
+``consensus``
+   A usable cross-band period handoff was not obtained or could not be applied.
+
+``numerical_stability``
+   The fit encountered PSD, Cholesky, positive-definiteness, or related
+   numerical failures.
+
+``fit_execution``
+   The model/kernel fit raised another execution-time exception.
+
+When all attempted model/kernel configs fail,
+``fallback_diagnostics_available=True`` and ``fallback_report.available=True``.
+Inspect ``failure_stage_counts``, ``exception_type_counts``, failed model lists,
+and ``recommended_next_steps``.  The fallback report is diagnostic-only:
+``automatic_model_selection_applied=False`` and ``selected_model=None``.
+
+Do not turn an all-failed advisory run into a winner by choosing the least severe
+exception.  Fix or narrow the workflow, then rerun the relevant configurations.
+
+Batch interpretation
+--------------------
+
+For a batch report, read:
+
+1. ``n_sources``, ``n_succeeded``, and ``n_failed``;
+2. each row in ``source_results`` for source-level ingestion or workflow
+   failures;
+3. ``model_kernel_config_results`` for individual config outcomes, training-
+   residual metrics, and ARD boundary fields; and
+4. ``model_kernel_config_summary`` for aggregate completion and score summaries.
+
+Aggregate score statistics do not correct for heterogeneous sampling, source
+brightness, uncertainty calibration, or different numbers of usable bands.
+Compare sources scientifically only after checking those differences.
+
+Runnable report interpreter
+---------------------------
+
+The maintained no-training example reads period-summary, single-source advisory,
+or batch advisory JSON and prints a compact interpretation:
+
+.. code-block:: console
+
+   python3 examples/interpret_pgmuvi_outputs.py results/report.json
+
+To save its normalized interpretation dictionary:
+
+.. code-block:: console
+
+   python3 examples/interpret_pgmuvi_outputs.py \
+       results/report.json \
+       --json-output results/report_interpretation.json
+
+The script does not import ``pgmuvi``, run a fit, rescore candidates, or select a
+model.  It only interprets fields already present in the supplied JSON.
+
+Common warning signs
+--------------------
 
 Overfitting
-    The GP predictive mean passes through every data point and the uncertainty band
-    is very narrow everywhere.  This suggests the noise variance is too small, or
-    that ``num_mixtures`` is too large.  Try constraining the noise or reducing
-    ``num_mixtures``.
+   The predictive mean follows nearly every point, uncertainty bands are very
+   narrow, learned noise is close to its lower bound, or training residuals look
+   excellent while held-out behavior is unknown.
 
-Poor convergence (MAP)
-    The loss does not decrease or oscillates.  Common causes:
+Poor MAP optimization
+   Loss is non-finite, strongly oscillatory, or fails to improve; fitted
+   parameters remain on bounds; repeated starts disagree substantially; or fit
+   history reports an exception.
 
-    * Poor initialisation — try using Lomb–Scargle initialisation via ``fit_LS()``.
-    * Constraints that are too tight — check that the true period lies within your
-      constraint bounds.
-    * Learning rate too large — reduce ``lr`` in the call to
-      :meth:`~pgmuvi.lightcurve.Lightcurve.fit`.
+Spurious or aliased periods
+   Peaks coincide with cadence aliases, seasonal gaps, harmonics, or the
+   observing baseline.  Compare with sampling metrics and independent period
+   diagnostics.
 
-Poor MCMC mixing *(planned feature)*
-    High :math:`\hat{R}` or very low effective sample size.  This guidance will
-    apply once MCMC support is available.  Common causes:
+Boundary-limited ARD scales
+   One or more entries appear in ``constrained_sm_ard_components``.  Treat the
+   corresponding scale as constraint-sensitive rather than as a well-measured
+   interior optimum.
 
-    * The chains are stuck in different modes — run multiple chains from different
-      starting points.
-    * Strong parameter correlations — use tighter priors or a different
-      parameterisation.
-    * Insufficient warmup — increase ``warmup_steps``.
+All advisory configs failed
+   ``fallback_report.available`` is true.  No fit-based ranking is available,
+   regardless of any pre-fit advisory ordering.
 
-Spurious periods
-    The PSD shows peaks at aliases (multiples or sub-multiples of the observing
-    cadence), or at the observational baseline.  Always compare the inferred periods
-    against the Nyquist period and baseline from
-    :meth:`~pgmuvi.lightcurve.Lightcurve.compute_sampling_metrics`.
+MCMC status and future work
+---------------------------
 
-Period Uncertainty
--------------------
+Full MCMC fitting and posterior plotting are not available in the current
+release.  ``Lightcurve.mcmc()``, ``plot_corner()``, and ``plot_trace()`` remain
+future functionality.  Period intervals in current MAP summaries are therefore
+peak-width diagnostics, not posterior credible intervals.
 
-When using MAP optimisation, no formal uncertainty is reported on the period.  A
-practical proxy is the inferred bandwidth ``mixture_scales``: a wider bandwidth
-(larger :math:`\sigma_q`) corresponds to a less coherent signal and a less
-precisely determined period.
+.. admonition:: TBD: interpretation notebook
 
-.. note::
+   ``TBD[result-interpretation-notebook]``: add a maintained notebook that reads
+   real exported period and advisory reports, reproduces the interpretation
+   sequence above, and compares training-residual diagnostics with future
+   held-out validation outputs.
 
-   Rigorous posterior period uncertainties via MCMC are planned for a future
-   release of ``pgmuvi``.  Once available,
-   :meth:`~pgmuvi.lightcurve.Lightcurve.mcmc` will provide credible intervals
-   on ``1 / mixture_means``.
+See also
+--------
+
+* :doc:`consensus_fitting`
+* :doc:`wavelength_models`
+* :doc:`wavelength_advisory`
+* :doc:`wavelength_advisory_batch`
+* :doc:`preprocessing`
