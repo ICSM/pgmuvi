@@ -50,6 +50,27 @@ class TestWavelengthAdvisoryDocs(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, text)
 
+    def test_single_source_doc_describes_retained_high_level_reports_truthfully(self):
+        text = self._read("docs/source/howto/wavelength_advisory.rst")
+        self.assertIn(
+            "does **not** preserve the complete period-independent diagnostic report",
+            text,
+        )
+        self.assertIn("parameter-plan report", text)
+        self.assertNotIn(
+            "The high-level helper returns all of these pieces in one dictionary",
+            text,
+        )
+
+    def test_batch_doc_does_not_call_rank_labels_stable_configuration_ids(self):
+        text = self._read("docs/source/howto/wavelength_advisory_batch.rst")
+        self.assertIn("rank-dependent evaluation label", text)
+        self.assertIn("not a stable configuration identity", text)
+        self.assertNotIn(
+            "Stable row identifier such as ``rank1_2DWavelengthDependent``",
+            text,
+        )
+
     def test_howto_index_links_current_advisory_pages(self):
         text = self._read("docs/source/howto/index.rst")
         self.assertIn("wavelength_advisory", text)

@@ -360,7 +360,10 @@ Important columns include:
    * - ``source_id``
      - Source identifier.
    * - ``model_kernel_config_id``
-     - Stable row identifier such as ``rank1_2DWavelengthDependent``.
+     - Current rank-dependent evaluation label such as
+       ``rank1_2DWavelengthDependent``.  It is useful within one report, but it
+       is not a stable configuration identity across candidate filtering,
+       reordering, or truncation.
    * - ``model_kernel_config_rank``
      - Original advisory/evaluation order.
    * - ``quality_rank``

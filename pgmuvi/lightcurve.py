@@ -9320,6 +9320,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         sources,
         *,
         from_csv_kwargs=None,
+        positive_data_filter_kwargs=None,
         workflow_kwargs=None,
         output_dir=None,
         export=True,
@@ -9339,6 +9340,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return run_period_independent_wavelength_advisory_workflow_batch(
             sources,
             from_csv_kwargs=from_csv_kwargs,
+            positive_data_filter_kwargs=positive_data_filter_kwargs,
             workflow_kwargs=workflow_kwargs,
             output_dir=output_dir,
             export=export,

@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.wavelength_diagnostics import (
@@ -389,12 +390,42 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                 require_positive_flux_error=True,
             )
 
-    def test_lightcurve_static_method_delegates(self):
-        report = Lightcurve.run_period_independent_wavelength_advisory_workflow_batch(
-            [{"source_id": "src", "lightcurve": _FakeLightcurve()}],
-            export=False,
-        )
-        self.assertEqual(report["n_succeeded"], 1)
+    def test_lightcurve_static_method_delegates_batch_filter_kwargs(self):
+        sources = [{"source_id": "src", "lightcurve": _FakeLightcurve()}]
+        expected = {"kind": "period_independent_wavelength_advisory_workflow_batch"}
+        positive_filter = {
+            "require_positive_flux": True,
+            "require_positive_flux_error": True,
+        }
+
+        with mock.patch(
+            "pgmuvi.wavelength_diagnostics."
+            "run_period_independent_wavelength_advisory_workflow_batch",
+            return_value=expected,
+        ) as mocked:
+            report = Lightcurve.run_period_independent_wavelength_advisory_workflow_batch(
+                sources,
+                from_csv_kwargs={"check_sampling": True},
+                positive_data_filter_kwargs=positive_filter,
+                workflow_kwargs={"make_plots": False},
+                export=False,
+            )
+
+        self.assertIs(report, expected)
+        mocked.assert_called_once()
+        args, kwargs = mocked.call_args
+        self.assertEqual(args[0], sources)
+        self.assertEqual(kwargs["from_csv_kwargs"], {"check_sampling": True})
+        self.assertEqual(kwargs["positive_data_filter_kwargs"], positive_filter)
+        self.assertEqual(kwargs["workflow_kwargs"], {"make_plots": False})
+        self.assertFalse(kwargs["export"])
+
+    def test_batch_nonempty_helper_is_defined_once(self):
+        import inspect
+        import pgmuvi.wavelength_diagnostics as wavelength_diagnostics
+
+        source = inspect.getsource(wavelength_diagnostics)
+        self.assertEqual(source.count("def _piwd_batch_nonempty("), 1)
 
     def test_rejects_empty_sources(self):
         with self.assertRaisesRegex(ValueError, "non-empty"):

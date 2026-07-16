@@ -29,8 +29,8 @@ default.
 Current workflow map
 --------------------
 
-The current advisory workflow has four distinct outputs that should be read
-together:
+The current advisory pipeline has four distinct evidence layers that should be
+read together:
 
 .. list-table:: Advisory output layers
    :header-rows: 1
@@ -50,8 +50,12 @@ together:
      - A compact summary of why model/kernel fits failed when no advisory
        ranking can be trusted.
 
-The high-level helper returns all of these pieces in one dictionary.  Batch
-runs export the same information per source and per model/kernel config.
+The current high-level helper returns the model/kernel-config report, run
+report, training-quality report, and fallback report in one dictionary.  It
+does **not** preserve the complete period-independent diagnostic report or the
+parameter-plan report as first-class nested sections.  Run those lower-level
+helpers separately when their full provenance is required.  Batch runs export
+the retained high-level information per source and per model/kernel config.
 
 Purpose
 -------

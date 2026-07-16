@@ -28,6 +28,17 @@ class TestLegacyWavelengthCandidateDocumentation(unittest.TestCase):
         self.assertIn("wavelength_advisory", text)
         self.assertIn("selected_model=None", text)
 
+    def test_legacy_page_does_not_claim_bic_or_loo_are_implemented(self):
+        text = self.read("docs/source/howto/legacy_wavelength_candidates.rst")
+        self.assertIn("does not calculate", text)
+        self.assertIn("Bayesian Information Criterion (BIC)", text)
+        self.assertIn("Leave-One-Out cross-validation", text)
+        self.assertIn("implementation or external analysis", text)
+        self.assertNotIn(
+            "can be used for formal model comparison",
+            text,
+        )
+
     def test_howto_index_links_current_and_legacy_pages(self):
         text = self.read("docs/source/howto/index.rst")
         for page in [

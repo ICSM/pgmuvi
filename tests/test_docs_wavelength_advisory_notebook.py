@@ -83,6 +83,11 @@ class TestWavelengthAdvisoryNotebook(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, text)
         self.assertNotIn("2DAchromatic", text)
+        self.assertIn("workflow['fallback_report']['available']", text)
+        self.assertNotIn(
+            "workflow['fallback_report']['fallback_diagnostics_available']",
+            text,
+        )
 
     def test_notebook_rejects_automatic_selection_framing(self):
         text = notebook_text()
