@@ -6964,7 +6964,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # now we need a prior for the mixture scales
         # we want to penalise very large scales, so we use a half-cauchy prior
         # with a scale of 1/10 of the maximum frequency
-        # mixture_scales_prior = gpytorch.priors.HalfCauchyPrior(1/self._xdata_transformed.max())  # noqa: E501
+        # mixture_scales_prior = gpytorch.priors.HalfCauchyPrior(1/self._xdata_transformed.max())
         if "mixture_scales" in self._model_pars:
             mixture_scales_prior = gpytorch.priors.LogNormalPrior(
                 0, 1
@@ -7899,7 +7899,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         # for key in self._model_pars:
         #     with contextlib.suppress(AttributeError):
-        #         self._model_pars[key]['param'] = self._model_pars[key]['param'].cuda(device=device) # noqa: E501
+        #         self._model_pars[key]['param'] = self._model_pars[key]['param'].cuda(device=device)
         # try:
         #     self.model.cuda()
         #     self.likelihood.cuda()
@@ -11473,8 +11473,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
         target_period = float(1.0 / np.median(freqs))
         try:
-            lower = float(getattr(found, "lower_bound"))
-            upper = float(getattr(found, "upper_bound"))
+            lower = float(found.lower_bound)
+            upper = float(found.upper_bound)
         except Exception as exc:
             raise ConsensusFitError(
                 "Consensus period constraint validation failed: unable to parse "
@@ -18380,7 +18380,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 for param_name, param in self._model_pars.items():
                     print(param)
                     print("----")
-                    # print(f'Parameter name: {param_name:42} value = {param["module"].value}, device = {param["module"].value.device}')  # noqa: E501
+                    # print(f'Parameter name: {param_name:42} value = {param["module"].value}, device = {param["module"].value.device}')
                 sampled_model = model.pyro_sample_from_prior()  # .detatch()
                 output = sampled_model.likelihood(sampled_model(x))  # .detatch()
                 pyro.sample("obs", output, obs=y)
@@ -22742,13 +22742,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             # Now we want the model predictions for the input times:
             if self.__FITTED_MAP:
                 self._eval()
-                
+
                 target_dtype = self._xdata_transformed.dtype
                 target_device = self._xdata_transformed.device
                 self.model = self.model.to(dtype=target_dtype, device=target_device)
                 self.likelihood = self.likelihood.to(dtype=target_dtype, device=target_device)
                 self.model.prediction_strategy = None
-                
+
                 with torch.no_grad():
                     observed_pred = self.likelihood(self.model(self._xdata_transformed))
                     t["y_pred_mean_obs"] = [np.asarray(observed_pred.mean.cpu())]

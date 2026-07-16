@@ -68,7 +68,16 @@ select = ["A",  # prevent using keywords that clobber python builtins
           "W",  # pycodestyle warnings
 
           ]
-ignore = ["UP004", "B007", "ISC001"]  # ISC001 conflicts with formatter
+ignore = [
+    "UP004",
+    "B007",
+    "E501",  # existing long-line debt; enforced incrementally in future cleanup
+    "ISC001",  # conflicts with the formatter
+    "RUF001",  # scientific Unicode is intentional in strings
+    "RUF002",  # scientific Unicode is intentional in docstrings
+    "RUF003",  # scientific Unicode is intentional in comments
+    "W293",  # existing whitespace-only blank-line debt
+]
 
 [tool.black]
 line-length = 88
