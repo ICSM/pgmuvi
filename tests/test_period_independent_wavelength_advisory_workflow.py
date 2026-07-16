@@ -53,16 +53,33 @@ def _quality_report():
         "advisory_only": True,
         "automatic_model_selection_applied": False,
         "selected_model": None,
+        "ranking_status": "available",
+        "fit_quality_ranking_available": True,
+        "single_valid_candidate": False,
+        "n_with_fit_quality": 2,
         "top_ranked_model": "2DDustMean",
         "top_ranked_fit_quality_score": 12.3,
+        "only_valid_model": None,
+        "only_valid_fit_quality_score": None,
         "ranked_results": [
             {
                 "quality_rank": 1,
+                "is_top_ranked": True,
                 "model": "2DDustMean",
+                "fit_quality_available": True,
                 "fit_quality_score": 12.3,
                 "fit_success": True,
                 "consensus_success": True,
-            }
+            },
+            {
+                "quality_rank": 2,
+                "is_top_ranked": False,
+                "model": "2DWavelengthDependent",
+                "fit_quality_available": True,
+                "fit_quality_score": 11.0,
+                "fit_success": True,
+                "consensus_success": True,
+            },
         ],
     }
 
@@ -102,7 +119,10 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflow(unittest.TestCase):
         self.assertFalse(report["automatic_model_selection_applied"])
         self.assertIsNone(report["selected_model"])
         self.assertFalse(report["mutates_input_lightcurve"])
+        self.assertEqual(report["fit_quality_ranking_status"], "available")
+        self.assertTrue(report["fit_quality_ranking_available"])
         self.assertEqual(report["top_ranked_model"], "2DDustMean")
+        self.assertIsNone(report["only_valid_model"])
         self.assertEqual(report["comparison_text_report"], "formatted report")
         self.assertIn("Period-independent wavelength advisory workflow", report["text_report"])
         self.assertIn("workflow_runs_model_kernel_config_fits: True", report["text_report"])
@@ -139,6 +159,70 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflow(unittest.TestCase):
         self.assertIs(report["run_report"], run_report)
         self.assertIs(report["quality_report"], quality)
         self.assertIsNone(report["text_report"])
+
+
+    def test_single_valid_candidate_is_not_promoted_to_top_ranked_model(self):
+        quality = _quality_report()
+        quality.update(
+            {
+                "ranking_status": "single_valid_candidate",
+                "fit_quality_ranking_available": False,
+                "single_valid_candidate": True,
+                "n_with_fit_quality": 1,
+                "top_ranked_model": None,
+                "top_ranked_fit_quality_score": None,
+                "only_valid_model": "2DDustMean",
+                "only_valid_fit_quality_score": 12.3,
+                "ranked_results": [quality["ranked_results"][0]],
+            }
+        )
+        quality["ranked_results"][0]["is_top_ranked"] = False
+
+        report = run_period_independent_wavelength_advisory_workflow(
+            object(),
+            model_kernel_config_report=_model_kernel_config_report(),
+            run_report=_run_report(),
+            quality_report=quality,
+            make_text_report=False,
+        )
+
+        self.assertEqual(
+            report["fit_quality_ranking_status"], "single_valid_candidate"
+        )
+        self.assertFalse(report["fit_quality_ranking_available"])
+        self.assertIsNone(report["top_ranked_model"])
+        self.assertEqual(report["only_valid_model"], "2DDustMean")
+        self.assertTrue(report["fallback_diagnostics_available"])
+        self.assertEqual(
+            report["fallback_report"]["reason"],
+            "only_one_model_kernel_config_has_fit_quality",
+        )
+
+    def test_unavailable_quality_diagnostics_clear_stale_top_rank(self):
+        quality = {
+            "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
+            "score_kind": "training_residual_fit_quality",
+            "ranking_status": "available",
+            "fit_quality_ranking_available": True,
+            "n_with_fit_quality": 2,
+            "top_ranked_model": "stale-model",
+            "top_ranked_fit_quality_score": -1.0e9,
+            "ranked_results": [],
+        }
+
+        report = run_period_independent_wavelength_advisory_workflow(
+            object(),
+            model_kernel_config_report=_model_kernel_config_report(),
+            run_report=_run_report(),
+            quality_report=quality,
+            make_text_report=False,
+        )
+
+        self.assertEqual(report["fit_quality_ranking_status"], "unavailable")
+        self.assertFalse(report["fit_quality_ranking_available"])
+        self.assertIsNone(report["top_ranked_model"])
+        self.assertIsNone(report["top_ranked_fit_quality_score"])
+        self.assertTrue(report["fallback_diagnostics_available"])
 
     def test_lightcurve_method_delegates_to_module_function(self):
         lc = Lightcurve.__new__(Lightcurve)

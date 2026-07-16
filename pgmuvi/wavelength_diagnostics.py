@@ -4472,7 +4472,10 @@ def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) ->
         fit_quality_score -= 0.25 * np.log1p(red_chi2)
         reason = "training residual diagnostics available"
     else:
-        fit_quality_score = -1.0e9
+        # Unavailable diagnostics are not a very poor scientific score.  Keep
+        # them unscored so they cannot become a top-ranked candidate when every
+        # fit failed or every diagnostic was unavailable.
+        fit_quality_score = None
         reason = fit_quality.get("reason") or "training residual diagnostics unavailable"
 
     return _clean_scalar_dict(
@@ -4485,8 +4488,10 @@ def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) ->
             "consensus_period": outcome.get("consensus_period"),
             "consensus_time_kernel_constraint_mode": outcome.get("consensus_time_kernel_constraint_mode"),
             "fit_quality_available": available,
-            "fit_quality_score": float(fit_quality_score),
-            "score": float(fit_quality_score),
+            "fit_quality_score": (
+                float(fit_quality_score) if fit_quality_score is not None else None
+            ),
+            "score": float(fit_quality_score) if fit_quality_score is not None else None,
             "score_kind": "training_residual_fit_quality",
             "scores_fit_quality": True,
             "fit_quality_metrics_used": [
@@ -4536,19 +4541,47 @@ def score_period_independent_wavelength_model_kernel_config_quality(
     ]
     scored.sort(
         key=lambda item: (
-            -float(item.get("fit_quality_score", -1.0e9)),
+            0 if item.get("fit_quality_available") else 1,
+            -(
+                float(item.get("fit_quality_score"))
+                if item.get("fit_quality_available")
+                and item.get("fit_quality_score") is not None
+                else 0.0
+            ),
             int(item.get("rank") or 999999),
         )
     )
 
+    n_with_fit_quality = sum(
+        1 for item in scored if item.get("fit_quality_available") is True
+    )
+    if n_with_fit_quality >= 2:
+        ranking_status = "available"
+    elif n_with_fit_quality == 1:
+        ranking_status = "single_valid_candidate"
+    else:
+        ranking_status = "unavailable"
+
     ranked_results = []
-    for index, item in enumerate(scored, start=1):
+    quality_rank = 0
+    for item in scored:
         copied = dict(item)
-        copied["quality_rank"] = index
-        copied["is_top_ranked"] = index == 1
+        if copied.get("fit_quality_available") is True:
+            quality_rank += 1
+            copied["quality_rank"] = quality_rank
+            copied["is_top_ranked"] = (
+                ranking_status == "available" and quality_rank == 1
+            )
+        else:
+            copied["quality_rank"] = None
+            copied["is_top_ranked"] = False
         ranked_results.append(copied)
 
-    top = ranked_results[0] if ranked_results else None
+    valid_rows = [
+        item for item in ranked_results if item.get("fit_quality_available") is True
+    ]
+    top = valid_rows[0] if ranking_status == "available" else None
+    only_valid = valid_rows[0] if ranking_status == "single_valid_candidate" else None
 
     return _clean_scalar_dict(
         {
@@ -4576,24 +4609,102 @@ def score_period_independent_wavelength_model_kernel_config_quality(
             "advisory_only": True,
             "automatic_model_selection_applied": False,
             "selected_model": None,
+            "ranking_status": ranking_status,
+            "fit_quality_ranking_available": ranking_status == "available",
+            "single_valid_candidate": ranking_status == "single_valid_candidate",
             "top_ranked_model": top.get("model") if top else None,
             "top_ranked_fit_quality_score": top.get("fit_quality_score") if top else None,
+            "only_valid_model": only_valid.get("model") if only_valid else None,
+            "only_valid_fit_quality_score": (
+                only_valid.get("fit_quality_score") if only_valid else None
+            ),
             "hard_model_exclusions": False,
             "automatic_constraints_applied": False,
             "automatic_initialization_applied": False,
             "parameter_suggestions_applied": False,
             "n_model_kernel_configs": len(outcomes),
-            "n_scored": len(ranked_results),
-            "n_with_fit_quality": sum(1 for item in ranked_results if item.get("fit_quality_available")),
+            "n_scored": n_with_fit_quality,
+            "n_unscored": len(ranked_results) - n_with_fit_quality,
+            "n_with_fit_quality": n_with_fit_quality,
             "ranked_results": ranked_results,
             "quality_ranked_results": ranked_results,
             "notes": [
                 "Fit-quality scores use training residual diagnostics from completed model/kernel config fits.",
+                "Candidates without valid fit-quality diagnostics remain unscored and cannot be top ranked.",
+                "A single valid candidate is reported separately and is not treated as a comparative ranking.",
                 "No model is selected or installed automatically.",
                 "Use cross-validation or held-out diagnostics before treating this as scientific model selection.",
             ],
         }
     )
+
+
+def _piwd_fit_quality_row_available(row: dict[str, Any]) -> bool:
+    """Return whether a comparison row has usable fit-quality diagnostics."""
+    if not isinstance(row, dict):
+        return False
+    if "fit_quality_available" in row:
+        return row.get("fit_quality_available") is True
+
+    fit_success = _piwd_bool_from_status(
+        row.get("fit_success"), status=row.get("status")
+    )
+    try:
+        score = float(row.get("fit_quality_score"))
+    except (TypeError, ValueError):
+        return False
+    return fit_success and np.isfinite(score)
+
+
+def _piwd_valid_fit_quality_rows(
+    quality_report: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return comparison rows with usable fit-quality diagnostics."""
+    quality_report = quality_report if isinstance(quality_report, dict) else {}
+    rows = quality_report.get("ranked_results")
+    if rows is None:
+        rows = quality_report.get("quality_ranked_results")
+    if not isinstance(rows, list):
+        return []
+    return [
+        row
+        for row in rows
+        if isinstance(row, dict) and _piwd_fit_quality_row_available(row)
+    ]
+
+
+def _piwd_resolve_fit_quality_ranking_state(
+    quality_report: dict[str, Any] | None,
+) -> tuple[str, int]:
+    """Return normalized ``(ranking_status, n_with_fit_quality)`` values.
+
+    When comparison rows are present, their actual diagnostic availability is
+    authoritative.  This prevents stale summary fields from preserving a
+    comparative winner after every row has become failed or unscored.
+    """
+    quality_report = quality_report if isinstance(quality_report, dict) else {}
+    rows = quality_report.get("ranked_results")
+    if rows is None:
+        rows = quality_report.get("quality_ranked_results")
+
+    if isinstance(rows, list):
+        n_with_fit_quality = len(_piwd_valid_fit_quality_rows(quality_report))
+    else:
+        try:
+            n_with_fit_quality = max(
+                int(quality_report.get("n_with_fit_quality") or 0), 0
+            )
+        except (TypeError, ValueError):
+            n_with_fit_quality = 0
+
+    if n_with_fit_quality >= 2:
+        ranking_status = "available"
+    elif n_with_fit_quality == 1:
+        ranking_status = "single_valid_candidate"
+    else:
+        ranking_status = "unavailable"
+
+    return ranking_status, n_with_fit_quality
 
 
 # -----------------------------------------------------------------------------
@@ -4671,6 +4782,13 @@ def format_period_independent_wavelength_model_kernel_config_comparison_report(
         f"{score_report.get('automatic_model_selection_applied')}"
     )
     lines.append(f"selected_model: {score_report.get('selected_model')}")
+    if score_report.get("score_kind") == "training_residual_fit_quality":
+        lines.append(f"ranking_status: {score_report.get('ranking_status')}")
+        lines.append(
+            "fit_quality_ranking_available: "
+            f"{score_report.get('fit_quality_ranking_available')}"
+        )
+        lines.append(f"only_valid_model: {score_report.get('only_valid_model')}")
     lines.append(f"top_ranked_model: {score_report.get('top_ranked_model')}")
     if score_report.get("score_interpretation"):
         lines.append(f"score_interpretation: {score_report.get('score_interpretation')}")
@@ -4683,7 +4801,12 @@ def format_period_independent_wavelength_model_kernel_config_comparison_report(
     lines.append(header)
     lines.append("-" * len(header))
     for row in rows:
-        rank = row.get("quality_rank") or row.get("score_rank") or row.get("rank")
+        if score_report.get("score_kind") == "training_residual_fit_quality":
+            rank = row.get("quality_rank")
+            if rank is None:
+                rank = "-"
+        else:
+            rank = row.get("score_rank") or row.get("rank")
         score = row.get("fit_quality_score")
         if score is None:
             score = row.get("viability_score", row.get("score"))
@@ -4832,12 +4955,13 @@ def _piwd_build_advisory_workflow_fallback_summary(
     run_report: dict[str, Any] | None,
     quality_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Summarize diagnostic-only fallback state for failed advisory fits.
+    """Summarize diagnostic fallback state when fit-quality ranking is unavailable.
 
-    This summary is activated when the advisory workflow attempted model/kernel
-    config fits but none completed successfully.  It makes the failure mode
-    inspectable without converting the workflow into automatic model selection
-    or silently treating a failed fit comparison as a selected model.
+    The fallback is available when no comparative training-residual ranking can
+    be formed: all attempted fits failed, all completed fits lack usable
+    diagnostics, or only one candidate has valid diagnostics.  It remains
+    advisory-only and never converts a failed or non-comparative workflow into
+    an automatically selected model.
     """
     run_report = run_report if isinstance(run_report, dict) else {}
     quality_report = quality_report if isinstance(quality_report, dict) else {}
@@ -4871,7 +4995,17 @@ def _piwd_build_advisory_workflow_fallback_summary(
         item.get("model") for item in failed if item.get("is_numerical_failure") is True
     ]
 
+    ranking_status, n_with_fit_quality = (
+        _piwd_resolve_fit_quality_ranking_state(quality_report)
+    )
+    valid_quality_rows = _piwd_valid_fit_quality_rows(quality_report)
+    only_valid_model = quality_report.get("only_valid_model")
+    if only_valid_model is None and len(valid_quality_rows) == 1:
+        only_valid_model = valid_quality_rows[0].get("model")
+
+    fit_based_model_ranking_available = ranking_status == "available"
     all_attempted_failed = bool(outcomes) and not passed and bool(failed)
+
     if all_attempted_failed:
         reason = "all_model_kernel_config_fits_failed"
         recommended_next_steps = [
@@ -4880,27 +5014,50 @@ def _piwd_build_advisory_workflow_fallback_summary(
             "If failures are consensus dominated, inspect LS/ACF/consensus period diagnostics and consider rerunning with safer consensus settings or a smaller model/kernel-config set.",
             "If failures are numerical, inspect constraints, learned noise, time-centering, and SM ARD scale-ceiling diagnostics before trusting fit-quality comparisons.",
         ]
-    elif passed:
-        reason = "at_least_one_model_kernel_config_fit_passed"
+    elif ranking_status == "single_valid_candidate":
+        reason = "only_one_model_kernel_config_has_fit_quality"
+        recommended_next_steps = [
+            "Inspect the only valid candidate as a completed fit, not as a comparative winner.",
+            "Use period-independent diagnostics as the fallback interpretation until at least one additional candidate has valid fit-quality diagnostics.",
+        ]
+    elif bool(outcomes) and ranking_status == "unavailable":
+        reason = "no_model_kernel_config_fit_quality_available"
+        recommended_next_steps = [
+            "Inspect why completed fits lack training-residual diagnostics before comparing candidates.",
+            "Use the period-independent wavelength diagnostics and parameter-plan metadata as the fallback interpretation; no model is selected automatically.",
+        ]
+    elif fit_based_model_ranking_available:
+        reason = "fit_quality_ranking_available"
         recommended_next_steps = []
     else:
         reason = "no_model_kernel_config_fits_were_attempted"
         recommended_next_steps = []
 
+    fallback_available = bool(outcomes) and not fit_based_model_ranking_available
+    top_ranked_model = (
+        quality_report.get("top_ranked_model")
+        if fit_based_model_ranking_available
+        else None
+    )
+
     return _clean_scalar_dict(
         {
             "kind": "period_independent_wavelength_advisory_fallback_summary",
-            "available": bool(all_attempted_failed),
+            "available": fallback_available,
             "reason": reason,
             "diagnostic_only": True,
             "advisory_only": True,
             "automatic_model_selection_applied": False,
             "selected_model": None,
-            "fit_based_model_ranking_available": bool(passed),
-            "top_ranked_model": quality_report.get("top_ranked_model"),
+            "fit_quality_ranking_status": ranking_status,
+            "fit_based_model_ranking_available": fit_based_model_ranking_available,
+            "single_valid_candidate": ranking_status == "single_valid_candidate",
+            "top_ranked_model": top_ranked_model,
+            "only_valid_model": only_valid_model,
             "n_attempted": len(outcomes),
             "n_passed": len(passed),
             "n_failed": len(failed),
+            "n_with_fit_quality": n_with_fit_quality,
             "failed_models": [item.get("model") for item in failed],
             "failure_stage_counts": failure_stage_counts,
             "exception_type_counts": exception_type_counts,
@@ -4911,6 +5068,7 @@ def _piwd_build_advisory_workflow_fallback_summary(
             "recommended_next_steps": recommended_next_steps,
         }
     )
+
 
 def _piwd_format_advisory_workflow_text_report(
     workflow_report: dict[str, Any],
@@ -4944,6 +5102,9 @@ def _piwd_format_advisory_workflow_text_report(
         f"automatic_constraints_applied: {workflow_report.get('automatic_constraints_applied')}",
         f"automatic_initialization_applied: {workflow_report.get('automatic_initialization_applied')}",
         f"score_kind: {workflow_report.get('score_kind')}",
+        f"fit_quality_ranking_status: {workflow_report.get('fit_quality_ranking_status')}",
+        f"fit_quality_ranking_available: {workflow_report.get('fit_quality_ranking_available')}",
+        f"only_valid_model: {workflow_report.get('only_valid_model')}",
         f"top_ranked_model: {workflow_report.get('top_ranked_model')}",
         f"top_ranked_fit_quality_score: {workflow_report.get('top_ranked_fit_quality_score')}",
         f"fallback_diagnostics_available: {workflow_report.get('fallback_diagnostics_available')}",
@@ -5005,9 +5166,11 @@ def run_period_independent_wavelength_advisory_workflow(
     3. score completed candidates using training-residual diagnostics,
     4. optionally format and/or plot the comparison report.
 
-    It is deliberately non-selecting.  It may report a top-ranked candidate for
-    inspection, but it does not install that candidate, set ``selected_model``,
-    mutate the input Lightcurve fit state, or apply wavelength-parameter
+    It is deliberately non-selecting.  It reports a top-ranked candidate only
+    when at least two candidates have valid fit-quality diagnostics.  A single
+    valid candidate is reported separately rather than treated as a comparative
+    winner.  The workflow never installs a candidate, sets ``selected_model``,
+    mutates the input Lightcurve fit state, or applies wavelength-parameter
     suggestions as constraints or initial values.
     """
     built_model_kernel_config_report = model_kernel_config_report is None
@@ -5035,6 +5198,27 @@ def run_period_independent_wavelength_advisory_workflow(
         quality_report = score_period_independent_wavelength_model_kernel_config_quality(
             run_report
         )
+
+    ranking_status, n_with_fit_quality = (
+        _piwd_resolve_fit_quality_ranking_state(quality_report)
+    )
+    valid_quality_rows = _piwd_valid_fit_quality_rows(quality_report)
+    only_valid_model = (
+        quality_report.get("only_valid_model")
+        if isinstance(quality_report, dict)
+        else None
+    )
+    only_valid_fit_quality_score = (
+        quality_report.get("only_valid_fit_quality_score")
+        if isinstance(quality_report, dict)
+        else None
+    )
+    if ranking_status == "single_valid_candidate" and len(valid_quality_rows) == 1:
+        only_valid_model = only_valid_model or valid_quality_rows[0].get("model")
+        if only_valid_fit_quality_score is None:
+            only_valid_fit_quality_score = valid_quality_rows[0].get(
+                "fit_quality_score"
+            )
 
     fallback_report = _piwd_build_advisory_workflow_fallback_summary(
         run_report,
@@ -5074,14 +5258,20 @@ def run_period_independent_wavelength_advisory_workflow(
         "built_model_kernel_config_report": bool(built_model_kernel_config_report),
         "ran_model_kernel_config_fits": bool(ran_model_kernel_config_fits),
         "scored_quality": bool(scored_quality),
+        "fit_quality_ranking_status": ranking_status,
+        "fit_quality_ranking_available": ranking_status == "available",
+        "single_valid_candidate": ranking_status == "single_valid_candidate",
+        "n_with_fit_quality": n_with_fit_quality,
+        "only_valid_model": only_valid_model,
+        "only_valid_fit_quality_score": only_valid_fit_quality_score,
         "top_ranked_model": (
             quality_report.get("top_ranked_model")
-            if isinstance(quality_report, dict)
+            if isinstance(quality_report, dict) and ranking_status == "available"
             else None
         ),
         "top_ranked_fit_quality_score": (
             quality_report.get("top_ranked_fit_quality_score")
-            if isinstance(quality_report, dict)
+            if isinstance(quality_report, dict) and ranking_status == "available"
             else None
         ),
         "score_kind": (
@@ -5514,6 +5704,9 @@ def _piwd_batch_write_summary_csv(path, rows):
         "source_index",
         "source_id",
         "status",
+        "fit_quality_ranking_status",
+        "fit_quality_ranking_available",
+        "only_valid_model",
         "top_ranked_model",
         "top_ranked_fit_quality_score",
         "score_kind",
@@ -5667,6 +5860,10 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
     ranked_rows = quality_report.get("ranked_results") or workflow.get("ranked_results") or []
     rows = _piwd_batch_merge_model_kernel_config_rows(run_rows, ranked_rows)
 
+    ranking_status, _ = _piwd_resolve_fit_quality_ranking_state(
+        quality_report if quality_report else workflow
+    )
+
     out = []
     for item in rows:
         fit_kwargs = item.get("fit_kwargs") if isinstance(item.get("fit_kwargs"), dict) else {}
@@ -5676,6 +5873,8 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
             "source_status": source_row.get("status"),
             "workflow_kind": workflow.get("kind"),
             "score_kind": quality_report.get("score_kind") or workflow.get("score_kind"),
+            "fit_quality_ranking_status": ranking_status,
+            "fit_quality_ranking_available": ranking_status == "available",
             "model_kernel_config_id": item.get("model_kernel_config_id"),
             "model_kernel_config_rank": item.get("rank"),
             "quality_rank": item.get("quality_rank"),
@@ -5748,6 +5947,8 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "source_status",
         "workflow_kind",
         "score_kind",
+        "fit_quality_ranking_status",
+        "fit_quality_ranking_available",
         "model_kernel_config_id",
         "model_kernel_config_rank",
         "quality_rank",
@@ -5888,6 +6089,8 @@ def _piwd_batch_summarize_model_kernel_config_rows(rows):
                 "n_sources_evaluated": 0,
                 "n_successful_sources": 0,
                 "n_failed_sources": 0,
+                "n_sources_with_fit_quality": 0,
+                "n_sources_with_comparative_ranking": 0,
                 "n_top_ranked_sources": 0,
                 "_fit_quality_score": [],
                 "_training_nrmse_by_target_scale": [],
@@ -5903,26 +6106,37 @@ def _piwd_batch_summarize_model_kernel_config_rows(rows):
         elif _piwd_batch_to_bool(row.get("fit_failed")) is True or row.get("status") == "failed":
             group["n_failed_sources"] += 1
 
+        fit_quality_available = _piwd_fit_quality_row_available(row)
+        ranking_available = (
+            _piwd_batch_to_bool(row.get("fit_quality_ranking_available")) is True
+            or row.get("fit_quality_ranking_status") == "available"
+        )
+        if fit_quality_available:
+            group["n_sources_with_fit_quality"] += 1
+        if ranking_available:
+            group["n_sources_with_comparative_ranking"] += 1
+
         is_top = _piwd_batch_to_bool(row.get("is_top_ranked"))
-        quality_rank = _piwd_batch_to_float(row.get("quality_rank"))
-        if is_top is True or quality_rank == 1.0:
+        if ranking_available and fit_quality_available and is_top is True:
             group["n_top_ranked_sources"] += 1
 
-        for metric in [
-            "fit_quality_score",
-            "training_nrmse_by_target_scale",
-            "training_median_abs_standardized_residual",
-            "training_outlier_fraction_3sigma",
-            "training_reduced_chi2",
-        ]:
-            value = _piwd_batch_to_float(row.get(metric))
-            if value is not None:
-                group[f"_{metric}"].append(value)
+        if fit_quality_available:
+            for metric in [
+                "fit_quality_score",
+                "training_nrmse_by_target_scale",
+                "training_median_abs_standardized_residual",
+                "training_outlier_fraction_3sigma",
+                "training_reduced_chi2",
+            ]:
+                value = _piwd_batch_to_float(row.get(metric))
+                if value is not None:
+                    group[f"_{metric}"].append(value)
 
     out = []
     for group in groups.values():
         n_eval = group["n_sources_evaluated"]
         n_success = group["n_successful_sources"]
+        n_comparative = group["n_sources_with_comparative_ranking"]
         n_top = group["n_top_ranked_sources"]
         scores = group.pop("_fit_quality_score")
         nrmse = group.pop("_training_nrmse_by_target_scale")
@@ -5932,7 +6146,9 @@ def _piwd_batch_summarize_model_kernel_config_rows(rows):
         group.update(
             {
                 "success_fraction": (n_success / n_eval) if n_eval else None,
-                "top_ranked_fraction": (n_top / n_eval) if n_eval else None,
+                "top_ranked_fraction": (
+                    n_top / n_comparative if n_comparative else None
+                ),
                 "mean_fit_quality_score": _piwd_batch_mean(scores),
                 "median_fit_quality_score": _piwd_batch_median(scores),
                 "best_fit_quality_score": max(scores) if scores else None,
@@ -5976,6 +6192,8 @@ def _piwd_batch_model_kernel_config_summary_csv_fields():
         "n_sources_evaluated",
         "n_successful_sources",
         "n_failed_sources",
+        "n_sources_with_fit_quality",
+        "n_sources_with_comparative_ranking",
         "n_top_ranked_sources",
         "success_fraction",
         "top_ranked_fraction",
@@ -6062,6 +6280,8 @@ def _piwd_batch_format_markdown_report(manifest):
             "n_sources_evaluated",
             "n_successful_sources",
             "n_failed_sources",
+            "n_sources_with_fit_quality",
+            "n_sources_with_comparative_ranking",
             "n_top_ranked_sources",
             "success_fraction",
             "top_ranked_fraction",
@@ -6085,6 +6305,8 @@ def _piwd_batch_format_markdown_report(manifest):
         fields = [
             "source_id",
             "status",
+            "fit_quality_ranking_status",
+            "only_valid_model",
             "top_ranked_model",
             "top_ranked_fit_quality_score",
             "score_kind",
@@ -6260,6 +6482,9 @@ def run_period_independent_wavelength_advisory_workflow_batch(
             "selected_model": None,
             "automatic_constraints_applied": False,
             "automatic_initialization_applied": False,
+            "fit_quality_ranking_status": None,
+            "fit_quality_ranking_available": False,
+            "only_valid_model": None,
             "top_ranked_model": None,
             "top_ranked_fit_quality_score": None,
             "score_kind": None,
@@ -6323,24 +6548,53 @@ def run_period_independent_wavelength_advisory_workflow_batch(
             n_failed_model_kernel_configs = (
                 n_model_kernel_configs - n_successful_model_kernel_configs
             )
+            workflow_ranking_status, _ = (
+                _piwd_resolve_fit_quality_ranking_state(
+                    quality_report if quality_report else workflow
+                )
+            )
+            workflow_ranking_available = workflow_ranking_status == "available"
+            valid_quality_rows = _piwd_valid_fit_quality_rows(quality_report)
+            workflow_only_valid_model = (
+                quality_report.get("only_valid_model")
+                or workflow.get("only_valid_model")
+            )
+            if (
+                workflow_only_valid_model is None
+                and workflow_ranking_status == "single_valid_candidate"
+                and len(valid_quality_rows) == 1
+            ):
+                workflow_only_valid_model = valid_quality_rows[0].get("model")
+            workflow_top_ranked_model = (
+                workflow.get("top_ranked_model")
+                if workflow_ranking_available
+                else None
+            )
+            workflow_top_ranked_score = (
+                workflow.get("top_ranked_fit_quality_score")
+                if workflow_ranking_available
+                else None
+            )
             row.update(
                 {
                     "status": "passed",
                     "workflow_kind": workflow.get("kind"),
-                    "top_ranked_model": workflow.get("top_ranked_model"),
-                    "top_ranked_fit_quality_score": workflow.get(
-                        "top_ranked_fit_quality_score"
-                    ),
+                    "fit_quality_ranking_status": workflow_ranking_status,
+                    "fit_quality_ranking_available": workflow_ranking_available,
+                    "only_valid_model": workflow_only_valid_model,
+                    "top_ranked_model": workflow_top_ranked_model,
+                    "top_ranked_fit_quality_score": workflow_top_ranked_score,
                     "score_kind": workflow.get("score_kind"),
                     "n_model_kernel_configs": n_model_kernel_configs,
                     "n_successful_model_kernel_configs": n_successful_model_kernel_configs,
                     "n_failed_model_kernel_configs": n_failed_model_kernel_configs,
                     "workflow_summary": {
                         "kind": workflow.get("kind"),
-                        "top_ranked_model": workflow.get("top_ranked_model"),
-                        "top_ranked_fit_quality_score": workflow.get(
-                            "top_ranked_fit_quality_score"
-                        ),
+                        "fit_quality_ranking_status": workflow_ranking_status,
+                        "fit_quality_ranking_available": workflow_ranking_available,
+                        "only_valid_model": workflow_only_valid_model,
+                        "top_ranked_model": workflow_top_ranked_model,
+                        "top_ranked_fit_quality_score": workflow_top_ranked_score,
                         "score_kind": workflow.get("score_kind"),
                         "automatic_model_selection_applied": workflow.get(
                             "automatic_model_selection_applied"

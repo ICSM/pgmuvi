@@ -98,9 +98,20 @@ Terminology
    ``time_kernel_type="quasi_periodic"`` and ``fit_strategy="consensus"`` is
    one model/kernel config.
 
+``fit_quality_ranking_status``
+   Whether a comparative training-residual ranking is ``available``,
+   ``single_valid_candidate``, or ``unavailable``.  At least two candidates
+   with valid fit-quality diagnostics are required for ``available``.
+
 ``top_ranked_model``
-   The model name with the best score in an advisory report.  This is a summary
-   field for inspection.  It is not an automatically selected model.
+   The model name with the best score when
+   ``fit_quality_ranking_status="available"``.  It is ``None`` when every
+   candidate is unscored or only one candidate has valid diagnostics.
+
+``only_valid_model``
+   The sole candidate with valid fit-quality diagnostics when
+   ``fit_quality_ranking_status="single_valid_candidate"``.  This is not a
+   comparative winner.
 
 ``selected_model``
    Reserved for a future workflow that actually applies a selection decision.
@@ -151,11 +162,15 @@ For most users, the high-level method is the right entry point:
    )
 
    print(workflow["text_report"])
-   print(workflow["quality_report"]["top_ranked_model"])
+   print(workflow["fit_quality_ranking_status"])
+   print(workflow["top_ranked_model"])
+   print(workflow["only_valid_model"])
    print(workflow["quality_report"]["selected_model"])
 
 The last line should print ``None`` for the current workflow.  A top-ranked
-model is reported for inspection, but no model is selected or installed.
+model is reported only when at least two candidates have valid fit-quality
+diagnostics.  A single valid candidate is reported through
+``only_valid_model`` instead of being promoted to a comparative winner.
 
 The high-level workflow is equivalent to the staged process below.
 
@@ -423,14 +438,16 @@ implemented.
 Advisory failure fallback reporting
 -----------------------------------
 
-The advisory workflow remains non-selecting even when every evaluated
-model/kernel configuration fails.  In that case the workflow includes
+The advisory workflow remains non-selecting whenever a comparative fit-quality
+ranking is unavailable.  This includes all-failed runs, runs whose completed
+fits have no usable residual diagnostics, and runs with only one valid
+candidate.  In those cases the workflow includes
 ``fallback_diagnostics_available=True`` and a ``fallback_report`` with a compact
-triage summary.  The fallback report records failure stages, exception types,
-failed models, consensus-failure models, numerical-failure models,
-input-validation failures, and recommended next inspection steps.
+triage summary.  The fallback records ``fit_quality_ranking_status`` together
+with failure stages, exception types, failed models, consensus-failure models,
+numerical-failure models, and recommended next inspection steps.
 
-Use these fields to decide whether to inspect the input data, relax consensus
-requirements, increase numerical safeguards, or rerun only a subset of
-model/kernel configs.  They are diagnostics for debugging a failed advisory run;
-they are not a substitute for a successful model comparison.
+Use these fields to decide whether to inspect the input data, restore missing
+diagnostics, relax consensus requirements, increase numerical safeguards, or
+rerun only a subset of model/kernel configs.  They are not a substitute for a
+valid comparison, and ``only_valid_model`` is not a comparative winner.

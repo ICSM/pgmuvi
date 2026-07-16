@@ -59,6 +59,9 @@ class TestInterpretPgmuviOutputsScript(unittest.TestCase):
             "advisory_only": True,
             "automatic_model_selection_applied": False,
             "selected_model": None,
+            "fit_quality_ranking_status": "available",
+            "fit_quality_ranking_available": True,
+            "only_valid_model": None,
             "top_ranked_model": "2DDustMean",
             "top_ranked_fit_quality_score": 82.5,
             "score_kind": "training_residual_fit_quality",
@@ -89,12 +92,69 @@ class TestInterpretPgmuviOutputsScript(unittest.TestCase):
             "fallback_report": {"available": False},
         }
         summary = self.module.interpret_payload(payload)
+        self.assertEqual(summary["fit_quality_ranking_status"], "available")
+        self.assertTrue(summary["fit_quality_ranking_available"])
         self.assertEqual(summary["top_ranked_model"], "2DDustMean")
+        self.assertIsNone(summary["only_valid_model"])
         self.assertIsNone(summary["selected_model"])
         self.assertEqual(len(summary["constrained_sm_ard_rows"]), 1)
         text = self.module.format_interpretation(summary)
         self.assertIn("training_residual_fit_quality", text)
         self.assertIn("constrained_sm_ard_rows: 1", text)
+
+
+    def test_advisory_summary_clears_stale_top_when_ranking_unavailable(self):
+        payload = {
+            "kind": "period_independent_wavelength_advisory_workflow",
+            "fit_quality_ranking_status": "unavailable",
+            "fit_quality_ranking_available": True,
+            "top_ranked_model": "stale-model",
+            "top_ranked_fit_quality_score": -1.0e9,
+            "quality_report": {
+                "ranking_status": "unavailable",
+                "fit_quality_ranking_available": True,
+                "top_ranked_model": "stale-model",
+                "ranked_results": [],
+            },
+            "fallback_report": {
+                "available": True,
+                "reason": "no_model_kernel_config_fit_quality_available",
+            },
+        }
+
+        summary = self.module.interpret_payload(payload)
+
+        self.assertEqual(summary["fit_quality_ranking_status"], "unavailable")
+        self.assertFalse(summary["fit_quality_ranking_available"])
+        self.assertIsNone(summary["top_ranked_model"])
+        self.assertIsNone(summary["top_ranked_fit_quality_score"])
+
+    def test_advisory_summary_reports_single_valid_candidate_separately(self):
+        payload = {
+            "kind": "period_independent_wavelength_advisory_workflow",
+            "fit_quality_ranking_status": "single_valid_candidate",
+            "fit_quality_ranking_available": False,
+            "only_valid_model": "2DDustMean",
+            "top_ranked_model": None,
+            "quality_report": {
+                "ranking_status": "single_valid_candidate",
+                "fit_quality_ranking_available": False,
+                "only_valid_model": "2DDustMean",
+                "ranked_results": [],
+            },
+            "fallback_report": {
+                "available": True,
+                "reason": "only_one_model_kernel_config_has_fit_quality",
+            },
+        }
+
+        summary = self.module.interpret_payload(payload)
+
+        self.assertEqual(
+            summary["fit_quality_ranking_status"], "single_valid_candidate"
+        )
+        self.assertEqual(summary["only_valid_model"], "2DDustMean")
+        self.assertIsNone(summary["top_ranked_model"])
 
     def test_advisory_fallback_surfaces_failure_counts(self):
         payload = {
@@ -120,7 +180,12 @@ class TestInterpretPgmuviOutputsScript(unittest.TestCase):
         summary = self.module.interpret_payload(payload)
         self.assertTrue(summary["fallback_available"])
         self.assertEqual(summary["failure_stage_counts"], {"consensus": 1})
-        self.assertTrue(any("All attempted configurations failed" in item for item in summary["warnings"]))
+        self.assertTrue(
+            any(
+                "Comparative fit-quality ranking is unavailable" in item
+                for item in summary["warnings"]
+            )
+        )
 
     def test_batch_summary_counts_failures_and_ard_hits(self):
         payload = {

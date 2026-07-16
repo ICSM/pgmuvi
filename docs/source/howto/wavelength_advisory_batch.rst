@@ -323,10 +323,16 @@ Important columns include:
      - User-facing source identifier.
    * - ``status``
      - ``passed`` or failure status.
+   * - ``fit_quality_ranking_status``
+     - ``available``, ``single_valid_candidate``, or ``unavailable``.
+   * - ``fit_quality_ranking_available``
+     - True only when at least two candidates have valid fit-quality diagnostics.
+   * - ``only_valid_model``
+     - Sole candidate with valid diagnostics when no comparative ranking exists.
    * - ``top_ranked_model``
-     - Advisory top-ranked model for this source, if available.
+     - Advisory top-ranked model only when comparative ranking is available.
    * - ``top_ranked_fit_quality_score``
-     - Fit-quality score associated with the top-ranked model.
+     - Fit-quality score associated with a valid comparative top rank.
    * - ``score_kind``
      - Scoring method, currently training-residual fit quality for PR61-style reports.
    * - ``n_model_kernel_configs``
@@ -367,9 +373,10 @@ Important columns include:
    * - ``model_kernel_config_rank``
      - Original advisory/evaluation order.
    * - ``quality_rank``
-     - Rank after training-residual fit-quality scoring.
+     - Rank among candidates with valid training-residual fit-quality diagnostics;
+       unavailable candidates have no quality rank.
    * - ``is_top_ranked``
-     - Whether this row is the top-ranked config for the source.
+     - True only for the first-ranked row when a comparative ranking is available.
    * - ``model``
      - Model name, e.g. ``2DDustMean``.
    * - ``fit_strategy``
@@ -435,12 +442,17 @@ Important columns include:
      - Number of sources for which this config completed successfully.
    * - ``n_failed_sources``
      - Number of sources for which this config failed.
+   * - ``n_sources_with_fit_quality``
+     - Number of source/config rows with valid fit-quality diagnostics.
+   * - ``n_sources_with_comparative_ranking``
+     - Number of sources for which at least two candidates had valid diagnostics.
    * - ``n_top_ranked_sources``
-     - Number of sources for which this config ranked first.
+     - Number of valid comparative rankings in which this config ranked first.
    * - ``success_fraction``
      - ``n_successful_sources / n_sources_evaluated``.
    * - ``top_ranked_fraction``
-     - ``n_top_ranked_sources / n_sources_evaluated``.
+     - ``n_top_ranked_sources / n_sources_with_comparative_ranking``; unavailable
+       when no comparative ranking exists.
    * - ``mean_fit_quality_score`` / ``median_fit_quality_score``
      - Fit-quality score summaries across sources.
    * - ``best_fit_quality_score`` / ``worst_fit_quality_score``
@@ -529,11 +541,12 @@ Triage failures in this order
    ``is_consensus_failure``, ``is_numerical_failure``, and
    ``is_input_validation_failure`` before comparing fit-quality scores.
 
-``all-config fallback``
-   When every config fails, read ``fallback_diagnostics_available`` and
-   ``fallback_report`` in the per-source workflow JSON.  The fallback summarizes
-   failed models and suggests the next diagnostic inspection; it does not repair
-   the fit or select a replacement model.
+``non-comparative fallback``
+   When comparative fit-quality ranking is unavailable, read
+   ``fallback_diagnostics_available`` and ``fallback_report`` in the per-source
+   workflow JSON.  This covers all-failed, completed-but-unscored, and
+   single-valid-candidate runs.  The fallback suggests the next diagnostic
+   inspection; it does not repair the fit or select a replacement model.
 
 ``aggregate interpretation``
    Only after the first three checks should you interpret ``success_fraction``,
@@ -554,13 +567,14 @@ fit is saturating in time-frequency, wavelength-frequency, or both.
 Advisory failure fallback reporting
 -----------------------------------
 
-If every model/kernel config for a source fails, the per-source workflow still
-exports diagnostic fallback metadata.  ``fallback_diagnostics_available`` marks
-that a fallback report is present, and ``fallback_report`` summarizes failure
-stages, exception types, failed models, consensus-failure models, and suggested
-next inspection steps.  Use this information to triage a source before deciding
-whether to rerun with different consensus settings, different model/kernel
-configs, or stricter input filtering.
+If comparative fit-quality ranking is unavailable for a source, the per-source
+workflow still exports diagnostic fallback metadata.
+``fallback_diagnostics_available`` marks that a fallback report is present, and
+``fallback_report`` records ``fit_quality_ranking_status`` plus failure stages,
+exception types, failed models, consensus-failure models, and suggested next
+inspection steps.  Use this information to triage all-failed, unscored, and
+single-valid-candidate sources before rerunning with different consensus
+settings, model/kernel configs, or input filtering.
 
 
 

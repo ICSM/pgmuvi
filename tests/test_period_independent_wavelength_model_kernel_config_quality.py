@@ -97,7 +97,10 @@ class TestPeriodIndependentWavelengthModelKernelConfigQuality(unittest.TestCase)
         self.assertGreater(
             ranked[0]["fit_quality_score"], ranked[1]["fit_quality_score"]
         )
+        self.assertEqual(report["ranking_status"], "available")
+        self.assertTrue(report["fit_quality_ranking_available"])
         self.assertEqual(report["top_ranked_model"], "2DDustMean")
+        self.assertIsNone(report["only_valid_model"])
         self.assertIsNone(report["selected_model"])
 
     def test_failed_or_unavailable_quality_scores_last(self):
@@ -108,7 +111,101 @@ class TestPeriodIndependentWavelengthModelKernelConfigQuality(unittest.TestCase)
 
         self.assertEqual(ranked[-1]["model"], "2D")
         self.assertFalse(ranked[-1]["fit_quality_available"])
-        self.assertLess(ranked[-1]["fit_quality_score"], -1e8)
+        self.assertIsNone(ranked[-1]["fit_quality_score"])
+        self.assertIsNone(ranked[-1]["quality_rank"])
+        self.assertFalse(ranked[-1]["is_top_ranked"])
+
+
+    def test_all_failed_candidates_do_not_produce_a_top_rank(self):
+        report = score_period_independent_wavelength_model_kernel_config_quality(
+            {
+                "kind": "period_independent_wavelength_model_kernel_config_results",
+                "outcomes": [
+                    {
+                        "rank": 1,
+                        "model": "2DDustMean",
+                        "status": "failed",
+                        "fit_success": False,
+                        "fit_quality": {"available": False, "reason": "failed"},
+                    },
+                    {
+                        "rank": 2,
+                        "model": "2D",
+                        "status": "failed",
+                        "fit_success": False,
+                        "fit_quality": {"available": False, "reason": "failed"},
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(report["ranking_status"], "unavailable")
+        self.assertFalse(report["fit_quality_ranking_available"])
+        self.assertIsNone(report["top_ranked_model"])
+        self.assertIsNone(report["top_ranked_fit_quality_score"])
+        self.assertIsNone(report["only_valid_model"])
+        self.assertEqual(report["n_scored"], 0)
+        self.assertEqual(report["n_unscored"], 2)
+        self.assertTrue(
+            all(not row["is_top_ranked"] for row in report["ranked_results"])
+        )
+        self.assertTrue(
+            all(row["fit_quality_score"] is None for row in report["ranked_results"])
+        )
+
+    def test_completed_but_unavailable_diagnostics_do_not_produce_a_top_rank(self):
+        report = score_period_independent_wavelength_model_kernel_config_quality(
+            {
+                "kind": "period_independent_wavelength_model_kernel_config_results",
+                "outcomes": [
+                    {
+                        "rank": 1,
+                        "model": "2DDustMean",
+                        "status": "passed",
+                        "fit_success": True,
+                        "fit_quality": {
+                            "available": False,
+                            "reason": "diagnostics unavailable",
+                        },
+                    },
+                    {
+                        "rank": 2,
+                        "model": "2D",
+                        "status": "passed",
+                        "fit_success": True,
+                        "fit_quality": {
+                            "available": False,
+                            "reason": "diagnostics unavailable",
+                        },
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(report["ranking_status"], "unavailable")
+        self.assertIsNone(report["top_ranked_model"])
+        self.assertEqual(report["n_with_fit_quality"], 0)
+
+    def test_single_valid_candidate_is_not_a_comparative_top_rank(self):
+        run_report = _quality_run_report()
+        run_report["model_kernel_config_results"] = [
+            run_report["model_kernel_config_results"][1],
+            run_report["model_kernel_config_results"][2],
+        ]
+
+        report = score_period_independent_wavelength_model_kernel_config_quality(
+            run_report
+        )
+
+        self.assertEqual(report["ranking_status"], "single_valid_candidate")
+        self.assertFalse(report["fit_quality_ranking_available"])
+        self.assertTrue(report["single_valid_candidate"])
+        self.assertIsNone(report["top_ranked_model"])
+        self.assertEqual(report["only_valid_model"], "2DDustMean")
+        self.assertIsNotNone(report["only_valid_fit_quality_score"])
+        valid = report["ranked_results"][0]
+        self.assertEqual(valid["quality_rank"], 1)
+        self.assertFalse(valid["is_top_ranked"])
 
     def test_report_aliases_are_present(self):
         report = score_period_independent_wavelength_model_kernel_config_quality(

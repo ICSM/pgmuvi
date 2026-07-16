@@ -50,7 +50,7 @@ class TestBatchAdvisoryWalkthroughDocs(unittest.TestCase):
             "Triage failures in this order",
             "source-level failure",
             "per-config failure",
-            "all-config fallback",
+            "non-comparative fallback",
         ]
         for token in required:
             with self.subTest(token=token):

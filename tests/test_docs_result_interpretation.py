@@ -60,6 +60,11 @@ class TestResultInterpretationDocs(unittest.TestCase):
             "not cross-validation",
             "not held-out predictive performance",
             "not marginal likelihood or model evidence",
+            "``fit_quality_available=False`` means the candidate is unscored",
+            "fit_quality_ranking_status",
+            "single_valid_candidate",
+            "only_valid_model",
+            "``top_ranked_model`` remains ``None``",
             "selected_model=None",
         ]
         for token in required:
@@ -90,7 +95,7 @@ class TestResultInterpretationDocs(unittest.TestCase):
             "fallback_report.available=True",
             "failure_stage_counts",
             "exception_type_counts",
-            "Do not turn an all-failed advisory run into a winner",
+            "Do not turn an all-failed or single-survivor advisory run into a winner",
         ]
         for token in required:
             with self.subTest(token=token):

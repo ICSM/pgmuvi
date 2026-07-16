@@ -49,11 +49,22 @@ class TestWavelengthAdvisoryFailureFallback(unittest.TestCase):
             ]
         }
 
-        fallback = _piwd_build_advisory_workflow_fallback_summary(run_report, {})
+        fallback = _piwd_build_advisory_workflow_fallback_summary(
+            run_report,
+            {
+                "ranking_status": "unavailable",
+                "fit_quality_ranking_available": False,
+                "n_with_fit_quality": 0,
+                "top_ranked_model": "stale-model",
+            },
+        )
 
         self.assertIs(fallback["available"], True)
         self.assertEqual(fallback["reason"], "all_model_kernel_config_fits_failed")
         self.assertIsNone(fallback["selected_model"])
+        self.assertIsNone(fallback["top_ranked_model"])
+        self.assertEqual(fallback["fit_quality_ranking_status"], "unavailable")
+        self.assertIs(fallback["fit_based_model_ranking_available"], False)
         self.assertIs(fallback["automatic_model_selection_applied"], False)
         self.assertEqual(
             fallback["failure_stage_counts"],
@@ -67,24 +78,80 @@ class TestWavelengthAdvisoryFailureFallback(unittest.TestCase):
         self.assertEqual(fallback["n_numerical_failure_models"], 1)
         self.assertTrue(fallback["recommended_next_steps"])
 
-    def test_fallback_summary_is_inactive_when_one_model_config_passes(self):
+    def test_fallback_summary_is_inactive_when_comparative_ranking_exists(self):
         run_report = {
             "outcomes": [
                 {"status": "passed", "fit_success": True, "model": "2DDustMean"},
                 {
-                    "status": "failed",
-                    "fit_failed": True,
-                    "model": "2D",
-                    "failure_stage": "consensus",
+                    "status": "passed",
+                    "fit_success": True,
+                    "model": "2DWavelengthDependent",
                 },
             ]
         }
+        quality_report = {
+            "ranking_status": "available",
+            "fit_quality_ranking_available": True,
+            "n_with_fit_quality": 2,
+            "top_ranked_model": "2DDustMean",
+        }
 
-        fallback = _piwd_build_advisory_workflow_fallback_summary(run_report, {})
+        fallback = _piwd_build_advisory_workflow_fallback_summary(
+            run_report, quality_report
+        )
 
         self.assertIs(fallback["available"], False)
-        self.assertEqual(fallback["reason"], "at_least_one_model_kernel_config_fit_passed")
+        self.assertEqual(fallback["reason"], "fit_quality_ranking_available")
         self.assertIs(fallback["fit_based_model_ranking_available"], True)
+        self.assertEqual(fallback["top_ranked_model"], "2DDustMean")
+
+    def test_single_valid_candidate_activates_noncomparative_fallback(self):
+        run_report = {
+            "outcomes": [
+                {"status": "passed", "fit_success": True, "model": "2DDustMean"},
+                {"status": "failed", "fit_failed": True, "model": "2D"},
+            ]
+        }
+        quality_report = {
+            "ranking_status": "single_valid_candidate",
+            "fit_quality_ranking_available": False,
+            "n_with_fit_quality": 1,
+            "only_valid_model": "2DDustMean",
+        }
+
+        fallback = _piwd_build_advisory_workflow_fallback_summary(
+            run_report, quality_report
+        )
+
+        self.assertIs(fallback["available"], True)
+        self.assertEqual(
+            fallback["reason"], "only_one_model_kernel_config_has_fit_quality"
+        )
+        self.assertIsNone(fallback["top_ranked_model"])
+        self.assertEqual(fallback["only_valid_model"], "2DDustMean")
+
+    def test_passed_but_unscored_candidates_activate_fallback(self):
+        run_report = {
+            "outcomes": [
+                {"status": "passed", "fit_success": True, "model": "2DDustMean"},
+                {"status": "passed", "fit_success": True, "model": "2D"},
+            ]
+        }
+        quality_report = {
+            "ranking_status": "unavailable",
+            "fit_quality_ranking_available": False,
+            "n_with_fit_quality": 0,
+        }
+
+        fallback = _piwd_build_advisory_workflow_fallback_summary(
+            run_report, quality_report
+        )
+
+        self.assertIs(fallback["available"], True)
+        self.assertEqual(
+            fallback["reason"], "no_model_kernel_config_fit_quality_available"
+        )
+        self.assertIsNone(fallback["top_ranked_model"])
 
     def test_batch_model_kernel_rows_surface_failure_classification(self):
         workflow = {
