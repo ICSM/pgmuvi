@@ -109,9 +109,11 @@ As a rule of thumb:
 * Decrease if the optimisation struggles to converge (fewer parameters = simpler
   optimisation landscape).
 
-The Bayesian Information Criterion (BIC) or Leave-One-Out cross-validation can be
-used for formal model comparison, but visual inspection of the PSD and residuals is
-often sufficient.
+The legacy workflow does not calculate the Bayesian Information Criterion (BIC)
+or Leave-One-Out cross-validation.  Either method would require a separate
+implementation or external analysis; the legacy training-point diagnostics and
+visual inspection of the PSD and residuals are not substitutes for held-out or
+penalized model comparison.
 
 Legacy Automatic Recommendation
 -------------------------------

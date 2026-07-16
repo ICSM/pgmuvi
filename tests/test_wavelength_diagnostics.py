@@ -471,6 +471,8 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
 
         success = report["results"][0]
         self.assertTrue(success["success"])
+        self.assertTrue(success["fit_success"])
+        self.assertFalse(success["fit_failed"])
         self.assertEqual(success["resolved_model_class"], "_FakeFittedModel")
         self.assertTrue(success["likelihood_noise_summary"]["available"])
 

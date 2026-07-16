@@ -963,7 +963,7 @@ def _comparison_result_entry(
         "priority": candidate.get("priority"),
         "reason": candidate.get("reason"),
         "status": status,
-        "fit_success": bool(status == "passed"),
+        "fit_success": bool(status == "success"),
         "fit_failed": bool(status == "failed"),
         "success": bool(status == "success"),
         "failed": bool(status == "failed"),
@@ -5536,11 +5536,6 @@ def _piwd_batch_write_summary_csv(path, rows):
         for row in rows:
             writer.writerow({field: row.get(field) for field in fields})
 
-
-
-def _piwd_batch_nonempty(value):
-    """Return True for values that can safely identify a model/kernel config."""
-    return value is not None and value != ""
 
 
 def _piwd_batch_nonempty(value):
