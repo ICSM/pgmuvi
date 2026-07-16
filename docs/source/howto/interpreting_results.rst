@@ -197,12 +197,27 @@ follow-up inspection.  It is not cross-validation, not held-out predictive
 performance, not AIC or BIC, and not marginal likelihood or model evidence.
 Small score differences do not establish a scientifically preferred model.
 
-A very low score or ``fit_quality_available=False`` should trigger inspection
-of the underlying metrics and fit state.  A high score can still represent
-overfitting because all metrics are evaluated at training coordinates.
+A very low score should trigger inspection of the underlying metrics and fit
+state.  ``fit_quality_available=False`` means the candidate is unscored; it is
+not assigned a very poor sentinel score and cannot become top ranked.  A high
+score can still represent overfitting because all metrics are evaluated at
+training coordinates.
 
-``top_ranked_model`` is therefore an advisory display field.  In the current
-workflow, ``automatic_model_selection_applied=False`` and
+Read ``fit_quality_ranking_status`` before reading any rank:
+
+``available``
+   At least two candidates have valid fit-quality diagnostics.  Only in this
+   state may ``top_ranked_model`` and ``top_ranked_fit_quality_score`` be
+   populated.
+
+``single_valid_candidate``
+   Exactly one candidate has valid diagnostics.  It is exposed as
+   ``only_valid_model`` but is not a comparative winner.
+
+``unavailable``
+   No candidate has valid diagnostics.  ``top_ranked_model`` remains ``None``.
+
+In every state, ``automatic_model_selection_applied=False`` and
 ``selected_model=None`` remain the scientific contract.
 
 Spectral-mixture ARD scale-ceiling diagnostics
@@ -259,14 +274,16 @@ The advisory failure classifier uses descriptive stages:
 ``fit_execution``
    The model/kernel fit raised another execution-time exception.
 
-When all attempted model/kernel configs fail,
+When comparative fit-quality ranking is unavailable,
 ``fallback_diagnostics_available=True`` and ``fallback_report.available=True``.
-Inspect ``failure_stage_counts``, ``exception_type_counts``, failed model lists,
-and ``recommended_next_steps``.  The fallback report is diagnostic-only:
+This includes all-failed runs, completed-but-unscored runs, and runs with only
+one valid candidate.  Inspect ``fit_quality_ranking_status``,
+``failure_stage_counts``, ``exception_type_counts``, failed model lists, and
+``recommended_next_steps``.  The fallback report is diagnostic-only:
 ``automatic_model_selection_applied=False`` and ``selected_model=None``.
 
-Do not turn an all-failed advisory run into a winner by choosing the least severe
-exception.  Fix or narrow the workflow, then rerun the relevant configurations.
+Do not turn an all-failed or single-survivor advisory run into a winner.  Fix or
+narrow the workflow, then rerun the relevant configurations.
 
 Batch interpretation
 --------------------

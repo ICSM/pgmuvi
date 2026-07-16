@@ -79,8 +79,11 @@ class TestWavelengthAdvisorySMARDDiagnostics(unittest.TestCase):
     def test_batch_long_form_csv_includes_sm_ard_columns(self):
         workflow = {
             "kind": "period_independent_wavelength_advisory_workflow",
-            "top_ranked_model": "2D",
-            "top_ranked_fit_quality_score": 12.0,
+            "fit_quality_ranking_status": "single_valid_candidate",
+            "fit_quality_ranking_available": False,
+            "only_valid_model": "2D",
+            "top_ranked_model": None,
+            "top_ranked_fit_quality_score": None,
             "score_kind": "training_residual_fit_quality",
             "run_report": {
                 "kind": "period_independent_wavelength_model_kernel_config_results",
@@ -112,12 +115,17 @@ class TestWavelengthAdvisorySMARDDiagnostics(unittest.TestCase):
             "quality_report": {
                 "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
                 "score_kind": "training_residual_fit_quality",
+                "ranking_status": "single_valid_candidate",
+                "fit_quality_ranking_available": False,
+                "n_with_fit_quality": 1,
+                "only_valid_model": "2D",
                 "ranked_results": [
                     {
                         "quality_rank": 1,
-                        "is_top_ranked": True,
+                        "is_top_ranked": False,
                         "model": "2D",
                         "fit_success": True,
+                        "fit_quality_available": True,
                         "fit_quality_score": 12.0,
                     }
                 ],

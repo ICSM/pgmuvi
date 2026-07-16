@@ -39,6 +39,10 @@ class TestWavelengthAdvisoryDocs(unittest.TestCase):
             "n_model_kernel_configs",
             "n_successful_model_kernel_configs",
             "n_failed_model_kernel_configs",
+            "fit_quality_ranking_status",
+            "fit_quality_ranking_available",
+            "only_valid_model",
+            "n_sources_with_comparative_ranking",
             "top_ranked_fraction",
             "positive_data_filter_kwargs",
             "n_rows_dropped_positive_filter",
@@ -49,6 +53,29 @@ class TestWavelengthAdvisoryDocs(unittest.TestCase):
         for token in required:
             with self.subTest(token=token):
                 self.assertIn(token, text)
+
+
+    def test_docs_explain_ranking_availability_and_single_candidate_semantics(self):
+        single = self._read("docs/source/howto/wavelength_advisory.rst")
+        batch = self._read("docs/source/howto/wavelength_advisory_batch.rst")
+
+        for token in [
+            "fit_quality_ranking_status",
+            "single_valid_candidate",
+            "only_valid_model",
+            "at least two candidates",
+        ]:
+            with self.subTest(document="single", token=token):
+                self.assertIn(token, single)
+
+        for token in [
+            "fit_quality_ranking_available",
+            "n_sources_with_fit_quality",
+            "n_sources_with_comparative_ranking",
+            "n_top_ranked_sources / n_sources_with_comparative_ranking",
+        ]:
+            with self.subTest(document="batch", token=token):
+                self.assertIn(token, batch)
 
     def test_single_source_doc_describes_retained_high_level_reports_truthfully(self):
         text = self._read("docs/source/howto/wavelength_advisory.rst")

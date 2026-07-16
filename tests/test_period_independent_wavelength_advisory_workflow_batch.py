@@ -33,11 +33,29 @@ class _FakeLightcurve:
             "selected_model": None,
             "automatic_constraints_applied": False,
             "automatic_initialization_applied": False,
+            "fit_quality_ranking_status": "available",
+            "fit_quality_ranking_available": True,
+            "only_valid_model": None,
             "top_ranked_model": self.model,
             "top_ranked_fit_quality_score": self.score,
             "score_kind": "training_residual_fit_quality",
             "ranked_results": [
-                {"model": self.model, "fit_success": True, "fit_quality_score": self.score}
+                {
+                    "quality_rank": 1,
+                    "is_top_ranked": True,
+                    "model": self.model,
+                    "fit_success": True,
+                    "fit_quality_available": True,
+                    "fit_quality_score": self.score,
+                },
+                {
+                    "quality_rank": 2,
+                    "is_top_ranked": False,
+                    "model": "2D",
+                    "fit_success": True,
+                    "fit_quality_available": True,
+                    "fit_quality_score": self.score - 1.0,
+                },
             ],
             "text_report": f"Workflow report for {self.model}",
             "comparison_text_report": f"Comparison report for {self.model}",
@@ -86,6 +104,93 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
             "2DWavelengthDependent",
         )
         self.assertEqual(sources[0]["lightcurve"].workflow_calls[0]["include_2d_baseline"], True)
+
+
+    def test_unavailable_ranking_clears_stale_top_rank_in_source_and_aggregate(self):
+        class UnavailableRankingLightcurve(_FakeLightcurve):
+            def run_period_independent_wavelength_advisory_workflow(self, **kwargs):
+                return {
+                    "kind": "period_independent_wavelength_advisory_workflow",
+                    "fit_quality_ranking_status": "available",
+                    "fit_quality_ranking_available": True,
+                    "top_ranked_model": "stale-model",
+                    "top_ranked_fit_quality_score": -1.0e9,
+                    "score_kind": "training_residual_fit_quality",
+                    "run_report": {
+                        "kind": "period_independent_wavelength_model_kernel_config_results",
+                        "outcomes": [
+                            {
+                                "rank": 1,
+                                "model": "2DDustMean",
+                                "status": "failed",
+                                "fit_success": False,
+                                "fit_failed": True,
+                            },
+                            {
+                                "rank": 2,
+                                "model": "2D",
+                                "status": "failed",
+                                "fit_success": False,
+                                "fit_failed": True,
+                            },
+                        ],
+                    },
+                    "quality_report": {
+                        "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
+                        "score_kind": "training_residual_fit_quality",
+                        "ranking_status": "available",
+                        "fit_quality_ranking_available": True,
+                        "n_with_fit_quality": 2,
+                        "top_ranked_model": "stale-model",
+                        "ranked_results": [
+                            {
+                                "quality_rank": None,
+                                "is_top_ranked": False,
+                                "model": "2DDustMean",
+                                "fit_success": False,
+                                "fit_quality_available": False,
+                                "fit_quality_score": None,
+                            },
+                            {
+                                "quality_rank": None,
+                                "is_top_ranked": False,
+                                "model": "2D",
+                                "fit_success": False,
+                                "fit_quality_available": False,
+                                "fit_quality_score": None,
+                            },
+                        ],
+                    },
+                }
+
+        report = run_period_independent_wavelength_advisory_workflow_batch(
+            [{"source_id": "src", "lightcurve": UnavailableRankingLightcurve()}],
+            export=False,
+        )
+
+        source = report["source_results"][0]
+        self.assertEqual(source["fit_quality_ranking_status"], "unavailable")
+        self.assertFalse(source["fit_quality_ranking_available"])
+        self.assertIsNone(source["top_ranked_model"])
+        self.assertIsNone(source["top_ranked_fit_quality_score"])
+        self.assertTrue(
+            all(
+                row["is_top_ranked"] is False
+                for row in report["model_kernel_config_results"]
+            )
+        )
+        self.assertTrue(
+            all(
+                row["n_top_ranked_sources"] == 0
+                for row in report["model_kernel_config_summary"]
+            )
+        )
+        self.assertTrue(
+            all(
+                row["top_ranked_fraction"] is None
+                for row in report["model_kernel_config_summary"]
+            )
+        )
 
     def test_report_contract_is_advisory_and_nonselecting(self):
         report = run_period_independent_wavelength_advisory_workflow_batch(
@@ -202,23 +307,53 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                     "selected_model": None,
                     "automatic_constraints_applied": False,
                     "automatic_initialization_applied": False,
+                    "fit_quality_ranking_status": "available",
+                    "fit_quality_ranking_available": True,
+                    "only_valid_model": None,
                     "top_ranked_model": "2DDustMean",
                     "top_ranked_fit_quality_score": 42.0,
                     "score_kind": "training_residual_fit_quality",
                     "run_report": {
                         "kind": "period_independent_wavelength_model_kernel_config_results",
                         "model_kernel_config_results": [
-                            {"model": "2DDustMean", "fit_success": True},
-                            {"model": "2DWavelengthDependent", "fit_success": True},
-                            {"model": "2D", "fit_success": False},
+                            {
+                                "model": "2DDustMean",
+                                "fit_success": True,
+                                "fit_quality_available": True,
+                            },
+                            {
+                                "model": "2DWavelengthDependent",
+                                "fit_success": True,
+                                "fit_quality_available": True,
+                            },
+                            {
+                                "model": "2D",
+                                "fit_success": False,
+                                "fit_quality_available": False,
+                            },
                         ],
                     },
                     "quality_report": {
                         "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
+                        "ranking_status": "available",
+                        "fit_quality_ranking_available": True,
+                        "n_with_fit_quality": 2,
                         "ranked_results": [
-                            {"model": "2DDustMean", "fit_success": True},
-                            {"model": "2DWavelengthDependent", "fit_success": True},
-                            {"model": "2D", "fit_success": False},
+                            {
+                                "model": "2DDustMean",
+                                "fit_success": True,
+                                "fit_quality_available": True,
+                            },
+                            {
+                                "model": "2DWavelengthDependent",
+                                "fit_success": True,
+                                "fit_quality_available": True,
+                            },
+                            {
+                                "model": "2D",
+                                "fit_success": False,
+                                "fit_quality_available": False,
+                            },
                         ],
                     },
                 }
@@ -281,6 +416,9 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
             "quality_report": {
                 "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
                 "score_kind": "training_residual_fit_quality",
+                "ranking_status": "available",
+                "fit_quality_ranking_available": True,
+                "n_with_fit_quality": 2,
                 # Real workflow quality rows may omit model_kernel_config_id and
                 # model-kernel-config rank.  They must merge by model name into
                 # the execution rows rather than becoming duplicate CSV rows.
@@ -290,6 +428,7 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                         "is_top_ranked": True,
                         "model": "2DDustMean",
                         "fit_success": True,
+                        "fit_quality_available": True,
                         "fit_quality_score": 42.0,
                         "training_reduced_chi2": 0.5,
                     },
@@ -298,6 +437,7 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                         "is_top_ranked": False,
                         "model": "2DWavelengthDependent",
                         "fit_success": True,
+                        "fit_quality_available": True,
                         "fit_quality_score": 41.0,
                         "training_reduced_chi2": 0.6,
                     },
@@ -448,6 +588,9 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
             "mutates_input_lightcurve": False,
             "automatic_model_selection_applied": False,
             "selected_model": None,
+            "fit_quality_ranking_status": "available",
+            "fit_quality_ranking_available": True,
+            "only_valid_model": None,
             "top_ranked_model": "2DDustMean",
             "top_ranked_fit_quality_score": 42.0,
             "score_kind": "training_residual_fit_quality",
@@ -485,12 +628,16 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
             "quality_report": {
                 "kind": "period_independent_wavelength_model_kernel_config_quality_scores",
                 "score_kind": "training_residual_fit_quality",
+                "ranking_status": "available",
+                "fit_quality_ranking_available": True,
+                "n_with_fit_quality": 2,
                 "ranked_results": [
                     {
                         "quality_rank": 1,
                         "is_top_ranked": True,
                         "model": "2DDustMean",
                         "fit_success": True,
+                        "fit_quality_available": True,
                         "fit_quality_score": 42.0,
                     },
                     {
@@ -498,6 +645,7 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                         "is_top_ranked": False,
                         "model": "2DWavelengthDependent",
                         "fit_success": True,
+                        "fit_quality_available": True,
                         "fit_quality_score": 40.0,
                     },
                 ],
@@ -528,6 +676,8 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         dust = by_model["2DDustMean"]
         self.assertEqual(dust["n_sources_evaluated"], 2)
         self.assertEqual(dust["n_successful_sources"], 2)
+        self.assertEqual(dust["n_sources_with_fit_quality"], 2)
+        self.assertEqual(dust["n_sources_with_comparative_ranking"], 2)
         self.assertEqual(dust["n_top_ranked_sources"], 2)
         self.assertEqual(dust["top_ranked_fraction"], 1.0)
         self.assertEqual(dust["median_fit_quality_score"], 42.0)

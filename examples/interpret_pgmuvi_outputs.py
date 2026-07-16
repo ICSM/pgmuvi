@@ -134,12 +134,35 @@ def interpret_advisory_workflow(payload: dict[str, Any]) -> dict[str, Any]:
         for item in outcomes
         if item.get("status") == "failed" or item.get("fit_failed") is True
     ]
+    ranking_status = (
+        payload.get("fit_quality_ranking_status")
+        or quality.get("ranking_status")
+    )
+    if ranking_status not in {
+        "available",
+        "single_valid_candidate",
+        "unavailable",
+    }:
+        ranking_status = (
+            "available"
+            if payload.get("fit_quality_ranking_available") is True
+            or quality.get("fit_quality_ranking_available") is True
+            else "unavailable"
+        )
+    ranking_available = ranking_status == "available"
+    only_valid_model = (
+        payload.get("only_valid_model") or quality.get("only_valid_model")
+    )
+
     warnings = [
         "The ranking uses training-coordinate residual diagnostics, not held-out validation or model evidence.",
         "top_ranked_model is advisory; selected_model remains None unless a separate selection procedure is applied.",
     ]
     if fallback.get("available"):
-        warnings.append("All attempted configurations failed; use fallback diagnostics instead of fit ranking.")
+        warnings.append(
+            "Comparative fit-quality ranking is unavailable; use fallback "
+            "diagnostics instead of declaring a winner."
+        )
     if constrained_rows:
         warnings.append("One or more spectral-mixture ARD scales are near a consensus upper bound.")
 
@@ -151,11 +174,22 @@ def interpret_advisory_workflow(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("automatic_model_selection_applied", False)
         ),
         "selected_model": payload.get("selected_model"),
-        "top_ranked_model": payload.get("top_ranked_model") or quality.get("top_ranked_model"),
-        "top_ranked_fit_quality_score": _finite_number(
-            payload.get("top_ranked_fit_quality_score")
-            if payload.get("top_ranked_fit_quality_score") is not None
-            else quality.get("top_ranked_fit_quality_score")
+        "fit_quality_ranking_status": ranking_status,
+        "fit_quality_ranking_available": ranking_available,
+        "only_valid_model": only_valid_model,
+        "top_ranked_model": (
+            payload.get("top_ranked_model") or quality.get("top_ranked_model")
+            if ranking_available
+            else None
+        ),
+        "top_ranked_fit_quality_score": (
+            _finite_number(
+                payload.get("top_ranked_fit_quality_score")
+                if payload.get("top_ranked_fit_quality_score") is not None
+                else quality.get("top_ranked_fit_quality_score")
+            )
+            if ranking_available
+            else None
         ),
         "score_kind": payload.get("score_kind") or quality.get("score_kind"),
         "top_training_metrics": {
@@ -285,6 +319,9 @@ def format_interpretation(summary: dict[str, Any]) -> str:
             lines.append(f"{key}: {_display(summary.get(key))}")
     elif report_type == "advisory_workflow":
         for key in [
+            "fit_quality_ranking_status",
+            "fit_quality_ranking_available",
+            "only_valid_model",
             "top_ranked_model",
             "top_ranked_fit_quality_score",
             "score_kind",
