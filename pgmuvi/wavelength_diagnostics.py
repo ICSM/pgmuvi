@@ -331,7 +331,7 @@ def _amplitude_phase_summary(band_table: list[dict[str, Any]]) -> dict[str, Any]
 
     summary: dict[str, Any] = {
         "available": bool(len(amplitude_values) > 0),
-        "n_bands_with_fixed_frequency_fit": int(len(amplitude_values)),
+        "n_bands_with_fixed_frequency_fit": len(amplitude_values),
         "amplitude_min": None,
         "amplitude_max": None,
         "amplitude_ratio_max_to_min": None,
@@ -521,7 +521,7 @@ def classify_wavelength_diagnostics(
         "phase_lag_class": "unavailable",
         "n_bands": n_bands,
         "n_usable_bands": n_usable,
-        "n_fixed_frequency_bands": int(len(fixed_rows)),
+        "n_fixed_frequency_bands": len(fixed_rows),
         "evidence": evidence,
         "recommended_candidate_models": candidates,
         "warnings": warnings,
@@ -994,7 +994,7 @@ def _comparison_result_entry(
         entry["failure_category"] = _failure_category(exception)
         if hasattr(exception, "failure_diagnostics"):
             try:
-                entry["failure_diagnostics"] = getattr(exception, "failure_diagnostics")
+                entry["failure_diagnostics"] = exception.failure_diagnostics
             except Exception:
                 pass
         entry["fit_history_entry"] = _latest_fit_history_entry(target_lightcurve)
@@ -1307,7 +1307,7 @@ def _score_comparison_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     scored.sort(key=lambda item: item[0])
     best_value, best = scored[0]
     return {
-        "n_scored_successful": int(len(scored)),
+        "n_scored_successful": len(scored),
         "best_model_kernel_config": {
             "name": best.get("name"),
             "model": best.get("model"),
@@ -1498,7 +1498,7 @@ def interpret_wavelength_model_comparison(
         )
         return _clean_scalar_dict(interpretation)
 
-    best_score, best_result = scored[0]
+    best_score, _ = scored[0]
     denominator = max(1.0, abs(best_score))
     rankings: list[dict[str, Any]] = []
     for rank, (score, result) in enumerate(scored, start=1):
@@ -2099,7 +2099,7 @@ def compare_wavelength_candidate_models(
         "kind": "wavelength_model_comparison",
         "stage": "model_comparison",
         "summary": {
-            "n_model_kernel_config_entries": int(len(normalised)),
+            "n_model_kernel_config_entries": len(normalised),
             "n_model_kernel_configs": int(n_model_kernel_configs),
             "n_successful": int(n_successful),
             "n_failed": int(n_failed),
@@ -2502,8 +2502,8 @@ def diagnose_period_independent_wavelength_structure(
         )
 
     summary = {
-        "n_bands": int(len(wavelengths)),
-        "n_usable_bands": int(len(usable_rows)),
+        "n_bands": len(wavelengths),
+        "n_usable_bands": len(usable_rows),
         "usable_wavelengths": usable_wavelengths,
         "has_yerr": bool(yerr_np is not None),
         "uses_temporal_consensus": False,
@@ -2736,10 +2736,10 @@ def diagnose_wavelength_dependence_prefit(
         )
 
     summary = {
-        "n_bands": int(len(wavelengths)),
+        "n_bands": len(wavelengths),
         "n_sampling_pass": int(n_sampling_pass),
         "n_variable": int(n_variable),
-        "n_usable_for_wavelength_diagnostics": int(len(usable_wavelengths)),
+        "n_usable_for_wavelength_diagnostics": len(usable_wavelengths),
         "sampling_pass_wavelengths": sampling_pass_wavelengths,
         "variable_wavelengths": variable_wavelengths,
         "usable_wavelengths": usable_wavelengths,
@@ -3793,7 +3793,7 @@ def _piwd_find_spectral_mixture_scale_array(fitted_lightcurve: Any) -> np.ndarra
     for kernel in _piwd_iter_kernel_like_objects(fitted_lightcurve):
         if not hasattr(kernel, "mixture_scales"):
             continue
-        arr = _piwd_to_numpy_array(getattr(kernel, "mixture_scales"))
+        arr = _piwd_to_numpy_array(kernel.mixture_scales)
         if arr is None:
             continue
         if arr.ndim == 0:
@@ -3913,7 +3913,7 @@ def _piwd_extract_sm_ard_scale_diagnostics(
             "sm_scale_constraint_upper": upper,
             "sm_scale_ceiling_tolerance_fraction": tolerance,
             "constrained_sm_ard_components": constrained,
-            "n_constrained_sm_ard_components": int(len(constrained)),
+            "n_constrained_sm_ard_components": len(constrained),
             "constrained_sm_ard_dimension_counts": counts,
         }
     )
@@ -4898,16 +4898,16 @@ def _piwd_build_advisory_workflow_fallback_summary(
             "selected_model": None,
             "fit_based_model_ranking_available": bool(passed),
             "top_ranked_model": quality_report.get("top_ranked_model"),
-            "n_attempted": int(len(outcomes)),
-            "n_passed": int(len(passed)),
-            "n_failed": int(len(failed)),
+            "n_attempted": len(outcomes),
+            "n_passed": len(passed),
+            "n_failed": len(failed),
             "failed_models": [item.get("model") for item in failed],
             "failure_stage_counts": failure_stage_counts,
             "exception_type_counts": exception_type_counts,
             "consensus_failure_models": consensus_failure_models,
-            "n_consensus_failure_models": int(len(consensus_failure_models)),
+            "n_consensus_failure_models": len(consensus_failure_models),
             "numerical_failure_models": numerical_failure_models,
-            "n_numerical_failure_models": int(len(numerical_failure_models)),
+            "n_numerical_failure_models": len(numerical_failure_models),
             "recommended_next_steps": recommended_next_steps,
         }
     )
@@ -6321,7 +6321,6 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                 or workflow.get("ranked_results")
                 or []
             )
-            ranked = quality_report.get("ranked_results") or workflow.get("ranked_results") or []
             n_model_kernel_configs = len(candidate_rows)
             n_successful_model_kernel_configs = sum(
                 1 for item in candidate_rows if item.get("fit_success") is True

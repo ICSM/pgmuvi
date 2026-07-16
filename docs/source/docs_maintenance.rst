@@ -91,11 +91,18 @@ backups, and other untracked inspection artifacts.
 Documentation dependencies
 --------------------------
 
-The documentation dependency list is centralized in
+The Python documentation dependency list is centralized in
 ``docs/source/requirements.txt``.  That file is used by local strict builds,
 Read the Docs, and the GitHub Actions documentation workflow.
 
-When a documentation dependency is added, removed, or deliberately pinned,
+Notebook rendering through ``nbsphinx`` also requires the Pandoc executable.
+Install Pandoc with the platform package manager before running a local strict
+build.  On Ubuntu, for example::
+
+   sudo apt-get update
+   sudo apt-get install --yes pandoc
+
+When a Python documentation dependency is added, removed, or deliberately pinned,
 update ``docs/source/requirements.txt`` first.  Do not duplicate ad hoc docs
 installation commands in CI workflows unless there is a narrowly documented
 reason for doing so.

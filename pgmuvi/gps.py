@@ -171,18 +171,10 @@ def spectral_mixture_parameter_schema(
 
     if num_mixtures is None:
         shape = None
-        default_components = None
-
     elif ard_num_dims > 1:
         shape = (num_mixtures, 1, ard_num_dims)
-        default_components = [
-            [[1.0] * ard_num_dims]
-            for _ in range(num_mixtures)
-        ]
-
     else:
         shape = (num_mixtures,)
-        default_components = [1.0] * num_mixtures
 
     return ParameterSpecCollection(
         [

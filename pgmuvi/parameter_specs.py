@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 import numpy as np
 
@@ -209,8 +210,8 @@ class ParameterSpecCollection:
     @classmethod
     def combine(
         cls,
-        *collections: "ParameterSpecCollection | None",
-    ) -> "ParameterSpecCollection":
+        *collections: ParameterSpecCollection | None,
+    ) -> ParameterSpecCollection:
         """Combine multiple parameter specification collections."""
         combined = cls()
 

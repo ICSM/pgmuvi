@@ -8,7 +8,8 @@ GPyTorch parameter space or apply them to models.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 import numpy as np
 

@@ -11,18 +11,6 @@ jobs:
     - name: Run Ruff
       uses: astral-sh/ruff-action@v3
       with:
-        # version: "latest"
+        version: "0.15.21"
         src: "./pgmuvi"
-        # Pass the --fix argument to automatically resolve fixable linting issues
-        args: "check -v --output-format=full --show-fixes --fix"
-
-    - name: Commit changes
-      # Use a separate action to commit the fixed files back to the branch
-      uses: stefanzweifel/git-auto-commit-action@v5
-      with:
-        commit_message: Apply Ruff fixes
-        # Optional: customize committer and author
-        committer_name: GitHub Actions Bot
-        committer_email: actions@github.com
-        author_name: GitHub Actions Bot
-        author_email: actions@github.com
+        args: "check -v --output-format=full --show-fixes"
