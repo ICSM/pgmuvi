@@ -52,6 +52,17 @@ class TestConsensusFittingDocumentation(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, text)
 
+    def test_guide_documents_two_band_frequency_agreement_guard(self):
+        text = self._read("docs/source/howto/consensus_fitting.rst")
+        required = [
+            "two_band_max_fractional_frequency_difference",
+            "default ``0.10``",
+            "midpoint period supported by neither band",
+        ]
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+
     def test_guide_documents_failure_and_multicomponent_limits(self):
         text = self._read("docs/source/howto/consensus_fitting.rst")
         required = [

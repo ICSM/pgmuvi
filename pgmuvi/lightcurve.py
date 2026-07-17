@@ -388,6 +388,18 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
         ),
         "median_frequency": _consensus_schema_field(default=None, nullable=True),
         "mad_frequency_scatter": _consensus_schema_field(default=None, nullable=True),
+        "two_band_pairwise_check_applied": _consensus_schema_field(
+            default=False, nullable=False
+        ),
+        "two_band_fractional_frequency_difference": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "two_band_max_fractional_frequency_difference": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "two_band_frequency_agreement": _consensus_schema_field(
+            default=None, nullable=True
+        ),
         "consensus_inlier_bands": _consensus_schema_field(
             default_factory="list", nullable=False, container_type="list"
         ),
@@ -4331,7 +4343,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         #       consensus kwarg was set); contains: constrain_consensus,
         #       consensus_method, consensus_sigma_clip, consensus_sigma,
         #       consensus_tolerance, consensus_max_harmonic,
-        #       min_consensus_inliers, use_gp_validation
+        #       min_consensus_inliers,
+        #       two_band_max_fractional_frequency_difference, use_gp_validation
         #   "min_consensus_inliers" : int | None
         #   "outlier_thresholds" : dict | None  (non-None only if any outlier
         #       kwarg was set); contains: outlier_sigma_threshold,
@@ -4453,6 +4466,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "consensus_tolerance",
                 "consensus_max_harmonic",
                 "min_consensus_inliers",
+                "two_band_max_fractional_frequency_difference",
                 "use_gp_validation",
             ]
             _consensus_configuration = {
@@ -9570,7 +9584,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Fixed temporal period.  Mutually exclusive with ``frequency``.
         amplitude_phase_kwargs : dict or None, optional
             Extra keyword arguments for the fixed-frequency sinusoid fit.
-            Currently supports ``reference_time`` and ``min_points``.
+            Currently supports ``reference_time`` and ``min_points``.  When
+            omitted, one global time-range midpoint is shared by all bands.
         classification_kwargs : dict or None, optional
             Extra keyword arguments for the wavelength-dependence classifier.
 
@@ -15356,6 +15371,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "outlier_sigma",
             "consensus_width_factor",
             "consensus_dedup_rtol",
+            "two_band_max_fractional_frequency_difference",
             "min_points_per_band",
             "max_gap_fraction",
             "min_duty_cycle",
@@ -15818,6 +15834,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         outlier_sigma=3.5,
         dedup_rtol=0.01,
         min_consensus_inliers=2,
+        two_band_max_fractional_frequency_difference=0.10,
         verbose=False,
     ):
         """Build a robust cross-band consensus frequency from dominant candidates.
@@ -15846,6 +15863,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ``final_consensus_frequency=nan`` so the caller can finalize
             diagnostics and raise an informative ``RuntimeError``.  Defaults
             to ``2``, meaning at least two bands must agree.
+        two_band_max_fractional_frequency_difference : float, optional
+            Maximum symmetric fractional frequency difference accepted when
+            exactly two original bands provide valid dominant frequencies.
+            The robust MAD stage cannot identify an outlier from only two
+            values, so pairs farther apart than this threshold fail rather
+            than producing an unsupported midpoint consensus.
         verbose : bool, optional
             If ``True``, print outlier decisions and final consensus values.
 
@@ -15876,6 +15899,58 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "Consensus fit failed: no valid dominant per-band frequencies "
                 "were available after quality gating."
             )
+
+        two_band_limit = float(two_band_max_fractional_frequency_difference)
+        if not np.isfinite(two_band_limit) or two_band_limit <= 0.0:
+            raise ValueError(
+                "two_band_max_fractional_frequency_difference must be a "
+                "finite, strictly positive float."
+            )
+
+        two_band_check_applied = len(freq_pairs) == 2
+        two_band_fractional_difference = None
+        two_band_frequency_agreement = None
+        if two_band_check_applied:
+            two_band_fractional_difference = (
+                self._consensus_fractional_frequency_difference(
+                    freq_pairs[0][1], freq_pairs[1][1]
+                )
+            )
+            two_band_frequency_agreement = bool(
+                two_band_fractional_difference <= two_band_limit
+            )
+            if not two_band_frequency_agreement:
+                original_freqs = np.asarray(
+                    [frequency for _, frequency in freq_pairs], dtype=float
+                )
+                original_bands = [band for band, _ in freq_pairs]
+                median_frequency = float(np.median(original_freqs))
+                mad_frequency = float(
+                    np.median(np.abs(original_freqs - median_frequency))
+                )
+                return {
+                    "frequencies_all": original_freqs.tolist(),
+                    "bands_all": original_bands,
+                    "median_frequency": median_frequency,
+                    "mad_frequency_scatter": mad_frequency,
+                    "inlier_bands": [],
+                    "outlier_bands": [],
+                    "final_consensus_frequency": float("nan"),
+                    "final_mad_frequency_scatter": float("nan"),
+                    "insufficient_inliers": True,
+                    "insufficient_inliers_count": 0,
+                    "required_min_consensus_inliers": int(
+                        min_consensus_inliers
+                    ),
+                    "two_band_pairwise_check_applied": True,
+                    "two_band_fractional_frequency_difference": float(
+                        two_band_fractional_difference
+                    ),
+                    "two_band_max_fractional_frequency_difference": (
+                        two_band_limit
+                    ),
+                    "two_band_frequency_agreement": False,
+                }
 
         # Deduplicate near-identical frequencies to prevent floating-point
         # jitter from counting equivalent peaks multiple times.
@@ -15966,6 +16041,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "insufficient_inliers": True,
                 "insufficient_inliers_count": n_original_inlier_bands,
                 "required_min_consensus_inliers": int(min_consensus_inliers),
+                "two_band_pairwise_check_applied": two_band_check_applied,
+                "two_band_fractional_frequency_difference": (
+                    two_band_fractional_difference
+                ),
+                "two_band_max_fractional_frequency_difference": (
+                    two_band_limit if two_band_check_applied else None
+                ),
+                "two_band_frequency_agreement": (
+                    two_band_frequency_agreement
+                ),
             }
 
         final_consensus_frequency = float(np.median(inlier_freqs))
@@ -15997,6 +16082,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "outlier_bands": outlier_bands,
             "final_consensus_frequency": final_consensus_frequency,
             "final_mad_frequency_scatter": mad_scatter,
+            "two_band_pairwise_check_applied": two_band_check_applied,
+            "two_band_fractional_frequency_difference": (
+                two_band_fractional_difference
+            ),
+            "two_band_max_fractional_frequency_difference": (
+                two_band_limit if two_band_check_applied else None
+            ),
+            "two_band_frequency_agreement": two_band_frequency_agreement,
         }
 
     @staticmethod
@@ -16526,7 +16619,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ``min_points_per_band``, ``max_gap_fraction``, ``min_duty_cycle``,
             ``outlier_sigma``, ``min_consensus_inliers``, ``use_acf``,
             ``constrain_consensus``, ``consensus_width_factor``,
-            ``consensus_dedup_rtol``, ``use_gp_validation``,
+            ``consensus_dedup_rtol``,
+            ``two_band_max_fractional_frequency_difference``,
+            ``use_gp_validation``,
             ``gp_validation_kwargs``, and ``gp_frequency_tolerance_factor``.
 
             Manual overrides are also accepted via:
@@ -16561,6 +16656,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
               ``consensus_success`` is ``False``.
               This guards against spurious consensus frequencies when all
               accepted bands have mutually inconsistent periods.
+            - ``two_band_max_fractional_frequency_difference`` : float,
+              default ``0.10``
+              Maximum symmetric fractional difference allowed when exactly
+              two bands provide valid dominant frequencies.  Pairs farther
+              apart fail instead of being averaged into a midpoint unsupported
+              by either band.
             - ``use_gp_validation`` : bool, default ``False``
               If ``True``, run optional per-band 1D GP frequency validation on
               LS/ACF-vetted candidates before final consensus aggregation.
@@ -16620,6 +16721,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         use_acf = fit_kwargs.pop("use_acf", False)
         consensus_width_factor = fit_kwargs.pop("consensus_width_factor", None)
         consensus_dedup_rtol = fit_kwargs.pop("consensus_dedup_rtol", 0.01)
+        two_band_max_fractional_frequency_difference = fit_kwargs.pop(
+            "two_band_max_fractional_frequency_difference", 0.10
+        )
         use_gp_validation = fit_kwargs.pop("use_gp_validation", False)
         gp_validation_kwargs = fit_kwargs.pop("gp_validation_kwargs", None)
         gp_frequency_tolerance_factor = fit_kwargs.pop(
@@ -16632,6 +16736,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise ValueError(
                 "consensus_dedup_rtol must be a finite, strictly positive "
                 "float."
+            )
+        two_band_max_fractional_frequency_difference = float(
+            two_band_max_fractional_frequency_difference
+        )
+        if (
+            not np.isfinite(two_band_max_fractional_frequency_difference)
+            or two_band_max_fractional_frequency_difference <= 0.0
+        ):
+            raise ValueError(
+                "two_band_max_fractional_frequency_difference must be a "
+                "finite, strictly positive float."
             )
         if not isinstance(use_gp_validation, bool):
             raise ValueError("use_gp_validation must be a boolean.")
@@ -16752,6 +16867,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     ),
                     dedup_rtol=consensus_dedup_rtol,
                     min_consensus_inliers=int(min_consensus_inliers),
+                    two_band_max_fractional_frequency_difference=(
+                        two_band_max_fractional_frequency_difference
+                    ),
                     verbose=verbose,
                 )
             except Exception as exc:
@@ -16792,6 +16910,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 result_diagnostics.update({
                     "median_frequency": consensus_diag["median_frequency"],
                     "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
+                    "two_band_pairwise_check_applied": bool(
+                        consensus_diag.get("two_band_pairwise_check_applied", False)
+                    ),
+                    "two_band_fractional_frequency_difference": (
+                        consensus_diag.get(
+                            "two_band_fractional_frequency_difference"
+                        )
+                    ),
+                    "two_band_max_fractional_frequency_difference": (
+                        consensus_diag.get(
+                            "two_band_max_fractional_frequency_difference"
+                        )
+                    ),
+                    "two_band_frequency_agreement": consensus_diag.get(
+                        "two_band_frequency_agreement"
+                    ),
                     "consensus_inlier_bands": consensus_diag["inlier_bands"],
                     "consensus_outlier_bands": consensus_diag["outlier_bands"],
                     "candidate_count": len(
@@ -16816,6 +16950,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "consensus_width_factor": _resolved_width_factor,
                         "consensus_scale_width_factor": float(consensus_scale_width_factor),
                         "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                        "two_band_max_fractional_frequency_difference": float(
+                            two_band_max_fractional_frequency_difference
+                        ),
                         "use_gp_validation": bool(use_gp_validation),
                         "gp_frequency_tolerance_factor": float(
                             gp_frequency_tolerance_factor
@@ -16829,13 +16966,30 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     (float(1.0 / f) if f and f > 0 else None)
                     for f in consensus_diag.get("frequencies_all", [])
                 ]
+                _two_band_failed = bool(
+                    consensus_diag.get("two_band_pairwise_check_applied")
+                    and consensus_diag.get("two_band_frequency_agreement") is False
+                )
+                if _two_band_failed:
+                    _failure_message = (
+                        "Consensus fit failed: the two accepted bands have "
+                        "incompatible dominant frequencies. Their fractional "
+                        "frequency difference exceeds the configured two-band "
+                        "agreement threshold, so no midpoint consensus was "
+                        "constructed. This is a data-quality or period-ambiguity "
+                        "issue, not a software error."
+                    )
+                else:
+                    _failure_message = (
+                        f"Consensus fit failed: the inferred periods are mutually "
+                        f"inconsistent across bands. Only {n_found} band(s) "
+                        f"clustered around a common frequency after outlier "
+                        f"rejection, but {n_req} are required. The bands do not "
+                        "support a coherent shared period — this is a data-quality "
+                        "issue, not a software error."
+                    )
                 raise ConsensusFitError(
-                    f"Consensus fit failed: the inferred periods are mutually "
-                    f"inconsistent across bands. Only {n_found} band(s) "
-                    f"clustered around a common frequency after outlier "
-                    f"rejection, but {n_req} are required. The bands do not "
-                    "support a coherent shared period — this is a data-quality "
-                    "issue, not a software error.",
+                    _failure_message,
                     failure_diagnostics={
                         "status": "failed",
                         "reason": "insufficient_consensus_inliers",
@@ -16845,6 +16999,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             consensus_diag.get("frequencies_all", [])
                         ),
                         "candidate_periods": _cand_periods,
+                        "two_band_pairwise_check_applied": bool(
+                            consensus_diag.get(
+                                "two_band_pairwise_check_applied", False
+                            )
+                        ),
+                        "two_band_fractional_frequency_difference": (
+                            consensus_diag.get(
+                                "two_band_fractional_frequency_difference"
+                            )
+                        ),
+                        "two_band_max_fractional_frequency_difference": (
+                            consensus_diag.get(
+                                "two_band_max_fractional_frequency_difference"
+                            )
+                        ),
+                        "two_band_frequency_agreement": consensus_diag.get(
+                            "two_band_frequency_agreement"
+                        ),
                     },
                 )
 
@@ -16929,6 +17101,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "consensus_frequency_scatter": consensus_diag["mad_frequency_scatter"],
                 "median_frequency": consensus_diag["median_frequency"],
                 "mad_frequency_scatter": consensus_diag["mad_frequency_scatter"],
+                "two_band_pairwise_check_applied": bool(
+                    consensus_diag.get("two_band_pairwise_check_applied", False)
+                ),
+                "two_band_fractional_frequency_difference": (
+                    consensus_diag.get("two_band_fractional_frequency_difference")
+                ),
+                "two_band_max_fractional_frequency_difference": (
+                    consensus_diag.get(
+                        "two_band_max_fractional_frequency_difference"
+                    )
+                ),
+                "two_band_frequency_agreement": consensus_diag.get(
+                    "two_band_frequency_agreement"
+                ),
                 "consensus_inlier_bands": consensus_diag["inlier_bands"],
                 "consensus_outlier_bands": consensus_diag["outlier_bands"],
                 "final_consensus_frequency": final_consensus_frequency,
@@ -16942,6 +17128,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "constrain_consensus": bool(apply_consensus_constraints),
                     "consensus_width_factor": float(consensus_width_factor),
                     "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                    "two_band_max_fractional_frequency_difference": float(
+                        two_band_max_fractional_frequency_difference
+                    ),
                     "use_gp_validation": bool(use_gp_validation),
                     "gp_frequency_tolerance_factor": float(
                         gp_frequency_tolerance_factor
@@ -17061,6 +17250,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "consensus_width_factor": consensus_width_factor,
                     "consensus_scale_width_factor": float(consensus_scale_width_factor),
                     "consensus_dedup_rtol": float(consensus_dedup_rtol),
+                    "two_band_max_fractional_frequency_difference": float(
+                        two_band_max_fractional_frequency_difference
+                    ),
                     "use_gp_validation": bool(use_gp_validation),
                     "gp_frequency_tolerance_factor": float(
                         gp_frequency_tolerance_factor

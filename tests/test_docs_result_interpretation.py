@@ -50,6 +50,23 @@ class TestResultInterpretationDocs(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.normalized)
 
+    def test_period_and_phase_boundary_semantics(self):
+        required = [
+            "Two-band consensus requires direct agreement",
+            "two_band_fractional_frequency_difference",
+            "two_band_max_fractional_frequency_difference",
+            "two_band_frequency_agreement",
+            "does not report the arithmetic midpoint",
+            "Fixed-frequency phase and lag diagnostics",
+            "one common ``reference_time``",
+            'fixed_frequency_reference_time_source="global_time_midpoint"',
+            "lag_linear_span",
+            "minimum_circular_arc",
+        ]
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, self.normalized)
+
     def test_fit_quality_caveats_are_explicit(self):
         required = [
             "fit_quality_score",

@@ -28,6 +28,7 @@ def _make_multiband_lightcurve(
     yerr_value=0.03,
     include_yerr=True,
     band_labels=None,
+    time_offsets=None,
 ):
     times = []
     wls = []
@@ -37,11 +38,14 @@ def _make_multiband_lightcurve(
     t = np.linspace(0.0, 90.0, n_per_band)
     if lags is None:
         lags = tuple(0.0 for _ in wavelengths)
-    for i, (wl, amp, lag) in enumerate(
-        zip(wavelengths, amplitudes, lags, strict=True)
+    if time_offsets is None:
+        time_offsets = tuple(0.0 for _ in wavelengths)
+    for i, (wl, amp, lag, time_offset) in enumerate(
+        zip(wavelengths, amplitudes, lags, time_offsets, strict=True)
     ):
-        y = 1.0 + amp * np.cos(2.0 * np.pi * (t - lag) / period)
-        times.append(t)
+        band_time = t + float(time_offset)
+        y = 1.0 + amp * np.cos(2.0 * np.pi * (band_time - lag) / period)
+        times.append(band_time)
         wls.append(np.full_like(t, wl))
         ys.append(y)
         yerrs.append(np.full_like(t, yerr_value))
@@ -277,6 +281,68 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         ]
         np.testing.assert_allclose(lags, [0.0, 2.0, 4.0], atol=0.05)
         self.assertGreater(report["amplitude_phase_summary"]["lag_span"], 3.9)
+
+    def test_default_reference_time_is_common_across_unequal_band_windows(self):
+        lc = _make_multiband_lightcurve(
+            n_per_band=90,
+            amplitudes=(0.4, 0.4, 0.4),
+            lags=(0.0, 2.0, 4.0),
+            time_offsets=(0.0, 15.0, 30.0),
+            yerr_value=0.01,
+        )
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+        )
+
+        self.assertEqual(
+            report["fixed_frequency_reference_time_source"],
+            "global_time_midpoint",
+        )
+        self.assertAlmostEqual(report["fixed_frequency_reference_time"], 60.0)
+        reference_times = [
+            row["fixed_frequency_diagnostics"]["reference_time"]
+            for row in report["band_table"]
+        ]
+        np.testing.assert_allclose(reference_times, [60.0, 60.0, 60.0])
+        recovered_lags = [
+            row["fixed_frequency_diagnostics"]["lag"]
+            for row in report["band_table"]
+        ]
+        np.testing.assert_allclose(recovered_lags, [0.0, 2.0, 4.0], atol=0.05)
+        self.assertTrue(
+            report["amplitude_phase_summary"]["reference_time_consistent"]
+        )
+
+    def test_circular_lag_span_handles_period_boundary(self):
+        lc = _make_multiband_lightcurve(
+            n_per_band=100,
+            wavelengths=(1.0, 2.0),
+            amplitudes=(0.4, 0.4),
+            lags=(14.5, -14.5),
+            period=30.0,
+            yerr_value=0.005,
+        )
+
+        report = lc.diagnose_wavelength_dependence(
+            sampling_kwargs={"min_points": 10},
+            variability_kwargs={"min_points": 10, "fvar_min": 0.001},
+            period=30.0,
+            amplitude_phase_kwargs={"reference_time": 0.0},
+        )
+
+        summary = report["amplitude_phase_summary"]
+        self.assertGreater(summary["lag_linear_span"], 28.0)
+        self.assertAlmostEqual(summary["lag_span"], 1.0, delta=0.08)
+        self.assertEqual(summary["lag_span_method"], "minimum_circular_arc")
+        classification = report["classification"]
+        self.assertEqual(
+            classification["phase_lag_class"],
+            "consistent_with_zero_lag",
+        )
+        self.assertAlmostEqual(classification["lag_span"], 1.0, delta=0.08)
 
     def test_period_argument_matches_frequency_argument(self):
         lc = _make_multiband_lightcurve(n_per_band=80, amplitudes=(0.2, 0.2, 0.2))
@@ -569,9 +635,21 @@ class TestDiagnoseWavelengthDependencePrefit(unittest.TestCase):
         self.assertEqual(report["predictive_score"]["available"], True)
         self.assertEqual(len(report["by_band"]), 2)
         self.assertLess(report["overall"]["residual_rms"], 1e-12)
+        self.assertEqual(
+            report["fixed_frequency_reference_time_source"],
+            "global_time_midpoint",
+        )
+        residual_reference_times = []
         for row in report["by_band"]:
             self.assertIn("fixed_frequency_residual", row)
             self.assertLess(row["fixed_frequency_residual"]["amplitude"], 1e-12)
+            residual_reference_times.append(
+                row["fixed_frequency_residual"]["reference_time"]
+            )
+        np.testing.assert_allclose(
+            residual_reference_times,
+            [report["fixed_frequency_reference_time"]] * 2,
+        )
 
     def test_compare_wavelength_models_scores_successful_model_kernel_configs(self):
         fake_lc = _FakeLightcurveForComparison(

@@ -163,6 +163,10 @@ def _make_valid_diagnostics(
         "per_band_dominant_frequencies": {},
         "median_frequency": None,
         "mad_frequency_scatter": None,
+        "two_band_pairwise_check_applied": False,
+        "two_band_fractional_frequency_difference": None,
+        "two_band_max_fractional_frequency_difference": None,
+        "two_band_frequency_agreement": None,
         "consensus_inlier_bands": [],
         "consensus_outlier_bands": [],
         "final_consensus_frequency": consensus_frequency,
@@ -1576,6 +1580,7 @@ class TestPrepareGpValidationFitKwargs(unittest.TestCase):
             "consensus_frequencies": [0.1, 0.2],
             "use_gp_validation": True,
             "outlier_sigma": 3.0,
+            "two_band_max_fractional_frequency_difference": 0.10,
             "min_points_per_band": 10,
         }
         result = Lightcurve._consensus_prepare_gp_validation_fit_kwargs(blocked)

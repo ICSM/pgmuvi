@@ -307,6 +307,13 @@ including:
    Controls rejection of per-band frequencies that are inconsistent with the
    robust consensus.
 
+``two_band_max_fractional_frequency_difference``
+   Applies only when exactly two bands provide valid dominant frequencies.
+   Because two values cannot support MAD-based outlier rejection, their
+   symmetric fractional frequency difference must not exceed this limit
+   (default ``0.10``).  Incompatible pairs fail explicitly rather than being
+   averaged into a midpoint period supported by neither band.
+
 ``use_acf``
    Enables the optional ACF contribution to the consensus diagnostics.
 

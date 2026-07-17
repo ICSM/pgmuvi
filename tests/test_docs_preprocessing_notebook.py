@@ -159,6 +159,19 @@ class TestRefreshedPreprocessingNotebook(unittest.TestCase):
             [0.55, 0.80],
         )
 
+    def test_preprocessing_guide_documents_configured_snr_fraction(self):
+        text = PREPROCESSING.read_text(encoding="utf-8")
+        required = [
+            "snr_threshold",
+            "fraction_snr_gt_min",
+            "fraction_snr_gt_3",
+            "min_fraction_good_snr",
+            "do not control a gate",
+        ]
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+
     def test_companion_guides_link_notebook_and_remove_tbd_markers(self):
         preprocessing = PREPROCESSING.read_text(encoding="utf-8")
         loading = LOADING.read_text(encoding="utf-8")

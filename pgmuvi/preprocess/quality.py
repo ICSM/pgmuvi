@@ -297,19 +297,37 @@ def assess_sampling_quality(
                 f"< {min_baseline_factor} required"
             )
 
-    # Gate 4: SNR check (if data provided)
+    # Gate 4: SNR check (if data provided).  The fraction gate must use
+    # the caller's configured threshold rather than the legacy hard-coded
+    # SNR > 3 metric retained by compute_sampling_metrics().
     if "median_snr" in metrics:
-        fraction_snr_gt_min = float(metrics.get("fraction_snr_gt_3", 0.0))
+        y_arr = np.asarray(y)
+        yerr_arr = np.asarray(yerr)
+        valid_snr = (
+            np.isfinite(y_arr)
+            & np.isfinite(yerr_arr)
+            & (yerr_arr > 0)
+        )
+        if np.any(valid_snr):
+            snr = np.abs(y_arr[valid_snr]) / yerr_arr[valid_snr]
+            fraction_snr_gt_min = float(np.mean(snr > float(min_snr)))
+        else:
+            fraction_snr_gt_min = 0.0
 
+        metrics["snr_threshold"] = float(min_snr)
+        metrics["fraction_snr_gt_min"] = fraction_snr_gt_min
         gates["min_snr"] = (
             metrics["median_snr"] >= min_snr
             and fraction_snr_gt_min >= min_fraction_good_snr
         )
         if not gates["min_snr"]:
             warning_msgs.append(
-                f"Poor SNR: median={metrics['median_snr']:.1f} < {min_snr}, "
-                f"fraction>={min_snr:.1f}={100 * fraction_snr_gt_min:.0f}%"
-                f" < {100 * min_fraction_good_snr:.0f}%"
+                "Poor SNR: "
+                f"median={metrics['median_snr']:.1f} "
+                f"(required >= {min_snr:.1f}); "
+                f"fraction with SNR > {min_snr:.1f}="
+                f"{100 * fraction_snr_gt_min:.0f}% "
+                f"(required >= {100 * min_fraction_good_snr:.0f}%)"
             )
     else:
         gates["min_snr"] = True  # Pass by default if not checkable
@@ -346,12 +364,8 @@ def assess_sampling_quality(
             print("\nSignal Quality:")
             print(f"  • Median SNR: {metrics['median_snr']:.1f}")
             print(
-                f"  • Points with SNR > 3: "
-                f"{100 * metrics['fraction_snr_gt_3']:.0f}%"
-            )
-            print(
-                f"  • Points with SNR > 5: "
-                f"{100 * metrics['fraction_snr_gt_5']:.0f}%"
+                f"  • Points with SNR > {float(min_snr):g}: "
+                f"{100 * metrics['fraction_snr_gt_min']:.0f}%"
             )
 
         print("\nQuality Gates:")
