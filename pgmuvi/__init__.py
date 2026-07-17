@@ -21,6 +21,7 @@ __all__ = [
     "priors",
     "synthetic",
     "trainers",
+    "wavelength_conclusions",
     "wavelength_diagnostics",
     "wavelength_hypotheses",
     "wavelength_results",

@@ -748,6 +748,7 @@ class WavelengthAdvisoryResult:
                 "interpretation",
                 "advisory_conclusions",
                 "unresolved_ambiguities",
+                "advisory_conclusion_summary",
             )
             if name in payload
         }

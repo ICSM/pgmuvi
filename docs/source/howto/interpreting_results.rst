@@ -512,3 +512,27 @@ See also
 * :doc:`wavelength_advisory`
 * :doc:`wavelength_advisory_batch`
 * :doc:`preprocessing`
+
+Advisory conclusions are scoped, not selections
+------------------------------------------------
+
+For the period-independent wavelength workflow, inspect
+``advisory_conclusions`` together with ``unresolved_ambiguities``.  A conclusion
+about a ``complete_configuration`` applies to the full GP configuration.  It
+must not be reinterpreted as isolated evidence for its wavelength mean or its
+wavelength covariance.
+
+The disposition ``remains_plausible`` means only that the available diagnostics
+do not exclude the hypothesis.  ``weakened`` records explicit adverse advisory
+evidence without claiming formal rejection.  ``technically_unevaluable`` means
+that technical execution did not yield usable scientific evidence.
+``scientifically_ambiguous`` means that the required same-mean or
+same-covariance contrast is absent.  ``incomparable`` means that the result is
+not eligible for the current like-for-like comparison.
+
+The current scalar ranking remains a training-residual heuristic, not a formal
+model-comparison statistic.  Consequently, neither ``top_ranked_model`` nor a
+``remains_plausible`` conclusion performs automatic model selection.  Use the
+ambiguity records to identify whether stronger interpretation requires another
+successful candidate, an isolated mean/covariance contrast, held-out prediction,
+seed-stability checks, or resolution of a recorded technical failure.
