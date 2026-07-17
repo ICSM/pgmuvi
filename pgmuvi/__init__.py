@@ -23,6 +23,7 @@ __all__ = [
     "trainers",
     "wavelength_conclusions",
     "wavelength_diagnostics",
+    "wavelength_estimation",
     "wavelength_hypotheses",
     "wavelength_results",
     "wavelength_status",

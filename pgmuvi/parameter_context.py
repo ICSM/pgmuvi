@@ -7,7 +7,7 @@ constraints. It does not compute diagnostics or apply values to models.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -38,7 +38,69 @@ class BandDiagnostics:
     mad_flux: float | None = None
     flux_percentiles: dict[float, float] = field(default_factory=dict)
     n_points: int | None = None
+    median_uncertainty: float | None = None
+    uncertainty_percentiles: dict[float, float] = field(default_factory=dict)
+    robust_scatter: float | None = None
+    raw_half_amplitude_q02_5_q97_5: float | None = None
+    raw_half_amplitude_q05_q95: float | None = None
+    raw_half_amplitude_q10_q90: float | None = None
+    fractional_half_amplitude_q02_5_q97_5: float | None = None
+    fractional_half_amplitude_q05_q95: float | None = None
+    fractional_half_amplitude_q10_q90: float | None = None
+    noise_corrected_robust_scatter: float | None = None
+    noise_corrected_half_amplitude_q02_5_q97_5: float | None = None
+    noise_corrected_half_amplitude_q05_q95: float | None = None
+    noise_corrected_half_amplitude_q10_q90: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+WAVELENGTH_ESTIMATION_SCHEMA_VERSION = "pgmuvi-wavelength-estimation-v1"
+
+
+@dataclass(frozen=True)
+class WavelengthEstimationDiagnostics:
+    """Data-derived wavelength sampling and trend diagnostics.
+
+    All wavelength scales are expressed in the same raw coordinate units as
+    the second column of the input light curve.  The recommended length scale
+    and bounds are advisory physical-space quantities only; this object does
+    not account for a later input transformation applied by a GP model.
+    """
+
+    schema_version: str = WAVELENGTH_ESTIMATION_SCHEMA_VERSION
+    available: bool = False
+    coordinate_space: str = "raw_input"
+    n_observations: int = 0
+    n_distinct_wavelengths: int = 0
+    n_usable_bands: int = 0
+    min_points_per_band: int = 3
+    wavelengths: tuple[float, ...] = ()
+    wavelength_min: float | None = None
+    wavelength_max: float | None = None
+    wavelength_span: float | None = None
+    adjacent_spacings: tuple[float, ...] = ()
+    minimum_adjacent_spacing: float | None = None
+    median_adjacent_spacing: float | None = None
+    maximum_adjacent_spacing: float | None = None
+    largest_gap: float | None = None
+    largest_gap_ratio_to_median_spacing: float | None = None
+    spacing_ratio_max_to_min: float | None = None
+    coverage_class: str = "unavailable"
+    median_flux_monotonicity_class: str = "unavailable"
+    amplitude_monotonicity_class: str = "unavailable"
+    scatter_monotonicity_class: str = "unavailable"
+    median_flux_ratio_max_to_min_abs: float | None = None
+    amplitude_ratio_max_to_min: float | None = None
+    scatter_ratio_max_to_min: float | None = None
+    recommended_lengthscale_initial: float | None = None
+    recommended_lengthscale_bounds: tuple[float, float] | None = None
+    recommendation_method: str | None = None
+    excluded_bands: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-safe dictionary representation."""
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -63,6 +125,7 @@ class ParameterEstimationContext:
     global_diagnostics: LightcurveDiagnostics | None = None
     band_diagnostics: dict[str, BandDiagnostics] = field(default_factory=dict)
     consensus_diagnostics: ConsensusDiagnostics | None = None
+    wavelength_diagnostics: WavelengthEstimationDiagnostics | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def bands(self) -> list[str]:

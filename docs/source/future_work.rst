@@ -43,9 +43,13 @@ Wavelength-derived fitting constraints and validation
 -----------------------------------------------------
 
 **TBD[wavelength-derived-constraints]**
-    Implement the dedicated scientific fitting tranche for data-derived
-    wavelength-kernel and wavelength-mean initialization and constraints.  The
-    tranche must summarize usable wavelength sampling, apply independent mean
+    The shared raw-coordinate wavelength-sampling context and the dormant
+    ``WAVELENGTH_RANGE`` guess/constraint strategies are implemented.  The
+    remaining scientific fitting tranche must apply data-derived wavelength-
+    kernel and wavelength-mean initialization and constraints.  It must use the
+    recorded usable-band, adjacent-spacing, gap, uncertainty, robust mean, and
+    robust amplitude summaries; transform raw-coordinate estimates into the
+    actual model-input coordinate where required; and apply independent mean
     and covariance estimates to ``2DWavelengthDependent``, ``2DDustMean``,
     ``2DPowerLawMean``, and ``2DSeparable``, and redesign the full ``2D``
     spectral-mixture parameterization so temporal and wavelength ARD dimensions

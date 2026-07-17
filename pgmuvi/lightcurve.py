@@ -68,6 +68,7 @@ from pgmuvi.parameter_workflow import (
     build_and_apply_parameter_estimates,
     model_supports_parameter_workflow,
 )
+from pgmuvi.wavelength_estimation import build_wavelength_estimation_context
 from pgmuvi.constraint_utils import clamp_to_constraint_interior
 from pgmuvi.constraint_utils import register_constraint_preserving_value
 
@@ -9899,24 +9900,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
     def _build_parameter_estimation_context(self):
         """Construct a parameter-estimation context from this light curve."""
-        flux_values = self._ydata_raw
-        if isinstance(flux_values, torch.Tensor):
-            flux_values = flux_values.detach().cpu().numpy()
+        flux_values_all = self._ydata_raw
+        if isinstance(flux_values_all, torch.Tensor):
+            flux_values_all = flux_values_all.detach().cpu().numpy()
+        flux_values_all = np.asarray(flux_values_all, dtype=float).reshape(-1)
+        finite_flux_values = flux_values_all[np.isfinite(flux_values_all)]
 
-        flux_values = np.asarray(flux_values, dtype=float)
-        flux_values = flux_values[np.isfinite(flux_values)]
-
-        time_values = self._xdata_raw
-        if isinstance(time_values, torch.Tensor):
-            time_values = time_values.detach().cpu().numpy()
-
-        time_values = np.asarray(time_values, dtype=float)
+        input_values = self._xdata_raw
+        if isinstance(input_values, torch.Tensor):
+            input_values = input_values.detach().cpu().numpy()
+        input_values = np.asarray(input_values, dtype=float)
 
         if self.ndim > 1:
-            times = np.sort(time_values[:, 0])
+            times = np.sort(input_values[:, 0])
         else:
-            times = np.sort(time_values)
+            times = np.sort(input_values.reshape(-1))
 
+        times = times[np.isfinite(times)]
         baseline_duration = None
         median_cadence = None
 
@@ -9929,29 +9929,55 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if gaps.size:
                 median_cadence = float(np.median(gaps))
 
-        if flux_values.size == 0:
-            return ParameterEstimationContext(
-                is_multiband=self.ndim > 1,
-                global_diagnostics=LightcurveDiagnostics(
-                    baseline_duration=baseline_duration,
-                    median_cadence=median_cadence,
-                ),
+        wavelength_diagnostics = None
+        band_diagnostics = {}
+        if self.ndim > 1:
+            uncertainty_values = None
+            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None:
+                uncertainty_values = self._yerr_raw
+                if isinstance(uncertainty_values, torch.Tensor):
+                    uncertainty_values = uncertainty_values.detach().cpu().numpy()
+
+            band_labels = None
+            if self.band is not None and len(self.band) == flux_values_all.size:
+                band_labels = np.asarray(self.band, dtype=str)
+
+            wavelength_diagnostics, band_diagnostics = (
+                build_wavelength_estimation_context(
+                    wavelengths=input_values[:, 1],
+                    fluxes=flux_values_all,
+                    uncertainties=uncertainty_values,
+                    band_labels=band_labels,
+                )
             )
 
-        p025, p50, p975 = np.percentile(flux_values, [2.5, 50.0, 97.5])
-        return ParameterEstimationContext(
-            is_multiband=self.ndim > 1,
-            global_diagnostics=LightcurveDiagnostics(
+        if finite_flux_values.size == 0:
+            global_diagnostics = LightcurveDiagnostics(
+                baseline_duration=baseline_duration,
+                median_cadence=median_cadence,
+            )
+        else:
+            p025, p50, p975 = np.percentile(
+                finite_flux_values,
+                [2.5, 50.0, 97.5],
+            )
+            global_diagnostics = LightcurveDiagnostics(
                 median_flux=float(p50),
                 flux_percentiles={
                     2.5: float(p025),
                     50.0: float(p50),
                     97.5: float(p975),
                 },
-                n_points=int(flux_values.size),
+                n_points=int(finite_flux_values.size),
                 baseline_duration=baseline_duration,
                 median_cadence=median_cadence,
-            ),
+            )
+
+        return ParameterEstimationContext(
+            is_multiband=self.ndim > 1,
+            global_diagnostics=global_diagnostics,
+            band_diagnostics=band_diagnostics,
+            wavelength_diagnostics=wavelength_diagnostics,
         )
 
     def _apply_parameter_workflow_estimates(self):
