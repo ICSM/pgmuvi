@@ -9898,6 +9898,132 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return model_str, diagnostics
 
+    def _prepare_wavelength_estimation_for_model(self, diagnostics):
+        """Attach wavelength-length-scale estimates in the GP input space.
+
+        The wavelength diagnostics are calculated from the raw wavelength
+        coordinate so their scientific provenance remains auditable.  Kernel
+        lengthscales, however, are parameters of the coordinate supplied to the
+        GP.  This helper therefore applies only the scale part of ``xtransform``
+        to the raw recommendation and retains both representations.
+        """
+        if diagnostics is None:
+            return None
+
+        raw_initial = diagnostics.recommended_lengthscale_initial
+        raw_bounds = diagnostics.recommended_lengthscale_bounds
+        metadata = dict(diagnostics.metadata)
+
+        if raw_initial is None or raw_bounds is None:
+            metadata.update(
+                {
+                    "model_lengthscale_units": None,
+                    "lengthscale_transform_status": "recommendation_unavailable",
+                }
+            )
+            return dataclasses.replace(
+                diagnostics,
+                model_recommended_lengthscale_initial=None,
+                model_recommended_lengthscale_bounds=None,
+                lengthscale_transform_status="recommendation_unavailable",
+                lengthscale_transform_name=(
+                    None
+                    if self.xtransform is None
+                    else type(self.xtransform).__name__
+                ),
+                metadata=metadata,
+            )
+
+        if self.xtransform is None:
+            metadata.update(
+                {
+                    "model_lengthscale_units": "raw_wavelength_coordinate",
+                    "lengthscale_transform_status": "identity",
+                }
+            )
+            return dataclasses.replace(
+                diagnostics,
+                model_coordinate_space="raw_input",
+                model_recommended_lengthscale_initial=float(raw_initial),
+                model_recommended_lengthscale_bounds=(
+                    float(raw_bounds[0]),
+                    float(raw_bounds[1]),
+                ),
+                lengthscale_transform_status="identity",
+                lengthscale_transform_name=None,
+                metadata=metadata,
+            )
+
+        transform_name = type(self.xtransform).__name__
+
+        def transform_scale(value):
+            template = torch.zeros(
+                (1, self.ndim),
+                dtype=self._xdata_transformed.dtype,
+                device=self._xdata_transformed.device,
+            )
+            template[0, 1] = float(value)
+            transformed = self.xtransform.transform_uncertainty(template)
+            transformed = torch.as_tensor(
+                transformed,
+                dtype=template.dtype,
+                device=template.device,
+            )
+            if transformed.shape != template.shape:
+                raise ValueError(
+                    "xtransform returned an incompatible shape while "
+                    "transforming a wavelength lengthscale."
+                )
+            scalar = abs(float(transformed[0, 1].detach().cpu()))
+            if not math.isfinite(scalar) or scalar <= 0.0:
+                raise ValueError(
+                    "xtransform produced a non-positive or non-finite "
+                    "wavelength lengthscale."
+                )
+            return scalar
+
+        try:
+            model_initial = transform_scale(raw_initial)
+            model_lower = transform_scale(raw_bounds[0])
+            model_upper = transform_scale(raw_bounds[1])
+            if model_lower >= model_upper:
+                raise ValueError(
+                    "Transformed wavelength lengthscale bounds are not ordered."
+                )
+        except Exception as exc:
+            metadata.update(
+                {
+                    "model_lengthscale_units": None,
+                    "lengthscale_transform_status": "failed",
+                    "lengthscale_transform_error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            return dataclasses.replace(
+                diagnostics,
+                model_coordinate_space="transformed_input",
+                model_recommended_lengthscale_initial=None,
+                model_recommended_lengthscale_bounds=None,
+                lengthscale_transform_status="failed",
+                lengthscale_transform_name=transform_name,
+                metadata=metadata,
+            )
+
+        metadata.update(
+            {
+                "model_lengthscale_units": "transformed_wavelength_coordinate",
+                "lengthscale_transform_status": "applied",
+            }
+        )
+        return dataclasses.replace(
+            diagnostics,
+            model_coordinate_space="transformed_input",
+            model_recommended_lengthscale_initial=model_initial,
+            model_recommended_lengthscale_bounds=(model_lower, model_upper),
+            lengthscale_transform_status="applied",
+            lengthscale_transform_name=transform_name,
+            metadata=metadata,
+        )
+
     def _build_parameter_estimation_context(self):
         """Construct a parameter-estimation context from this light curve."""
         flux_values_all = self._ydata_raw
@@ -9948,6 +10074,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     fluxes=flux_values_all,
                     uncertainties=uncertainty_values,
                     band_labels=band_labels,
+                )
+            )
+            wavelength_diagnostics = (
+                self._prepare_wavelength_estimation_for_model(
+                    wavelength_diagnostics
                 )
             )
 
@@ -10086,6 +10217,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "value_reason": info.get("value_reason"),
                 "constraint_reason": info.get("constraint_reason"),
             }
+            for optional_key in (
+                "constraint_action",
+                "wavelength_estimate_provenance",
+            ):
+                if optional_key in info:
+                    entry[optional_key] = copy.deepcopy(info[optional_key])
 
             if value_applied or constraint_applied:
                 applied.append(entry)

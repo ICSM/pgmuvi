@@ -46,9 +46,26 @@ class TestLengthscaleKernelParameterSchema(unittest.TestCase):
 
         lengthscale = schema["wavelength_kernel.lengthscale"]
 
-        self.assertIs(lengthscale.role, ParameterRole.LENGTHSCALE)
+        self.assertIs(lengthscale.role, ParameterRole.WAVELENGTH_SCALE)
         self.assertIs(lengthscale.domain, ParameterDomain.WAVELENGTH)
         self.assertIs(lengthscale.scale, ParameterScale.LOG)
+        self.assertIs(
+            lengthscale.guess_strategy,
+            GuessStrategy.WAVELENGTH_RANGE,
+        )
+        self.assertIs(
+            lengthscale.constraint_strategy,
+            ConstraintStrategy.WAVELENGTH_RANGE,
+        )
+        self.assertEqual(
+            lengthscale.guess_source,
+            "wavelength_estimation_context",
+        )
+        self.assertEqual(
+            lengthscale.constraint_source,
+            "wavelength_estimation_context",
+        )
+        self.assertEqual(lengthscale.metadata["coordinate_dimension"], 1)
 
     def test_accepts_empty_prefix(self):
         schema = lengthscale_kernel_parameter_schema(

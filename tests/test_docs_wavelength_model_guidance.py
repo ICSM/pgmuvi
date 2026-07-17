@@ -80,7 +80,7 @@ class TestWavelengthModelGuidanceDocs(unittest.TestCase):
             "selected_model=None",
             "training-space residual",
             "not held-out predictive performance",
-            "does not apply those suggestions as values or constraints",
+            "does not make the advisory ranking automatic model selection",
             "triage rules, not statistical model selection",
         ]
         for token in required:

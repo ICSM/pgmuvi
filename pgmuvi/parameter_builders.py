@@ -71,9 +71,19 @@ class ParameterEstimateBuilder:
                         "schema_version",
                         None,
                     ),
-                    "coordinate_space": getattr(
+                    "raw_coordinate_space": getattr(
                         wavelength_diagnostics,
                         "coordinate_space",
+                        None,
+                    ),
+                    "model_coordinate_space": getattr(
+                        wavelength_diagnostics,
+                        "model_coordinate_space",
+                        None,
+                    ),
+                    "coordinate_space": getattr(
+                        wavelength_diagnostics,
+                        "model_coordinate_space",
                         None,
                     ),
                     "n_usable_bands": getattr(
@@ -96,6 +106,51 @@ class ParameterEstimateBuilder:
                         "largest_gap",
                         None,
                     ),
+                    "raw_recommended_lengthscale_initial": getattr(
+                        wavelength_diagnostics,
+                        "recommended_lengthscale_initial",
+                        None,
+                    ),
+                    "raw_recommended_lengthscale_bounds": getattr(
+                        wavelength_diagnostics,
+                        "recommended_lengthscale_bounds",
+                        None,
+                    ),
+                    "model_recommended_lengthscale_initial": getattr(
+                        wavelength_diagnostics,
+                        "model_recommended_lengthscale_initial",
+                        None,
+                    ),
+                    "model_recommended_lengthscale_bounds": getattr(
+                        wavelength_diagnostics,
+                        "model_recommended_lengthscale_bounds",
+                        None,
+                    ),
+                    "lengthscale_transform_status": getattr(
+                        wavelength_diagnostics,
+                        "lengthscale_transform_status",
+                        None,
+                    ),
+                    "lengthscale_transform_name": getattr(
+                        wavelength_diagnostics,
+                        "lengthscale_transform_name",
+                        None,
+                    ),
+                    "lengthscale_transform_error": getattr(
+                        wavelength_diagnostics,
+                        "metadata",
+                        {},
+                    ).get("lengthscale_transform_error"),
+                    "raw_lengthscale_units": getattr(
+                        wavelength_diagnostics,
+                        "metadata",
+                        {},
+                    ).get("lengthscale_units"),
+                    "model_lengthscale_units": getattr(
+                        wavelength_diagnostics,
+                        "metadata",
+                        {},
+                    ).get("model_lengthscale_units"),
                     "recommendation_method": getattr(
                         wavelength_diagnostics,
                         "recommendation_method",
@@ -149,8 +204,20 @@ class ParameterEstimateBuilder:
             return "robust_flux_span_unavailable"
 
         if spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE:
-            if context.wavelength_diagnostics is None:
+            diagnostics = context.wavelength_diagnostics
+            if diagnostics is None:
                 return "wavelength_diagnostics_unavailable"
+            if (
+                getattr(diagnostics, "recommended_lengthscale_initial", None)
+                is not None
+                and getattr(
+                    diagnostics,
+                    "model_recommended_lengthscale_initial",
+                    None,
+                )
+                is None
+            ):
+                return "wavelength_lengthscale_model_transform_unavailable"
 
             return "wavelength_lengthscale_recommendation_unavailable"
 
@@ -389,14 +456,14 @@ class ParameterEstimateBuilder:
         spec: ParameterSpec,
         context: ParameterEstimationContext,
     ):
-        """Return the raw-coordinate wavelength length-scale recommendation."""
+        """Return the model-coordinate wavelength length-scale recommendation."""
         diagnostics = context.wavelength_diagnostics
         if diagnostics is None:
             return None
 
         value = getattr(
             diagnostics,
-            "recommended_lengthscale_initial",
+            "model_recommended_lengthscale_initial",
             None,
         )
         return self._reshape_initial_value(value, spec.shape)
@@ -406,14 +473,14 @@ class ParameterEstimateBuilder:
         spec: ParameterSpec,
         context: ParameterEstimationContext,
     ):
-        """Return raw-coordinate wavelength length-scale bounds."""
+        """Return model-coordinate wavelength length-scale bounds."""
         diagnostics = context.wavelength_diagnostics
         if diagnostics is None:
             return None
 
         bounds = getattr(
             diagnostics,
-            "recommended_lengthscale_bounds",
+            "model_recommended_lengthscale_bounds",
             None,
         )
         if bounds is None:

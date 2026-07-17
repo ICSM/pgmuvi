@@ -43,19 +43,21 @@ Wavelength-derived fitting constraints and validation
 -----------------------------------------------------
 
 **TBD[wavelength-derived-constraints]**
-    The shared raw-coordinate wavelength-sampling context and the dormant
-    ``WAVELENGTH_RANGE`` guess/constraint strategies are implemented.  The
-    remaining scientific fitting tranche must apply data-derived wavelength-
-    kernel and wavelength-mean initialization and constraints.  It must use the
+    The shared wavelength-sampling context is implemented, and its data-derived
+    covariance lengthscale is now transformed into the GP input coordinate and
+    applied to the separable wavelength kernels in
+    ``2DWavelengthDependent``, ``2DDustMean``, ``2DPowerLawMean``, and
+    ``2DSeparable``.  Existing constraints are intersected, constraint-before-
+    value ordering is preserved, and raw/model-coordinate plus effective-bound
+    provenance is recorded.
+
+    The remaining scientific fitting tranche must initialize and constrain the
+    wavelength-dependent mean parameters independently, redesign the full
+    ``2D`` spectral-mixture parameterization so temporal and wavelength ARD
+    dimensions can receive genuinely independent bounds, and extend explicit
+    component/dimension saturation diagnostics.  It must continue to use the
     recorded usable-band, adjacent-spacing, gap, uncertainty, robust mean, and
-    robust amplitude summaries; transform raw-coordinate estimates into the
-    actual model-input coordinate where required; and apply independent mean
-    and covariance estimates to ``2DWavelengthDependent``, ``2DDustMean``,
-    ``2DPowerLawMean``, and ``2DSeparable``, and redesign the full ``2D``
-    spectral-mixture parameterization so temporal and wavelength ARD dimensions
-    can receive genuinely independent bounds.  It must also preserve
-    constraint-before-value ordering and record the origin of every estimate and
-    bound.
+    robust amplitude summaries rather than reverting to generic constants.
 
 **TBD[wavelength-constraint-validation]**
     Validate the wavelength-derived initialization and constraint tranche with

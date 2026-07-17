@@ -15,18 +15,45 @@ class TestWavelengthEstimationDocumentation(unittest.TestCase):
         cls.future_work_text = (
             root / "docs/source/future_work.rst"
         ).read_text(encoding="utf-8")
+        cls.wavelength_models_text = (
+            root / "docs/source/howto/wavelength_models.rst"
+        ).read_text(encoding="utf-8")
+        cls.consensus_text = (
+            root / "docs/source/howto/consensus_fitting.rst"
+        ).read_text(encoding="utf-8")
 
     def test_api_reference_includes_wavelength_estimation_module(self):
         self.assertIn("pgmuvi.wavelength_estimation", self.api_text)
 
-    def test_module_page_states_raw_coordinate_and_no_application(self):
-        self.assertIn("raw wavelength", self.module_text)
-        self.assertIn("not applied to any GP model", self.module_text)
+    def test_module_page_states_raw_and_model_coordinate_application(self):
+        self.assertIn("wavelength coordinate", self.module_text)
+        self.assertIn("coordinate supplied to the GP", self.module_text)
+        self.assertIn("Existing registered bounds are", self.module_text)
+        self.assertIn("2DWavelengthDependent", self.module_text)
+        self.assertIn("full non-separable ``2D``", self.module_text)
         self.assertIn("No logarithmic flux transformation", self.module_text)
 
-    def test_future_work_retains_model_application_and_validation(self):
-        self.assertIn("actual model-input coordinate", self.future_work_text)
-        self.assertIn("2DWavelengthDependent", self.future_work_text)
+    def test_model_guide_documents_application_provenance_and_scope(self):
+        self.assertIn(
+            "Data-derived wavelength covariance initialization",
+            self.wavelength_models_text,
+        )
+        self.assertIn(
+            "wavelength_estimate_provenance",
+            self.wavelength_models_text,
+        )
+        self.assertIn("``2DSeparable``", self.wavelength_models_text)
+
+    def test_consensus_guide_documents_independent_wavelength_handoff(self):
+        self.assertIn(
+            "consensus period handoff",
+            self.consensus_text,
+        )
+        self.assertIn("quasi-periodic", self.consensus_text)
+
+    def test_future_work_retains_mean_ard_and_validation_work(self):
+        self.assertIn("wavelength-dependent mean parameters", self.future_work_text)
+        self.assertIn("temporal and wavelength ARD", self.future_work_text)
         self.assertIn("wavelength-constraint-validation", self.future_work_text)
 
 

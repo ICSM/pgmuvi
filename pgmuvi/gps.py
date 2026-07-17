@@ -113,7 +113,11 @@ def lengthscale_kernel_parameter_schema(
         [
             ParameterSpec(
                 name=name("lengthscale"),
-                role=ParameterRole.LENGTHSCALE,
+                role=(
+                    ParameterRole.LENGTHSCALE
+                    if domain is ParameterDomain.TIME
+                    else ParameterRole.WAVELENGTH_SCALE
+                ),
                 domain=domain,
                 scale=ParameterScale.LOG,
                 initial_value=1.0,
@@ -121,9 +125,31 @@ def lengthscale_kernel_parameter_schema(
                 guess_strategy=(
                     GuessStrategy.GEOMETRIC_SAMPLING_TIMESCALE
                     if domain is ParameterDomain.TIME
-                    else GuessStrategy.DEFAULT
+                    else GuessStrategy.WAVELENGTH_RANGE
                 ),
-                constraint_strategy=ConstraintStrategy.DEFAULT,
+                constraint_strategy=(
+                    ConstraintStrategy.DEFAULT
+                    if domain is ParameterDomain.TIME
+                    else ConstraintStrategy.WAVELENGTH_RANGE
+                ),
+                guess_source=(
+                    None
+                    if domain is ParameterDomain.TIME
+                    else "wavelength_estimation_context"
+                ),
+                constraint_source=(
+                    None
+                    if domain is ParameterDomain.TIME
+                    else "wavelength_estimation_context"
+                ),
+                metadata=(
+                    {}
+                    if domain is ParameterDomain.TIME
+                    else {
+                        "coordinate_dimension": 1,
+                        "parameterization": "separable_wavelength_covariance",
+                    }
+                ),
                 description=(
                     "Positive correlation lengthscale of the kernel in "
                     f"{description_context} space."
