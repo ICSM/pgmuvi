@@ -59,6 +59,7 @@ Data, diagnostics, and validation
    pgmuvi.multiband_ls_significance
    pgmuvi.wavelength_conclusions
    pgmuvi.wavelength_diagnostics
+   pgmuvi.wavelength_estimation
    pgmuvi.wavelength_hypotheses
    pgmuvi.wavelength_results
    pgmuvi.wavelength_status

@@ -57,6 +57,51 @@ class ParameterEstimateBuilder:
         metadata = {
             "value_reason": value_reason,
         }
+        diagnostics = {}
+
+        if (
+            spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE
+            or spec.constraint_strategy is ConstraintStrategy.WAVELENGTH_RANGE
+        ):
+            wavelength_diagnostics = context.wavelength_diagnostics
+            if wavelength_diagnostics is not None:
+                diagnostics = {
+                    "schema_version": getattr(
+                        wavelength_diagnostics,
+                        "schema_version",
+                        None,
+                    ),
+                    "coordinate_space": getattr(
+                        wavelength_diagnostics,
+                        "coordinate_space",
+                        None,
+                    ),
+                    "n_usable_bands": getattr(
+                        wavelength_diagnostics,
+                        "n_usable_bands",
+                        None,
+                    ),
+                    "wavelength_span": getattr(
+                        wavelength_diagnostics,
+                        "wavelength_span",
+                        None,
+                    ),
+                    "median_adjacent_spacing": getattr(
+                        wavelength_diagnostics,
+                        "median_adjacent_spacing",
+                        None,
+                    ),
+                    "largest_gap": getattr(
+                        wavelength_diagnostics,
+                        "largest_gap",
+                        None,
+                    ),
+                    "recommendation_method": getattr(
+                        wavelength_diagnostics,
+                        "recommendation_method",
+                        None,
+                    ),
+                }
 
         if spec.name.startswith("mean_module.") and constraint is not None:
             metadata["constraint_reason"] = (
@@ -72,6 +117,7 @@ class ParameterEstimateBuilder:
             constraint_source=(
                 spec.constraint_strategy.value if spec.constraint_strategy else None
             ),
+            diagnostics=diagnostics,
             metadata=metadata,
         )
 
@@ -101,6 +147,12 @@ class ParameterEstimateBuilder:
                 return "global_diagnostics_unavailable"
 
             return "robust_flux_span_unavailable"
+
+        if spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE:
+            if context.wavelength_diagnostics is None:
+                return "wavelength_diagnostics_unavailable"
+
+            return "wavelength_lengthscale_recommendation_unavailable"
 
         return None
 
@@ -176,6 +228,9 @@ class ParameterEstimateBuilder:
 
         if spec.guess_strategy is GuessStrategy.CONSENSUS_MULTICOMP_PERIOD:
             return self._estimate_consensus_multicomp_period(spec, context)
+
+        if spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE:
+            return self._estimate_wavelength_range_value(spec, context)
 
         return None
 
@@ -324,7 +379,61 @@ class ParameterEstimateBuilder:
         if spec.constraint_strategy is ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN:
             return self._estimate_robust_positive_flux_span_constraint(context)
 
+        if spec.constraint_strategy is ConstraintStrategy.WAVELENGTH_RANGE:
+            return self._estimate_wavelength_range_constraint(spec, context)
+
         return None
+
+    def _estimate_wavelength_range_value(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Return the raw-coordinate wavelength length-scale recommendation."""
+        diagnostics = context.wavelength_diagnostics
+        if diagnostics is None:
+            return None
+
+        value = getattr(
+            diagnostics,
+            "recommended_lengthscale_initial",
+            None,
+        )
+        return self._reshape_initial_value(value, spec.shape)
+
+    def _estimate_wavelength_range_constraint(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Return raw-coordinate wavelength length-scale bounds."""
+        diagnostics = context.wavelength_diagnostics
+        if diagnostics is None:
+            return None
+
+        bounds = getattr(
+            diagnostics,
+            "recommended_lengthscale_bounds",
+            None,
+        )
+        if bounds is None:
+            return None
+
+        lower, upper = bounds
+        if spec.shape is None:
+            return (lower, upper)
+
+        lower_tensor = torch.full(
+            spec.shape,
+            float(lower),
+            dtype=DEFAULT_DTYPE,
+        )
+        upper_tensor = torch.full(
+            spec.shape,
+            float(upper),
+            dtype=DEFAULT_DTYPE,
+        )
+        return (lower_tensor, upper_tensor)
 
     def _estimate_default_constraint(
         self,
