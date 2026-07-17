@@ -134,6 +134,51 @@ def _phase_to_lag(phase_radians: float, frequency: float) -> float:
     return float(((lag + 0.5 * period) % period) - 0.5 * period)
 
 
+def _minimum_circular_span(values: np.ndarray, period: float) -> float:
+    """Return the minimum circular arc containing all finite values."""
+    period = float(period)
+    if not np.isfinite(period) or period <= 0.0:
+        raise ValueError("period must be a positive finite value.")
+
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size <= 1:
+        return 0.0
+
+    wrapped = np.sort(np.mod(finite, period))
+    circular_gaps = np.diff(np.concatenate([wrapped, wrapped[:1] + period]))
+    return float(max(0.0, period - np.max(circular_gaps)))
+
+
+def _unwrap_periodic_values(values: np.ndarray, period: float) -> np.ndarray:
+    """Unwrap an ordered periodic sequence using nearest-cycle continuity."""
+    period = float(period)
+    if not np.isfinite(period) or period <= 0.0:
+        raise ValueError("period must be a positive finite value.")
+    values = np.asarray(values, dtype=float)
+    angles = _TWO_PI * values / period
+    return np.unwrap(angles) * period / _TWO_PI
+
+
+def _resolve_common_reference_time(
+    times: np.ndarray,
+    reference_time: float | None,
+) -> tuple[float, str]:
+    """Resolve one reference epoch shared by every fixed-frequency band fit."""
+    if reference_time is not None:
+        value = float(reference_time)
+        if not np.isfinite(value):
+            raise ValueError("reference_time must be finite when provided.")
+        return value, "user_supplied"
+
+    finite = np.asarray(times, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        raise ValueError("A common reference_time requires finite observation times.")
+    value = float(0.5 * (np.min(finite) + np.max(finite)))
+    return value, "global_time_midpoint"
+
+
 def _fit_fixed_frequency_sinusoid(
     t: np.ndarray,
     y: np.ndarray,
@@ -338,9 +383,14 @@ def _amplitude_phase_summary(band_table: list[dict[str, Any]]) -> dict[str, Any]
         "amplitude_loglog_slope": None,
         "fractional_amplitude_median": None,
         "fractional_amplitude_scatter": None,
+        "reference_time": None,
+        "reference_time_consistent": None,
         "lag_min": None,
         "lag_max": None,
+        "lag_linear_span": None,
         "lag_span": None,
+        "lag_span_method": None,
+        "lag_period": None,
     }
 
     if amplitude_values:
@@ -363,11 +413,43 @@ def _amplitude_phase_summary(band_table: list[dict[str, Any]]) -> dict[str, Any]
         summary["fractional_amplitude_median"] = float(np.median(frac))
         summary["fractional_amplitude_scatter"] = float(robust_scale(frac))
 
+    reference_times = []
+    periods = []
+    for row in band_table:
+        periodic = row.get("fixed_frequency_diagnostics", {})
+        if periodic.get("status") != "ok":
+            continue
+        reference = _finite_float(periodic.get("reference_time"))
+        period = _finite_float(periodic.get("period"))
+        if reference is not None:
+            reference_times.append(reference)
+        if period is not None and period > 0.0:
+            periods.append(period)
+
+    if reference_times:
+        reference_array = np.asarray(reference_times, dtype=float)
+        reference_consistent = bool(
+            np.allclose(
+                reference_array,
+                reference_array[0],
+                rtol=0.0,
+                atol=np.finfo(float).eps * max(1.0, abs(reference_array[0])),
+            )
+        )
+        summary["reference_time_consistent"] = reference_consistent
+        if reference_consistent:
+            summary["reference_time"] = float(reference_array[0])
+
     if lag_values:
         lags = np.asarray(lag_values, dtype=float)
         summary["lag_min"] = float(np.min(lags))
         summary["lag_max"] = float(np.max(lags))
-        summary["lag_span"] = float(np.max(lags) - np.min(lags))
+        summary["lag_linear_span"] = float(np.max(lags) - np.min(lags))
+        if periods:
+            period = float(np.median(np.asarray(periods, dtype=float)))
+            summary["lag_span"] = _minimum_circular_span(lags, period)
+            summary["lag_span_method"] = "minimum_circular_arc"
+            summary["lag_period"] = period
 
     return _clean_scalar_dict(summary)
 
@@ -688,11 +770,16 @@ def classify_wavelength_diagnostics(
     finite_lag = np.isfinite(lags)
     if np.count_nonzero(finite_lag) >= 2:
         lag_values = lags[finite_lag]
-        lag_span = float(np.nanmax(lag_values) - np.nanmin(lag_values))
+        lag_values_unwrapped = _unwrap_periodic_values(lag_values, fixed_period)
+        lag_span = _minimum_circular_span(lag_values, fixed_period)
         lag_span_fraction = (
             float(lag_span / fixed_period) if fixed_period > 0.0 else None
         )
+        classification["lag_linear_span"] = float(
+            np.nanmax(lag_values) - np.nanmin(lag_values)
+        )
         classification["lag_span"] = lag_span
+        classification["lag_span_method"] = "minimum_circular_arc"
         classification["lag_span_fraction_of_period"] = lag_span_fraction
         if (
             lag_span_fraction is not None
@@ -707,7 +794,7 @@ def classify_wavelength_diagnostics(
             lag_span_fraction is not None
             and lag_span_fraction >= significant_lag_fraction
         ):
-            lag_monotonic = _values_are_monotonic(lag_values)
+            lag_monotonic = _values_are_monotonic(lag_values_unwrapped)
             classification["phase_lag_class"] = (
                 "possible_monotonic_wavelength_lag"
                 if lag_monotonic
@@ -1160,6 +1247,7 @@ def compute_wavelength_residual_diagnostics(
     *,
     frequency: float | None = None,
     period: float | None = None,
+    reference_time: float | None = None,
     min_points_per_band: int = 3,
 ) -> dict[str, Any]:
     """Compute residual and predictive diagnostics for a fitted light curve.
@@ -1197,6 +1285,13 @@ def compute_wavelength_residual_diagnostics(
             "overall": {},
             "predictive_score": {"available": False},
         }
+
+    common_reference_time = None
+    common_reference_time_source = None
+    if fixed_frequency is not None:
+        common_reference_time, common_reference_time_source = (
+            _resolve_common_reference_time(x_raw[:, 0], reference_time)
+        )
 
     mean, variance, prediction_source = _training_prediction_arrays(lightcurve)
     if mean is None:
@@ -1252,6 +1347,7 @@ def compute_wavelength_residual_diagnostics(
                     residual[mask],
                     None,
                     frequency=fixed_frequency,
+                    reference_time=common_reference_time,
                     min_points=max(3, min_points_per_band),
                 )
                 row["fixed_frequency_residual"] = periodic
@@ -1278,6 +1374,8 @@ def compute_wavelength_residual_diagnostics(
         "target_space": "transformed_y_training_space",
         "fixed_frequency": fixed_frequency,
         "fixed_period": (None if fixed_frequency is None else float(1.0 / fixed_frequency)),
+        "fixed_frequency_reference_time": common_reference_time,
+        "fixed_frequency_reference_time_source": common_reference_time_source,
         "overall": overall,
         "by_band": band_rows,
         "predictive_score": _clean_scalar_dict(predictive_score),
@@ -2429,6 +2527,7 @@ def diagnose_period_independent_wavelength_structure(
 
     x_np = x_raw.detach().cpu().numpy()
     y_np = lightcurve._ydata_raw.detach().cpu().numpy()
+
     yerr_np = None
     if hasattr(lightcurve, "_yerr_raw") and lightcurve._yerr_raw is not None:
         yerr_np = lightcurve._yerr_raw.detach().cpu().numpy()
@@ -2588,7 +2687,10 @@ def diagnose_wavelength_dependence_prefit(
         Fixed temporal period.  Mutually exclusive with ``frequency``.
     amplitude_phase_kwargs : dict or None, optional
         Keyword arguments for the fixed-frequency sinusoid fit.  Currently
-        supports ``reference_time`` and ``min_points``.
+        supports ``reference_time`` and ``min_points``.  When no
+        ``reference_time`` is supplied, one global midpoint of the full
+        multiband time range is used for every band so phases and lags are
+        directly comparable.
     classification_kwargs : dict or None, optional
         Keyword arguments for :func:`classify_wavelength_diagnostics`.
 
@@ -2620,6 +2722,18 @@ def diagnose_wavelength_dependence_prefit(
 
     x_np = x_raw.detach().cpu().numpy()
     y_np = lightcurve._ydata_raw.detach().cpu().numpy()
+
+    common_reference_time = None
+    common_reference_time_source = None
+    if fixed_frequency is not None:
+        common_reference_time, common_reference_time_source = (
+            _resolve_common_reference_time(
+                x_np[:, 0],
+                amplitude_phase_kwargs.get("reference_time"),
+            )
+        )
+        amplitude_phase_kwargs["reference_time"] = common_reference_time
+
     yerr_np = None
     if hasattr(lightcurve, "_yerr_raw") and lightcurve._yerr_raw is not None:
         yerr_np = lightcurve._yerr_raw.detach().cpu().numpy()
@@ -2758,6 +2872,10 @@ def diagnose_wavelength_dependence_prefit(
     if fixed_frequency is not None:
         report["fixed_frequency"] = float(fixed_frequency)
         report["fixed_period"] = float(1.0 / fixed_frequency)
+        report["fixed_frequency_reference_time"] = common_reference_time
+        report["fixed_frequency_reference_time_source"] = (
+            common_reference_time_source
+        )
         report["amplitude_phase_summary"] = _amplitude_phase_summary(band_table)
 
     classification = classify_wavelength_diagnostics(report, **classification_kwargs)

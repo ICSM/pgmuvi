@@ -166,6 +166,35 @@ class TestComputeSamplingMetricsTightlyClustered(unittest.TestCase):
         self.assertAlmostEqual(metrics["nyquist_period"], expected)
 
 
+class TestAssessSamplingQualityConfiguredSnrThreshold(unittest.TestCase):
+    """The SNR fraction gate must follow the caller's threshold."""
+
+    def test_fraction_gate_uses_min_snr_not_legacy_threshold_three(self):
+        t = np.linspace(0.0, 100.0, 100)
+        y = np.concatenate([np.full(50, 4.0), np.full(50, 6.0)])
+        yerr = np.ones_like(y)
+
+        passes, diag = assess_sampling_quality(
+            t,
+            y,
+            yerr,
+            min_snr=5.0,
+            min_fraction_good_snr=0.75,
+        )
+
+        self.assertFalse(passes)
+        self.assertFalse(diag["gates"]["min_snr"])
+        self.assertEqual(diag["metrics"]["snr_threshold"], 5.0)
+        self.assertAlmostEqual(
+            diag["metrics"]["fraction_snr_gt_min"],
+            0.5,
+        )
+        self.assertEqual(diag["metrics"]["fraction_snr_gt_3"], 1.0)
+        self.assertTrue(
+            any("SNR > 5.0" in warning for warning in diag["warnings"])
+        )
+
+
 class TestAssessSamplingQualityDuplicateWarning(unittest.TestCase):
     """assess_sampling_quality diagnostic warnings with duplicate timestamps."""
 

@@ -138,14 +138,22 @@ long-timescale variability remains detectable after subsampling.
 
    :mod:`pgmuvi.preprocess` — full API reference for the preprocessing subpackage.
 
-Quality Filtering
-------------------
+Quality filtering and SNR thresholds
+------------------------------------
 
-.. note::
+:func:`pgmuvi.preprocess.quality.assess_sampling_quality` applies the
+configured ``min_snr`` threshold to both the median-SNR gate and the fraction
+of points above that threshold.  The returned metrics record the actual
+``snr_threshold`` and ``fraction_snr_gt_min`` used for the decision.
 
-   This section will describe how to apply quality flags or sigma-clipping to remove
-   outliers before fitting.  The relevant utilities are located in
-   :mod:`pgmuvi.preprocess.quality`.
+The legacy descriptive fields ``fraction_snr_gt_3`` and
+``fraction_snr_gt_5`` remain available, but they do not control a gate when a
+different ``min_snr`` is supplied.  Record ``min_snr`` and
+``min_fraction_good_snr`` with every scientific run.
+
+Quality flags and sigma clipping should be applied before fitting when their
+scientific meaning is justified.  The relevant utilities are located in
+:mod:`pgmuvi.preprocess.quality`.
 
 Preprocessing Tutorial
 -----------------------

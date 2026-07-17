@@ -100,6 +100,17 @@ only a single dominant period.  Compare ``consensus_period``,
 component-identity warning or a large drift flag means the final fit may no
 longer represent the component handed off by consensus.
 
+Two-band consensus requires direct agreement
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When exactly two bands contribute dominant frequencies, MAD clipping cannot
+identify which value is an outlier.  Inspect
+``two_band_fractional_frequency_difference``,
+``two_band_max_fractional_frequency_difference``, and
+``two_band_frequency_agreement``.  If the pair exceeds the configured limit,
+consensus fails and ``final_consensus_frequency`` remains unavailable; PGMUVI
+does not report the arithmetic midpoint as a shared period.
+
 Kernel-component diagnostics are not final periods
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -180,6 +191,21 @@ model veto or a hard parameter constraint.
 A trend is only interpretable when at least two bands are usable and the
 wavelength coordinate is physically meaningful.  Integer band codes are not
 physical wavelengths.
+
+Fixed-frequency phase and lag diagnostics
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every band must use one common ``reference_time`` before phases or lags are
+compared.  When the caller does not provide one, the diagnostic uses the
+midpoint of the full multiband time range and records
+``fixed_frequency_reference_time_source="global_time_midpoint"``.
+
+Lag values are periodic.  ``lag_linear_span`` preserves the naive signed
+maximum-minus-minimum range for inspection, while ``lag_span`` uses the
+``minimum_circular_arc`` method.  The circular value prevents phases lying on
+opposite sides of the period boundary from being misclassified as almost one
+full cycle apart.  A lag trend remains descriptive and conditional on the
+supplied period or frequency.
 
 Training-residual fit-quality scores
 ------------------------------------
