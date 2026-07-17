@@ -103,6 +103,17 @@ Terminology
    ``single_valid_candidate``, or ``unavailable``.  At least two candidates
    with valid fit-quality diagnostics are required for ``available``.
 
+Canonical attempt status fields
+   Each maintained model/kernel-config outcome also records
+   ``attempt_disposition``, ``execution_stage``, ``technical_outcome``,
+   ``diagnostic_validity``, ``scientific_usability``, and
+   ``comparison_eligibility``.  These fields are orthogonal: for example, a
+   fit may have legacy ``status="passed"`` while
+   ``technical_outcome="initialized_only"`` and
+   ``comparison_eligibility="ineligible"`` when ``training_iter=0``.  The
+   compatibility fields remain available, but new interpretation code should
+   use the canonical dimensions.
+
 ``top_ranked_model``
    The model name with the best score when
    ``fit_quality_ranking_status="available"``.  It is ``None`` when every

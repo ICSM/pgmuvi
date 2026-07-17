@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import time
+import warnings
 from typing import Any
 
 import numpy as np
@@ -22,6 +23,13 @@ except ImportError:  # pragma: no cover - pgmuvi normally depends on torch
 
 from pgmuvi.preprocess.quality import assess_sampling_quality, robust_scale
 from pgmuvi.preprocess.variability import is_variable
+from pgmuvi.wavelength_status import (
+    ExecutionStage,
+    WarningSeverity,
+    WavelengthFailureRecord,
+    coerce_execution_stage,
+    derive_wavelength_attempt_status,
+)
 
 
 _TWO_PI = 2.0 * np.pi
@@ -4272,6 +4280,7 @@ def _piwd_extract_sm_ard_scale_diagnostics(
 
 def _piwd_classify_model_kernel_config_failure(
     exception: BaseException | None,
+    fitted_lightcurve=None,
 ) -> dict[str, Any]:
     """Classify a failed advisory model/kernel-config fit for reporting.
 
@@ -4281,27 +4290,82 @@ def _piwd_classify_model_kernel_config_failure(
     """
     if exception is None:
         return {
+            "failure_code": None,
             "failure_stage": None,
+            "failure_substage": None,
             "failure_stage_reason": None,
             "is_consensus_failure": False,
             "is_numerical_failure": False,
             "is_input_validation_failure": False,
+            "structured_failure_diagnostics": {},
+            "failure_summary": None,
         }
 
     exception_type = type(exception).__name__
     message = str(exception)
     text = f"{exception_type} {message}".lower()
 
+    structured = getattr(exception, "failure_diagnostics", None)
+    structured = dict(structured) if isinstance(structured, dict) else {}
+    if not structured and fitted_lightcurve is not None:
+        candidate_diagnostics = getattr(
+            fitted_lightcurve, "failure_diagnostics", None
+        )
+        if isinstance(candidate_diagnostics, dict):
+            structured = dict(candidate_diagnostics)
+    summary = getattr(exception, "failure_summary", None)
+    if summary is None and fitted_lightcurve is not None:
+        summary = getattr(fitted_lightcurve, "failure_summary", None)
+    if summary is not None and hasattr(summary, "to_dict"):
+        try:
+            summary = summary.to_dict()
+        except Exception:
+            summary = None
+    elif not isinstance(summary, dict):
+        summary = None
+
     stage = "fit_execution"
+    substage = None
     reason = "model/kernel config fit raised an exception"
+    failure_code = "fit_execution_failed"
     is_consensus = False
     is_numerical = False
     is_input_validation = False
 
-    if "consensus" in text or "period consensus" in text:
+    structured_reason = structured.get("reason")
+    structured_code = structured.get("failure_code") or structured_reason
+    if structured_code:
+        failure_code = str(structured_code)
+    structured_stage = structured.get("failure_stage") or structured.get("stage")
+    structured_substage = structured.get("failure_substage")
+    if structured_substage:
+        substage = str(structured_substage)
+
+    structured_is_consensus = structured.get("is_consensus_failure") is True
+    if "consensus" in text or "period consensus" in text or structured_is_consensus:
         stage = "consensus"
         reason = "fit failed while deriving or applying temporal consensus information"
+        if not structured_code:
+            failure_code = "consensus_failed"
+        if substage is None and structured_stage not in {
+            None,
+            "consensus",
+        }:
+            substage = str(structured_stage)
         is_consensus = True
+    elif structured:
+        stage = str(structured_stage or stage)
+        reason = str(
+            structured.get("failure_stage_reason")
+            or structured.get("message")
+            or reason
+        )
+        is_numerical = stage in {"numerical_stability", "optimization"}
+        is_input_validation = stage in {
+            "input_validation",
+            "data_quality",
+            "precondition",
+        }
     elif (
         "notpsd" in text
         or "not positive definite" in text
@@ -4312,6 +4376,7 @@ def _piwd_classify_model_kernel_config_failure(
     ):
         stage = "numerical_stability"
         reason = "fit failed due to a numerical stability or covariance-matrix issue"
+        failure_code = "numerical_stability_failed"
         is_numerical = True
     elif (
         "constraint" in text
@@ -4321,6 +4386,7 @@ def _piwd_classify_model_kernel_config_failure(
     ):
         stage = "parameter_constraint"
         reason = "fit failed while satisfying parameter values or constraints"
+        failure_code = "parameter_constraint_failed"
     elif (
         "sampling" in text
         or "variability" in text
@@ -4330,19 +4396,118 @@ def _piwd_classify_model_kernel_config_failure(
     ):
         stage = "data_quality"
         reason = "fit failed because the input data did not satisfy a quality or availability requirement"
+        failure_code = "data_quality_precondition_failed"
         is_input_validation = True
     elif isinstance(exception, (ValueError, TypeError, AttributeError, KeyError)):
         stage = "input_validation"
         reason = "fit failed due to invalid or unsupported input for this model/kernel config"
+        failure_code = "input_validation_failed"
         is_input_validation = True
 
     return {
+        "failure_code": failure_code,
         "failure_stage": stage,
+        "failure_substage": substage,
         "failure_stage_reason": reason,
         "is_consensus_failure": bool(is_consensus),
         "is_numerical_failure": bool(is_numerical),
         "is_input_validation_failure": bool(is_input_validation),
+        "structured_failure_diagnostics": structured,
+        "failure_summary": summary,
     }
+
+
+def _piwd_warning_records(captured_warnings) -> list[dict[str, Any]]:
+    """Normalize captured Python warnings for attempt-level reporting."""
+    records = []
+    for item in captured_warnings or []:
+        records.append(
+            {
+                "severity": WarningSeverity.WARNING.value,
+                "category": getattr(item.category, "__name__", str(item.category)),
+                "message": str(item.message),
+                "filename": str(item.filename),
+                "lineno": int(item.lineno),
+            }
+        )
+    return records
+
+
+def _piwd_reemit_captured_warnings(captured_warnings) -> None:
+    """Re-emit captured warnings so attempt reporting does not hide them."""
+    for item in captured_warnings or []:
+        warnings.warn_explicit(
+            str(item.message),
+            item.category,
+            item.filename,
+            item.lineno,
+        )
+
+
+def _piwd_training_recovery_metadata(fitted_lightcurve, fit_result) -> dict[str, Any]:
+    """Return trainer recovery fields from the retained fit result."""
+    result = fit_result if isinstance(fit_result, dict) else None
+    if result is None and fitted_lightcurve is not None:
+        candidate = getattr(fitted_lightcurve, "results", None)
+        result = candidate if isinstance(candidate, dict) else {}
+    result = result or {}
+    keys = (
+        "training_recovered_from_failure",
+        "training_failure_iteration",
+        "training_failure_type",
+        "training_failure_message",
+        "training_restored_best_iteration",
+        "training_restored_best_loss",
+        "training_best_iteration",
+        "training_best_loss",
+    )
+    return {key: result.get(key) for key in keys}
+
+
+def _piwd_failure_record(exception, failure_info) -> dict[str, Any] | None:
+    """Build the canonical structured failure record for an exception."""
+    if exception is None:
+        return None
+    record = WavelengthFailureRecord(
+        failure_code=str(failure_info.get("failure_code") or "fit_execution_failed"),
+        stage=coerce_execution_stage(failure_info.get("failure_stage")),
+        substage=failure_info.get("failure_substage"),
+        exception_type=type(exception).__name__,
+        message=str(exception),
+        diagnostics=failure_info.get("structured_failure_diagnostics") or {},
+        traceback_reference="inline:traceback",
+    )
+    return record.to_dict()
+
+
+def _piwd_has_partial_scientific_failure_diagnostics(
+    failure_info: dict[str, Any],
+) -> bool:
+    """Return whether a failed attempt retained partial scientific evidence.
+
+    Generic exception metadata is useful for triage but does not make the
+    scientific diagnostics partially valid.  At present, partial validity is
+    reserved for consensus failures that retain band- or period-level evidence.
+    """
+    if failure_info.get("is_consensus_failure") is not True:
+        return False
+    diagnostics = failure_info.get("structured_failure_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    evidence_keys = {
+        "accepted_bands",
+        "rejected_bands",
+        "per_band_diagnostics",
+        "per_band_dominant_periods",
+        "period_summaries",
+        "consensus_frequency",
+        "consensus_period",
+        "n_accepted_bands",
+        "n_rejected_bands",
+        "n_total_bands",
+    }
+    return any(key in diagnostics for key in evidence_keys)
+
 
 def _piwd_extract_fit_outcome(
     candidate: dict[str, Any],
@@ -4351,6 +4516,7 @@ def _piwd_extract_fit_outcome(
     fitted_lightcurve=None,
     fit_result: Any = None,
     exception: BaseException | None = None,
+    captured_warnings=None,
 ) -> dict[str, Any]:
     """Build a JSON-safe outcome record for one candidate execution."""
     diagnostics = None
@@ -4360,31 +4526,62 @@ def _piwd_extract_fit_outcome(
     fit_quality = (
         _piwd_compute_training_fit_quality(fitted_lightcurve)
         if status == "passed"
-        else _piwd_training_fit_quality_unavailable("model/kernel config fit did not complete")
+        else _piwd_training_fit_quality_unavailable(
+            "model/kernel config fit did not complete"
+        )
     )
     sm_ard_diagnostics = _piwd_extract_sm_ard_scale_diagnostics(
         fitted_lightcurve,
         diagnostics,
     )
-    sm_ard_counts = sm_ard_diagnostics.get("constrained_sm_ard_dimension_counts") or {}
-    failure_info = _piwd_classify_model_kernel_config_failure(exception)
+    sm_ard_counts = (
+        sm_ard_diagnostics.get("constrained_sm_ard_dimension_counts") or {}
+    )
+    failure_info = _piwd_classify_model_kernel_config_failure(
+        exception, fitted_lightcurve=fitted_lightcurve
+    )
+    failure_record = _piwd_failure_record(exception, failure_info)
+    warning_records = _piwd_warning_records(captured_warnings)
+    recovery = _piwd_training_recovery_metadata(fitted_lightcurve, fit_result)
+    fit_kwargs = dict(candidate.get("fit_kwargs") or {})
+    attempt_status = derive_wavelength_attempt_status(
+        legacy_status=status,
+        training_iter=fit_kwargs.get("training_iter"),
+        recovered_from_failure=bool(
+            recovery.get("training_recovered_from_failure")
+        ),
+        diagnostics_available=fit_quality.get("available"),
+        diagnostics_partial=_piwd_has_partial_scientific_failure_diagnostics(
+            failure_info
+        ),
+        warning_count=len(warning_records),
+        failure_stage=failure_info.get("failure_stage"),
+    )
 
     outcome: dict[str, Any] = {
         "model_kernel_config_id": candidate.get("model_kernel_config_id"),
         "rank": candidate.get("rank"),
         "model": candidate.get("model"),
         "status": status,
-
+        **attempt_status.to_dict(),
         "fit_success": bool(status == "passed"),
-
         "fit_failed": bool(status == "failed"),
+        "failure_code": failure_info.get("failure_code"),
         "failure_stage": failure_info.get("failure_stage"),
+        "failure_substage": failure_info.get("failure_substage"),
         "failure_stage_reason": failure_info.get("failure_stage_reason"),
         "is_consensus_failure": failure_info.get("is_consensus_failure"),
         "is_numerical_failure": failure_info.get("is_numerical_failure"),
-        "is_input_validation_failure": failure_info.get("is_input_validation_failure"),
+        "is_input_validation_failure": failure_info.get(
+            "is_input_validation_failure"
+        ),
         "fit_failure_diagnostics": failure_info,
-        "fit_kwargs": dict(candidate.get("fit_kwargs") or {}),
+        "structured_failure_record": failure_record,
+        "structured_failure_diagnostics": failure_info.get(
+            "structured_failure_diagnostics"
+        ),
+        "failure_summary": failure_info.get("failure_summary"),
+        "fit_kwargs": fit_kwargs,
         "recommendation_strength": candidate.get("recommendation_strength"),
         "hard_exclusion": bool(candidate.get("hard_exclusion", False)),
         "source": candidate.get("source"),
@@ -4394,7 +4591,9 @@ def _piwd_extract_fit_outcome(
                 candidate.get("applies_parameter_suggestions", False),
             )
         ),
-        "constraints_applied_from_plan": bool(candidate.get("applies_constraints", False)),
+        "constraints_applied_from_plan": bool(
+            candidate.get("applies_constraints", False)
+        ),
         "consensus_success": diagnostics.get("consensus_success"),
         "consensus_frequency": diagnostics.get("consensus_frequency"),
         "consensus_period": diagnostics.get("consensus_period"),
@@ -4405,17 +4604,27 @@ def _piwd_extract_fit_outcome(
         "n_rejected_bands": diagnostics.get("n_rejected_bands"),
         "accepted_bands": diagnostics.get("accepted_bands"),
         "rejected_bands": diagnostics.get("rejected_bands"),
-        "fit_result_type": type(fit_result).__name__ if fit_result is not None else None,
+        "fit_result_type": (
+            type(fit_result).__name__ if fit_result is not None else None
+        ),
         "fit_quality": fit_quality,
         "fit_quality_available": fit_quality.get("available"),
         "training_rmse": fit_quality.get("rmse"),
         "training_mae": fit_quality.get("mae"),
-        "training_median_abs_residual": fit_quality.get("median_abs_residual"),
+        "training_median_abs_residual": fit_quality.get(
+            "median_abs_residual"
+        ),
         "training_normalized_rmse": fit_quality.get("normalized_rmse"),
-        "training_nrmse_by_target_scale": fit_quality.get("normalized_rmse_by_target_scale"),
+        "training_nrmse_by_target_scale": fit_quality.get(
+            "normalized_rmse_by_target_scale"
+        ),
         "training_reduced_chi2": fit_quality.get("reduced_chi2"),
-        "training_median_abs_standardized_residual": fit_quality.get("median_abs_standardized_residual"),
-        "training_outlier_fraction_3sigma": fit_quality.get("outlier_fraction_3sigma"),
+        "training_median_abs_standardized_residual": fit_quality.get(
+            "median_abs_standardized_residual"
+        ),
+        "training_outlier_fraction_3sigma": fit_quality.get(
+            "outlier_fraction_3sigma"
+        ),
         **_piwd_training_marginal_likelihood_fields(fit_quality),
         "training_predictive_variance_kind": fit_quality.get(
             "predictive_variance_kind"
@@ -4426,6 +4635,9 @@ def _piwd_extract_fit_outcome(
         "training_measurement_uncertainty_added_separately": fit_quality.get(
             "measurement_uncertainty_added_separately"
         ),
+        **recovery,
+        "warning_count": len(warning_records),
+        "warning_records": warning_records,
         "sm_ard_scale_diagnostics": sm_ard_diagnostics,
         "constrained_sm_ard_components": sm_ard_diagnostics.get(
             "constrained_sm_ard_components"
@@ -4434,7 +4646,9 @@ def _piwd_extract_fit_outcome(
             "n_constrained_sm_ard_components"
         ),
         "constrained_sm_ard_dimension_counts": sm_ard_counts,
-        "n_constrained_sm_time_components": sm_ard_counts.get("time_frequency", 0),
+        "n_constrained_sm_time_components": sm_ard_counts.get(
+            "time_frequency", 0
+        ),
         "n_constrained_sm_wavelength_components": sm_ard_counts.get(
             "wavelength_frequency", 0
         ),
@@ -4452,6 +4666,7 @@ def _piwd_extract_fit_outcome(
                         type(exception), exception, exception.__traceback__
                     )
                 ),
+                "traceback_reference": "inline:traceback",
             }
         )
 
@@ -4509,33 +4724,53 @@ def run_period_independent_wavelength_model_kernel_configs(
             lc_to_fit = lightcurve
 
         fit_kwargs = dict(candidate.get("fit_kwargs") or {})
+        captured_warnings = []
+        fit_result = None
+        fit_exception = None
         try:
-            if fit_runner is None:
-                fit_result = lc_to_fit.fit(**fit_kwargs)
-            else:
-                fit_result = fit_runner(lc_to_fit, fit_kwargs, candidate)
+            with warnings.catch_warnings(record=True) as captured_warnings:
+                warnings.simplefilter("always")
+                if fit_runner is None:
+                    fit_result = lc_to_fit.fit(**fit_kwargs)
+                else:
+                    fit_result = fit_runner(lc_to_fit, fit_kwargs, candidate)
+        except Exception as exc:
+            fit_exception = exc
+
+        if fit_exception is None:
             outcomes.append(
                 _piwd_extract_fit_outcome(
                     candidate,
                     status="passed",
                     fitted_lightcurve=lc_to_fit,
                     fit_result=fit_result,
+                    captured_warnings=captured_warnings,
                 )
             )
-        except Exception as exc:
+        else:
             outcomes.append(
                 _piwd_extract_fit_outcome(
                     candidate,
                     status="failed",
                     fitted_lightcurve=lc_to_fit,
-                    exception=exc,
+                    exception=fit_exception,
+                    captured_warnings=captured_warnings,
                 )
             )
-            if stop_on_error:
-                raise
+
+        if fit_exception is not None and stop_on_error:
+            try:
+                _piwd_reemit_captured_warnings(captured_warnings)
+            finally:
+                raise fit_exception
+        _piwd_reemit_captured_warnings(captured_warnings)
 
     passed = [outcome for outcome in outcomes if outcome.get("status") == "passed"]
     failed = [outcome for outcome in outcomes if outcome.get("status") == "failed"]
+    technical_outcome_counts = {}
+    for outcome in outcomes:
+        key = outcome.get("technical_outcome") or "unknown"
+        technical_outcome_counts[key] = technical_outcome_counts.get(key, 0) + 1
 
     return _clean_scalar_dict(
         {
@@ -4560,6 +4795,14 @@ def run_period_independent_wavelength_model_kernel_configs(
             "n_attempted": len(outcomes),
             "n_passed": len(passed),
             "n_failed": len(failed),
+            "technical_outcome_counts": technical_outcome_counts,
+            "n_initialized_only": technical_outcome_counts.get("initialized_only", 0),
+            "n_completed_with_recovery": technical_outcome_counts.get(
+                "completed_with_recovery", 0
+            ),
+            "n_completed_with_warnings": technical_outcome_counts.get(
+                "completed_with_warnings", 0
+            ),
             "passed_models": [outcome.get("model") for outcome in passed],
             "failed_models": [outcome.get("model") for outcome in failed],
             "outcomes": outcomes,
@@ -4809,7 +5052,12 @@ def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) ->
     fit_success = _piwd_bool_from_status(
         outcome.get("fit_success"), status=outcome.get("status")
     )
-    available = bool(fit_quality.get("available")) and fit_success
+    comparison_eligibility = outcome.get("comparison_eligibility")
+    available = (
+        bool(fit_quality.get("available"))
+        and fit_success
+        and comparison_eligibility != "ineligible"
+    )
 
     nrmse = _piwd_quality_metric(
         fit_quality.get("normalized_rmse_by_target_scale"), fallback=1.0e6
@@ -4832,17 +5080,32 @@ def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) ->
         fit_quality_score -= 0.25 * np.log1p(red_chi2)
         reason = "training residual diagnostics available"
     else:
-        # Unavailable diagnostics are not a very poor scientific score.  Keep
-        # them unscored so they cannot become a top-ranked candidate when every
-        # fit failed or every diagnostic was unavailable.
+        # Unavailable or comparison-ineligible diagnostics are not a very poor
+        # scientific score.  Keep them unscored so they cannot become a
+        # top-ranked candidate when every fit failed, every diagnostic was
+        # unavailable, or the attempt was initialization-only.
         fit_quality_score = None
-        reason = fit_quality.get("reason") or "training residual diagnostics unavailable"
+        if comparison_eligibility == "ineligible":
+            reason = "canonical attempt status marks this result comparison-ineligible"
+        else:
+            reason = (
+                fit_quality.get("reason")
+                or "training residual diagnostics unavailable"
+            )
 
     return _clean_scalar_dict(
         {
             "rank": outcome.get("rank"),
             "model": outcome.get("model"),
             "status": outcome.get("status"),
+            "attempt_disposition": outcome.get("attempt_disposition"),
+            "execution_stage": outcome.get("execution_stage"),
+            "technical_outcome": outcome.get("technical_outcome"),
+            "diagnostic_validity": outcome.get("diagnostic_validity"),
+            "scientific_usability": outcome.get("scientific_usability"),
+            "comparison_eligibility": comparison_eligibility,
+            "warning_severity": outcome.get("warning_severity"),
+            "warning_count": outcome.get("warning_count"),
             "fit_success": fit_success,
             "consensus_success": outcome.get("consensus_success"),
             "consensus_period": outcome.get("consensus_period"),
@@ -5351,6 +5614,12 @@ def _piwd_build_advisory_workflow_fallback_summary(
         if item.get("fit_failed") is True or item.get("status") == "failed"
     ]
 
+    technical_outcome_counts = _piwd_count_values(
+        [item.get("technical_outcome") for item in outcomes]
+    )
+    failure_code_counts = _piwd_count_values(
+        [item.get("failure_code") for item in failed]
+    )
     failure_stage_counts = _piwd_count_values(
         [item.get("failure_stage") for item in failed]
     )
@@ -5428,8 +5697,25 @@ def _piwd_build_advisory_workflow_fallback_summary(
             "n_failed": len(failed),
             "n_with_fit_quality": n_with_fit_quality,
             "failed_models": [item.get("model") for item in failed],
+            "technical_outcome_counts": technical_outcome_counts,
+            "failure_code_counts": failure_code_counts,
             "failure_stage_counts": failure_stage_counts,
             "exception_type_counts": exception_type_counts,
+            "initialized_only_models": [
+                item.get("model")
+                for item in outcomes
+                if item.get("technical_outcome") == "initialized_only"
+            ],
+            "recovered_models": [
+                item.get("model")
+                for item in outcomes
+                if item.get("technical_outcome") == "completed_with_recovery"
+            ],
+            "comparison_ineligible_models": [
+                item.get("model")
+                for item in outcomes
+                if item.get("comparison_eligibility") == "ineligible"
+            ],
             "consensus_failure_models": consensus_failure_models,
             "n_consensus_failure_models": len(consensus_failure_models),
             "numerical_failure_models": numerical_failure_models,
@@ -6250,9 +6536,19 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
             "is_top_ranked": item.get("is_top_ranked"),
             "model": item.get("model"),
             "status": item.get("status"),
+            "attempt_disposition": item.get("attempt_disposition"),
+            "execution_stage": item.get("execution_stage"),
+            "technical_outcome": item.get("technical_outcome"),
+            "diagnostic_validity": item.get("diagnostic_validity"),
+            "scientific_usability": item.get("scientific_usability"),
+            "comparison_eligibility": item.get("comparison_eligibility"),
+            "warning_severity": item.get("warning_severity"),
+            "warning_count": item.get("warning_count"),
             "fit_success": item.get("fit_success"),
             "fit_failed": item.get("fit_failed"),
+            "failure_code": item.get("failure_code"),
             "failure_stage": item.get("failure_stage"),
+            "failure_substage": item.get("failure_substage"),
             "failure_stage_reason": item.get("failure_stage_reason"),
             "is_consensus_failure": item.get("is_consensus_failure"),
             "is_numerical_failure": item.get("is_numerical_failure"),
@@ -6265,6 +6561,14 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
             "learn_additional_noise": fit_kwargs.get("learn_additional_noise"),
             "training_iter": fit_kwargs.get("training_iter"),
             "miniter": fit_kwargs.get("miniter"),
+            "training_recovered_from_failure": item.get(
+                "training_recovered_from_failure"
+            ),
+            "training_failure_iteration": item.get("training_failure_iteration"),
+            "training_failure_type": item.get("training_failure_type"),
+            "training_restored_best_iteration": item.get(
+                "training_restored_best_iteration"
+            ),
             "consensus_success": item.get("consensus_success"),
             "consensus_period": item.get("consensus_period"),
             "consensus_frequency": item.get("consensus_frequency"),
@@ -6334,9 +6638,19 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "is_top_ranked",
         "model",
         "status",
+        "attempt_disposition",
+        "execution_stage",
+        "technical_outcome",
+        "diagnostic_validity",
+        "scientific_usability",
+        "comparison_eligibility",
+        "warning_severity",
+        "warning_count",
         "fit_success",
         "fit_failed",
+        "failure_code",
         "failure_stage",
+        "failure_substage",
         "failure_stage_reason",
         "is_consensus_failure",
         "is_numerical_failure",
@@ -6349,6 +6663,10 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "learn_additional_noise",
         "training_iter",
         "miniter",
+        "training_recovered_from_failure",
+        "training_failure_iteration",
+        "training_failure_type",
+        "training_restored_best_iteration",
         "consensus_success",
         "consensus_period",
         "consensus_frequency",
@@ -6851,10 +7169,14 @@ def run_period_independent_wavelength_advisory_workflow_batch(
 
     for index, source in enumerate(source_list):
         source_id = _piwd_batch_safe_source_id(None, index)
+        source_execution_stage = "ingestion"
         row = {
             "source_index": index,
             "source_id": source_id,
             "status": "not_started",
+            **derive_wavelength_attempt_status(
+                legacy_status="not_attempted"
+            ).to_dict(),
             "advisory_only": True,
             "runs_fits": True,
             "applies_to_fit": True,
@@ -6909,6 +7231,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                     "n_rows_dropped"
                 )
 
+            source_execution_stage = "optimization"
             workflow = lc.run_period_independent_wavelength_advisory_workflow(
                 **workflow_kwargs
             )
@@ -6957,9 +7280,36 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                 if workflow_ranking_available
                 else None
             )
+            candidate_warning_count = sum(
+                int(item.get("warning_count") or 0)
+                for item in candidate_rows
+                if isinstance(item, dict)
+            )
+            candidate_recovery = any(
+                item.get("technical_outcome") == "completed_with_recovery"
+                or item.get("training_recovered_from_failure") is True
+                for item in candidate_rows
+                if isinstance(item, dict)
+            )
+            all_initialized_only = bool(candidate_rows) and all(
+                item.get("technical_outcome") == "initialized_only"
+                for item in candidate_rows
+                if isinstance(item, dict)
+            )
+            source_status = derive_wavelength_attempt_status(
+                legacy_status="passed",
+                training_iter=0 if all_initialized_only else None,
+                recovered_from_failure=candidate_recovery,
+                diagnostics_available=workflow_ranking_available,
+                diagnostics_partial=(
+                    workflow_ranking_status == "single_valid_candidate"
+                ),
+                warning_count=candidate_warning_count,
+            )
             row.update(
                 {
                     "status": "passed",
+                    **source_status.to_dict(),
                     "workflow_kind": workflow.get("kind"),
                     "fit_quality_ranking_status": workflow_ranking_status,
                     "fit_quality_ranking_available": workflow_ranking_available,
@@ -6967,6 +7317,8 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                     "top_ranked_model": workflow_top_ranked_model,
                     "top_ranked_fit_quality_score": workflow_top_ranked_score,
                     "score_kind": workflow.get("score_kind"),
+                    "warning_count": candidate_warning_count,
+                    "training_recovered_from_failure": candidate_recovery,
                     "n_model_kernel_configs": n_model_kernel_configs,
                     "n_successful_model_kernel_configs": n_successful_model_kernel_configs,
                     "n_failed_model_kernel_configs": n_failed_model_kernel_configs,
@@ -6993,6 +7345,7 @@ def run_period_independent_wavelength_advisory_workflow_batch(
             model_kernel_config_rows.extend(source_model_kernel_config_rows)
 
             if export and outdir is not None:
+                source_execution_stage = "export"
                 source_component = _piwd_batch_safe_path_component(source_id, index)
                 source_outdir = outdir / source_component
                 source_prefix = f"{source_component}_wavelength_advisory"
@@ -7012,12 +7365,32 @@ def run_period_independent_wavelength_advisory_workflow_batch(
         except Exception as exc:
             if stop_on_error:
                 raise
+            source_status = derive_wavelength_attempt_status(
+                legacy_status="failed",
+                diagnostics_partial=False,
+                failure_stage=source_execution_stage,
+            )
+            source_failure_code = f"source_{source_execution_stage}_failed"
+            source_failure_record = WavelengthFailureRecord(
+                failure_code=source_failure_code,
+                stage=ExecutionStage(source_execution_stage),
+                substage=None,
+                exception_type=type(exc).__name__,
+                message=str(exc),
+                diagnostics={},
+                traceback_reference="inline:traceback",
+            ).to_dict()
             row.update(
                 {
                     "status": "failed",
+                    **source_status.to_dict(),
+                    "failure_code": source_failure_code,
+                    "failure_stage": source_execution_stage,
+                    "structured_failure_record": source_failure_record,
                     "exception_type": type(exc).__name__,
                     "exception_message": str(exc),
                     "traceback": traceback.format_exc(),
+                    "traceback_reference": "inline:traceback",
                 }
             )
             if export and outdir is not None:

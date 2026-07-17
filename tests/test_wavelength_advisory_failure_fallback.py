@@ -78,6 +78,50 @@ class TestWavelengthAdvisoryFailureFallback(unittest.TestCase):
         self.assertEqual(fallback["n_numerical_failure_models"], 1)
         self.assertTrue(fallback["recommended_next_steps"])
 
+    def test_fallback_summary_surfaces_canonical_status_counts(self):
+        run_report = {
+            "outcomes": [
+                {
+                    "status": "passed",
+                    "fit_success": True,
+                    "model": "2DDustMean",
+                    "technical_outcome": "initialized_only",
+                    "comparison_eligibility": "ineligible",
+                },
+                {
+                    "status": "failed",
+                    "fit_failed": True,
+                    "model": "2D",
+                    "technical_outcome": "failed",
+                    "comparison_eligibility": "ineligible",
+                    "failure_code": "no_accepted_bands",
+                },
+            ]
+        }
+        quality_report = {
+            "ranking_status": "unavailable",
+            "fit_quality_ranking_available": False,
+            "n_with_fit_quality": 0,
+        }
+
+        fallback = _piwd_build_advisory_workflow_fallback_summary(
+            run_report, quality_report
+        )
+
+        self.assertEqual(
+            fallback["technical_outcome_counts"],
+            {"initialized_only": 1, "failed": 1},
+        )
+        self.assertEqual(
+            fallback["failure_code_counts"],
+            {"no_accepted_bands": 1},
+        )
+        self.assertEqual(fallback["initialized_only_models"], ["2DDustMean"])
+        self.assertEqual(
+            fallback["comparison_ineligible_models"],
+            ["2DDustMean", "2D"],
+        )
+
     def test_fallback_summary_is_inactive_when_comparative_ranking_exists(self):
         run_report = {
             "outcomes": [
@@ -163,8 +207,18 @@ class TestWavelengthAdvisoryFailureFallback(unittest.TestCase):
                         "rank": 1,
                         "model": "2D",
                         "status": "failed",
+                        "attempt_disposition": "attempted",
+                        "execution_stage": "consensus",
+                        "technical_outcome": "failed",
+                        "diagnostic_validity": "partial",
+                        "scientific_usability": "unusable",
+                        "comparison_eligibility": "ineligible",
+                        "warning_severity": "error",
+                        "warning_count": 0,
                         "fit_failed": True,
+                        "failure_code": "no_accepted_bands",
                         "failure_stage": "consensus",
+                        "failure_substage": "band_quality",
                         "failure_stage_reason": "fit failed while deriving consensus",
                         "is_consensus_failure": True,
                         "is_numerical_failure": False,
@@ -185,7 +239,11 @@ class TestWavelengthAdvisoryFailureFallback(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         row = rows[0]
+        self.assertEqual(row["technical_outcome"], "failed")
+        self.assertEqual(row["comparison_eligibility"], "ineligible")
+        self.assertEqual(row["failure_code"], "no_accepted_bands")
         self.assertEqual(row["failure_stage"], "consensus")
+        self.assertEqual(row["failure_substage"], "band_quality")
         self.assertIs(row["is_consensus_failure"], True)
         self.assertEqual(row["exception_type"], "ConsensusFitError")
 
