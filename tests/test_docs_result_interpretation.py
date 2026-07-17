@@ -74,6 +74,26 @@ class TestResultInterpretationDocs(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.normalized)
 
+    def test_retained_state_marginal_likelihood_semantics(self):
+        required = [
+            "Retained-state marginal-likelihood fields",
+            "training_log_marginal_likelihood",
+            "Data log marginal likelihood **per observation**",
+            "training_log_marginal_likelihood_total",
+            "training_map_objective",
+            "training_registered_log_prior",
+            "training_registered_prior_count",
+            "training_additional_objective_terms",
+            "training_marginal_likelihood_evaluation_mode",
+            "retained_current_state",
+            "does not reuse the last loss recorded before an optimizer step",
+            "not held-out predictive scores",
+            "not Bayesian model probabilities",
+        ]
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, self.normalized)
+
     def test_ard_ceiling_interpretation_is_coordinate_specific(self):
         required = [
             "time_frequency",

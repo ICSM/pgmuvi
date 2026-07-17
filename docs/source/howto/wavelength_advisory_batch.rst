@@ -405,6 +405,20 @@ Important columns include:
      - Fraction of large standardized residuals.
    * - ``training_reduced_chi2``
      - Reduced-chi-square-like training residual diagnostic.
+   * - ``training_log_marginal_likelihood`` /
+       ``training_log_marginal_likelihood_total``
+     - Retained-state data log marginal likelihood per observation and in total,
+       excluding registered priors and additional objective terms.
+   * - ``training_map_objective`` / ``training_map_objective_total``
+     - Exact MLL objective per observation and in total at the retained parameter
+       state.
+   * - ``training_registered_log_prior`` /
+       ``training_registered_log_prior_total``
+     - Registered-prior contribution, separated from the data likelihood.
+   * - ``training_marginal_likelihood_evaluation_mode`` /
+       ``training_marginal_likelihood_parameter_state``
+     - Explicit provenance, currently ``train`` and
+       ``retained_current_state``.
    * - ``training_standardization_sigma_source``
      - Whether standardized residuals used observed predictive variance or the
        transformed-uncertainty fallback. Observed predictive variance already

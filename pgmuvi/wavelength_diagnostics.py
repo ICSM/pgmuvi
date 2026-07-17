@@ -3560,6 +3560,187 @@ def _piwd_training_fit_quality_unavailable(reason: str) -> dict[str, Any]:
     )
 
 
+def _piwd_compute_retained_state_marginal_likelihood(
+    fitted_lightcurve: Any,
+) -> dict[str, Any]:
+    """Evaluate exact-GP objective terms at the retained parameter state.
+
+    The data log marginal likelihood is evaluated in training mode from
+    ``likelihood(model(train_x)).log_prob(train_y)``.  The exact MLL objective
+    is evaluated separately so registered-prior and any other objective-term
+    contributions remain distinguishable.  Original model/likelihood modes are
+    restored before returning.
+    """
+
+    base = {
+        "available": False,
+        "reason": None,
+        "evaluation_mode": "train",
+        "parameter_state": "retained_current_state",
+        "n_data": 0,
+        "data_log_marginal_likelihood_per_observation": None,
+        "data_log_marginal_likelihood_total": None,
+        "map_objective_per_observation": None,
+        "map_objective_total": None,
+        "registered_log_prior_per_observation": None,
+        "registered_log_prior_total": None,
+        "registered_prior_count": 0,
+        "map_objective_includes_registered_priors": False,
+        "additional_objective_terms_per_observation": None,
+        "additional_objective_terms_total": None,
+    }
+
+    if fitted_lightcurve is None:
+        base["reason"] = "no fitted Lightcurve was provided"
+        return _clean_scalar_dict(base)
+
+    model = getattr(fitted_lightcurve, "model", None)
+    likelihood = getattr(fitted_lightcurve, "likelihood", None)
+    train_x = getattr(fitted_lightcurve, "_xdata_transformed", None)
+    train_y = getattr(fitted_lightcurve, "_ydata_transformed", None)
+    if model is None or likelihood is None:
+        base["reason"] = "fitted Lightcurve has no model/likelihood"
+        return _clean_scalar_dict(base)
+    if train_x is None or train_y is None:
+        base["reason"] = "fitted Lightcurve has no transformed training data"
+        return _clean_scalar_dict(base)
+
+    model_was_training = getattr(model, "training", None)
+    likelihood_was_training = getattr(likelihood, "training", None)
+
+    try:
+        import torch as _torch
+        import gpytorch as _gpytorch
+
+        if int(train_y.numel()) <= 0:
+            raise ValueError("transformed training target is empty")
+
+        model.train()
+        likelihood.train()
+        with _torch.no_grad():
+            latent = model(train_x)
+            n_data = int(latent.event_shape.numel())
+            if n_data <= 0:
+                raise ValueError("latent training distribution has no events")
+            observed = likelihood(latent)
+
+            data_total_tensor = observed.log_prob(train_y)
+            if data_total_tensor.numel() != 1:
+                data_total_tensor = data_total_tensor.sum()
+
+            mll = _gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+            objective_per_observation_tensor = mll(latent, train_y)
+            if objective_per_observation_tensor.numel() != 1:
+                objective_per_observation_tensor = (
+                    objective_per_observation_tensor.sum()
+                )
+
+            prior_total_tensor = data_total_tensor.new_zeros(())
+            registered_prior_count = 0
+            for _name, module, prior, closure, _setting_closure in mll.named_priors():
+                prior_value = closure(module)
+                prior_total_tensor = prior_total_tensor + prior.log_prob(
+                    prior_value
+                ).sum()
+                registered_prior_count += 1
+
+            objective_total_tensor = objective_per_observation_tensor * n_data
+            additional_total_tensor = (
+                objective_total_tensor - data_total_tensor - prior_total_tensor
+            )
+
+        data_total = _piwd_safe_float(data_total_tensor.detach().cpu().item())
+        objective_per_observation = _piwd_safe_float(
+            objective_per_observation_tensor.detach().cpu().item()
+        )
+        prior_total = _piwd_safe_float(prior_total_tensor.detach().cpu().item())
+        additional_total = _piwd_safe_float(
+            additional_total_tensor.detach().cpu().item()
+        )
+        if data_total is None or objective_per_observation is None:
+            raise ValueError("marginal-likelihood evaluation was non-finite")
+
+        base.update(
+            {
+                "available": True,
+                "n_data": n_data,
+                "data_log_marginal_likelihood_per_observation": (
+                    data_total / n_data
+                ),
+                "data_log_marginal_likelihood_total": data_total,
+                "map_objective_per_observation": objective_per_observation,
+                "map_objective_total": objective_per_observation * n_data,
+                "registered_log_prior_per_observation": (
+                    prior_total / n_data if prior_total is not None else None
+                ),
+                "registered_log_prior_total": prior_total,
+                "registered_prior_count": registered_prior_count,
+                "map_objective_includes_registered_priors": bool(
+                    registered_prior_count
+                ),
+                "additional_objective_terms_per_observation": (
+                    additional_total / n_data
+                    if additional_total is not None
+                    else None
+                ),
+                "additional_objective_terms_total": additional_total,
+            }
+        )
+    except Exception as exc:
+        base["reason"] = (
+            "could not evaluate retained-state marginal likelihood: "
+            f"{type(exc).__name__}: {exc}"
+        )
+    finally:
+        try:
+            if isinstance(model_was_training, bool):
+                model.train(model_was_training)
+            if isinstance(likelihood_was_training, bool):
+                likelihood.train(likelihood_was_training)
+        except Exception:
+            pass
+
+    return _clean_scalar_dict(base)
+
+
+_PIWD_TRAINING_MARGINAL_LIKELIHOOD_FIELDS = {
+    "training_log_marginal_likelihood": "log_marginal_likelihood",
+    "training_log_marginal_likelihood_total": "log_marginal_likelihood_total",
+    "training_marginal_likelihood_available": "marginal_likelihood_available",
+    "training_marginal_likelihood_reason": "marginal_likelihood_reason",
+    "training_marginal_likelihood_evaluation_mode": (
+        "marginal_likelihood_evaluation_mode"
+    ),
+    "training_marginal_likelihood_parameter_state": (
+        "marginal_likelihood_parameter_state"
+    ),
+    "training_map_objective": "map_objective",
+    "training_map_objective_total": "map_objective_total",
+    "training_registered_log_prior": "registered_log_prior",
+    "training_registered_log_prior_total": "registered_log_prior_total",
+    "training_registered_prior_count": "registered_prior_count",
+    "training_map_objective_includes_registered_priors": (
+        "map_objective_includes_registered_priors"
+    ),
+    "training_additional_objective_terms": "additional_objective_terms",
+    "training_additional_objective_terms_total": (
+        "additional_objective_terms_total"
+    ),
+}
+
+
+def _piwd_training_marginal_likelihood_fields(
+    fit_quality: dict[str, Any],
+) -> dict[str, Any]:
+    """Return stable flattened retained-state MLL fields."""
+    return {
+        output_name: fit_quality.get(input_name)
+        for output_name, input_name in (
+            _PIWD_TRAINING_MARGINAL_LIKELIHOOD_FIELDS.items()
+        )
+    }
+
+
 def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]:
     """Compute best-effort training-space residual diagnostics for a fitted GP.
 
@@ -3677,20 +3858,9 @@ def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]
             dof = max(int(std_resid.size) - 1, 1)
             reduced_chi2 = float(np.sum(std_resid**2) / dof)
 
-    log_mll = None
-    try:
-        import torch as _torch
-        import gpytorch as _gpytorch
-
-        with _torch.no_grad():
-            output = fitted_lightcurve.model(fitted_lightcurve._xdata_transformed)
-            mll = _gpytorch.mlls.ExactMarginalLogLikelihood(
-                fitted_lightcurve.likelihood, fitted_lightcurve.model
-            )
-            value = mll(output, fitted_lightcurve._ydata_transformed)
-            log_mll = _piwd_safe_float(value.detach().cpu().item())
-    except Exception:
-        log_mll = None
+    marginal_likelihood = _piwd_compute_retained_state_marginal_likelihood(
+        fitted_lightcurve
+    )
 
     by_band = []
     try:
@@ -3743,7 +3913,49 @@ def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]
             "median_abs_standardized_residual": median_abs_standardized_residual,
             "outlier_fraction_3sigma": outlier_fraction_3sigma,
             "reduced_chi2": reduced_chi2,
-            "log_marginal_likelihood": log_mll,
+            # Backward-compatible field: retained-state *data* log marginal
+            # likelihood per observation, excluding registered priors and any
+            # additional objective terms.
+            "log_marginal_likelihood": marginal_likelihood.get(
+                "data_log_marginal_likelihood_per_observation"
+            ),
+            "log_marginal_likelihood_total": marginal_likelihood.get(
+                "data_log_marginal_likelihood_total"
+            ),
+            "marginal_likelihood_available": marginal_likelihood.get(
+                "available"
+            ),
+            "marginal_likelihood_reason": marginal_likelihood.get("reason"),
+            "marginal_likelihood_evaluation_mode": marginal_likelihood.get(
+                "evaluation_mode"
+            ),
+            "marginal_likelihood_parameter_state": marginal_likelihood.get(
+                "parameter_state"
+            ),
+            "map_objective": marginal_likelihood.get(
+                "map_objective_per_observation"
+            ),
+            "map_objective_total": marginal_likelihood.get(
+                "map_objective_total"
+            ),
+            "registered_log_prior": marginal_likelihood.get(
+                "registered_log_prior_per_observation"
+            ),
+            "registered_log_prior_total": marginal_likelihood.get(
+                "registered_log_prior_total"
+            ),
+            "registered_prior_count": marginal_likelihood.get(
+                "registered_prior_count"
+            ),
+            "map_objective_includes_registered_priors": marginal_likelihood.get(
+                "map_objective_includes_registered_priors"
+            ),
+            "additional_objective_terms": marginal_likelihood.get(
+                "additional_objective_terms_per_observation"
+            ),
+            "additional_objective_terms_total": marginal_likelihood.get(
+                "additional_objective_terms_total"
+            ),
             "by_band": by_band,
         }
     )
@@ -4086,7 +4298,7 @@ def _piwd_extract_fit_outcome(
         "training_reduced_chi2": fit_quality.get("reduced_chi2"),
         "training_median_abs_standardized_residual": fit_quality.get("median_abs_standardized_residual"),
         "training_outlier_fraction_3sigma": fit_quality.get("outlier_fraction_3sigma"),
-        "training_log_marginal_likelihood": fit_quality.get("log_marginal_likelihood"),
+        **_piwd_training_marginal_likelihood_fields(fit_quality),
         "training_predictive_variance_kind": fit_quality.get(
             "predictive_variance_kind"
         ),
@@ -4537,7 +4749,7 @@ def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) ->
             "training_median_abs_standardized_residual": fit_quality.get("median_abs_standardized_residual"),
             "training_outlier_fraction_3sigma": fit_quality.get("outlier_fraction_3sigma"),
             "training_reduced_chi2": fit_quality.get("reduced_chi2"),
-            "training_log_marginal_likelihood": fit_quality.get("log_marginal_likelihood"),
+            **_piwd_training_marginal_likelihood_fields(fit_quality),
             "training_predictive_variance_kind": fit_quality.get(
                 "predictive_variance_kind"
             ),
@@ -5955,9 +6167,10 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
                 "training_outlier_fraction_3sigma"
             ),
             "training_reduced_chi2": item.get("training_reduced_chi2"),
-            "training_log_marginal_likelihood": item.get(
-                "training_log_marginal_likelihood"
-            ),
+            **{
+                field_name: item.get(field_name)
+                for field_name in _PIWD_TRAINING_MARGINAL_LIKELIHOOD_FIELDS
+            },
             "training_predictive_variance_kind": item.get(
                 "training_predictive_variance_kind"
             ),
@@ -6030,7 +6243,7 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "training_median_abs_standardized_residual",
         "training_outlier_fraction_3sigma",
         "training_reduced_chi2",
-        "training_log_marginal_likelihood",
+        *_PIWD_TRAINING_MARGINAL_LIKELIHOOD_FIELDS.keys(),
         "training_predictive_variance_kind",
         "training_standardization_sigma_source",
         "training_measurement_uncertainty_added_separately",

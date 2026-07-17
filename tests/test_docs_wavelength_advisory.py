@@ -77,6 +77,32 @@ class TestWavelengthAdvisoryDocs(unittest.TestCase):
             with self.subTest(document="batch", token=token):
                 self.assertIn(token, batch)
 
+    def test_docs_explain_retained_state_marginal_likelihood(self):
+        single = self._read("docs/source/howto/wavelength_advisory.rst")
+        batch = self._read("docs/source/howto/wavelength_advisory_batch.rst")
+        single = " ".join(single.split())
+        batch = " ".join(batch.split())
+
+        for token in [
+            "training_log_marginal_likelihood",
+            "data log marginal likelihood per observation",
+            "excluding registered priors",
+            "training_map_objective",
+            "retained_current_state",
+        ]:
+            with self.subTest(document="single", token=token):
+                self.assertIn(token, single)
+
+        for token in [
+            "training_log_marginal_likelihood_total",
+            "training_map_objective_total",
+            "training_registered_log_prior_total",
+            "training_marginal_likelihood_evaluation_mode",
+            "retained_current_state",
+        ]:
+            with self.subTest(document="batch", token=token):
+                self.assertIn(token, batch)
+
     def test_docs_explain_training_residual_noise_semantics(self):
         single = self._read("docs/source/howto/wavelength_advisory.rst")
         batch = self._read("docs/source/howto/wavelength_advisory_batch.rst")
