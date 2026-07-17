@@ -71,6 +71,7 @@ class GuessStrategy(str, Enum):
 
     WAVELENGTH_RANGE = "wavelength_range"
     WAVELENGTH_MEAN = "wavelength_mean"
+    DIMENSION_AWARE_SM_ARD = "dimension_aware_sm_ard"
 
     CUSTOM = "custom"
 
@@ -98,6 +99,7 @@ class ConstraintStrategy(str, Enum):
 
     WAVELENGTH_RANGE = "wavelength_range"
     WAVELENGTH_MEAN = "wavelength_mean"
+    DIMENSION_AWARE_SM_ARD = "dimension_aware_sm_ard"
 
     CUSTOM = "custom"
 

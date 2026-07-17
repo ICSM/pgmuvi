@@ -339,12 +339,15 @@ component.
 ``fit_strategy="consensus_multicomp"`` is an implemented staged workflow for
 extracting, clustering, and aggregating multiple frequency components before a
 final 2-D spectral-mixture fit.  It is not the default LPV workflow.  The current
-implementation still applies one broad global frequency interval to accepted
-components rather than component-specific constraints.
+implementation still applies one broad global **temporal-frequency** interval
+across accepted components rather than component-specific temporal intervals.
+For the full ``2D`` spectral-mixture baseline, that consensus interval updates
+only ARD index 0; the independently derived wavelength-frequency bounds at ARD
+index 1 are preserved.
 
 .. admonition:: TBD: multi-periodic support
 
-   Component-specific constraints, model-family support beyond the final 2-D
+   component-specific constraints, model-family support beyond the final 2-D
    spectral-mixture fit, and a complete scientific validation standard for
    multi-periodic sources remain future work.
 

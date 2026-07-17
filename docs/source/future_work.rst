@@ -59,12 +59,18 @@ Wavelength-derived fitting constraints and validation
     records the robust-band fit, proposed interval, effective interval, and
     coordinate basis.
 
-    The remaining scientific fitting tranche must redesign the full ``2D``
-    spectral-mixture parameterization so temporal and wavelength ARD dimensions
-    can receive genuinely independent bounds, and extend explicit
-    component/dimension saturation diagnostics.  It must continue to use the
-    recorded usable-band, adjacent-spacing, gap, uncertainty, robust mean, and
-    robust amplitude summaries rather than reverting to generic constants.
+    The full ``2D`` spectral-mixture baseline now gives temporal and wavelength ARD
+    dimensions genuinely independent broadcast tensor intervals
+    for both ``mixture_means`` and ``mixture_scales``.  ARD index 0
+    receives temporal-frequency values and bounds, while index 1 receives
+    independently wavelength-derived values and bounds.  Source-type period
+    limits alter only index 0, and raw/model-coordinate provenance is retained.
+
+    The remaining work in this tranche is explicit component/dimension
+    saturation and distance-to-bound reporting.  It must distinguish a
+    scientifically long wavelength correlation scale from optimizer pressure,
+    identify the affected component and ARD dimension, and record whether the
+    spectral-mixture component count was fixed at one.
 
 **TBD[wavelength-constraint-validation]**
     Validate the wavelength-derived initialization and constraint tranche with

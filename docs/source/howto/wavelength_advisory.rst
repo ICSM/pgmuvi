@@ -609,7 +609,7 @@ initialization with enforceable constraints for ``2DWavelengthDependent``,
 conclusion records into automatic selection evidence.
 
 The remaining roadmap is tracked by ``TBD[wavelength-derived-constraints]`` and
-``TBD[wavelength-constraint-validation]``.  It covers dimension-aware temporal
-versus wavelength ARD bounds for the full ``2D`` spectral-mixture baseline,
-saturation provenance, synthetic recovery, consensus compatibility, and
-real-LPV validation.
+``TBD[wavelength-constraint-validation]``.  Independent temporal and wavelength
+ARD bounds are now implemented for the full ``2D`` spectral-mixture baseline.
+The remaining work covers component/dimension saturation provenance, synthetic
+recovery, consensus compatibility, and real-LPV validation.

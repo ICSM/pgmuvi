@@ -159,6 +159,80 @@ class ParameterEstimateBuilder:
                 }
 
         if (
+            spec.guess_strategy is GuessStrategy.DIMENSION_AWARE_SM_ARD
+            or spec.constraint_strategy
+            is ConstraintStrategy.DIMENSION_AWARE_SM_ARD
+        ):
+            ard_diagnostics = context.spectral_mixture_ard_diagnostics
+            if ard_diagnostics is not None:
+                parameter_name = spec.metadata.get(
+                    "spectral_mixture_ard_parameter",
+                    spec.name.split(".")[-1],
+                )
+                model_record = ard_diagnostics.get(
+                    "model_coordinate", {}
+                ).get(parameter_name, {})
+                raw_record = ard_diagnostics.get(
+                    "raw_coordinate", {}
+                ).get(parameter_name, {})
+                diagnostics = {
+                    "schema_version": ard_diagnostics.get("schema_version"),
+                    "parameterization": ard_diagnostics.get(
+                        "parameterization"
+                    ),
+                    "parameter": parameter_name,
+                    "coordinate_order": ard_diagnostics.get(
+                        "coordinate_order"
+                    ),
+                    "ard_index": ard_diagnostics.get("ard_index"),
+                    "num_mixtures": ard_diagnostics.get("num_mixtures"),
+                    "constraint_shape": ard_diagnostics.get(
+                        "constraint_shape"
+                    ),
+                    "value_shape": ard_diagnostics.get("value_shape"),
+                    "raw_initial_value": raw_record.get("initial_value"),
+                    "raw_constraint_lower": raw_record.get(
+                        "constraint_lower"
+                    ),
+                    "raw_constraint_upper": raw_record.get(
+                        "constraint_upper"
+                    ),
+                    "model_initial_value": model_record.get(
+                        "initial_value"
+                    ),
+                    "model_constraint_lower": model_record.get(
+                        "constraint_lower"
+                    ),
+                    "model_constraint_upper": model_record.get(
+                        "constraint_upper"
+                    ),
+                    "raw_sampling": ard_diagnostics.get(
+                        "raw_coordinate", {}
+                    ).get("sampling"),
+                    "model_sampling": ard_diagnostics.get(
+                        "model_coordinate", {}
+                    ).get("sampling"),
+                    "temporal_initialization": model_record.get(
+                        "temporal_initialization"
+                    ),
+                    "wavelength_initialization": model_record.get(
+                        "wavelength_initialization"
+                    ),
+                    "wavelength_lengthscale_initial": model_record.get(
+                        "wavelength_lengthscale_initial"
+                    ),
+                    "wavelength_lengthscale_bounds": model_record.get(
+                        "wavelength_lengthscale_bounds"
+                    ),
+                    "wavelength_lengthscale_source": model_record.get(
+                        "wavelength_lengthscale_source"
+                    ),
+                    "lengthscale_to_spectral_scale": model_record.get(
+                        "lengthscale_to_spectral_scale"
+                    ),
+                }
+
+        if (
             spec.guess_strategy is GuessStrategy.WAVELENGTH_MEAN
             or spec.constraint_strategy is ConstraintStrategy.WAVELENGTH_MEAN
         ):
@@ -235,6 +309,14 @@ class ParameterEstimateBuilder:
                 return "global_diagnostics_unavailable"
 
             return "robust_flux_span_unavailable"
+
+        if spec.guess_strategy is GuessStrategy.DIMENSION_AWARE_SM_ARD:
+            diagnostics = context.spectral_mixture_ard_diagnostics
+            if diagnostics is None:
+                return "spectral_mixture_ard_diagnostics_unavailable"
+            if not diagnostics.get("available", False):
+                return "spectral_mixture_ard_estimate_unavailable"
+            return "spectral_mixture_ard_parameter_unavailable"
 
         if spec.guess_strategy is GuessStrategy.WAVELENGTH_MEAN:
             diagnostics = context.wavelength_mean_diagnostics
@@ -337,6 +419,9 @@ class ParameterEstimateBuilder:
 
         if spec.guess_strategy is GuessStrategy.CONSENSUS_MULTICOMP_PERIOD:
             return self._estimate_consensus_multicomp_period(spec, context)
+
+        if spec.guess_strategy is GuessStrategy.DIMENSION_AWARE_SM_ARD:
+            return self._estimate_dimension_aware_sm_ard_value(spec, context)
 
         if spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE:
             return self._estimate_wavelength_range_value(spec, context)
@@ -491,6 +576,15 @@ class ParameterEstimateBuilder:
         if spec.constraint_strategy is ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN:
             return self._estimate_robust_positive_flux_span_constraint(context)
 
+        if (
+            spec.constraint_strategy
+            is ConstraintStrategy.DIMENSION_AWARE_SM_ARD
+        ):
+            return self._estimate_dimension_aware_sm_ard_constraint(
+                spec,
+                context,
+            )
+
         if spec.constraint_strategy is ConstraintStrategy.WAVELENGTH_RANGE:
             return self._estimate_wavelength_range_constraint(spec, context)
 
@@ -498,6 +592,55 @@ class ParameterEstimateBuilder:
             return self._estimate_wavelength_mean_constraint(spec, context)
 
         return None
+
+    @staticmethod
+    def _dimension_aware_sm_ard_record(
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        diagnostics = context.spectral_mixture_ard_diagnostics
+        if diagnostics is None or not diagnostics.get("available", False):
+            return None
+        parameter_name = spec.metadata.get(
+            "spectral_mixture_ard_parameter",
+            spec.name.split(".")[-1],
+        )
+        return diagnostics.get("model_coordinate", {}).get(parameter_name)
+
+    def _estimate_dimension_aware_sm_ard_value(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        record = self._dimension_aware_sm_ard_record(spec, context)
+        if not record:
+            return None
+        value = record.get("initial_value")
+        if value is None:
+            return None
+        value_tensor = torch.as_tensor(value, dtype=DEFAULT_DTYPE)
+        if spec.shape is not None and tuple(value_tensor.shape) != tuple(spec.shape):
+            if value_tensor.numel() != math.prod(spec.shape):
+                return None
+            value_tensor = value_tensor.reshape(spec.shape)
+        return value_tensor
+
+    def _estimate_dimension_aware_sm_ard_constraint(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        record = self._dimension_aware_sm_ard_record(spec, context)
+        if not record:
+            return None
+        lower = record.get("constraint_lower")
+        upper = record.get("constraint_upper")
+        if lower is None or upper is None:
+            return None
+        return (
+            torch.as_tensor(lower, dtype=DEFAULT_DTYPE),
+            torch.as_tensor(upper, dtype=DEFAULT_DTYPE),
+        )
 
     @staticmethod
     def _wavelength_mean_record(

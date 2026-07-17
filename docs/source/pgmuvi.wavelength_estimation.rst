@@ -26,8 +26,10 @@ model-coordinate recommendations, the transform, the proposed interval, and
 the effective registered interval.
 
 This applies to the wavelength covariance in ``2DWavelengthDependent``,
-``2DDustMean``, ``2DPowerLawMean``, and ``2DSeparable``.  It does not change the
-full non-separable ``2D`` spectral-mixture ARD parameterization.
+``2DDustMean``, ``2DPowerLawMean``, and ``2DSeparable``.  The
+full non-separable ``2D`` baseline consumes the same sampling context through the
+dimension-aware spectral-mixture ARD layer documented in
+:mod:`pgmuvi.spectral_mixture_ard`.
 
 The same module now builds model-ready wavelength-mean recommendations from
 robust per-band median fluxes.  ``GuessStrategy.WAVELENGTH_MEAN`` and

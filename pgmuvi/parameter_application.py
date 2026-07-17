@@ -19,8 +19,10 @@ from pgmuvi.parameter_specs import ConstraintStrategy
 from pgmuvi.parameter_specs import GuessStrategy
 from pgmuvi.parameter_specs import ParameterScale
 import math
-import torch
+
 import gpytorch
+import numpy as np
+import torch
 
 
 class ParameterEstimateApplicator:
@@ -112,6 +114,23 @@ class ParameterEstimateApplicator:
                     "diagnostics": self._to_python(estimate.diagnostics),
                 }
 
+            if self._is_dimension_aware_sm_ard_estimate(estimate):
+                result["spectral_mixture_ard_provenance"] = {
+                    "value_source": estimate.value_source,
+                    "constraint_source": estimate.constraint_source,
+                    "estimated_value": self._to_python(estimate.value),
+                    "estimated_constraint": self._to_python(
+                        estimate.constraint
+                    ),
+                    "effective_constraint": self._to_python(
+                        self._effective_constraint_bounds(
+                            target_module,
+                            parameter_name,
+                        )
+                    ),
+                    "diagnostics": self._to_python(estimate.diagnostics),
+                }
+
             results[estimate.name] = result
 
         return results
@@ -132,6 +151,16 @@ class ParameterEstimateApplicator:
             estimate.spec.guess_strategy is GuessStrategy.WAVELENGTH_MEAN
             or estimate.spec.constraint_strategy
             is ConstraintStrategy.WAVELENGTH_MEAN
+        )
+
+    @staticmethod
+    def _is_dimension_aware_sm_ard_estimate(estimate) -> bool:
+        """Return whether an estimate separates the two SM ARD coordinates."""
+        return (
+            estimate.spec.guess_strategy
+            is GuessStrategy.DIMENSION_AWARE_SM_ARD
+            or estimate.spec.constraint_strategy
+            is ConstraintStrategy.DIMENSION_AWARE_SM_ARD
         )
 
     @staticmethod
@@ -159,6 +188,12 @@ class ParameterEstimateApplicator:
             if detached.numel() == 1:
                 return float(detached.item())
             return detached.tolist()
+        if isinstance(value, np.ndarray):
+            if value.size == 1:
+                return float(value.reshape(-1)[0])
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
         if isinstance(value, (bool, int, float, str)):
             return value
         return str(value)
@@ -338,6 +373,7 @@ class ParameterEstimateApplicator:
                     ConstraintStrategy.DEFAULT,
                     ConstraintStrategy.WAVELENGTH_RANGE,
                     ConstraintStrategy.WAVELENGTH_MEAN,
+                    ConstraintStrategy.DIMENSION_AWARE_SM_ARD,
                 }
                 and existing_constraint is not None
             ):

@@ -60,6 +60,7 @@ Data, diagnostics, and validation
    pgmuvi.wavelength_conclusions
    pgmuvi.wavelength_diagnostics
    pgmuvi.wavelength_estimation
+   pgmuvi.spectral_mixture_ard
    pgmuvi.wavelength_hypotheses
    pgmuvi.wavelength_results
    pgmuvi.wavelength_status

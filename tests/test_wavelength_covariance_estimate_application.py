@@ -274,12 +274,23 @@ class TestSeparableWavelengthCovarianceApplication(unittest.TestCase):
         )
         self.assertAlmostEqual(fitted_value, math.sqrt(8.0) / 4.0, places=5)
 
-    def test_full_2d_spectral_mixture_schema_is_not_changed(self):
+    def test_full_2d_uses_dimension_aware_spectral_mixture_strategy(self):
         lc = self._lightcurve()
         lc.set_model("2D", num_mixtures=1)
 
         schema = lc.model.parameter_schema()
+        means = schema["covar_module.mixture_means"]
+        scales = schema["covar_module.mixture_scales"]
 
+        for spec in (means, scales):
+            self.assertIs(
+                spec.guess_strategy,
+                GuessStrategy.DIMENSION_AWARE_SM_ARD,
+            )
+            self.assertIs(
+                spec.constraint_strategy,
+                ConstraintStrategy.DIMENSION_AWARE_SM_ARD,
+            )
         self.assertFalse(
             any(
                 spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE
