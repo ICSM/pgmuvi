@@ -431,6 +431,17 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                         "fit_quality_available": True,
                         "fit_quality_score": 42.0,
                         "training_reduced_chi2": 0.5,
+                        "training_log_marginal_likelihood": -1.25,
+                        "training_log_marginal_likelihood_total": -12.5,
+                        "training_marginal_likelihood_available": True,
+                        "training_marginal_likelihood_evaluation_mode": "train",
+                        "training_marginal_likelihood_parameter_state": (
+                            "retained_current_state"
+                        ),
+                        "training_map_objective": -1.30,
+                        "training_registered_log_prior": -0.05,
+                        "training_registered_prior_count": 1,
+                        "training_map_objective_includes_registered_priors": True,
                         "training_predictive_variance_kind": "observed",
                         "training_standardization_sigma_source": (
                             "observed_predictive_standard_deviation"
@@ -488,6 +499,22 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         self.assertEqual(dust["quality_rank"], 1)
         self.assertEqual(dust["time_kernel_type"], "quasi_periodic")
         self.assertEqual(dust["fit_quality_score"], 42.0)
+        self.assertEqual(dust["training_log_marginal_likelihood"], -1.25)
+        self.assertEqual(dust["training_log_marginal_likelihood_total"], -12.5)
+        self.assertTrue(dust["training_marginal_likelihood_available"])
+        self.assertEqual(
+            dust["training_marginal_likelihood_evaluation_mode"], "train"
+        )
+        self.assertEqual(
+            dust["training_marginal_likelihood_parameter_state"],
+            "retained_current_state",
+        )
+        self.assertEqual(dust["training_map_objective"], -1.30)
+        self.assertEqual(dust["training_registered_log_prior"], -0.05)
+        self.assertEqual(dust["training_registered_prior_count"], 1)
+        self.assertTrue(
+            dust["training_map_objective_includes_registered_priors"]
+        )
         self.assertEqual(dust["training_predictive_variance_kind"], "observed")
         self.assertEqual(
             dust["training_standardization_sigma_source"],
@@ -505,6 +532,22 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                 "training_standardization_sigma_source"
             ],
             "observed_predictive_standard_deviation",
+        )
+        self.assertEqual(
+            csv_by_model["2DDustMean"][
+                "training_marginal_likelihood_evaluation_mode"
+            ],
+            "train",
+        )
+        self.assertEqual(
+            csv_by_model["2DDustMean"][
+                "training_marginal_likelihood_parameter_state"
+            ],
+            "retained_current_state",
+        )
+        self.assertEqual(
+            csv_by_model["2DDustMean"]["training_registered_prior_count"],
+            "1",
         )
         self.assertEqual(csv_by_model["2DWavelengthDependent"]["quality_rank"], "2")
 

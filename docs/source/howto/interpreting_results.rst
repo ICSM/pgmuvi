@@ -226,6 +226,47 @@ Read ``fit_quality_ranking_status`` before reading any rank:
 In every state, ``automatic_model_selection_applied=False`` and
 ``selected_model=None`` remain the scientific contract.
 
+Retained-state marginal-likelihood fields
+------------------------------------------
+
+The advisory result also records exact-GP marginal-likelihood diagnostics at the
+currently retained parameter state.  These fields are descriptive and are not
+used by ``fit_quality_score``.
+
+``training_log_marginal_likelihood``
+   Data log marginal likelihood **per observation**, evaluated in training mode
+   from ``likelihood(model(x_train)).log_prob(y_train)``.  It excludes registered
+   priors and additional objective terms.
+
+``training_log_marginal_likelihood_total``
+   The corresponding total data log marginal likelihood.
+
+``training_map_objective`` and ``training_map_objective_total``
+   The exact ``ExactMarginalLogLikelihood`` objective at the retained parameter
+   state, reported per observation and in total.  Registered priors are included
+   when present.
+
+``training_registered_log_prior`` and ``training_registered_log_prior_total``
+   The registered-prior contribution, separated from the data likelihood.
+   ``training_registered_prior_count`` and
+   ``training_map_objective_includes_registered_priors`` record whether such
+   terms were present.
+
+``training_additional_objective_terms``
+   Any remaining non-prior terms added by the exact MLL objective, separated
+   from both the data likelihood and registered priors.
+
+``training_marginal_likelihood_evaluation_mode`` is ``train`` and
+``training_marginal_likelihood_parameter_state`` is
+``retained_current_state``.  The evaluator temporarily switches the model and
+likelihood to training mode, computes all terms from the current parameters, and
+then restores their original modes.  It does not reuse the last loss recorded
+before an optimizer step.
+
+These are full-data training quantities, not held-out predictive scores and not
+Bayesian model probabilities.  Compare them only when candidates use identical
+analysis data, target transforms, likelihood policy, and fitting assumptions.
+
 Spectral-mixture ARD scale-ceiling diagnostics
 ----------------------------------------------
 

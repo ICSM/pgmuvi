@@ -375,6 +375,15 @@ unavailable.
    for triage and debugging, but they are not cross-validation, not posterior
    predictive checking, and not a formal marginal-likelihood model comparison.
 
+The fit-quality payload nevertheless records retained-state exact-GP objective
+terms for later inspection.  ``training_log_marginal_likelihood`` is the data
+log marginal likelihood per observation, excluding registered priors;
+``training_map_objective`` is the exact MLL objective per observation, including
+registered priors when present.  Total-valued companions and explicit prior and
+additional-objective contributions are retained separately.  Evaluation occurs
+in training mode at ``retained_current_state`` and the original model and
+likelihood modes are restored afterwards.
+
 Stage 5: format and plot
 ------------------------
 
