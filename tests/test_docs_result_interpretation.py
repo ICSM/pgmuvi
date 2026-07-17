@@ -66,6 +66,9 @@ class TestResultInterpretationDocs(unittest.TestCase):
             "only_valid_model",
             "``top_ranked_model`` remains ``None``",
             "selected_model=None",
+            "standardization_sigma_source",
+            "already includes the likelihood noise",
+            "not added again",
         ]
         for token in required:
             with self.subTest(token=token):

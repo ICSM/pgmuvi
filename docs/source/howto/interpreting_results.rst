@@ -197,6 +197,12 @@ follow-up inspection.  It is not cross-validation, not held-out predictive
 performance, not AIC or BIC, and not marginal likelihood or model evidence.
 Small score differences do not establish a scientifically preferred model.
 
+Standardized residual metrics use the observed predictive standard deviation from
+``likelihood(model(x_train))``.  That predictive variance already includes the
+likelihood noise, so the reported measurement uncertainty is not added again.
+``standardization_sigma_source`` records whether observed predictive variance was
+available or whether transformed ``yerr`` had to be used as a fallback.
+
 A very low score should trigger inspection of the underlying metrics and fit
 state.  ``fit_quality_available=False`` means the candidate is unscored; it is
 not assigned a very poor sentinel score and cannot become top ranked.  A high

@@ -363,6 +363,11 @@ Use training-residual diagnostics to rank completed fits:
 This is a diagnostic ranking, not a final evidence calculation.  Current metrics
 include training residual summaries such as normalized RMSE, median absolute
 standardized residual, reduced chi-square-like summaries, and outlier fraction.
+The standardized residuals use the observed predictive variance returned by
+``likelihood(model(x_train))``.  Because that variance already contains the
+likelihood noise, the stored measurement uncertainties are not added to it a second
+time.  Transformed ``yerr`` is used only as a fallback when predictive variance is
+unavailable.
 
 .. warning::
 

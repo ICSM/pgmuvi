@@ -77,6 +77,28 @@ class TestWavelengthAdvisoryDocs(unittest.TestCase):
             with self.subTest(document="batch", token=token):
                 self.assertIn(token, batch)
 
+    def test_docs_explain_training_residual_noise_semantics(self):
+        single = self._read("docs/source/howto/wavelength_advisory.rst")
+        batch = self._read("docs/source/howto/wavelength_advisory_batch.rst")
+        single = " ".join(single.split())
+        batch = " ".join(batch.split())
+
+        for token in [
+            "likelihood(model(x_train))",
+            "not added to it a second time",
+            "predictive variance is unavailable",
+        ]:
+            with self.subTest(document="single", token=token):
+                self.assertIn(token, single)
+
+        for token in [
+            "training_standardization_sigma_source",
+            "already includes likelihood noise",
+            "not combined with ``yerr`` again",
+        ]:
+            with self.subTest(document="batch", token=token):
+                self.assertIn(token, batch)
+
     def test_single_source_doc_describes_retained_high_level_reports_truthfully(self):
         text = self._read("docs/source/howto/wavelength_advisory.rst")
         self.assertIn(

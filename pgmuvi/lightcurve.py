@@ -740,6 +740,24 @@ class Transformer(torch.nn.Module):
         """
         raise NotImplementedError
 
+    def transform_uncertainty(self, data, **kwargs):
+        """Transform uncertainty scales without applying a location shift.
+
+        Uncertainties describe differences in the transformed quantity, not
+        absolute locations.  Built-in affine transformers therefore reuse the
+        fitted scale while suppressing any mean, median, minimum, or offset
+        subtraction.  The transformer must already have been fitted on the
+        corresponding values before this method is called.
+        """
+        return self.transform(data, shift=False, **kwargs)
+
+    def transform_variance(self, data, **kwargs):
+        """Transform variance values using the square of the fitted scale."""
+        if torch.any(data < 0):
+            raise ValueError("Variance values must be non-negative.")
+        transformed_sigma = self.transform_uncertainty(torch.sqrt(data), **kwargs)
+        return transformed_sigma**2
+
     def inverse(self, data, shift=True, **kwargs):
         """Invert a transform based on saved parameters
 
@@ -796,6 +814,17 @@ class MinMax(Transformer):
         """
         return (data * self.range) + (shift * self.min)
 
+    def transform_uncertainty(self, data, apply_to=None, **kwargs):
+        """Divide uncertainty scales by the fitted data range."""
+        del kwargs
+        if not hasattr(self, "range"):
+            raise RuntimeError(
+                "MinMax uncertainty transformation requires a fitted range."
+            )
+        if apply_to is not None:
+            return data / self.range[apply_to]
+        return data / self.range
+
 
 class ZScore(Transformer):
     def transform(self, data, dim=0, apply_to=None, recalc=False, shift=True, **kwargs):
@@ -841,6 +870,18 @@ class ZScore(Transformer):
             The data to be reverse-transformed
         """
         return (data * self.sd) + (self.mean * shift)
+
+    def transform_uncertainty(self, data, apply_to=None, **kwargs):
+        """Divide uncertainty scales by the fitted standard deviation."""
+        del kwargs
+        if not hasattr(self, "sd"):
+            raise RuntimeError(
+                "ZScore uncertainty transformation requires a fitted standard "
+                "deviation."
+            )
+        if apply_to is not None:
+            return data / self.sd[apply_to]
+        return data / self.sd
 
 
 class Shift(Transformer):
@@ -967,6 +1008,11 @@ class Shift(Transformer):
             raise RuntimeError("Shift.inverse() called before the offset was fitted.")
         return data + self._offset_for_data(data)
 
+    def transform_uncertainty(self, data, **kwargs):
+        """Return uncertainty scales unchanged by a pure coordinate shift."""
+        del kwargs
+        return data
+
 
 class TimeCenter(Shift):
     """Center the time coordinate while preserving all other coordinates.
@@ -1024,6 +1070,17 @@ class RobustZScore(Transformer):
             The data to be reverse-transformed
         """
         return (data * self.mad) + (self.median * shift)
+
+    def transform_uncertainty(self, data, apply_to=None, **kwargs):
+        """Divide uncertainty scales by the fitted MAD."""
+        del kwargs
+        if not hasattr(self, "mad"):
+            raise RuntimeError(
+                "RobustZScore uncertainty transformation requires a fitted MAD."
+            )
+        if apply_to is not None:
+            return data / self.mad[apply_to]
+        return data / self.mad
 
 
 def minmax(data, dim=0):
@@ -3505,11 +3562,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise ValueError(errmsg)
         # then, store the raw data internally
         self.register_buffer("_yerr_raw", values)
-        # now apply the same transformation that was applied to the ydata
+        # Apply only the fitted scale from the y-data transformation. Errors
+        # represent differences, so location shifts must not be applied.
         if self.ytransform is None:
             self.register_buffer("_yerr_transformed", values)
         elif isinstance(self.ytransform, Transformer):
-            self.register_buffer("_yerr_transformed", self.ytransform.transform(values))
+            self.register_buffer(
+                "_yerr_transformed",
+                self.ytransform.transform_uncertainty(values),
+            )
 
     def _ensure_tensor(self, values):
         # Ensures that the input data has type torch.Tensor
@@ -6290,6 +6351,28 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return self.ytransform.transform(values)
         raise TypeError("ytransform must be None or a Transformer instance.")
 
+    def transform_y_uncertainty(self, values):
+        """Transform dependent-variable uncertainty scales.
+
+        Unlike :meth:`transform_y`, this method never applies the location
+        shift fitted by the y-axis transformer.  For example, z-score errors
+        are divided by the fitted standard deviation, while MinMax errors are
+        divided by the fitted range.
+        """
+        if self.ytransform is None:
+            return values
+        elif isinstance(self.ytransform, Transformer):
+            return self.ytransform.transform_uncertainty(values)
+        raise TypeError("ytransform must be None or a Transformer instance.")
+
+    def transform_y_variance(self, values):
+        """Transform dependent-variable variances with the squared scale."""
+        if self.ytransform is None:
+            return values
+        elif isinstance(self.ytransform, Transformer):
+            return self.ytransform.transform_variance(values)
+        raise TypeError("ytransform must be None or a Transformer instance.")
+
     def _floating_data_dtype(self):
         """Return the floating dtype used by the stored training data."""
         for name in (
@@ -6370,7 +6453,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             to produce noise *variances* before being passed to the likelihood.
 
             If ``True``, the stored uncertainties are assumed to already be
-            variances and are passed through unchanged as the noise tensor.
+            variances.  When a ``ytransform`` is active, they are rescaled by
+            the square of the fitted y-axis scale before being passed to the
+            likelihood; without a y-transform they are passed through
+            unchanged.
         learn_additional_noise : bool, optional
             If ``True`` and per-point uncertainties are available, use
             :class:`gpytorch.likelihoods.FixedNoiseGaussianLikelihood` with
@@ -6396,12 +6482,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         learn_additional_noise = bool(learn_additional_noise)
 
         # Prepare the noise tensor: gpytorch likelihoods expect variances.
-        # By default (variance=False) we square the stored errors; if the
-        # caller has already supplied variances, we use them as-is.
+        # By default (variance=False) we square the transformed standard
+        # deviations. If the caller supplied variances, transform the raw
+        # values with the square of the fitted y-axis scale.
         _has_noise = hasattr(self, "_yerr_transformed")
         if _has_noise:
             noise = (
-                self._yerr_transformed
+                self.transform_y_variance(self._yerr_raw)
                 if variance
                 else self._yerr_transformed ** 2
             )

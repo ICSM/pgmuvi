@@ -405,6 +405,10 @@ Important columns include:
      - Fraction of large standardized residuals.
    * - ``training_reduced_chi2``
      - Reduced-chi-square-like training residual diagnostic.
+   * - ``training_standardization_sigma_source``
+     - Whether standardized residuals used observed predictive variance or the
+       transformed-uncertainty fallback. Observed predictive variance already
+       includes likelihood noise and is not combined with ``yerr`` again.
    * - ``exception_type`` / ``exception_message``
      - Per-config failure diagnostics.
    * - ``failure_stage`` / ``failure_stage_reason``

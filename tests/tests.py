@@ -121,7 +121,10 @@ class TestLightCurve(unittest.TestCase):
 
     def test_yerr_setter_with_transform(self):
         self.lightcurve.ytransform = MinMax()
-        self.test_yerr_transformed = self.lightcurve.ytransform.transform(self.test_ydata)
+        self.lightcurve.ytransform.transform(self.test_ydata)
+        self.test_yerr_transformed = (
+            self.lightcurve.ytransform.transform_uncertainty(self.test_ydata)
+        )
 
         self.lightcurve.yerr = self.test_ydata
         self.assertTrue(torch.equal(self.lightcurve._yerr_raw, self.test_ydata))
