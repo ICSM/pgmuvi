@@ -331,6 +331,35 @@ A failed fit is not a low-quality successful fit.  Read ``status``,
 ``fit_success``, ``fit_failed``, ``exception_type``, ``exception_message``, and
 ``failure_stage`` before comparing scores.
 
+For maintained advisory outcomes, also inspect the canonical status dimensions:
+
+``attempt_disposition``
+   Whether the configured attempt was attempted, skipped, or not attempted.
+
+``execution_stage``
+   The furthest stage reached, such as ``precondition``, ``consensus``,
+   ``optimization``, ``diagnostics``, or ``completed``.
+
+``technical_outcome``
+   One of ``failed``, ``initialized_only``, ``completed``,
+   ``completed_with_warnings``, or ``completed_with_recovery``.  A zero-iteration
+   fit is initialization-only even though the legacy status remains ``passed``.
+
+``diagnostic_validity`` / ``scientific_usability``
+   Whether diagnostics are valid, partial, unavailable, or invalid, and whether
+   the attempt is usable, limited, or unusable for scientific interpretation.
+
+``comparison_eligibility``
+   Whether the attempt can participate in the current fit-quality comparison.
+   Initialization-only and diagnostically unavailable attempts are
+   comparison-ineligible rather than assigned a very poor score.
+
+``failure_code`` / ``failure_substage``
+   Stable machine-readable failure identity and optional more specific stage.
+   Structured ``failure_diagnostics`` and ``failure_summary`` are retained when
+   supplied by a consensus failure, and general outer fit exceptions now also
+   populate the canonical ``Lightcurve`` failure state.
+
 The advisory failure classifier uses descriptive stages:
 
 ``input_validation``

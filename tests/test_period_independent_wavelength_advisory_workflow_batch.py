@@ -192,6 +192,36 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
             )
         )
 
+    def test_source_rows_include_canonical_status_dimensions(self):
+        report = run_period_independent_wavelength_advisory_workflow_batch(
+            [{"source_id": "src", "lightcurve": _FakeLightcurve()}],
+            export=False,
+        )
+        source = report["source_results"][0]
+        self.assertEqual(source["status"], "passed")
+        self.assertEqual(source["attempt_disposition"], "attempted")
+        self.assertEqual(source["execution_stage"], "completed")
+        self.assertEqual(source["technical_outcome"], "completed")
+        self.assertEqual(source["diagnostic_validity"], "valid")
+        self.assertEqual(source["scientific_usability"], "usable")
+        self.assertEqual(source["comparison_eligibility"], "eligible")
+
+    def test_failed_source_rows_include_structured_failure_status(self):
+        report = run_period_independent_wavelength_advisory_workflow_batch(
+            [{"source_id": "bad", "lightcurve": _FakeLightcurve(fail=True)}],
+            export=False,
+        )
+        source = report["source_results"][0]
+        self.assertEqual(source["technical_outcome"], "failed")
+        self.assertEqual(source["scientific_usability"], "unusable")
+        self.assertEqual(source["comparison_eligibility"], "ineligible")
+        self.assertEqual(source["failure_code"], "source_optimization_failed")
+        self.assertEqual(source["failure_stage"], "optimization")
+        self.assertEqual(
+            source["structured_failure_record"]["failure_code"],
+            "source_optimization_failed",
+        )
+
     def test_report_contract_is_advisory_and_nonselecting(self):
         report = run_period_independent_wavelength_advisory_workflow_batch(
             [{"source_id": "src", "lightcurve": _FakeLightcurve()}],

@@ -296,6 +296,30 @@ class TestPeriodIndependentWavelengthModelKernelConfigQuality(unittest.TestCase)
         self.assertEqual(valid["quality_rank"], 1)
         self.assertFalse(valid["is_top_ranked"])
 
+    def test_comparison_ineligible_attempt_remains_unscored(self):
+        run_report = _quality_run_report()
+        run_report["model_kernel_config_results"][0][
+            "comparison_eligibility"
+        ] = "ineligible"
+        run_report["model_kernel_config_results"][0][
+            "technical_outcome"
+        ] = "initialized_only"
+
+        report = score_period_independent_wavelength_model_kernel_config_quality(
+            run_report
+        )
+        row = next(
+            item
+            for item in report["ranked_results"]
+            if item["model"] == "2DWavelengthDependent"
+        )
+
+        self.assertFalse(row["fit_quality_available"])
+        self.assertIsNone(row["fit_quality_score"])
+        self.assertEqual(row["comparison_eligibility"], "ineligible")
+        self.assertEqual(row["technical_outcome"], "initialized_only")
+        self.assertIn("comparison-ineligible", row["score_components"][0])
+
     def test_report_aliases_are_present(self):
         report = score_period_independent_wavelength_model_kernel_config_quality(
             _quality_run_report()

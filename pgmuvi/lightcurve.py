@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 import time
+import traceback
 from typing import ClassVar
 import numpy as np
 import torch
@@ -2661,11 +2662,28 @@ class PeriodSummaryResult:
 class FitFailureSummary:
     """Lightweight structured summary for failed fit attempts."""
 
-    def __init__(self, status="failed", reason=None, message="", diagnostics=None):
+    def __init__(
+        self,
+        status="failed",
+        reason=None,
+        message="",
+        diagnostics=None,
+        *,
+        failure_code=None,
+        stage=None,
+        substage=None,
+        exception_type=None,
+        traceback_reference=None,
+    ):
         self.status = status
         self.reason = reason
         self.message = message
         self.diagnostics = dict(diagnostics or {})
+        self.failure_code = failure_code or reason
+        self.stage = stage
+        self.substage = substage
+        self.exception_type = exception_type
+        self.traceback_reference = traceback_reference
 
     def _json_serialize(self, obj):
         if obj is None or isinstance(obj, (bool, str, int)):
@@ -2689,13 +2707,19 @@ class FitFailureSummary:
 
     def to_dict(self, include_fit_history=False, fit_history=None):
         """Return a JSON-safe failure-summary dictionary.
-        
-        When requested, the returned dictionary also includes sanitized fit-history
-        information supplied by the caller."""
+
+        When requested, the returned dictionary also includes sanitized
+        fit-history information supplied by the caller.
+        """
         payload = {
             "status": self.status,
             "reason": self.reason,
             "message": self.message,
+            "failure_code": self.failure_code,
+            "stage": self.stage,
+            "substage": self.substage,
+            "exception_type": self.exception_type,
+            "traceback_reference": self.traceback_reference,
             "diagnostics": self.diagnostics,
         }
         if include_fit_history:
@@ -2710,12 +2734,16 @@ class FitFailureSummary:
             "===================",
             f"Status : {self.status}",
             f"Reason : {self.reason or 'N/A'}",
+            f"Code   : {self.failure_code or 'N/A'}",
+            f"Stage  : {self.stage or 'N/A'}",
             f"Message: {self.message or 'N/A'}",
         ]
         if self.diagnostics:
             lines.append("Diagnostics:")
             for key in sorted(self.diagnostics):
-                lines.append(f"  - {key}: {self.to_dict()['diagnostics'].get(key)}")
+                lines.append(
+                    f"  - {key}: {self.to_dict()['diagnostics'].get(key)}"
+                )
         return "\n".join(lines)
 
     def write_json(
@@ -2735,6 +2763,7 @@ class FitFailureSummary:
                 indent=2,
                 allow_nan=False,
             )
+
 
 class Lightcurve(InputHelpers, gpytorch.Module):
     """A class for storing, manipulating and fitting light curves
@@ -6258,11 +6287,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         diagnostics=None,
         clear_model_state=False,
         clear_consensus=False,
+        failure_code=None,
+        stage=None,
+        substage=None,
+        exception_type="ConsensusFitError",
+        traceback_reference=None,
+        is_consensus_failure=True,
+        source="_record_failure_state",
+        elapsed_seconds=None,
     ):
         """Set canonical failed-fit state and return a failure summary object."""
         _diagnostics = self._consensus_make_json_safe(dict(diagnostics or {}))
         _diagnostics.setdefault("status", "failed")
         _diagnostics.setdefault("reason", reason)
+        _diagnostics.setdefault("failure_code", failure_code or reason)
+        _diagnostics.setdefault("failure_stage", stage)
+        _diagnostics.setdefault("failure_substage", substage)
+        _diagnostics.setdefault("exception_type", exception_type)
+        _diagnostics.setdefault("is_consensus_failure", bool(is_consensus_failure))
 
         self._reset_fit_state(
             clear_failure=False,
@@ -6278,14 +6320,28 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             reason=reason,
             message=message,
             diagnostics=_diagnostics,
+            failure_code=failure_code or reason,
+            stage=stage,
+            substage=substage,
+            exception_type=exception_type,
+            traceback_reference=traceback_reference,
         )
-        self.consensus_failure_summary = self.failure_summary
+        self.consensus_failure_summary = (
+            self.failure_summary if is_consensus_failure else None
+        )
         self._append_fit_history(
             success=False,
             failed=True,
-            exception_type="ConsensusFitError",
+            exception_type=exception_type,
             exception_message=message,
-            notes={"reason": reason, "source": "_record_failure_state"},
+            elapsed_seconds=elapsed_seconds,
+            notes={
+                "reason": reason,
+                "failure_code": failure_code or reason,
+                "stage": stage,
+                "substage": substage,
+                "source": source,
+            },
         )
         self._fit_history_recorded = True
         return self.failure_summary
@@ -6299,9 +6355,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if not self.fit_failed:
             return
 
+        _is_consensus_failure = bool(
+            isinstance(self.failure_diagnostics, dict)
+            and self.failure_diagnostics.get("is_consensus_failure") is True
+        )
+        _fit_label = "consensus fit" if _is_consensus_failure else "fit"
         _base_message = (
             "Cannot generate "
-            f"{action_message}: the most recent consensus fit failed"
+            f"{action_message}: the most recent {_fit_label} failed"
         )
         _reason_messages = {
             "no_accepted_bands": (
@@ -6320,7 +6381,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         }
         _tail = _reason_messages.get(
             self.failure_reason,
-            "because the data did not support a coherent shared period.",
+            (
+                "because the data did not support a coherent shared period."
+                if _is_consensus_failure
+                else "because the fit did not complete successfully."
+            ),
         )
         _message = f"{_base_message} {_tail}"
         exc = ConsensusFitError(
@@ -10114,13 +10179,22 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             result = self._fit_core(*args, **kwargs)
         except Exception as exc:
             if not bool(getattr(self, "_fit_history_recorded", False)):
-                self._append_fit_history(
-                    success=False,
-                    failed=True,
+                self._record_failure_state(
+                    reason="fit_exception",
+                    failure_code="fit_execution_failed",
+                    stage="fit_execution",
+                    substage="outer_fit",
+                    message=str(exc),
+                    diagnostics={
+                        "exception_type": exc.__class__.__name__,
+                        "elapsed_seconds": time.perf_counter() - _fit_start,
+                        "traceback": traceback.format_exc(),
+                    },
                     exception_type=exc.__class__.__name__,
-                    exception_message=str(exc),
+                    traceback_reference="failure_diagnostics.traceback",
+                    is_consensus_failure=False,
+                    source="fit_exception",
                     elapsed_seconds=time.perf_counter() - _fit_start,
-                    notes={"source": "fit_exception"},
                 )
             raise
         else:
@@ -10996,12 +11070,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _failure_diagnostics = getattr(exc, "failure_diagnostics", None) or {}
             _failure_reason = _failure_diagnostics.get("reason") or "consensus_failure"
             _failure_message = str(exc)
+            _failure_diagnostics.setdefault("traceback", traceback.format_exc())
             failure_summary = self._record_failure_state(
                 reason=_failure_reason,
+                failure_code=_failure_reason,
+                stage="consensus",
+                substage=_failure_diagnostics.get("failure_stage"),
                 message=_failure_message,
                 diagnostics=_failure_diagnostics,
                 clear_model_state=False,
                 clear_consensus=False,
+                exception_type=exc.__class__.__name__,
+                traceback_reference="failure_diagnostics.traceback",
+                is_consensus_failure=True,
+                source="_consensus_fit",
             )
             exc.failure_diagnostics = self.failure_diagnostics
             exc.failure_summary = failure_summary

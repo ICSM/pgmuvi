@@ -322,7 +322,13 @@ Important columns include:
    * - ``source_id``
      - User-facing source identifier.
    * - ``status``
-     - ``passed`` or failure status.
+     - Legacy outer source status, retained for compatibility.
+   * - ``attempt_disposition`` / ``execution_stage`` / ``technical_outcome``
+     - Canonical source-level execution status dimensions.
+   * - ``diagnostic_validity`` / ``scientific_usability`` /
+       ``comparison_eligibility``
+     - Whether the completed source workflow produced usable and comparable
+       evidence.
    * - ``fit_quality_ranking_status``
      - ``available``, ``single_valid_candidate``, or ``unavailable``.
    * - ``fit_quality_ranking_available``
@@ -390,7 +396,16 @@ Important columns include:
    * - ``training_iter`` / ``miniter``
      - Training controls used for the fit.
    * - ``fit_success`` / ``fit_failed``
-     - Per-config fit status.
+     - Legacy per-config fit aliases retained for compatibility.
+   * - ``attempt_disposition`` / ``execution_stage`` / ``technical_outcome``
+     - Canonical execution dimensions, including ``initialized_only``,
+       ``completed_with_warnings``, and ``completed_with_recovery``.
+   * - ``diagnostic_validity`` / ``scientific_usability`` /
+       ``comparison_eligibility``
+     - Diagnostic and comparison status.  Rows marked
+       ``comparison_eligibility="ineligible"`` remain unscored.
+   * - ``warning_severity`` / ``warning_count``
+     - Structured warning summary captured during the candidate fit.
    * - ``fit_quality_score``
      - Advisory residual-quality score.
    * - ``consensus_period`` / ``consensus_frequency``
@@ -425,8 +440,10 @@ Important columns include:
        includes likelihood noise and is not combined with ``yerr`` again.
    * - ``exception_type`` / ``exception_message``
      - Per-config failure diagnostics.
-   * - ``failure_stage`` / ``failure_stage_reason``
-     - Broad failure classification and short reason for failed configs.
+   * - ``failure_code`` / ``failure_stage`` / ``failure_substage`` /
+       ``failure_stage_reason``
+     - Stable failure identity, broad stage, optional substage, and readable
+       reason for failed configs.
    * - ``is_consensus_failure`` / ``is_numerical_failure`` / ``is_input_validation_failure``
      - Boolean triage flags for common failure modes.
    * - ``n_constrained_sm_ard_components``
