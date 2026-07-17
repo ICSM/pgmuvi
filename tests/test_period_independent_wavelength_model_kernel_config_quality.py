@@ -2,8 +2,11 @@
 
 import unittest
 
+import torch
+
 from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.wavelength_diagnostics import (
+    _piwd_compute_training_fit_quality,
     score_period_independent_wavelength_model_kernel_config_quality,
 )
 
@@ -64,6 +67,92 @@ def _quality_run_report():
             },
         ],
     }
+
+
+class _Prediction:
+    def __init__(self, mean, variance=None):
+        self.mean = torch.as_tensor(mean, dtype=torch.float64)
+        if variance is not None:
+            self.variance = torch.as_tensor(variance, dtype=torch.float64)
+
+
+class _Model:
+    def __call__(self, _x):
+        return object()
+
+
+class _Likelihood:
+    def __init__(self, prediction):
+        self.prediction = prediction
+
+    def __call__(self, _output):
+        return self.prediction
+
+
+class _FittedLightcurve:
+    def __init__(self, *, prediction, y, yerr):
+        self.model = _Model()
+        self.likelihood = _Likelihood(prediction)
+        self._xdata_transformed = torch.arange(len(y), dtype=torch.float64)
+        self._ydata_transformed = torch.as_tensor(y, dtype=torch.float64)
+        self._yerr_transformed = torch.as_tensor(yerr, dtype=torch.float64)
+
+    def _eval(self):
+        return None
+
+
+class TestTrainingFitQualityVarianceSemantics(unittest.TestCase):
+    def test_observed_predictive_variance_is_not_combined_with_yerr_again(self):
+        fitted = _FittedLightcurve(
+            prediction=_Prediction(mean=[0.0, 0.0], variance=[4.0, 4.0]),
+            y=[1.0, 2.0],
+            yerr=[3.0, 3.0],
+        )
+
+        report = _piwd_compute_training_fit_quality(fitted)
+
+        self.assertTrue(report["available"])
+        self.assertEqual(report["predictive_variance_kind"], "observed")
+        self.assertEqual(
+            report["standardization_sigma_source"],
+            "observed_predictive_standard_deviation",
+        )
+        self.assertFalse(report["measurement_uncertainty_added_separately"])
+        self.assertAlmostEqual(report["normalized_rmse"], (0.625) ** 0.5)
+        self.assertAlmostEqual(report["reduced_chi2"], 1.25)
+
+    def test_yerr_is_used_only_when_predictive_variance_is_unavailable(self):
+        fitted = _FittedLightcurve(
+            prediction=_Prediction(mean=[0.0, 0.0]),
+            y=[1.0, 2.0],
+            yerr=[2.0, 2.0],
+        )
+
+        report = _piwd_compute_training_fit_quality(fitted)
+
+        self.assertEqual(
+            report["standardization_sigma_source"],
+            "transformed_measurement_uncertainty_fallback",
+        )
+        self.assertIsNone(report["predictive_variance_kind"])
+        self.assertAlmostEqual(report["normalized_rmse"], (0.625) ** 0.5)
+        self.assertAlmostEqual(report["reduced_chi2"], 1.25)
+
+    def test_invalid_predictive_variance_uses_pointwise_yerr_fallback(self):
+        fitted = _FittedLightcurve(
+            prediction=_Prediction(mean=[0.0, 0.0], variance=[4.0, float("nan")]),
+            y=[1.0, 2.0],
+            yerr=[3.0, 2.0],
+        )
+
+        report = _piwd_compute_training_fit_quality(fitted)
+
+        self.assertEqual(
+            report["standardization_sigma_source"],
+            "observed_predictive_standard_deviation_with_transformed_yerr_fallback",
+        )
+        self.assertAlmostEqual(report["normalized_rmse"], (0.625) ** 0.5)
+        self.assertAlmostEqual(report["reduced_chi2"], 1.25)
 
 
 class TestPeriodIndependentWavelengthModelKernelConfigQuality(unittest.TestCase):

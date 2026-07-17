@@ -95,6 +95,14 @@ axis (``ytransform``). All predictions are automatically inverse-transformed bac
 the original units when plotting or reporting results. Pass ``center_time=False`` to
 turn off the default time-centering behaviour.
 
+When a ``ytransform`` is active, dependent-variable uncertainties are transformed as
+scales rather than as absolute values.  MinMax uncertainties are divided by the fitted
+range, z-score uncertainties by the fitted standard deviation, and robust-z-score
+uncertainties by the fitted MAD.  Location shifts such as the fitted minimum, mean,
+median, or explicit offset are never subtracted from ``yerr``.
+If ``set_likelihood(variance=True)`` is used because the stored values are already
+variances, PGMUVI applies the square of the fitted transform scale.
+
 1D vs 2D Models
 ----------------
 

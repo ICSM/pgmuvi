@@ -431,6 +431,11 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
                         "fit_quality_available": True,
                         "fit_quality_score": 42.0,
                         "training_reduced_chi2": 0.5,
+                        "training_predictive_variance_kind": "observed",
+                        "training_standardization_sigma_source": (
+                            "observed_predictive_standard_deviation"
+                        ),
+                        "training_measurement_uncertainty_added_separately": False,
                     },
                     {
                         "quality_rank": 2,
@@ -483,10 +488,24 @@ class TestPeriodIndependentWavelengthAdvisoryWorkflowBatch(unittest.TestCase):
         self.assertEqual(dust["quality_rank"], 1)
         self.assertEqual(dust["time_kernel_type"], "quasi_periodic")
         self.assertEqual(dust["fit_quality_score"], 42.0)
+        self.assertEqual(dust["training_predictive_variance_kind"], "observed")
+        self.assertEqual(
+            dust["training_standardization_sigma_source"],
+            "observed_predictive_standard_deviation",
+        )
+        self.assertFalse(
+            dust["training_measurement_uncertainty_added_separately"]
+        )
 
         csv_by_model = {row["model"]: row for row in csv_rows}
         self.assertEqual(csv_by_model["2DDustMean"]["model_kernel_config_id"], "rank2_2DDustMean")
         self.assertEqual(csv_by_model["2DDustMean"]["quality_rank"], "1")
+        self.assertEqual(
+            csv_by_model["2DDustMean"][
+                "training_standardization_sigma_source"
+            ],
+            "observed_predictive_standard_deviation",
+        )
         self.assertEqual(csv_by_model["2DWavelengthDependent"]["quality_rank"], "2")
 
 

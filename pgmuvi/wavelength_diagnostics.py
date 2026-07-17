@@ -3567,7 +3567,9 @@ def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]
     the training coordinates in the transformed space used by the GP.  They are
     not cross-validation, AIC, BIC, or posterior predictive checks, but they are
     real fit-quality quantities and can distinguish model/kernel config fits that all pass
-    the consensus/viability checks.
+    the consensus/viability checks. Standardized residuals use the observed
+    likelihood-wrapped predictive variance once; stored measurement errors are
+    only a fallback when that variance is unavailable.
     """
     if fitted_lightcurve is None:
         return _piwd_training_fit_quality_unavailable("no fitted Lightcurve was provided")
@@ -3622,7 +3624,9 @@ def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]
     resid_std = float(np.std(residual)) if n > 1 else 0.0
     nrmse = float(rmse / robust_scale) if robust_scale > 0 else None
 
-    yerr = _piwd_numpy_1d_or_none(getattr(fitted_lightcurve, "_yerr_transformed", None))
+    yerr = _piwd_numpy_1d_or_none(
+        getattr(fitted_lightcurve, "_yerr_transformed", None)
+    )
     if yerr is not None and yerr.size == finite.size:
         yerr = yerr[finite]
     else:
@@ -3635,15 +3639,29 @@ def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]
         pred_std = np.sqrt(pred_var)
 
     sigma = None
+    sigma_source = None
+    predictive_variance_kind = None
     if yerr is not None:
         yerr = np.where(np.isfinite(yerr) & (yerr > 0), yerr, np.nan)
+    if pred_std is not None and np.any(np.isfinite(pred_std) & (pred_std > 0)):
+        sigma = pred_std.copy()
+        sigma_source = "observed_predictive_standard_deviation"
+        predictive_variance_kind = "observed"
+        if yerr is not None:
+            fill = (
+                (~np.isfinite(sigma) | (sigma <= 0))
+                & np.isfinite(yerr)
+                & (yerr > 0)
+            )
+            if np.any(fill):
+                sigma[fill] = yerr[fill]
+                sigma_source = (
+                    "observed_predictive_standard_deviation_with_"
+                    "transformed_yerr_fallback"
+                )
+    elif yerr is not None and np.any(np.isfinite(yerr) & (yerr > 0)):
         sigma = yerr.copy()
-    if pred_std is not None:
-        if sigma is None:
-            sigma = pred_std
-        else:
-            sigma = np.sqrt(np.nan_to_num(sigma, nan=0.0) ** 2 + np.nan_to_num(pred_std, nan=0.0) ** 2)
-            sigma = np.where(sigma > 0, sigma, np.nan)
+        sigma_source = "transformed_measurement_uncertainty_fallback"
 
     normalized_rmse = None
     median_abs_standardized_residual = None
@@ -3718,6 +3736,9 @@ def _piwd_compute_training_fit_quality(fitted_lightcurve: Any) -> dict[str, Any]
             "residual_std": resid_std,
             "target_robust_scale": robust_scale,
             "normalized_rmse_by_target_scale": nrmse,
+            "predictive_variance_kind": predictive_variance_kind,
+            "standardization_sigma_source": sigma_source,
+            "measurement_uncertainty_added_separately": False,
             "normalized_rmse": normalized_rmse,
             "median_abs_standardized_residual": median_abs_standardized_residual,
             "outlier_fraction_3sigma": outlier_fraction_3sigma,
@@ -4066,6 +4087,15 @@ def _piwd_extract_fit_outcome(
         "training_median_abs_standardized_residual": fit_quality.get("median_abs_standardized_residual"),
         "training_outlier_fraction_3sigma": fit_quality.get("outlier_fraction_3sigma"),
         "training_log_marginal_likelihood": fit_quality.get("log_marginal_likelihood"),
+        "training_predictive_variance_kind": fit_quality.get(
+            "predictive_variance_kind"
+        ),
+        "training_standardization_sigma_source": fit_quality.get(
+            "standardization_sigma_source"
+        ),
+        "training_measurement_uncertainty_added_separately": fit_quality.get(
+            "measurement_uncertainty_added_separately"
+        ),
         "sm_ard_scale_diagnostics": sm_ard_diagnostics,
         "constrained_sm_ard_components": sm_ard_diagnostics.get(
             "constrained_sm_ard_components"
@@ -4508,6 +4538,15 @@ def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) ->
             "training_outlier_fraction_3sigma": fit_quality.get("outlier_fraction_3sigma"),
             "training_reduced_chi2": fit_quality.get("reduced_chi2"),
             "training_log_marginal_likelihood": fit_quality.get("log_marginal_likelihood"),
+            "training_predictive_variance_kind": fit_quality.get(
+                "predictive_variance_kind"
+            ),
+            "training_standardization_sigma_source": fit_quality.get(
+                "standardization_sigma_source"
+            ),
+            "training_measurement_uncertainty_added_separately": fit_quality.get(
+                "measurement_uncertainty_added_separately"
+            ),
             "score_components": [reason],
             "source_outcome": outcome,
         }
@@ -5919,6 +5958,15 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
             "training_log_marginal_likelihood": item.get(
                 "training_log_marginal_likelihood"
             ),
+            "training_predictive_variance_kind": item.get(
+                "training_predictive_variance_kind"
+            ),
+            "training_standardization_sigma_source": item.get(
+                "training_standardization_sigma_source"
+            ),
+            "training_measurement_uncertainty_added_separately": item.get(
+                "training_measurement_uncertainty_added_separately"
+            ),
             "n_constrained_sm_ard_components": item.get(
                 "n_constrained_sm_ard_components"
             ),
@@ -5983,6 +6031,9 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "training_outlier_fraction_3sigma",
         "training_reduced_chi2",
         "training_log_marginal_likelihood",
+        "training_predictive_variance_kind",
+        "training_standardization_sigma_source",
+        "training_measurement_uncertainty_added_separately",
         "n_constrained_sm_ard_components",
         "n_constrained_sm_time_components",
         "n_constrained_sm_wavelength_components",

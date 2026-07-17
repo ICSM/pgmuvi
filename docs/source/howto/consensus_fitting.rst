@@ -245,7 +245,9 @@ for all scatter:
 This adds one learned homoscedastic variance term on top of the supplied
 per-observation variances.  It does not replace the reported errors.  Do not set
 ``variance=True`` unless the stored uncertainty column already contains
-variances rather than standard deviations.
+variances rather than standard deviations.  With a ``ytransform``, standard
+deviations use the fitted scale once and variances use its square; location
+shifts are never applied to either quantity.
 
 Initialization, constraints, and numerical stability
 -----------------------------------------------------
