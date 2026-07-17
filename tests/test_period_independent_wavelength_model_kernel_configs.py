@@ -170,6 +170,45 @@ class TestPeriodIndependentWavelengthModelKernelConfigs(unittest.TestCase):
             self.assertIn("parameter_suggestions_applied", candidate)
             self.assertFalse(candidate["parameter_suggestions_applied"])
 
+    def test_model_hypothesis_metadata_separates_mean_and_covariance(self):
+        lc = _make_multiband_lightcurve()
+        plan = lc.build_period_independent_wavelength_parameter_plan()
+        plan["ranked_candidates"].append(
+            {
+                "rank": len(plan["ranked_candidates"]) + 1,
+                "model": "2DSeparable",
+                "recommendation_strength": "advisory",
+                "hard_exclusion": False,
+                "primary_reason": "Explicit taxonomy-propagation test candidate.",
+                "reason": "Explicit taxonomy-propagation test candidate.",
+            }
+        )
+
+        report = lc.build_period_independent_wavelength_model_kernel_configs(
+            parameter_plan=plan,
+            include_models=["2DDustMean", "2DSeparable", "2D"],
+            include_2d_baseline=True,
+        )
+
+        self.assertEqual(
+            report["hypothesis_schema_version"],
+            "pgmuvi-wavelength-hypotheses-v1",
+        )
+        by_model = {
+            candidate["model"]: candidate["model_hypothesis"]
+            for candidate in report["model_kernel_configs"]
+        }
+        self.assertEqual(by_model["2DDustMean"]["mean_structure"], "dust_attenuation")
+        self.assertEqual(
+            by_model["2DDustMean"]["covariance_structure"],
+            "separable_smooth_wavelength",
+        )
+        self.assertTrue(by_model["2DDustMean"]["mean_wavelength_dependent"])
+        self.assertTrue(by_model["2DDustMean"]["covariance_wavelength_dependent"])
+        self.assertEqual(by_model["2DSeparable"]["mean_structure"], "constant")
+        self.assertEqual(by_model["2D"]["role"], "joint_baseline")
+        self.assertFalse(by_model["2D"]["covariance_separable"])
+
     def test_include_models_filters_candidate_list(self):
         lc = _make_multiband_lightcurve()
 

@@ -125,6 +125,13 @@ class TestAttemptResultAdapter(unittest.TestCase):
             ComparisonEligibility.ELIGIBLE,
         )
         self.assertEqual(result.fit_kwargs["training_iter"], 20)
+        self.assertIsNotNone(result.hypothesis)
+        self.assertEqual(result.hypothesis.model, "2DDustMean")
+        self.assertEqual(result.hypothesis.role.value, "mean_and_covariance")
+        self.assertEqual(
+            result.hypothesis.covariance_structure.value,
+            "separable_smooth_wavelength",
+        )
         self.assertEqual(
             result.to_legacy_dict()["unknown_legacy_field"], {"kept": True}
         )
@@ -134,6 +141,7 @@ class TestAttemptResultAdapter(unittest.TestCase):
             "completed_with_warnings",
         )
         self.assertEqual(typed["warnings"][0]["message"], "synthetic warning")
+        self.assertEqual(typed["hypothesis"]["mean_structure"], "dust_attenuation")
         self.assertEqual(typed["diagnostics"]["consensus"]["consensus_period"], 600.0)
         json.dumps(typed)
 

@@ -23,6 +23,11 @@ except ImportError:  # pragma: no cover - pgmuvi normally depends on torch
 
 from pgmuvi.preprocess.quality import assess_sampling_quality, robust_scale
 from pgmuvi.preprocess.variability import is_variable
+from pgmuvi.wavelength_hypotheses import (
+    WAVELENGTH_HYPOTHESIS_SCHEMA_VERSION,
+    WavelengthModelHypothesis,
+    describe_wavelength_model_hypothesis,
+)
 from pgmuvi.wavelength_status import (
     ExecutionStage,
     WarningSeverity,
@@ -3539,6 +3544,9 @@ def build_period_independent_wavelength_model_kernel_configs(
             "parameter_suggestions": (
                 suggestions.get(model) if include_parameter_suggestions else None
             ),
+            "model_hypothesis": describe_wavelength_model_hypothesis(
+                model, fit_kwargs=fit_kwargs
+            ).to_dict(),
         }
         candidates.append(candidate)
 
@@ -3572,6 +3580,9 @@ def build_period_independent_wavelength_model_kernel_configs(
                 "parameter_suggestions_applied": False,
                 "applies_constraints": False,
                 "parameter_suggestions": None,
+                "model_hypothesis": describe_wavelength_model_hypothesis(
+                    "2D", fit_kwargs=baseline_kwargs
+                ).to_dict(),
             }
         )
 
@@ -3589,6 +3600,7 @@ def build_period_independent_wavelength_model_kernel_configs(
             "kind": "period_independent_wavelength_model_kernel_configs",
             "stage": "prefit_period_independent_model_kernel_config",
             "source_plan_kind": plan.get("kind"),
+            "hypothesis_schema_version": WAVELENGTH_HYPOTHESIS_SCHEMA_VERSION,
             "is_period_independent": True,
             "uses_temporal_consensus": False,
             "uses_period_or_frequency": False,
@@ -3606,6 +3618,7 @@ def build_period_independent_wavelength_model_kernel_configs(
                 "Parameter suggestions are metadata only and are not inserted into fit_kwargs.",
                 "LPV separable candidates default to time_kernel_type='quasi_periodic' to use the PR55 period_length handoff.",
                 "The 2D baseline keeps its existing spectral-mixture time-kernel default unless base_fit_kwargs overrides it.",
+                "Model-hypothesis metadata records mean and covariance roles separately and is descriptive rather than selecting.",
             ],
         }
     )
@@ -3638,6 +3651,15 @@ def _piwd_validate_model_kernel_config_report(report: dict[str, Any]) -> list[di
         copied["rank"] = int(copied.get("rank") or index)
         copied["model"] = str(copied.get("model") or fit_kwargs.get("model"))
         copied["fit_kwargs"] = dict(fit_kwargs)
+        hypothesis = copied.get("model_hypothesis")
+        if isinstance(hypothesis, dict):
+            copied["model_hypothesis"] = WavelengthModelHypothesis.from_mapping(
+                hypothesis
+            ).to_dict()
+        else:
+            copied["model_hypothesis"] = describe_wavelength_model_hypothesis(
+                copied["model"], fit_kwargs=copied["fit_kwargs"]
+            ).to_dict()
         normalized.append(copied)
     return normalized
 
@@ -4562,6 +4584,7 @@ def _piwd_extract_fit_outcome(
         "model_kernel_config_id": candidate.get("model_kernel_config_id"),
         "rank": candidate.get("rank"),
         "model": candidate.get("model"),
+        "model_hypothesis": candidate.get("model_hypothesis"),
         "status": status,
         **attempt_status.to_dict(),
         "fit_success": bool(status == "passed"),
@@ -4777,6 +4800,7 @@ def run_period_independent_wavelength_model_kernel_configs(
             "kind": "period_independent_wavelength_model_kernel_config_results",
             "stage": "model_kernel_config_fit_execution_summary",
             "source_model_kernel_config_report_kind": model_kernel_config_report.get("kind"),
+            "hypothesis_schema_version": WAVELENGTH_HYPOTHESIS_SCHEMA_VERSION,
             "is_period_independent": True,
             "uses_temporal_consensus": True,
             "uses_period_or_frequency": True,
@@ -4902,6 +4926,7 @@ def _piwd_score_one_wavelength_fit_outcome(
         {
             "rank": outcome.get("rank"),
             "model": outcome.get("model"),
+            "model_hypothesis": outcome.get("model_hypothesis"),
             "status": status,
             "fit_success": fit_success,
             "consensus_success": consensus_success,
@@ -5097,6 +5122,7 @@ def _piwd_score_one_wavelength_fit_quality(scored_or_outcome: dict[str, Any]) ->
         {
             "rank": outcome.get("rank"),
             "model": outcome.get("model"),
+            "model_hypothesis": outcome.get("model_hypothesis"),
             "status": outcome.get("status"),
             "attempt_disposition": outcome.get("attempt_disposition"),
             "execution_stage": outcome.get("execution_stage"),
