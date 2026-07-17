@@ -16,6 +16,7 @@ from pgmuvi.constraint_utils import make_interval_constraint
 from pgmuvi.constraint_utils import register_constraint_preserving_value
 from pgmuvi.parameter_estimates import ParameterEstimateCollection
 from pgmuvi.parameter_specs import ConstraintStrategy
+from pgmuvi.parameter_specs import GuessStrategy
 from pgmuvi.parameter_specs import ParameterScale
 import math
 import torch
@@ -77,9 +78,81 @@ class ParameterEstimateApplicator:
             if constraint_action is not None:
                 result["constraint_action"] = constraint_action
 
+            if self._is_wavelength_range_estimate(estimate):
+                result["wavelength_estimate_provenance"] = {
+                    "value_source": estimate.value_source,
+                    "constraint_source": estimate.constraint_source,
+                    "estimated_value": self._to_python(estimate.value),
+                    "estimated_constraint": self._to_python(
+                        estimate.constraint
+                    ),
+                    "effective_constraint": self._to_python(
+                        self._effective_constraint_bounds(
+                            target_module,
+                            parameter_name,
+                        )
+                    ),
+                    "diagnostics": self._to_python(estimate.diagnostics),
+                }
+
             results[estimate.name] = result
 
         return results
+
+    @staticmethod
+    def _is_wavelength_range_estimate(estimate) -> bool:
+        """Return whether an estimate comes from wavelength-range diagnostics."""
+        return (
+            estimate.spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE
+            or estimate.spec.constraint_strategy
+            is ConstraintStrategy.WAVELENGTH_RANGE
+        )
+
+    @staticmethod
+    def _to_python(value):
+        """Return a JSON-safe scalar/list representation when possible."""
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return {
+                key: ParameterEstimateApplicator._to_python(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, tuple):
+            return [
+                ParameterEstimateApplicator._to_python(item)
+                for item in value
+            ]
+        if isinstance(value, list):
+            return [
+                ParameterEstimateApplicator._to_python(item)
+                for item in value
+            ]
+        if isinstance(value, torch.Tensor):
+            detached = value.detach().cpu()
+            if detached.numel() == 1:
+                return float(detached.item())
+            return detached.tolist()
+        if isinstance(value, (bool, int, float, str)):
+            return value
+        return str(value)
+
+    @staticmethod
+    def _effective_constraint_bounds(target_module, parameter_name):
+        """Return the bounds registered on a constrained GPyTorch parameter."""
+        raw_parameter_name = (
+            parameter_name
+            if parameter_name.startswith("raw_")
+            else f"raw_{parameter_name}"
+        )
+        constraint = getattr(
+            target_module,
+            f"{raw_parameter_name}_constraint",
+            None,
+        )
+        if constraint is None:
+            return None
+        return get_bounds(constraint)
 
     def _resolve_parameter(self, model, parameter_name: str):
         """Resolve a dotted parameter path on a model."""
@@ -235,7 +308,10 @@ class ParameterEstimateApplicator:
             constraint = proposed_constraint
             if (
                 estimate.spec.constraint_strategy
-                is ConstraintStrategy.DEFAULT
+                in {
+                    ConstraintStrategy.DEFAULT,
+                    ConstraintStrategy.WAVELENGTH_RANGE,
+                }
                 and existing_constraint is not None
             ):
                 existing_bounds = get_bounds(existing_constraint)

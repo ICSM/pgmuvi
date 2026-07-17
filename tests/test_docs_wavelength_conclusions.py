@@ -20,7 +20,9 @@ class TestWavelengthConclusionDocumentation(unittest.TestCase):
 
 
     def test_future_work_tracks_constraint_and_validation_tranche(self):
-        future_work = (ROOT / "docs/source/future_work.rst").read_text()
+        future_work = " ".join(
+            (ROOT / "docs/source/future_work.rst").read_text().split()
+        )
         advisory = (ROOT / "docs/source/howto/wavelength_advisory.rst").read_text()
         for marker in (
             "TBD[wavelength-derived-constraints]",

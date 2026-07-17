@@ -94,7 +94,11 @@ For the noise variance::
    For **separable 2D models** (``"2DSeparable"``, ``"2DAchromatic"``,
    ``"2DWavelengthDependent"``, etc.), constraints on ``mixture_means`` apply to
    the temporal spectral-mixture component; the wavelength kernel parameters are
-   separate and can be constrained independently.
+   separate and can be constrained independently.  When the schema-driven
+   parameter workflow is enabled, non-achromatic separable models receive a
+   data-derived wavelength-lengthscale interval.  That interval is converted to
+   the GP input coordinate and intersected with any existing registered bounds,
+   so an existing tighter user interval is not loosened or replaced.
 
    For the **non-separable ``model="2D"``**, GPyTorch applies constraints
    element-wise to the entire ``mixture_means`` tensor (which spans both time

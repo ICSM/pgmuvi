@@ -248,8 +248,10 @@ The current advisory workflow:
 
 * keeps ``advisory_only=True`` and ``selected_model=None``;
 * does not install a top-ranked fit on the input light curve;
-* copies parameter suggestions into planning metadata but does not apply those
-  suggestions as values or constraints;
+* keeps advisory planning metadata separate from fitting decisions; when a
+  separable candidate is actually fitted, the parameter workflow may apply the
+  data-derived wavelength-covariance lengthscale and bounds, but this does not
+  make the advisory ranking automatic model selection;
 * ranks successful configurations using descriptive training-space residual
   diagnostics, not held-out predictive performance, Bayes factors, or evidence;
 * cannot turn a failed fit into evidence that the model family is scientifically
@@ -260,6 +262,29 @@ The current advisory workflow:
 Read :doc:`wavelength_advisory` for the staged single-source workflow and
 :doc:`wavelength_advisory_batch` for output folders, summaries, reports, and
 failure triage across many sources.
+
+Data-derived wavelength covariance initialization
+-------------------------------------------------
+
+For ``2DWavelengthDependent``, ``2DDustMean``, ``2DPowerLawMean``, and
+``2DSeparable``, the parameter workflow now initializes the separable
+wavelength-kernel lengthscale from the usable wavelength sampling.  The raw
+recommendation combines the median adjacent-band spacing and total wavelength
+span, with bounds informed by the minimum spacing, largest gap, and full span.
+
+The raw value and bounds are converted using only the scale part of the active
+input transform before they are registered on the GP kernel.  A pure time or
+coordinate-origin shift leaves the wavelength lengthscale unchanged; affine
+rescaling changes it into the model coordinate.  Existing kernel constraints
+are intersected rather than overwritten, and the parameter-workflow result
+records both the proposed and effective bounds under
+``wavelength_estimate_provenance``.
+
+This is an initialization and optimization-domain improvement, not evidence
+that a source has resolved wavelength dependence.  It does not apply to the
+full non-separable ``2D`` spectral-mixture kernel, whose temporal and wavelength
+ARD entries still share tensor-wide constraints, and it does not yet initialize
+the dust, power-law, or quadratic wavelength-mean shape parameters.
 
 Interpreting model-specific diagnostics
 ---------------------------------------

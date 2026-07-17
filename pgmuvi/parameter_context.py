@@ -54,17 +54,18 @@ class BandDiagnostics:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-WAVELENGTH_ESTIMATION_SCHEMA_VERSION = "pgmuvi-wavelength-estimation-v1"
+WAVELENGTH_ESTIMATION_SCHEMA_VERSION = "pgmuvi-wavelength-estimation-v2"
 
 
 @dataclass(frozen=True)
 class WavelengthEstimationDiagnostics:
     """Data-derived wavelength sampling and trend diagnostics.
 
-    All wavelength scales are expressed in the same raw coordinate units as
-    the second column of the input light curve.  The recommended length scale
-    and bounds are advisory physical-space quantities only; this object does
-    not account for a later input transformation applied by a GP model.
+    Raw wavelength scales are expressed in the same coordinate units as the
+    second column of the input light curve.  The model-coordinate fields retain
+    the corresponding values after the scale-only part of an input transform is
+    applied, allowing separable wavelength kernels to consume the estimates
+    without losing raw-coordinate provenance.
     """
 
     schema_version: str = WAVELENGTH_ESTIMATION_SCHEMA_VERSION
@@ -95,6 +96,11 @@ class WavelengthEstimationDiagnostics:
     recommended_lengthscale_initial: float | None = None
     recommended_lengthscale_bounds: tuple[float, float] | None = None
     recommendation_method: str | None = None
+    model_coordinate_space: str = "raw_input"
+    model_recommended_lengthscale_initial: float | None = None
+    model_recommended_lengthscale_bounds: tuple[float, float] | None = None
+    lengthscale_transform_status: str = "identity"
+    lengthscale_transform_name: str | None = None
     excluded_bands: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 

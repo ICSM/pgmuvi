@@ -271,9 +271,14 @@ For normal use:
   transforms until the default run has been diagnosed.
 
 The schema-driven parameter workflow is enabled by default through
-``use_parameter_workflow=True``.  After fitting, inspect
-``get_parameter_workflow_summary()`` rather than assuming every proposed value
-or constraint was applied.
+``use_parameter_workflow=True``.  For the separable LPV models, this includes a
+data-derived wavelength-kernel lengthscale and interval converted into the
+actual GP input coordinate.  This wavelength-covariance estimate is independent
+of the consensus period handoff, so it applies with quasi-periodic and
+spectral-mixture time kernels alike.  After fitting, inspect
+``get_parameter_workflow_report()`` and the wavelength parameter's
+``wavelength_estimate_provenance`` rather than assuming every proposed value or
+constraint was applied.
 
 For LPVs, ``constraint_set="LPV"`` applies the package's LPV constraint set,
 including a minimum period of 100 in the native time units.  Use it only when
