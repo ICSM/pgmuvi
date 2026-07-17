@@ -437,6 +437,37 @@ The export helper writes files only.  It does not run fits unless the
 ``Lightcurve`` convenience method is called without a precomputed ``workflow``
 and supplied with explicit ``run_workflow_kwargs``.
 
+Typed result adapters
+---------------------
+
+The existing dictionary-returning workflow remains unchanged.  Code that wants
+attribute access, explicit status types, defensive copies, and a canonical
+JSON-safe envelope can adapt a completed workflow without rerunning any fit:
+
+.. code-block:: python
+
+   from pgmuvi.wavelength_results import WavelengthAdvisoryResult
+
+   typed = WavelengthAdvisoryResult.from_mapping(workflow)
+   first_attempt = typed.attempts[0]
+
+   print(first_attempt.model)
+   print(first_attempt.status.technical_outcome)
+   print(first_attempt.status.comparison_eligibility)
+
+   canonical_payload = typed.to_dict()
+   compatibility_payload = typed.to_legacy_dict()
+
+``to_dict()`` returns the versioned typed schema.  ``to_legacy_dict()`` returns
+a defensive JSON-safe copy of the original workflow payload, including unknown
+fields.  Constructing either adapter does not mutate the source dictionary.
+
+Typed evidence records require one explicit epistemic role: observed fact,
+derived statistic, heuristic interpretation, formal comparison result,
+workflow warning, or future-work limitation.  Merely adapting an old workflow
+does not invent evidence records or upgrade a training-residual ranking into a
+formal comparison result.
+
 Interpreting the ranking
 ------------------------
 
