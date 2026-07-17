@@ -100,6 +100,15 @@ For the noise variance::
    the GP input coordinate and intersected with any existing registered bounds,
    so an existing tighter user interval is not loosened or replaced.
 
+   The wavelength-dependent mean parameters in
+   ``"2DWavelengthDependent"``, ``"2DDustMean"``, and
+   ``"2DPowerLawMean"`` also use registered GPyTorch raw-parameter
+   constraints.  Their data-derived intervals are therefore enforced during
+   optimization rather than merely reported for plain ``nn.Parameter``
+   objects.  Dust and power-law wavelength formulas are evaluated in the
+   reconstructed physical wavelength coordinate when an affine input transform
+   is active.
+
    For the **non-separable ``model="2D"``**, GPyTorch applies constraints
    element-wise to the entire ``mixture_means`` tensor (which spans both time
    and wavelength dimensions), so temporal and wavelength constraints cannot be

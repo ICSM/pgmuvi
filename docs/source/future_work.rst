@@ -51,10 +51,17 @@ Wavelength-derived fitting constraints and validation
     value ordering is preserved, and raw/model-coordinate plus effective-bound
     provenance is recorded.
 
-    The remaining scientific fitting tranche must initialize and constrain the
-    wavelength-dependent mean parameters independently, redesign the full
-    ``2D`` spectral-mixture parameterization so temporal and wavelength ARD
-    dimensions can receive genuinely independent bounds, and extend explicit
+    Data-derived wavelength-mean initialization and enforceable constraints are
+    now implemented independently for ``2DWavelengthDependent``,
+    ``2DDustMean``, and ``2DPowerLawMean``.  Dust and power-law means reconstruct
+    physical positive wavelength under affine input transforms, while the
+    quadratic mean uses the GP input coordinate.  Parameter-level provenance
+    records the robust-band fit, proposed interval, effective interval, and
+    coordinate basis.
+
+    The remaining scientific fitting tranche must redesign the full ``2D``
+    spectral-mixture parameterization so temporal and wavelength ARD dimensions
+    can receive genuinely independent bounds, and extend explicit
     component/dimension saturation diagnostics.  It must continue to use the
     recorded usable-band, adjacent-spacing, gap, uncertainty, robust mean, and
     robust amplitude summaries rather than reverting to generic constants.

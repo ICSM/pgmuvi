@@ -31,7 +31,7 @@ class TestWavelengthEstimationDocumentation(unittest.TestCase):
         self.assertIn("Existing registered bounds are", self.module_text)
         self.assertIn("2DWavelengthDependent", self.module_text)
         self.assertIn("full non-separable ``2D``", self.module_text)
-        self.assertIn("No logarithmic flux transformation", self.module_text)
+        self.assertIn("No logarithmic flux fitting", self.module_text)
 
     def test_model_guide_documents_application_provenance_and_scope(self):
         self.assertIn(
@@ -51,8 +51,11 @@ class TestWavelengthEstimationDocumentation(unittest.TestCase):
         )
         self.assertIn("quasi-periodic", self.consensus_text)
 
-    def test_future_work_retains_mean_ard_and_validation_work(self):
-        self.assertIn("wavelength-dependent mean parameters", self.future_work_text)
+    def test_future_work_records_mean_completion_and_retains_ard_validation(self):
+        self.assertIn(
+            "Data-derived wavelength-mean initialization",
+            self.future_work_text,
+        )
         self.assertIn("temporal and wavelength ARD", self.future_work_text)
         self.assertIn("wavelength-constraint-validation", self.future_work_text)
 

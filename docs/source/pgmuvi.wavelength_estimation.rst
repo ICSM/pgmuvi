@@ -27,10 +27,35 @@ the effective registered interval.
 
 This applies to the wavelength covariance in ``2DWavelengthDependent``,
 ``2DDustMean``, ``2DPowerLawMean``, and ``2DSeparable``.  It does not change the
-full non-separable ``2D`` spectral-mixture ARD parameterization, and it does not
-yet initialize wavelength-dependent mean parameters.
+full non-separable ``2D`` spectral-mixture ARD parameterization.
 
-No logarithmic flux transformation is used when constructing these summaries.
+The same module now builds model-ready wavelength-mean recommendations from
+robust per-band median fluxes.  ``GuessStrategy.WAVELENGTH_MEAN`` and
+``ConstraintStrategy.WAVELENGTH_MEAN`` initialize and constrain:
+
+* the quadratic bias and coefficients in ``2DWavelengthDependent``;
+* the offset, amplitude, optical depth, and extinction index in
+  ``2DDustMean``; and
+* the offset, signed amplitude, and exponent in ``2DPowerLawMean``.
+
+The quadratic coefficients are fitted in the wavelength coordinate seen by the
+GP.  Dust and power-law means instead evaluate on reconstructed physical,
+strictly positive wavelength while their flux parameters remain in the actual
+training-target coordinate.  Affine input transforms are supported and recorded;
+a non-affine wavelength transform is rejected rather than silently changing the
+physical interpretation.  Every affected mean parameter uses a registered
+GPyTorch raw-parameter interval, so the reported bounds remain active during
+optimization.
+
+With only two usable bands, the power-law exponent is not identifiable jointly
+with its offset and amplitude.  The estimator therefore keeps the documented
+``-2`` default and fits only the linear coefficients instead of selecting an
+arbitrary grid endpoint.  An exactly flat band-median trend is not promoted to
+a dust-shape estimate.
+
+No logarithmic flux fitting is introduced by this workflow.  Explicit
+``log_*`` mean parameters receive positive physical estimates and are converted
+to their stored log parameterization only at application time.
 
 .. automodule:: pgmuvi.wavelength_estimation
     :members:

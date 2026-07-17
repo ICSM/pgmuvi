@@ -95,6 +95,23 @@ class ParameterEstimateApplicator:
                     "diagnostics": self._to_python(estimate.diagnostics),
                 }
 
+            if self._is_wavelength_mean_estimate(estimate):
+                result["wavelength_mean_estimate_provenance"] = {
+                    "value_source": estimate.value_source,
+                    "constraint_source": estimate.constraint_source,
+                    "estimated_value": self._to_python(estimate.value),
+                    "estimated_constraint": self._to_python(
+                        estimate.constraint
+                    ),
+                    "effective_constraint": self._to_python(
+                        self._effective_constraint_bounds(
+                            target_module,
+                            parameter_name,
+                        )
+                    ),
+                    "diagnostics": self._to_python(estimate.diagnostics),
+                }
+
             results[estimate.name] = result
 
         return results
@@ -106,6 +123,15 @@ class ParameterEstimateApplicator:
             estimate.spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE
             or estimate.spec.constraint_strategy
             is ConstraintStrategy.WAVELENGTH_RANGE
+        )
+
+    @staticmethod
+    def _is_wavelength_mean_estimate(estimate) -> bool:
+        """Return whether an estimate comes from wavelength-mean diagnostics."""
+        return (
+            estimate.spec.guess_strategy is GuessStrategy.WAVELENGTH_MEAN
+            or estimate.spec.constraint_strategy
+            is ConstraintStrategy.WAVELENGTH_MEAN
         )
 
     @staticmethod
@@ -311,6 +337,7 @@ class ParameterEstimateApplicator:
                 in {
                     ConstraintStrategy.DEFAULT,
                     ConstraintStrategy.WAVELENGTH_RANGE,
+                    ConstraintStrategy.WAVELENGTH_MEAN,
                 }
                 and existing_constraint is not None
             ):

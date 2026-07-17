@@ -109,6 +109,35 @@ class WavelengthEstimationDiagnostics:
         return asdict(self)
 
 
+WAVELENGTH_MEAN_ESTIMATION_SCHEMA_VERSION = "pgmuvi-wavelength-mean-estimation-v1"
+
+
+@dataclass(frozen=True)
+class WavelengthMeanEstimationDiagnostics:
+    """Model-ready wavelength-mean initialization and constraint candidates.
+
+    ``physical_wavelength`` recommendations use the raw positive wavelength
+    coordinate together with the transformed GP target.  ``model_wavelength``
+    recommendations use the wavelength coordinate actually supplied to the GP.
+    This distinction keeps dust and power-law parameters physically interpretable
+    while allowing the flexible quadratic mean to follow the fitted coordinate.
+    """
+
+    schema_version: str = WAVELENGTH_MEAN_ESTIMATION_SCHEMA_VERSION
+    available: bool = False
+    n_usable_bands: int = 0
+    raw_wavelengths: tuple[float, ...] = ()
+    model_wavelengths: tuple[float, ...] = ()
+    model_median_fluxes: tuple[float, ...] = ()
+    recommendations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-safe dictionary representation."""
+        return asdict(self)
+
+
 @dataclass(frozen=True)
 class ConsensusDiagnostics:
     """Period/frequency diagnostics from a cross-band consensus analysis."""
@@ -132,6 +161,7 @@ class ParameterEstimationContext:
     band_diagnostics: dict[str, BandDiagnostics] = field(default_factory=dict)
     consensus_diagnostics: ConsensusDiagnostics | None = None
     wavelength_diagnostics: WavelengthEstimationDiagnostics | None = None
+    wavelength_mean_diagnostics: WavelengthMeanEstimationDiagnostics | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def bands(self) -> list[str]:

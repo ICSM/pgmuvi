@@ -158,7 +158,40 @@ class ParameterEstimateBuilder:
                     ),
                 }
 
-        if spec.name.startswith("mean_module.") and constraint is not None:
+        if (
+            spec.guess_strategy is GuessStrategy.WAVELENGTH_MEAN
+            or spec.constraint_strategy is ConstraintStrategy.WAVELENGTH_MEAN
+        ):
+            mean_diagnostics = context.wavelength_mean_diagnostics
+            if mean_diagnostics is not None:
+                model_name = spec.metadata.get("wavelength_mean_model")
+                record = mean_diagnostics.recommendations.get(model_name, {})
+                diagnostics = {
+                    "schema_version": mean_diagnostics.schema_version,
+                    "model": model_name,
+                    "parameter": spec.metadata.get(
+                        "wavelength_mean_parameter", spec.name
+                    ),
+                    "coordinate_basis": record.get("coordinate_basis"),
+                    "n_usable_bands": mean_diagnostics.n_usable_bands,
+                    "raw_wavelengths": list(mean_diagnostics.raw_wavelengths),
+                    "model_wavelengths": list(mean_diagnostics.model_wavelengths),
+                    "model_median_fluxes": list(
+                        mean_diagnostics.model_median_fluxes
+                    ),
+                    "fit_rmse": record.get("fit_rmse"),
+                    "fit_degree": record.get("fit_degree"),
+                    "exponent_estimation": record.get("exponent_estimation"),
+                    "recommendation_available": record.get("available", False),
+                    "recommendation_reason": record.get("reason"),
+                    "warnings": list(mean_diagnostics.warnings),
+                }
+
+        if (
+            spec.name.startswith("mean_module.")
+            and constraint is not None
+            and spec.constraint_strategy is not ConstraintStrategy.WAVELENGTH_MEAN
+        ):
             metadata["constraint_reason"] = (
                 "constraint_not_enforceable_plain_parameter"
             )
@@ -202,6 +235,15 @@ class ParameterEstimateBuilder:
                 return "global_diagnostics_unavailable"
 
             return "robust_flux_span_unavailable"
+
+        if spec.guess_strategy is GuessStrategy.WAVELENGTH_MEAN:
+            diagnostics = context.wavelength_mean_diagnostics
+            if diagnostics is None:
+                return "wavelength_mean_diagnostics_unavailable"
+            record = self._wavelength_mean_record(spec, context)
+            if not record:
+                return "wavelength_mean_model_recommendation_unavailable"
+            return record.get("reason") or "wavelength_mean_parameter_unavailable"
 
         if spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE:
             diagnostics = context.wavelength_diagnostics
@@ -298,6 +340,9 @@ class ParameterEstimateBuilder:
 
         if spec.guess_strategy is GuessStrategy.WAVELENGTH_RANGE:
             return self._estimate_wavelength_range_value(spec, context)
+
+        if spec.guess_strategy is GuessStrategy.WAVELENGTH_MEAN:
+            return self._estimate_wavelength_mean_value(spec, context)
 
         return None
 
@@ -449,7 +494,69 @@ class ParameterEstimateBuilder:
         if spec.constraint_strategy is ConstraintStrategy.WAVELENGTH_RANGE:
             return self._estimate_wavelength_range_constraint(spec, context)
 
+        if spec.constraint_strategy is ConstraintStrategy.WAVELENGTH_MEAN:
+            return self._estimate_wavelength_mean_constraint(spec, context)
+
         return None
+
+    @staticmethod
+    def _wavelength_mean_record(
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Return the model-specific wavelength-mean recommendation record."""
+        diagnostics = context.wavelength_mean_diagnostics
+        if diagnostics is None:
+            return None
+        model_name = spec.metadata.get("wavelength_mean_model")
+        if not model_name:
+            return None
+        return diagnostics.recommendations.get(model_name)
+
+    def _estimate_wavelength_mean_value(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Return a model-ready wavelength-mean parameter recommendation."""
+        record = self._wavelength_mean_record(spec, context)
+        if not record or not record.get("available"):
+            return None
+        parameter_name = spec.metadata.get(
+            "wavelength_mean_parameter", spec.name
+        )
+        value = record.get("initial_values", {}).get(parameter_name)
+        return self._reshape_initial_value(value, spec.shape)
+
+    def _estimate_wavelength_mean_constraint(
+        self,
+        spec: ParameterSpec,
+        context: ParameterEstimationContext,
+    ):
+        """Return a model-ready wavelength-mean parameter interval."""
+        record = self._wavelength_mean_record(spec, context)
+        if not record or not record.get("available"):
+            return None
+        parameter_name = spec.metadata.get(
+            "wavelength_mean_parameter", spec.name
+        )
+        bounds = record.get("constraints", {}).get(parameter_name)
+        if bounds is None:
+            return None
+        lower, upper = bounds
+        if spec.shape is None:
+            return (lower, upper)
+        lower_tensor = torch.as_tensor(lower, dtype=DEFAULT_DTYPE)
+        upper_tensor = torch.as_tensor(upper, dtype=DEFAULT_DTYPE)
+        if lower_tensor.numel() == 1:
+            lower_tensor = lower_tensor.expand(spec.shape).clone()
+        else:
+            lower_tensor = lower_tensor.reshape(spec.shape)
+        if upper_tensor.numel() == 1:
+            upper_tensor = upper_tensor.expand(spec.shape).clone()
+        else:
+            upper_tensor = upper_tensor.reshape(spec.shape)
+        return (lower_tensor, upper_tensor)
 
     def _estimate_wavelength_range_value(
         self,

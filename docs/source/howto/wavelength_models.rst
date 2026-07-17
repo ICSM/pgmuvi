@@ -283,8 +283,38 @@ records both the proposed and effective bounds under
 This is an initialization and optimization-domain improvement, not evidence
 that a source has resolved wavelength dependence.  It does not apply to the
 full non-separable ``2D`` spectral-mixture kernel, whose temporal and wavelength
-ARD entries still share tensor-wide constraints, and it does not yet initialize
-the dust, power-law, or quadratic wavelength-mean shape parameters.
+ARD entries still share tensor-wide constraints.
+
+Data-derived wavelength mean initialization
+-------------------------------------------
+
+The three wavelength-dependent mean families now use robust per-band median
+fluxes to construct initial values and finite optimization intervals.  The
+parameter workflow records these under
+``wavelength_mean_estimate_provenance``.
+
+``2DWavelengthDependent``
+   Fits the quadratic bias and two coefficients in the transformed wavelength
+   coordinate actually supplied to the GP.  The coefficient intervals scale
+   with the robust target range and transformed wavelength span.
+
+``2DDustMean``
+   Fits a coarse positive dust-attenuation profile using physical wavelength
+   and the transformed training target.  Positive amplitude, optical depth,
+   and extinction-index estimates are converted to the model's explicit
+   ``log_*`` parameters only when applied.
+
+``2DPowerLawMean``
+   Fits ``offset + weight * wavelength**exponent`` using physical wavelength
+   and the transformed training target.  The signed weight is retained and the
+   exponent is constrained to a finite physical search domain.
+
+For dust and power-law means, an affine wavelength transform is inverted inside
+the mean module.  MinMax, Z-score, robust Z-score, and pure coordinate shifts
+therefore do not turn physical wavelength into a zero, negative, or otherwise
+misinterpreted base.  A custom non-affine wavelength transform is rejected for
+these physical means.  The intervals are registered on raw GPyTorch parameters
+and remain active throughout optimization.
 
 Interpreting model-specific diagnostics
 ---------------------------------------

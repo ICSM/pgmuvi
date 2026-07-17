@@ -601,13 +601,15 @@ fallback fields remain unchanged.
 Remaining wavelength-constraint tranche
 ---------------------------------------
 
-The conclusion synthesis does not improve the fitted wavelength parameters.
-That separate implementation roadmap is explicitly tracked by
-``TBD[wavelength-derived-constraints]`` and
-``TBD[wavelength-constraint-validation]``.  It covers data-derived wavelength
-sampling summaries, independent wavelength-kernel and wavelength-mean
-initialization, dimension-aware temporal versus wavelength ARD bounds for the
-full ``2D`` spectral-mixture baseline, saturation provenance, synthetic
-recovery, consensus compatibility, and real-LPV validation.  The current B4
-conclusion records must not be presented as a substitute for that scientific
-fitting work.
+The conclusion synthesis is separate from parameter fitting.  Subsequent
+packages now provide data-derived wavelength sampling summaries, separable
+wavelength-kernel initialization, and independent wavelength-mean
+initialization with enforceable constraints for ``2DWavelengthDependent``,
+``2DDustMean``, and ``2DPowerLawMean``.  Those fitting changes do not turn the
+conclusion records into automatic selection evidence.
+
+The remaining roadmap is tracked by ``TBD[wavelength-derived-constraints]`` and
+``TBD[wavelength-constraint-validation]``.  It covers dimension-aware temporal
+versus wavelength ARD bounds for the full ``2D`` spectral-mixture baseline,
+saturation provenance, synthetic recovery, consensus compatibility, and
+real-LPV validation.
