@@ -58,5 +58,6 @@ Data, diagnostics, and validation
    pgmuvi.preprocess
    pgmuvi.multiband_ls_significance
    pgmuvi.wavelength_diagnostics
+   pgmuvi.wavelength_results
    pgmuvi.wavelength_status
    pgmuvi.upload_validation

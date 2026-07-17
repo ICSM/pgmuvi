@@ -387,6 +387,24 @@ one valid candidate.  Inspect ``fit_quality_ranking_status``,
 Do not turn an all-failed or single-survivor advisory run into a winner.  Fix or
 narrow the workflow, then rerun the relevant configurations.
 
+Typed evidence roles
+--------------------
+
+:class:`pgmuvi.wavelength_results.WavelengthEvidenceKind` distinguishes
+observed facts, derived statistics, heuristic interpretations, formal
+comparison results, workflow warnings, and future-work limitations.  This
+classification records what a result item claims.  Using it does not turn a
+heuristic score into formal model evidence.  In particular, current
+training-residual quality scores remain heuristic even when wrapped in a typed
+result.
+
+The typed attempt adapter also retains the orthogonal canonical status from
+:mod:`pgmuvi.wavelength_status`, any structured failure record, captured
+warnings, diagnostic groups, score fields, and the complete legacy payload.
+Use ``to_dict()`` for the canonical versioned representation and
+``to_legacy_dict()`` when an existing downstream consumer still expects the
+flat dictionary contract.
+
 Batch interpretation
 --------------------
 
