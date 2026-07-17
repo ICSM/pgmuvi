@@ -61,11 +61,11 @@ class TestPowerLawMeanParameterSchema(unittest.TestCase):
 
         self.assertEqual(
             offset.guess_strategy,
-            GuessStrategy.MEDIAN_FLUX,
+            GuessStrategy.WAVELENGTH_MEAN,
         )
         self.assertEqual(
             offset.constraint_strategy,
-            ConstraintStrategy.ROBUST_FLUX_RANGE,
+            ConstraintStrategy.WAVELENGTH_MEAN,
         )
 
     def test_power_law_mean_weight_estimation_strategies(self):
@@ -75,11 +75,11 @@ class TestPowerLawMeanParameterSchema(unittest.TestCase):
 
         self.assertEqual(
             weight.guess_strategy,
-            GuessStrategy.ROBUST_FLUX_SPAN,
+            GuessStrategy.WAVELENGTH_MEAN,
         )
         self.assertEqual(
             weight.constraint_strategy,
-            ConstraintStrategy.ROBUST_FLUX_RANGE,
+            ConstraintStrategy.WAVELENGTH_MEAN,
         )
 
     def test_power_law_mean_exponent_default_estimation_strategies(self):
@@ -91,9 +91,9 @@ class TestPowerLawMeanParameterSchema(unittest.TestCase):
         self.assertEqual(exponent.constraint, (-10.0, 10.0))
         self.assertEqual(
             exponent.guess_strategy,
-            GuessStrategy.DEFAULT,
+            GuessStrategy.WAVELENGTH_MEAN,
         )
         self.assertEqual(
             exponent.constraint_strategy,
-            ConstraintStrategy.DEFAULT,
+            ConstraintStrategy.WAVELENGTH_MEAN,
         )

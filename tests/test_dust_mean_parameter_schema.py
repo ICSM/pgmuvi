@@ -10,8 +10,8 @@ from pgmuvi.parameter_specs import (
 )
 from pgmuvi.parameter_builders import ParameterEstimateBuilder
 from pgmuvi.parameter_context import (
-    LightcurveDiagnostics,
     ParameterEstimationContext,
+    WavelengthMeanEstimationDiagnostics,
 )
 
 
@@ -71,42 +71,42 @@ class TestDustMeanParameterSchema(unittest.TestCase):
 
         self.assertEqual(
             schema["mean_module.offset"].guess_strategy,
-            GuessStrategy.MEDIAN_FLUX,
+            GuessStrategy.WAVELENGTH_MEAN,
         )
 
         self.assertEqual(
             schema["mean_module.offset"].constraint_strategy,
-            ConstraintStrategy.ROBUST_FLUX_RANGE,
+            ConstraintStrategy.WAVELENGTH_MEAN,
         )
 
         self.assertEqual(
             schema["mean_module.log_amplitude"].guess_strategy,
-            GuessStrategy.ROBUST_FLUX_SPAN,
+            GuessStrategy.WAVELENGTH_MEAN,
         )
 
         self.assertEqual(
             schema["mean_module.log_amplitude"].constraint_strategy,
-            ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN,
+            ConstraintStrategy.WAVELENGTH_MEAN,
         )
 
         self.assertEqual(
             schema["mean_module.log_tau"].guess_strategy,
-            GuessStrategy.DEFAULT,
+            GuessStrategy.WAVELENGTH_MEAN,
         )
 
         self.assertEqual(
             schema["mean_module.log_tau"].constraint_strategy,
-            ConstraintStrategy.DEFAULT,
+            ConstraintStrategy.WAVELENGTH_MEAN,
         )
 
         self.assertEqual(
             schema["mean_module.log_alpha"].guess_strategy,
-            GuessStrategy.DEFAULT,
+            GuessStrategy.WAVELENGTH_MEAN,
         )
 
         self.assertEqual(
             schema["mean_module.log_alpha"].constraint_strategy,
-            ConstraintStrategy.DEFAULT,
+            ConstraintStrategy.WAVELENGTH_MEAN,
         )
 
     def test_dust_mean_schema_builds_estimates_from_diagnostics(self):
@@ -114,12 +114,30 @@ class TestDustMeanParameterSchema(unittest.TestCase):
 
         context = ParameterEstimationContext(
             is_multiband=True,
-            global_diagnostics=LightcurveDiagnostics(
-                median_flux=55.0,
-                flux_percentiles={
-                    2.5: 10.0,
-                    50.0: 55.0,
-                    97.5: 100.0,
+            wavelength_mean_diagnostics=WavelengthMeanEstimationDiagnostics(
+                available=True,
+                n_usable_bands=4,
+                recommendations={
+                    "2DDustMean": {
+                        "available": True,
+                        "coordinate_basis": (
+                            "physical_wavelength_and_model_flux"
+                        ),
+                        "initial_values": {
+                            "mean_module.offset": 0.2,
+                            "mean_module.log_amplitude": 3.0,
+                            "mean_module.log_tau": 1.4,
+                            "mean_module.log_alpha": 1.8,
+                        },
+                        "constraints": {
+                            "mean_module.offset": [-1.0, 4.0],
+                            "mean_module.log_amplitude": [1.0e-4, 10.0],
+                            "mean_module.log_tau": [1.0e-3, 1.0e3],
+                            "mean_module.log_alpha": [0.1, 10.0],
+                        },
+                        "fit_rmse": 0.01,
+                        "reason": None,
+                    }
                 },
             ),
         )
@@ -129,28 +147,36 @@ class TestDustMeanParameterSchema(unittest.TestCase):
             context=context,
         )
 
-        offset = estimates["mean_module.offset"]
-        amplitude = estimates["mean_module.log_amplitude"]
-
-        tau = estimates["mean_module.log_tau"]
-        alpha = estimates["mean_module.log_alpha"]
-
-        self.assertEqual(offset.value, 55.0)
-        self.assertEqual(offset.constraint, (10.0, 100.0))
-
-        self.assertEqual(amplitude.value, 90.0)
-
-        self.assertAlmostEqual(
-            amplitude.constraint[0],
-            9.0e-5,
+        self.assertEqual(estimates["mean_module.offset"].value, 0.2)
+        self.assertEqual(
+            estimates["mean_module.offset"].constraint,
+            (-1.0, 4.0),
         )
-        self.assertAlmostEqual(
-            amplitude.constraint[1],
-            450.0,
+        self.assertEqual(
+            estimates["mean_module.log_amplitude"].value,
+            3.0,
+        )
+        self.assertEqual(
+            estimates["mean_module.log_tau"].value,
+            1.4,
+        )
+        self.assertEqual(
+            estimates["mean_module.log_alpha"].value,
+            1.8,
+        )
+        self.assertEqual(
+            estimates["mean_module.log_amplitude"].constraint,
+            (1.0e-4, 10.0),
+        )
+        self.assertEqual(
+            estimates["mean_module.log_tau"].constraint,
+            (1.0e-3, 1.0e3),
+        )
+        self.assertEqual(
+            estimates["mean_module.log_alpha"].constraint,
+            (0.1, 10.0),
         )
 
-        self.assertEqual(tau.value, 1.0)
-        self.assertEqual(tau.constraint, (1.0e-3, 1.0e3))
 
-        self.assertEqual(alpha.value, 1.7)
-        self.assertEqual(alpha.constraint, (0.1, 10.0))
+if __name__ == "__main__":
+    unittest.main()

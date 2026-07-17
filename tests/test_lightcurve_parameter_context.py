@@ -654,7 +654,7 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
             },
         )
 
-    def test_parameter_workflow_propagates_global_diagnostics_reason(self):
+    def test_parameter_workflow_propagates_wavelength_mean_diagnostics_reason(self):
         import gpytorch
 
         from pgmuvi.gps import DustMeanGPModel
@@ -690,5 +690,5 @@ class TestLightcurveParameterEstimationContext(unittest.TestCase):
 
         self.assertEqual(
             result["mean_module.offset"]["value_reason"],
-            "global_diagnostics_unavailable",
+            "wavelength_mean_diagnostics_unavailable",
         )

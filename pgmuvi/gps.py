@@ -22,6 +22,11 @@ from gpytorch.models import ExactGP, ApproximateGP
 from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.variational import VariationalStrategy
 
+from pgmuvi.constraint_utils import (
+    make_interval_constraint,
+    register_constraint_preserving_value,
+)
+
 from pgmuvi.parameter_specs import (
     ConstraintStrategy,
     GuessStrategy,
@@ -325,7 +330,58 @@ def _kernel_parameter_schema(
 # ---------------------------------------------------------------------
 # Mean functions
 # ---------------------------------------------------------------------
-class PowerLawMean(gpt.means.Mean):
+class _IntervalConstrainedMeanMixin:
+    """Utilities for GPyTorch-constrained mean-function parameters."""
+
+    def _register_interval_parameter(self, name, initial_value, lower, upper):
+        initial = t.as_tensor(initial_value, dtype=t.get_default_dtype())
+        lower_tensor = t.full_like(initial, float(lower))
+        upper_tensor = t.full_like(initial, float(upper))
+        constraint = gpt.constraints.Interval(lower_tensor, upper_tensor)
+        raw_name = f"raw_{name}"
+        self.register_parameter(
+            raw_name,
+            t.nn.Parameter(constraint.inverse_transform(initial.clone())),
+        )
+        self.register_constraint(raw_name, constraint)
+
+    def _constrained_parameter(self, name):
+        raw = getattr(self, f"raw_{name}")
+        constraint = getattr(self, f"raw_{name}_constraint")
+        return constraint.transform(raw)
+
+    def _set_constrained_parameter(self, name, value):
+        raw = getattr(self, f"raw_{name}")
+        constraint = getattr(self, f"raw_{name}_constraint")
+        value_tensor = t.as_tensor(value, dtype=raw.dtype, device=raw.device)
+        value_tensor = value_tensor.reshape_as(raw)
+        with t.no_grad():
+            raw.copy_(constraint.inverse_transform(value_tensor))
+
+    def configure_default_flux_bounds(self, train_y):
+        """Set broad finite flux bounds scaled to the training target."""
+        values = t.as_tensor(train_y).detach()
+        values = values[t.isfinite(values)]
+        if values.numel() == 0:
+            return
+        span = float(values.max() - values.min())
+        maximum = float(values.abs().max())
+        bound = max(10.0 * max(span, maximum, 1.0), 100.0)
+        for name in ("offset", "weight", "bias", "weights"):
+            raw_name = f"raw_{name}"
+            if not hasattr(self, raw_name):
+                continue
+            raw = getattr(self, raw_name)
+            lower = t.full_like(raw, -bound)
+            upper = t.full_like(raw, bound)
+            register_constraint_preserving_value(
+                self,
+                raw_name,
+                make_interval_constraint(lower, upper),
+            )
+
+
+class PowerLawMean(_IntervalConstrainedMeanMixin, gpt.means.Mean):
     """Mean function with power-law wavelength dependence for 2D GP models.
 
     Computes the mean flux as a power law in the second input dimension
@@ -346,38 +402,87 @@ class PowerLawMean(gpt.means.Mean):
 
     Attributes
     ----------
-    offset : torch.nn.Parameter
-        Constant offset term.
-    weight : torch.nn.Parameter
-        Amplitude scaling factor (unconstrained; sign determines whether
-        flux increases or decreases with wavelength).
-    exponent : torch.nn.Parameter
-        Power-law exponent for the wavelength dependence. Defaults to
+    offset : torch.Tensor
+        Constrained constant offset term.
+    weight : torch.Tensor
+        Constrained signed amplitude scaling factor; its sign determines
+        whether flux increases or decreases with wavelength.
+    exponent : torch.Tensor
+        Constrained power-law exponent for the wavelength dependence. Defaults to
         ``-2.0``, which gives a steep decline from optical to infrared
         (i.e., high optical amplitude).
 
     Notes
     -----
-    The ``exponent`` parameter is unconstrained and can be learned to any
-    real value during optimisation. Initialising it to a physically
-    motivated value (e.g. ``-1.7`` for a typical dust-extinction law, or
-    ``2.0`` for a Rayleigh-Jeans tail) can help convergence.
+    The parameters use registered finite GPyTorch intervals. The parameter
+    workflow replaces the broad constructor bounds with data-derived intervals
+    before optimization when wavelength-mean diagnostics are available.
     """
 
     def __init__(self, batch_shape=None):
         super().__init__()
         if batch_shape is None:
             batch_shape = t.Size()
-        self.register_parameter(
-            "offset", t.nn.Parameter(t.zeros(*batch_shape, 1))
+        shape = (*batch_shape, 1)
+        self._register_interval_parameter(
+            "offset", t.zeros(shape), -100.0, 100.0
         )
-        self.register_parameter(
-            "weight", t.nn.Parameter(t.ones(*batch_shape, 1))
+        self._register_interval_parameter(
+            "weight", t.ones(shape), -100.0, 100.0
         )
-        # Default exponent of -2 gives a steep optical-to-IR decline
-        self.register_parameter(
-            "exponent", t.nn.Parameter(t.full((*batch_shape, 1), -2.0))
+        self._register_interval_parameter(
+            "exponent", t.full(shape, -2.0), -10.0, 10.0
         )
+        self.register_buffer("wavelength_origin", t.tensor(0.0))
+        self.register_buffer("wavelength_scale", t.tensor(1.0))
+
+    @property
+    def offset(self):
+        return self._constrained_parameter("offset")
+
+    @offset.setter
+    def offset(self, value):
+        self._set_constrained_parameter("offset", value)
+
+    @property
+    def weight(self):
+        return self._constrained_parameter("weight")
+
+    @weight.setter
+    def weight(self, value):
+        self._set_constrained_parameter("weight", value)
+
+    @property
+    def exponent(self):
+        return self._constrained_parameter("exponent")
+
+    @exponent.setter
+    def exponent(self, value):
+        self._set_constrained_parameter("exponent", value)
+
+    def configure_wavelength_coordinate(self, origin, scale):
+        """Configure ``physical = origin + scale * model_wavelength``."""
+        origin_value = t.as_tensor(
+            origin,
+            dtype=self.wavelength_origin.dtype,
+            device=self.wavelength_origin.device,
+        )
+        scale_value = t.as_tensor(
+            scale,
+            dtype=self.wavelength_scale.dtype,
+            device=self.wavelength_scale.device,
+        )
+        if (
+            scale_value.numel() != 1
+            or not t.isfinite(scale_value)
+            or scale_value <= 0
+        ):
+            raise ValueError("Physical-wavelength scale must be finite and positive.")
+        self.wavelength_origin.copy_(origin_value.reshape_as(self.wavelength_origin))
+        self.wavelength_scale.copy_(scale_value.reshape_as(self.wavelength_scale))
+
+    def physical_wavelength(self, x):
+        return self.wavelength_origin + self.wavelength_scale * x[..., 1]
 
     def parameter_schema(self, prefix="mean_module"):
         """Return model-independent parameter specifications for PowerLawMean."""
@@ -392,8 +497,14 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
-                    guess_strategy=GuessStrategy.MEDIAN_FLUX,
-                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DPowerLawMean",
+                        "wavelength_mean_parameter": "mean_module.offset",
+                    },
                     description=(
                         "Constant additive flux offset of the wavelength "
                         "power-law mean function."
@@ -404,8 +515,14 @@ class PowerLawMean(gpt.means.Mean):
                     role=ParameterRole.AMPLITUDE,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
-                    guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
-                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DPowerLawMean",
+                        "wavelength_mean_parameter": "mean_module.weight",
+                    },
                     description=(
                         "Linear flux-domain amplitude multiplying the wavelength "
                         "power-law term. The sign controls whether the mean flux "
@@ -419,8 +536,14 @@ class PowerLawMean(gpt.means.Mean):
                     scale=ParameterScale.LINEAR,
                     initial_value=-2.0,
                     constraint=(-10.0, 10.0),
-                    guess_strategy=GuessStrategy.DEFAULT,
-                    constraint_strategy=ConstraintStrategy.DEFAULT,
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DPowerLawMean",
+                        "wavelength_mean_parameter": "mean_module.exponent",
+                    },
                     description=(
                         "Dimensionless power-law index controlling the wavelength "
                         "dependence of the mean flux."
@@ -430,14 +553,14 @@ class PowerLawMean(gpt.means.Mean):
         )
 
     def forward(self, x):
-        wavelength = x[..., 1]  # second column is wavelength
+        wavelength = self.physical_wavelength(x).clamp(min=1.0e-12)
         return (
             self.offset.squeeze(-1)
             + self.weight.squeeze(-1) * wavelength.pow(self.exponent.squeeze(-1))
         )
 
 
-class DustMean(gpt.means.Mean):
+class DustMean(_IntervalConstrainedMeanMixin, gpt.means.Mean):
     """Mean function with dust-extinction wavelength dependence for 2D GP
     models.
 
@@ -461,15 +584,15 @@ class DustMean(gpt.means.Mean):
 
     Attributes
     ----------
-    offset : torch.nn.Parameter
-        Constant offset (background) term.
-    log_amplitude : torch.nn.Parameter
+    offset : torch.Tensor
+        Constrained constant offset (background) term.
+    log_amplitude : torch.Tensor
         Log of the amplitude; the amplitude itself is ``exp(log_amplitude)``,
         ensuring it is always positive.
-    log_tau : torch.nn.Parameter
+    log_tau : torch.Tensor
         Log of the dust optical depth ``tau``; the optical depth itself is
         ``exp(log_tau)``, ensuring it is always positive.
-    log_alpha : torch.nn.Parameter
+    log_alpha : torch.Tensor
         Log of the extinction power-law index ``alpha``; the index itself is
         ``exp(log_alpha)``, ensuring it is always positive.  Defaults to
         ``log(1.7)`` ≈ 0.53, corresponding to a typical interstellar
@@ -478,33 +601,88 @@ class DustMean(gpt.means.Mean):
     Notes
     -----
     The wavelength axis is expected to be the second column of the input
-    tensor ``x``.  It should be strictly positive (as is the case for
-    physical wavelengths in microns).  Wavelength values below ``1e-6``
-    (microns) are clamped to ``1e-6`` to avoid numerical overflow in
-    ``λ^(-alpha)``; in practice any physically meaningful wavelength
-    (optical ~0.4 μm or longer) is well above this threshold.  Applying a
-    wavelength transform (e.g. ``MinMax``) before fitting is still
-    recommended to keep wavelength values in a numerically convenient range.
+    tensor ``x``.  When the GP input is affinely transformed, the physical
+    positive wavelength is reconstructed before evaluating this law. Values
+    below ``1e-6`` microns are clamped to avoid numerical overflow in
+    ``λ^(-alpha)``; physically meaningful optical and infrared wavelengths are
+    well above this numerical guard.
     """
 
     def __init__(self, batch_shape=None):
         super().__init__()
         if batch_shape is None:
             batch_shape = t.Size()
-        self.register_parameter(
-            "offset", t.nn.Parameter(t.zeros(*batch_shape, 1))
+        shape = (*batch_shape, 1)
+        self._register_interval_parameter(
+            "offset", t.zeros(shape), -100.0, 100.0
         )
-        self.register_parameter(
-            "log_amplitude", t.nn.Parameter(t.zeros(*batch_shape, 1))
+        self._register_interval_parameter(
+            "log_amplitude", t.zeros(shape), -40.0, 40.0
         )
-        self.register_parameter(
-            "log_tau", t.nn.Parameter(t.zeros(*batch_shape, 1))
+        self._register_interval_parameter(
+            "log_tau", t.zeros(shape), -40.0, math.log(1.0e3)
         )
-        # Default alpha ≈ 1.7, consistent with a typical dust-extinction law
-        self.register_parameter(
-            "log_alpha",
-            t.nn.Parameter(t.full((*batch_shape, 1), _LOG_1_7)),
+        self._register_interval_parameter(
+            "log_alpha", t.full(shape, _LOG_1_7), math.log(0.1), math.log(10.0)
         )
+        self.register_buffer("wavelength_origin", t.tensor(0.0))
+        self.register_buffer("wavelength_scale", t.tensor(1.0))
+
+    @property
+    def offset(self):
+        return self._constrained_parameter("offset")
+
+    @offset.setter
+    def offset(self, value):
+        self._set_constrained_parameter("offset", value)
+
+    @property
+    def log_amplitude(self):
+        return self._constrained_parameter("log_amplitude")
+
+    @log_amplitude.setter
+    def log_amplitude(self, value):
+        self._set_constrained_parameter("log_amplitude", value)
+
+    @property
+    def log_tau(self):
+        return self._constrained_parameter("log_tau")
+
+    @log_tau.setter
+    def log_tau(self, value):
+        self._set_constrained_parameter("log_tau", value)
+
+    @property
+    def log_alpha(self):
+        return self._constrained_parameter("log_alpha")
+
+    @log_alpha.setter
+    def log_alpha(self, value):
+        self._set_constrained_parameter("log_alpha", value)
+
+    def configure_wavelength_coordinate(self, origin, scale):
+        """Configure ``physical = origin + scale * model_wavelength``."""
+        origin_value = t.as_tensor(
+            origin,
+            dtype=self.wavelength_origin.dtype,
+            device=self.wavelength_origin.device,
+        )
+        scale_value = t.as_tensor(
+            scale,
+            dtype=self.wavelength_scale.dtype,
+            device=self.wavelength_scale.device,
+        )
+        if (
+            scale_value.numel() != 1
+            or not t.isfinite(scale_value)
+            or scale_value <= 0
+        ):
+            raise ValueError("Physical-wavelength scale must be finite and positive.")
+        self.wavelength_origin.copy_(origin_value.reshape_as(self.wavelength_origin))
+        self.wavelength_scale.copy_(scale_value.reshape_as(self.wavelength_scale))
+
+    def physical_wavelength(self, x):
+        return self.wavelength_origin + self.wavelength_scale * x[..., 1]
 
     def parameter_schema(self, prefix="mean_module"):
         """Return model-independent parameter specifications for DustMean."""
@@ -518,8 +696,14 @@ class DustMean(gpt.means.Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
-                    guess_strategy=GuessStrategy.MEDIAN_FLUX,
-                    constraint_strategy=ConstraintStrategy.ROBUST_FLUX_RANGE,
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DDustMean",
+                        "wavelength_mean_parameter": "mean_module.offset",
+                    },
                     description=(
                         "Constant additive flux offset shared across "
                         "wavelengths."
@@ -530,8 +714,14 @@ class DustMean(gpt.means.Mean):
                     role=ParameterRole.AMPLITUDE,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LOG,
-                    guess_strategy=GuessStrategy.ROBUST_FLUX_SPAN,
-                    constraint_strategy=ConstraintStrategy.ROBUST_POSITIVE_FLUX_SPAN,
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DDustMean",
+                        "wavelength_mean_parameter": "mean_module.log_amplitude",
+                    },
                     description=(
                         "Positive amplitude of the dust-attenuated "
                         "wavelength-dependent mean function, represented in "
@@ -545,8 +735,14 @@ class DustMean(gpt.means.Mean):
                     scale=ParameterScale.LOG,
                     initial_value=1.0,
                     constraint=(1.0e-3, 1.0e3),
-                    guess_strategy=GuessStrategy.DEFAULT,
-                    constraint_strategy=ConstraintStrategy.DEFAULT,
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DDustMean",
+                        "wavelength_mean_parameter": "mean_module.log_tau",
+                    },
                     description=(
                         "Positive effective dust optical-depth parameter "
                         "controlling the "
@@ -560,8 +756,14 @@ class DustMean(gpt.means.Mean):
                     scale=ParameterScale.LOG,
                     initial_value=1.7,
                     constraint=(0.1, 10.0),
-                    guess_strategy=GuessStrategy.DEFAULT,
-                    constraint_strategy=ConstraintStrategy.DEFAULT,
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DDustMean",
+                        "wavelength_mean_parameter": "mean_module.log_alpha",
+                    },
                     description=(
                         "Positive power-law index of the "
                         "wavelength-dependent attenuation law."
@@ -574,7 +776,7 @@ class DustMean(gpt.means.Mean):
         # Clamp wavelength to avoid overflow in λ^(-alpha): any physical
         # wavelength in microns is far above 1e-6, so this guard is only
         # triggered for pathological inputs.
-        wavelength = x[..., 1].clamp(min=1e-6)
+        wavelength = self.physical_wavelength(x).clamp(min=1e-6)
         amplitude = self.log_amplitude.squeeze(-1).exp()
         tau = self.log_tau.squeeze(-1).exp()
         alpha = self.log_alpha.squeeze(-1).exp()
@@ -2146,7 +2348,7 @@ class CustomLinearConstantMean(Mean):
         return self.bias + self.wavelength_slope * x[:, 1]
 
 
-class CustomQuadConstantMean(Mean):
+class CustomQuadConstantMean(_IntervalConstrainedMeanMixin, Mean):
     """ Custom mean function that is quadratic in wavelength and constant in time.
 
     This is useful for modelling stars whose mean flux changes with wavelength but not
@@ -2156,14 +2358,28 @@ class CustomQuadConstantMean(Mean):
 
     def __init__(self):
         super().__init__()
-        self.register_parameter(
-            name="weights",
-            parameter=t.nn.Parameter(t.tensor([0.0, 0.0])),
+        self._register_interval_parameter(
+            "weights", t.tensor([0.0, 0.0]), -100.0, 100.0
         )
-        self.register_parameter(
-            name="bias",
-            parameter=t.nn.Parameter(t.tensor(0.0)),
+        self._register_interval_parameter(
+            "bias", t.tensor(0.0), -100.0, 100.0
         )
+
+    @property
+    def weights(self):
+        return self._constrained_parameter("weights")
+
+    @weights.setter
+    def weights(self, value):
+        self._set_constrained_parameter("weights", value)
+
+    @property
+    def bias(self):
+        return self._constrained_parameter("bias")
+
+    @bias.setter
+    def bias(self, value):
+        self._set_constrained_parameter("bias", value)
 
     def parameter_schema(self, prefix="mean_module"):
         """Return model-independent parameter specifications for this mean."""
@@ -2178,6 +2394,14 @@ class CustomQuadConstantMean(Mean):
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
                     shape=(2,),
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DWavelengthDependent",
+                        "wavelength_mean_parameter": "mean_module.weights",
+                    },
                     description=(
                         "Linear and quadratic coefficients describing how the mean "
                         "flux changes with wavelength in the transformed "
@@ -2189,6 +2413,14 @@ class CustomQuadConstantMean(Mean):
                     role=ParameterRole.OFFSET,
                     domain=ParameterDomain.FLUX,
                     scale=ParameterScale.LINEAR,
+                    guess_strategy=GuessStrategy.WAVELENGTH_MEAN,
+                    constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+                    guess_source="wavelength_mean_estimation_context",
+                    constraint_source="wavelength_mean_estimation_context",
+                    metadata={
+                        "wavelength_mean_model": "2DWavelengthDependent",
+                        "wavelength_mean_parameter": "mean_module.bias",
+                    },
                     description=(
                         "Constant flux offset of the wavelength-quadratic "
                         "mean function."
@@ -2342,6 +2574,11 @@ class WavelengthDependentGPModel(SeparableGPModel):
                 f"Expected one of: {accepted}."
             )
 
+        configure_flux_bounds = getattr(
+            mean_module, "configure_default_flux_bounds", None
+        )
+        if configure_flux_bounds is not None:
+            configure_flux_bounds(train_y)
 
         time_kernel = _build_time_kernel(
             time_kernel_type, period, num_mixtures, add_flicker=add_flicker

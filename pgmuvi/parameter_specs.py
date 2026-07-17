@@ -70,6 +70,7 @@ class GuessStrategy(str, Enum):
     VARIABILITY_TIMESCALE = "variability_timescale"
 
     WAVELENGTH_RANGE = "wavelength_range"
+    WAVELENGTH_MEAN = "wavelength_mean"
 
     CUSTOM = "custom"
 
@@ -96,6 +97,7 @@ class ConstraintStrategy(str, Enum):
     VARIABILITY_TIMESCALE = "variability_timescale"
 
     WAVELENGTH_RANGE = "wavelength_range"
+    WAVELENGTH_MEAN = "wavelength_mean"
 
     CUSTOM = "custom"
 

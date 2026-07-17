@@ -10,3 +10,4 @@ workflow based on physical-space parameter estimates.
     :members:
     :undoc-members:
     :show-inheritance:
+    :exclude-members: offset, weight, exponent, log_amplitude, log_tau, log_alpha

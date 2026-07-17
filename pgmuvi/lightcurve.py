@@ -68,7 +68,10 @@ from pgmuvi.parameter_workflow import (
     build_and_apply_parameter_estimates,
     model_supports_parameter_workflow,
 )
-from pgmuvi.wavelength_estimation import build_wavelength_estimation_context
+from pgmuvi.wavelength_estimation import (
+    build_wavelength_estimation_context,
+    build_wavelength_mean_estimation_context,
+)
 from pgmuvi.constraint_utils import clamp_to_constraint_interior
 from pgmuvi.constraint_utils import register_constraint_preserving_value
 
@@ -6792,11 +6795,80 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         self._move_module_to_data_dtype(self.model)
         self._move_module_to_data_dtype(self.likelihood)
+        self._configure_physical_wavelength_mean_coordinate()
 
         # now we've got a model set up, we're going to make some handy lookups
         # for the parameters and modules that we'll need to access later
         self._make_parameter_dict()
         # self.set_default_constraints()
+
+    def _configure_physical_wavelength_mean_coordinate(self):
+        """Map transformed GP wavelengths back to raw positive wavelengths.
+
+        Dust and power-law means have physical wavelength parameters.  When an
+        affine input transform is active, they must evaluate on the inverse
+        wavelength coordinate rather than on centered or standardized values.
+        """
+        self._wavelength_mean_coordinate_provenance = {
+            "status": "not_required",
+            "origin": 0.0,
+            "scale": 1.0,
+        }
+        mean_module = getattr(self.model, "mean_module", None)
+        configure = getattr(mean_module, "configure_wavelength_coordinate", None)
+        if configure is None:
+            return
+        if self.ndim < 2:
+            raise ValueError(
+                "Physical wavelength mean modules require a two-dimensional "
+                "input with wavelength in coordinate 1."
+            )
+
+        raw = torch.as_tensor(self._xdata_raw)[:, 1].detach().cpu().numpy()
+        model = (
+            torch.as_tensor(self._xdata_transformed)[:, 1]
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        finite = np.isfinite(raw) & np.isfinite(model)
+        raw = np.asarray(raw[finite], dtype=float)
+        model = np.asarray(model[finite], dtype=float)
+        if raw.size < 2 or np.unique(raw).size < 2:
+            raise ValueError(
+                "Physical wavelength mean modules require at least two finite "
+                "distinct wavelengths."
+            )
+
+        design = np.column_stack([np.ones_like(model), model])
+        origin, scale = np.linalg.lstsq(design, raw, rcond=None)[0]
+        reconstructed = origin + scale * model
+        tolerance = 1.0e-8 * max(float(np.max(np.abs(raw))), 1.0)
+        max_error = float(np.max(np.abs(reconstructed - raw)))
+        if (
+            not math.isfinite(float(origin))
+            or not math.isfinite(float(scale))
+            or float(scale) <= 0.0
+            or max_error > tolerance
+        ):
+            raise ValueError(
+                "DustMean and PowerLawMean require an affine wavelength input "
+                "transform so physical wavelength can be reconstructed exactly."
+            )
+
+        with torch.no_grad():
+            configure(float(origin), float(scale))
+        self._wavelength_mean_coordinate_provenance = {
+            "status": "configured",
+            "origin": float(origin),
+            "scale": float(scale),
+            "maximum_reconstruction_error": max_error,
+            "raw_coordinate": "physical_wavelength",
+            "model_coordinate": "gp_input_dimension_1",
+            "transform_name": (
+                None if self.xtransform is None else type(self.xtransform).__name__
+            ),
+        }
 
     def _make_parameter_dict(self):
         """Make a dictionary of the model parameters
@@ -6822,15 +6894,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if "raw" in param_name:
                 # This is a constrained parameter, so we need to get the
                 # unconstrained value
-                pn_const = comps[-1].lstrip("raw_")
+                pn_const = comps[-1].removeprefix("raw_")
                 param_dict["constrained"] = True
                 param_dict["constrained_name"] = pn_const
-                pn = ".".join([c.lstrip("raw_") for c in comps])
+                pn = ".".join([c.removeprefix("raw_") for c in comps])
                 param_dict["constrained_full_name"] = pn
             tmp = self.model.__getattr__(comps[0])
             param_dict["chain"].append(tmp)
             for i in range(1, len(comps)):
-                c = comps[i] if "raw" not in comps[i] else comps[i].lstrip("raw_")
+                c = comps[i].removeprefix("raw_")
                 try:
                     tmp = tmp.__getattr__(c)
                 except AttributeError:
@@ -10056,6 +10128,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 median_cadence = float(np.median(gaps))
 
         wavelength_diagnostics = None
+        wavelength_mean_diagnostics = None
         band_diagnostics = {}
         if self.ndim > 1:
             uncertainty_values = None
@@ -10080,6 +10153,35 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 self._prepare_wavelength_estimation_for_model(
                     wavelength_diagnostics
                 )
+            )
+            model_wavelengths = (
+                self._xdata_transformed[:, 1]
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            model_fluxes = (
+                self._ydata_transformed.detach().cpu().numpy()
+            )
+            wavelength_mean_diagnostics = (
+                build_wavelength_mean_estimation_context(
+                    raw_wavelengths=input_values[:, 1],
+                    model_wavelengths=model_wavelengths,
+                    model_fluxes=model_fluxes,
+                    band_labels=band_labels,
+                )
+            )
+            mean_metadata = dict(wavelength_mean_diagnostics.metadata)
+            mean_metadata["wavelength_coordinate_configuration"] = dict(
+                getattr(
+                    self,
+                    "_wavelength_mean_coordinate_provenance",
+                    {"status": "not_configured"},
+                )
+            )
+            wavelength_mean_diagnostics = dataclasses.replace(
+                wavelength_mean_diagnostics,
+                metadata=mean_metadata,
             )
 
         if finite_flux_values.size == 0:
@@ -10109,6 +10211,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             global_diagnostics=global_diagnostics,
             band_diagnostics=band_diagnostics,
             wavelength_diagnostics=wavelength_diagnostics,
+            wavelength_mean_diagnostics=wavelength_mean_diagnostics,
         )
 
     def _apply_parameter_workflow_estimates(self):
@@ -10220,6 +10323,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             for optional_key in (
                 "constraint_action",
                 "wavelength_estimate_provenance",
+                "wavelength_mean_estimate_provenance",
             ):
                 if optional_key in info:
                     entry[optional_key] = copy.deepcopy(info[optional_key])
@@ -22173,10 +22277,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             if not raw and "raw" in param_name:
                 # This is a constrained parameter, so we need to get the
                 # unconstrained value
-                pn = ".".join([c.lstrip("raw_") for c in comps])
+                pn = ".".join([c.removeprefix("raw_") for c in comps])
                 tmp = self.model.__getattr__(comps[0])
                 for i in range(1, len(comps)):
-                    c = comps[i] if "raw" not in comps[i] else comps[i].lstrip("raw_")
+                    c = comps[i].removeprefix("raw_")
                     try:
                         tmp = tmp.__getattr__(c)
                     except AttributeError:

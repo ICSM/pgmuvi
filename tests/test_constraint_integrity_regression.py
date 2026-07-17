@@ -10,16 +10,19 @@ import unittest
 import gpytorch
 import torch
 
-from pgmuvi.gps import MaternGPModel, PowerLawMeanGPModel, SpectralMixtureGPModel
+from pgmuvi.gps import MaternGPModel, SpectralMixtureGPModel
 from pgmuvi.lightcurve import Lightcurve
 from pgmuvi.parameter_application import ParameterEstimateApplicator
 from pgmuvi.parameter_context import LightcurveDiagnostics, ParameterEstimationContext
 from pgmuvi.parameter_estimates import ParameterEstimate, ParameterEstimateCollection
 from pgmuvi.parameter_specs import (
+    ConstraintStrategy,
+    GuessStrategy,
     ParameterDomain,
     ParameterRole,
     ParameterScale,
     ParameterSpec,
+    ParameterSpecCollection,
 )
 from pgmuvi.parameter_workflow import build_and_apply_parameter_estimates
 
@@ -111,24 +114,40 @@ class TestConstraintIntegrityRegression(unittest.TestCase):
 
     def test_mean_constraint_reporting_is_honest_for_plain_parameters(self):
         """Plain nn.Parameter mean constraints should not be reported as enforced."""
-        x = torch.stack(
-            [
-                torch.linspace(0.0, 10.0, 30),
-                torch.full((30,), 2.2),
-            ],
-            dim=1,
-        )
-        y = 10.0 + 2.0 * torch.sin(2.0 * torch.pi * x[:, 0] / 3.0)
-        likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        model = PowerLawMeanGPModel(x, y, likelihood, time_kernel_type="matern")
+        class PlainMean(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.offset = torch.nn.Parameter(torch.tensor(0.0))
 
+        class PlainMeanModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.mean_module = PlainMean()
+
+            def parameter_schema(self):
+                return ParameterSpecCollection(
+                    [
+                        ParameterSpec(
+                            name="mean_module.offset",
+                            role=ParameterRole.OFFSET,
+                            domain=ParameterDomain.FLUX,
+                            scale=ParameterScale.LINEAR,
+                            guess_strategy=GuessStrategy.MEDIAN_FLUX,
+                            constraint_strategy=(
+                                ConstraintStrategy.ROBUST_FLUX_RANGE
+                            ),
+                        )
+                    ]
+                )
+
+        model = PlainMeanModel()
         context = ParameterEstimationContext(
             is_multiband=True,
             global_diagnostics=LightcurveDiagnostics(
                 baseline_duration=10.0,
                 median_flux=10.0,
                 flux_percentiles={2.5: 8.0, 50.0: 10.0, 97.5: 12.0},
-                n_points=len(x),
+                n_points=30,
             ),
         )
 
