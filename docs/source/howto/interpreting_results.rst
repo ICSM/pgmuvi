@@ -387,6 +387,26 @@ one valid candidate.  Inspect ``fit_quality_ranking_status``,
 Do not turn an all-failed or single-survivor advisory run into a winner.  Fix or
 narrow the workflow, then rerun the relevant configurations.
 
+Mean and covariance hypothesis fields
+-------------------------------------
+
+Read ``model_hypothesis`` before attributing a score difference to one physical
+mechanism.  The fields ``mean_structure`` and ``covariance_structure`` are
+orthogonal descriptions of the complete model/kernel configuration.
+``mean_wavelength_dependent`` and ``covariance_wavelength_dependent`` make that
+separation explicit.
+
+``2DDustMean`` and ``2DPowerLawMean`` are not mean-only alternatives: both also
+contain smooth wavelength covariance.  ``2DWavelengthDependent`` likewise
+changes the mean and covariance relative to the constant-mean separable model.
+``2D`` uses a joint non-separable spectral-mixture covariance and should be read
+as a baseline with a different parameterization, not as a nested special case.
+
+The ``comparison_cautions`` list is part of the report precisely because
+current training-residual rankings cannot identify which changed mechanism
+caused a score difference.  Use the taxonomy for interpretation and grouping,
+not as a substitute score or automatic selection policy.
+
 Typed evidence roles
 --------------------
 

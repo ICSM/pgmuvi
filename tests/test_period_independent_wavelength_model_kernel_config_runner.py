@@ -145,6 +145,30 @@ class TestPeriodIndependentWavelengthModelKernelConfigRunner(unittest.TestCase):
         self.assertIn("model_kernel_config_results", report)
         self.assertEqual(report["model_kernel_config_results"], report["outcomes"])
 
+    def test_runner_derives_and_propagates_missing_hypothesis_metadata(self):
+        lc = _make_multiband_lightcurve()
+
+        def runner(candidate_lc, fit_kwargs, candidate):
+            candidate_lc.consensus_diagnostics = {"consensus_success": True}
+            return None
+
+        report = lc.run_period_independent_wavelength_model_kernel_configs(
+            model_kernel_config_report=_model_kernel_config_report(),
+            fit_runner=runner,
+        )
+
+        self.assertEqual(
+            report["hypothesis_schema_version"],
+            "pgmuvi-wavelength-hypotheses-v1",
+        )
+        by_model = {
+            outcome["model"]: outcome["model_hypothesis"]
+            for outcome in report["outcomes"]
+        }
+        self.assertEqual(by_model["2DDustMean"]["role"], "mean_and_covariance")
+        self.assertEqual(by_model["2DDustMean"]["mean_structure"], "dust_attenuation")
+        self.assertEqual(by_model["2D"]["role"], "joint_baseline")
+
     def test_fit_kwargs_are_passed_to_runner(self):
         lc = _make_multiband_lightcurve()
         seen = []

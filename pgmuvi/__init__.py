@@ -22,6 +22,7 @@ __all__ = [
     "synthetic",
     "trainers",
     "wavelength_diagnostics",
+    "wavelength_hypotheses",
     "wavelength_results",
     "wavelength_status",
 ]

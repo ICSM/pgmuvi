@@ -437,6 +437,54 @@ The export helper writes files only.  It does not run fits unless the
 ``Lightcurve`` convenience method is called without a precomputed ``workflow``
 and supplied with explicit ``run_workflow_kwargs``.
 
+Explicit model-hypothesis metadata
+----------------------------------
+
+Each generated model/kernel configuration now includes a
+``model_hypothesis`` mapping.  This mapping records the mean structure and
+covariance structure as separate axes.  The public model string still names a
+complete GP configuration; it is not treated as an isolated physical
+mechanism.
+
+For the LPV-focused configurations this distinction is important:
+
+``2D``
+   Constant mean with one joint, non-separable two-dimensional
+   spectral-mixture covariance.  It remains a baseline rather than a member of
+   the separable family.
+
+``2DSeparable``
+   Constant mean with a separable product of time and wavelength covariance
+   kernels.
+
+``2DWavelengthDependent``
+   Quadratic wavelength-dependent mean together with separable smooth
+   wavelength covariance.
+
+``2DDustMean`` and ``2DPowerLawMean``
+   Dust or power-law wavelength means together with the same broad family of
+   separable smooth wavelength covariance.  These are therefore not
+   ``mean-only`` hypotheses.
+
+The metadata is descriptive and versioned.  It does not change advisory order,
+fit kwargs, scores, or comparison eligibility.  In particular, a better score
+for ``2DDustMean`` than ``2DSeparable`` does not by itself isolate evidence for
+the dust mean law because the compared objects are complete model/kernel
+configurations.
+
+The maintained LPV advisory priority remains:
+
+.. code-block:: text
+
+   2DWavelengthDependent
+   2DDustMean
+   2DPowerLawMean
+   2DSeparable
+   2D
+
+``2DAchromatic`` is represented only as an explicit achromatic-control taxonomy
+entry and is not part of that default LPV priority ordering.
+
 Typed result adapters
 ---------------------
 

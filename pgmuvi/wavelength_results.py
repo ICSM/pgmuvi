@@ -17,6 +17,10 @@ from enum import Enum
 import math
 from typing import Any
 
+from .wavelength_hypotheses import (
+    WavelengthModelHypothesis,
+    describe_wavelength_model_hypothesis,
+)
 from .wavelength_status import (
     AttemptDisposition,
     ComparisonEligibility,
@@ -519,9 +523,18 @@ class WavelengthModelAttemptResult:
     scores: Mapping[str, Any] = field(default_factory=dict)
     evidence: tuple[WavelengthEvidenceRecord, ...] = ()
     legacy_payload: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    hypothesis: WavelengthModelHypothesis | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fit_kwargs", _mapping_copy(self.fit_kwargs))
+        if self.hypothesis is None:
+            object.__setattr__(
+                self,
+                "hypothesis",
+                describe_wavelength_model_hypothesis(
+                    self.model or "", fit_kwargs=self.fit_kwargs
+                ),
+            )
         object.__setattr__(self, "diagnostics", _mapping_copy(self.diagnostics))
         object.__setattr__(self, "scores", _mapping_copy(self.scores))
         object.__setattr__(self, "warnings", tuple(self.warnings))
@@ -609,6 +622,14 @@ class WavelengthModelAttemptResult:
                 else None
             ),
             status=_attempt_status_from_mapping(payload),
+            hypothesis=(
+                WavelengthModelHypothesis.from_mapping(payload["model_hypothesis"])
+                if isinstance(payload.get("model_hypothesis"), Mapping)
+                else describe_wavelength_model_hypothesis(
+                    str(payload.get("model") or ""),
+                    fit_kwargs=payload.get("fit_kwargs") or {},
+                )
+            ),
             failure=_failure_from_mapping(payload),
             warnings=_warning_records_from_attempt(payload),
             fit_kwargs=payload.get("fit_kwargs") or {},
@@ -627,6 +648,9 @@ class WavelengthModelAttemptResult:
             "rank": self.rank,
             "model": self.model,
             "status": self.status.to_dict(),
+            "hypothesis": (
+                self.hypothesis.to_dict() if self.hypothesis is not None else None
+            ),
             "failure": self.failure.to_dict() if self.failure is not None else None,
             "warnings": [record.to_dict() for record in self.warnings],
             "fit_kwargs": _mapping_copy(self.fit_kwargs),
