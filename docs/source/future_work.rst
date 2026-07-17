@@ -39,6 +39,28 @@ Validation and model-selection boundaries
     model. The current advisory contract intentionally leaves
     ``selected_model`` as ``None``.
 
+Wavelength-derived fitting constraints and validation
+-----------------------------------------------------
+
+**TBD[wavelength-derived-constraints]**
+    Implement the dedicated scientific fitting tranche for data-derived
+    wavelength-kernel and wavelength-mean initialization and constraints.  The
+    tranche must summarize usable wavelength sampling, apply independent mean
+    and covariance estimates to ``2DWavelengthDependent``, ``2DDustMean``,
+    ``2DPowerLawMean``, and ``2DSeparable``, and redesign the full ``2D``
+    spectral-mixture parameterization so temporal and wavelength ARD dimensions
+    can receive genuinely independent bounds.  It must also preserve
+    constraint-before-value ordering and record the origin of every estimate and
+    bound.
+
+**TBD[wavelength-constraint-validation]**
+    Validate the wavelength-derived initialization and constraint tranche with
+    synthetic recovery, sparse and uneven band coverage, missing bands, large
+    wavelength gaps, weak and strong wavelength dependence, supported
+    non-monotonic cases, seed stability, constraint-ceiling diagnostics,
+    consensus periodic or quasi-periodic time kernels, and real LPV sources.
+    Successful optimization alone is not sufficient validation.
+
 Wavelength-model extensions
 ---------------------------
 

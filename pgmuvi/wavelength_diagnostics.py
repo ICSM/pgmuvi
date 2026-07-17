@@ -23,6 +23,9 @@ except ImportError:  # pragma: no cover - pgmuvi normally depends on torch
 
 from pgmuvi.preprocess.quality import assess_sampling_quality, robust_scale
 from pgmuvi.preprocess.variability import is_variable
+from pgmuvi.wavelength_conclusions import (
+    synthesize_wavelength_advisory_conclusions,
+)
 from pgmuvi.wavelength_hypotheses import (
     WAVELENGTH_HYPOTHESIS_SCHEMA_VERSION,
     WavelengthModelHypothesis,
@@ -5796,6 +5799,36 @@ def _piwd_format_advisory_workflow_text_report(
         "it is expected to be False because scoring summarizes already-completed fits.",
     ]
 
+    conclusions = workflow_report.get("advisory_conclusions") or []
+    ambiguities = workflow_report.get("unresolved_ambiguities") or []
+    if conclusions or ambiguities:
+        lines.extend(
+            [
+                "",
+                "Advisory conclusions",
+                "=" * 60,
+                f"conclusion_schema_version: {workflow_report.get('advisory_conclusion_schema_version')}",
+                f"n_conclusions: {len(conclusions)}",
+                f"n_unresolved_ambiguities: {len(ambiguities)}",
+            ]
+        )
+        for conclusion in conclusions:
+            if not isinstance(conclusion, dict):
+                continue
+            lines.append(
+                "- "
+                f"[{conclusion.get('scope')}] {conclusion.get('subject')}: "
+                f"{conclusion.get('disposition')} — {conclusion.get('summary')}"
+            )
+        if ambiguities:
+            lines.append("unresolved_ambiguities:")
+            for ambiguity in ambiguities:
+                if not isinstance(ambiguity, dict):
+                    continue
+                lines.append(
+                    f"- {ambiguity.get('code')}: {ambiguity.get('summary')}"
+                )
+
     if fallback_report.get("available"):
         lines.extend(
             [
@@ -5962,12 +5995,31 @@ def run_period_independent_wavelength_advisory_workflow(
         ),
         "fallback_diagnostics_available": fallback_report.get("available"),
         "fallback_report": fallback_report,
+        "advisory_conclusion_schema_version": None,
+        "advisory_conclusions": [],
+        "unresolved_ambiguities": [],
+        "advisory_conclusion_summary": {},
         "model_kernel_config_report": model_kernel_config_report,
         "run_report": run_report,
         "quality_report": quality_report,
         "comparison_text_report": comparison_text_report,
         "text_report": None,
     }
+    conclusion_synthesis = synthesize_wavelength_advisory_conclusions(
+        workflow_report
+    )
+    workflow_report["advisory_conclusion_schema_version"] = (
+        conclusion_synthesis.get("schema_version")
+    )
+    workflow_report["advisory_conclusions"] = conclusion_synthesis.get(
+        "conclusions", []
+    )
+    workflow_report["unresolved_ambiguities"] = conclusion_synthesis.get(
+        "unresolved_ambiguities", []
+    )
+    workflow_report["advisory_conclusion_summary"] = conclusion_synthesis.get(
+        "summary", {}
+    )
     if make_text_report:
         workflow_report["text_report"] = _piwd_format_advisory_workflow_text_report(
             workflow_report,
@@ -6541,6 +6593,26 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
     ranked_rows = quality_report.get("ranked_results") or workflow.get("ranked_results") or []
     rows = _piwd_batch_merge_model_kernel_config_rows(run_rows, ranked_rows)
 
+    conclusion_rows = [
+        item
+        for item in workflow.get("advisory_conclusions") or []
+        if isinstance(item, dict)
+        and item.get("scope") == "complete_configuration"
+    ]
+    conclusions_by_id = {}
+    conclusions_by_model = {}
+    for conclusion in conclusion_rows:
+        for config_id in conclusion.get("model_kernel_config_ids") or []:
+            if _piwd_batch_nonempty(config_id):
+                conclusions_by_id[config_id] = conclusion
+        models = conclusion.get("models") or []
+        if len(models) == 1 and _piwd_batch_nonempty(models[0]):
+            model = models[0]
+            if model in conclusions_by_model:
+                conclusions_by_model[model] = None
+            else:
+                conclusions_by_model[model] = conclusion
+
     ranking_status, _ = _piwd_resolve_fit_quality_ranking_state(
         quality_report if quality_report else workflow
     )
@@ -6548,6 +6620,10 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
     out = []
     for item in rows:
         fit_kwargs = item.get("fit_kwargs") if isinstance(item.get("fit_kwargs"), dict) else {}
+        conclusion = conclusions_by_id.get(item.get("model_kernel_config_id"))
+        if conclusion is None:
+            conclusion = conclusions_by_model.get(item.get("model"))
+        conclusion = conclusion if isinstance(conclusion, dict) else {}
         flattened = {
             "source_index": source_row.get("source_index"),
             "source_id": source_row.get("source_id"),
@@ -6561,6 +6637,11 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
             "quality_rank": item.get("quality_rank"),
             "is_top_ranked": item.get("is_top_ranked"),
             "model": item.get("model"),
+            "advisory_conclusion_schema_version": workflow.get(
+                "advisory_conclusion_schema_version"
+            ),
+            "advisory_conclusion_disposition": conclusion.get("disposition"),
+            "advisory_conclusion_summary": conclusion.get("summary"),
             "status": item.get("status"),
             "attempt_disposition": item.get("attempt_disposition"),
             "execution_stage": item.get("execution_stage"),
@@ -6663,6 +6744,9 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "quality_rank",
         "is_top_ranked",
         "model",
+        "advisory_conclusion_schema_version",
+        "advisory_conclusion_disposition",
+        "advisory_conclusion_summary",
         "status",
         "attempt_disposition",
         "execution_stage",
@@ -7332,6 +7416,15 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                 ),
                 warning_count=candidate_warning_count,
             )
+            advisory_conclusion_summary = (
+                workflow.get("advisory_conclusion_summary") or {}
+            )
+            unresolved_ambiguities = workflow.get("unresolved_ambiguities") or []
+            unresolved_ambiguity_codes = [
+                item.get("code")
+                for item in unresolved_ambiguities
+                if isinstance(item, dict) and item.get("code")
+            ]
             row.update(
                 {
                     "status": "passed",
@@ -7343,6 +7436,21 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                     "top_ranked_model": workflow_top_ranked_model,
                     "top_ranked_fit_quality_score": workflow_top_ranked_score,
                     "score_kind": workflow.get("score_kind"),
+                    "advisory_conclusion_schema_version": workflow.get(
+                        "advisory_conclusion_schema_version"
+                    ),
+                    "n_advisory_conclusions": advisory_conclusion_summary.get(
+                        "n_conclusions", 0
+                    ),
+                    "n_unresolved_ambiguities": advisory_conclusion_summary.get(
+                        "n_unresolved_ambiguities", 0
+                    ),
+                    "advisory_conclusion_disposition_counts": (
+                        advisory_conclusion_summary.get(
+                            "conclusion_disposition_counts", {}
+                        )
+                    ),
+                    "unresolved_ambiguity_codes": unresolved_ambiguity_codes,
                     "warning_count": candidate_warning_count,
                     "training_recovered_from_failure": candidate_recovery,
                     "n_model_kernel_configs": n_model_kernel_configs,
@@ -7356,6 +7464,16 @@ def run_period_independent_wavelength_advisory_workflow_batch(
                         "top_ranked_model": workflow_top_ranked_model,
                         "top_ranked_fit_quality_score": workflow_top_ranked_score,
                         "score_kind": workflow.get("score_kind"),
+                        "advisory_conclusion_schema_version": workflow.get(
+                            "advisory_conclusion_schema_version"
+                        ),
+                        "n_advisory_conclusions": advisory_conclusion_summary.get(
+                            "n_conclusions", 0
+                        ),
+                        "n_unresolved_ambiguities": advisory_conclusion_summary.get(
+                            "n_unresolved_ambiguities", 0
+                        ),
+                        "unresolved_ambiguity_codes": unresolved_ambiguity_codes,
                         "automatic_model_selection_applied": workflow.get(
                             "automatic_model_selection_applied"
                         ),

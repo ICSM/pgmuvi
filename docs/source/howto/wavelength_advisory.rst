@@ -555,3 +555,59 @@ Use these fields to decide whether to inspect the input data, restore missing
 diagnostics, relax consensus requirements, increase numerical safeguards, or
 rerun only a subset of model/kernel configs.  They are not a substitute for a
 valid comparison, and ``only_valid_model`` is not a comparative winner.
+
+Structured advisory conclusions and unresolved ambiguities
+-----------------------------------------------------------
+
+The one-shot period-independent advisory workflow now adds versioned
+``advisory_conclusions`` and ``unresolved_ambiguities`` records.  These records
+summarize the existing attempt statuses, fit-quality availability, and
+``model_hypothesis`` metadata.  They do not rerun fits, change scores, alter
+comparison eligibility, or perform automatic model selection.
+
+Each conclusion has an explicit scope:
+
+``complete_configuration``
+   The fitted model string as a complete mean-plus-covariance GP
+   configuration.
+
+``mean_structure``
+   A wavelength-mean family such as ``dust_attenuation`` or ``power_law``.
+
+``covariance_structure``
+   A joint or separable wavelength-covariance family.
+
+The conservative conclusion dispositions are ``remains_plausible``,
+``weakened``, ``technically_unevaluable``, ``scientifically_ambiguous``, and
+``incomparable``.  ``remains_plausible`` is not a selection or endorsement.
+``technically_unevaluable`` records that a fit did not produce usable evidence.
+``scientifically_ambiguous`` records that the candidate set does not isolate a
+mean or covariance mechanism.  ``incomparable`` records usable but non-equivalent
+or diagnostically incomplete results.
+
+The ``unresolved_ambiguities`` list makes limitations explicit.  In particular,
+the current training-residual fit-quality ranking is heuristic: it is not a
+formal, held-out, or cross-validated model comparison.  A top-ranked model is
+therefore still not selected automatically.  Failures, a single valid
+candidate, and missing same-mean or same-covariance contrasts are reported as
+separate ambiguities rather than being collapsed into one success/failure flag.
+
+The schema version is available as
+``advisory_conclusion_schema_version``.  The text report includes the same
+conclusion and ambiguity summaries, while the existing legacy ranking and
+fallback fields remain unchanged.
+
+
+Remaining wavelength-constraint tranche
+---------------------------------------
+
+The conclusion synthesis does not improve the fitted wavelength parameters.
+That separate implementation roadmap is explicitly tracked by
+``TBD[wavelength-derived-constraints]`` and
+``TBD[wavelength-constraint-validation]``.  It covers data-derived wavelength
+sampling summaries, independent wavelength-kernel and wavelength-mean
+initialization, dimension-aware temporal versus wavelength ARD bounds for the
+full ``2D`` spectral-mixture baseline, saturation provenance, synthetic
+recovery, consensus compatibility, and real-LPV validation.  The current B4
+conclusion records must not be presented as a substitute for that scientific
+fitting work.

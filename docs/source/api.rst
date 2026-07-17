@@ -57,6 +57,7 @@ Data, diagnostics, and validation
    pgmuvi.dtypes
    pgmuvi.preprocess
    pgmuvi.multiband_ls_significance
+   pgmuvi.wavelength_conclusions
    pgmuvi.wavelength_diagnostics
    pgmuvi.wavelength_hypotheses
    pgmuvi.wavelength_results
