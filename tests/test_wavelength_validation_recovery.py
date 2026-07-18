@@ -390,6 +390,7 @@ class TestSyntheticRecoveryRun(RecoveryCaseMixin, unittest.TestCase):
         self.assertEqual(
             seen["fit_kwargs"]["time_kernel_type"], "quasi_periodic"
         )
+        self.assertTrue(seen["fit_kwargs"]["use_acf"])
         self.assertEqual(run.status.technical_outcome, TechnicalOutcome.COMPLETED)
 
     def test_2d_defaults_preserve_independent_ard_initialization(self):
