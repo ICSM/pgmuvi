@@ -947,6 +947,108 @@ class DummyModel:
         self.assertAlmostEqual(float(constraint.lower_bound), 0.1, places=5)
         self.assertAlmostEqual(float(constraint.upper_bound), 10.0, places=5)
 
+    def test_wavelength_mean_keeps_explicit_schema_subset_interval(self):
+        spec = ParameterSpec(
+            name="mean_module.exponent",
+            role=ParameterRole.SHAPE,
+            domain=ParameterDomain.DIMENSIONLESS,
+            scale=ParameterScale.LINEAR,
+            constraint=(-10.0, 10.0),
+            constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=0.5,
+            constraint=(0.34, 0.60),
+        )
+
+        class MeanModule(gpytorch.Module):
+            def __init__(self):
+                super().__init__()
+                constraint = gpytorch.constraints.Interval(0.25, 0.75)
+                self.register_parameter(
+                    "raw_exponent",
+                    torch.nn.Parameter(
+                        constraint.inverse_transform(torch.tensor([0.5]))
+                    ),
+                )
+                self.register_constraint("raw_exponent", constraint)
+
+            @property
+            def exponent(self):
+                return self.raw_exponent_constraint.transform(
+                    self.raw_exponent
+                )
+
+        class Model:
+            def __init__(self):
+                self.mean_module = MeanModule()
+
+        model = Model()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        constraint = model.mean_module.raw_exponent_constraint
+        self.assertEqual(
+            result["mean_module.exponent"]["constraint_action"],
+            "kept_existing",
+        )
+        self.assertAlmostEqual(float(constraint.lower_bound), 0.25)
+        self.assertAlmostEqual(float(constraint.upper_bound), 0.75)
+
+    def test_wavelength_mean_replaces_schema_default_interval(self):
+        spec = ParameterSpec(
+            name="mean_module.exponent",
+            role=ParameterRole.SHAPE,
+            domain=ParameterDomain.DIMENSIONLESS,
+            scale=ParameterScale.LINEAR,
+            constraint=(-10.0, 10.0),
+            constraint_strategy=ConstraintStrategy.WAVELENGTH_MEAN,
+        )
+        estimate = ParameterEstimate(
+            spec=spec,
+            value=0.5,
+            constraint=(0.34, 0.60),
+        )
+
+        class MeanModule(gpytorch.Module):
+            def __init__(self):
+                super().__init__()
+                constraint = gpytorch.constraints.Interval(-10.0, 10.0)
+                self.register_parameter(
+                    "raw_exponent",
+                    torch.nn.Parameter(
+                        constraint.inverse_transform(torch.tensor([0.5]))
+                    ),
+                )
+                self.register_constraint("raw_exponent", constraint)
+
+            @property
+            def exponent(self):
+                return self.raw_exponent_constraint.transform(
+                    self.raw_exponent
+                )
+
+        class Model:
+            def __init__(self):
+                self.mean_module = MeanModule()
+
+        model = Model()
+        result = ParameterEstimateApplicator().apply(
+            model=model,
+            estimates=ParameterEstimateCollection([estimate]),
+        )
+
+        constraint = model.mean_module.raw_exponent_constraint
+        self.assertEqual(
+            result["mean_module.exponent"]["constraint_action"],
+            "applied",
+        )
+        self.assertAlmostEqual(float(constraint.lower_bound), 0.34)
+        self.assertAlmostEqual(float(constraint.upper_bound), 0.60)
+
     def test_default_constraint_conflict_keeps_existing_constraint(self):
         spec = ParameterSpec(
             name="covar_module.lengthscale",

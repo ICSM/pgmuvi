@@ -70,6 +70,45 @@ class TestWavelengthMeanEstimation(unittest.TestCase):
         exponent = record["initial_values"]["mean_module.exponent"]
         self.assertAlmostEqual(exponent, 1.7, delta=0.08)
         self.assertLess(record["fit_rmse"], 0.1)
+        profile = record["profile_support"]
+        self.assertEqual(profile["criterion"], "same_sign_rmse_profile")
+        self.assertGreater(profile["n_supported_candidates"], 0)
+        for parameter, value in record["initial_values"].items():
+            lower, upper = record["constraints"][parameter]
+            self.assertLess(lower, value)
+            self.assertLess(value, upper)
+        exponent_bounds = record["constraints"]["mean_module.exponent"]
+        weight_bounds = record["constraints"]["mean_module.weight"]
+        self.assertGreater(exponent_bounds[0], 0.0)
+        self.assertGreater(weight_bounds[0], 0.0)
+        self.assertLess(exponent_bounds[1] - exponent_bounds[0], 5.0)
+
+
+    def test_power_law_profile_preserves_negative_exponent_branch(self):
+        raw_wavelengths = np.asarray([0.5, 0.8, 1.2, 2.0, 4.0, 6.0])
+        model_wavelengths = (raw_wavelengths - raw_wavelengths.min()) / np.ptp(
+            raw_wavelengths
+        )
+        fluxes = 2.0 + 5.0 * raw_wavelengths**-1.4
+        inputs = self._rows(
+            raw_wavelengths,
+            model_wavelengths,
+            fluxes,
+        )
+        diagnostics = build_wavelength_mean_estimation_context(*inputs)
+        record = diagnostics.recommendations["2DPowerLawMean"]
+
+        exponent = record["initial_values"]["mean_module.exponent"]
+        lower, upper = record["constraints"]["mean_module.exponent"]
+        weight_lower, weight_upper = record["constraints"][
+            "mean_module.weight"
+        ]
+        self.assertLess(exponent, 0.0)
+        self.assertLess(upper, 0.0)
+        self.assertLess(lower, exponent)
+        self.assertLess(exponent, upper)
+        self.assertGreater(weight_lower, 0.0)
+        self.assertGreater(weight_upper, weight_lower)
 
     def test_dust_recommendation_is_positive_in_physical_parameters(self):
         raw_wavelengths = np.asarray([0.45, 0.65, 1.2, 2.2, 4.0])
@@ -103,6 +142,11 @@ class TestWavelengthMeanEstimation(unittest.TestCase):
         self.assertEqual(
             record["initial_values"]["mean_module.exponent"],
             -2.0,
+        )
+        self.assertIsNone(record["profile_support"])
+        self.assertEqual(
+            record["constraints"]["mean_module.exponent"],
+            [-10.0, 10.0],
         )
 
     def test_flat_trend_does_not_invent_dust_shape(self):

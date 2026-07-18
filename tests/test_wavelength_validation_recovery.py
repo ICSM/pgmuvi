@@ -1,3 +1,4 @@
+import inspect
 import json
 import unittest
 
@@ -168,6 +169,108 @@ class TestSyntheticRecoveryMetrics(RecoveryCaseMixin, unittest.TestCase):
         self.assertFalse(metric.passed)
         self.assertEqual(metric.parameter, "mean_module")
         self.assertEqual(metric.threshold["maximum"], 0.15)
+
+    def test_centered_mean_metric_separates_shape_from_constant_offset(self):
+        case = self.make_case()
+        truth = case.scenario.truth.noiseless_summary["mean_by_band"]
+        shifted = [value + 20.0 for value in truth]
+        by_name = self.metric_map(
+            build_synthetic_wavelength_recovery_metrics(
+                case,
+                "2DWavelengthDependent",
+                fitted_mean_by_band=shifted,
+            )
+        )
+
+        self.assertAlmostEqual(
+            by_name["mean_law_centered_normalized_rmse"].value,
+            0.0,
+        )
+        self.assertIsNone(
+            by_name["mean_law_centered_normalized_rmse"].passed
+        )
+
+    def test_correlation_matrix_metric_is_zero_at_true_lengthscale(self):
+        case = self.make_case()
+        truth = case.scenario.truth.wavelength_covariance_parameters[
+            "wavelength_lengthscale"
+        ]
+        by_name = self.metric_map(
+            build_synthetic_wavelength_recovery_metrics(
+                case,
+                "2DSeparable",
+                fitted_wavelength_lengthscale=truth,
+            )
+        )
+
+        metric = by_name["wavelength_correlation_matrix_rmse"]
+        self.assertAlmostEqual(metric.value, 0.0)
+        self.assertTrue(metric.available)
+        self.assertIsNone(metric.passed)
+        self.assertAlmostEqual(
+            metric.metadata["fitted_endpoint_correlation"],
+            metric.metadata["truth_endpoint_correlation"],
+        )
+
+
+    def test_shared_grid_realization_correlation_metric_is_available(self):
+        case = self.make_case(shared_time_grid=True)
+        truth = case.scenario.truth.wavelength_covariance_parameters[
+            "wavelength_lengthscale"
+        ]
+        by_name = self.metric_map(
+            build_synthetic_wavelength_recovery_metrics(
+                case,
+                "2DWavelengthDependent",
+                fitted_wavelength_lengthscale=truth,
+            )
+        )
+
+        metric = by_name["realized_wavelength_correlation_matrix_rmse"]
+        self.assertTrue(metric.available)
+        self.assertIsNone(metric.passed)
+        self.assertEqual(metric.metadata["n_shared_time_points"], 6)
+
+    def test_harmonic_case_keeps_lengthscale_diagnostic_but_not_strict_gate(self):
+        case = self.make_case(
+            generating_model="2DSeparable",
+            mean_kind="constant",
+            shared_time_grid=True,
+            temporal_components=(
+                {
+                    "period": 100.0,
+                    "variance_fraction": 0.8,
+                    "coherence_time": 400.0,
+                    "periodic_lengthscale": 0.7,
+                },
+                {
+                    "period": 50.0,
+                    "variance_fraction": 0.2,
+                    "coherence_time": 300.0,
+                    "periodic_lengthscale": 0.7,
+                },
+            ),
+        )
+        truth = case.scenario.truth.wavelength_covariance_parameters[
+            "wavelength_lengthscale"
+        ]
+        by_name = self.metric_map(
+            build_synthetic_wavelength_recovery_metrics(
+                case,
+                "2DSeparable",
+                fitted_wavelength_lengthscale=10.0 * truth,
+            )
+        )
+
+        metric = by_name["wavelength_lengthscale_factor_error"]
+        self.assertTrue(metric.available)
+        self.assertIsNone(metric.passed)
+        self.assertEqual(metric.direction.value, "informational")
+        self.assertFalse(metric.metadata["strict_recovery_eligible"])
+        self.assertIn(
+            "multiple_temporal_components_fitted_with_single_quasi_periodic_kernel",
+            metric.limitations,
+        )
 
     def test_joint_sm_metrics_cover_parameter_component_and_dimension(self):
         case = self.make_case(
@@ -347,6 +450,20 @@ class TestSyntheticRecoveryRun(RecoveryCaseMixin, unittest.TestCase):
             def get_parameter_workflow_summary(self):
                 return {"available": True, "applied": []}
 
+            def get_parameter_workflow_report(self):
+                return {
+                    "available": True,
+                    "applied": [
+                        {
+                            "parameter": "mean_module.exponent",
+                            "wavelength_mean_estimate_provenance": {
+                                "effective_constraint": [0.25, 0.75]
+                            },
+                        }
+                    ],
+                    "skipped": [],
+                }
+
         lightcurve = FakeLightcurve()
         run = run_synthetic_wavelength_recovery(
             case,
@@ -363,6 +480,13 @@ class TestSyntheticRecoveryRun(RecoveryCaseMixin, unittest.TestCase):
         self.assertTrue(metrics["mean_law_normalized_rmse"].passed)
         self.assertEqual(lightcurve.fit_kwargs["fit_strategy"], "consensus")
         self.assertTrue(run.parameter_workflow["available"])
+        report = run.parameter_workflow["report"]
+        self.assertEqual(
+            report["applied"][0][
+                "wavelength_mean_estimate_provenance"
+            ]["effective_constraint"],
+            [0.25, 0.75],
+        )
 
     def test_runner_uses_injected_outputs_without_gpytorch(self):
         case = self.make_case()
@@ -392,6 +516,15 @@ class TestSyntheticRecoveryRun(RecoveryCaseMixin, unittest.TestCase):
         )
         self.assertTrue(seen["fit_kwargs"]["use_acf"])
         self.assertEqual(run.status.technical_outcome, TechnicalOutcome.COMPLETED)
+
+    def test_fit_core_consumes_verbose_before_model_construction(self):
+        from pgmuvi.lightcurve import Lightcurve
+
+        parameter = inspect.signature(Lightcurve._fit_core).parameters[
+            "verbose"
+        ]
+        self.assertIs(parameter.default, False)
+        self.assertNotEqual(parameter.kind, inspect.Parameter.VAR_KEYWORD)
 
     def test_2d_defaults_preserve_independent_ard_initialization(self):
         case = self.make_case(
@@ -528,6 +661,115 @@ class TestSyntheticRecoveryAggregate(RecoveryCaseMixin, unittest.TestCase):
             gates["gates"]["matched_run_completion"]["passed"]
         )
         self.assertEqual(aggregate.failure_summaries["n_failures"], 1)
+
+
+    def test_aggregate_gate_excludes_informational_harmonic_lengthscale(self):
+        ordinary = self.make_case(
+            scenario_id="ordinary",
+            generating_model="2DWavelengthDependent",
+            shared_time_grid=True,
+        )
+        harmonic = self.make_case(
+            scenario_id="harmonic",
+            generating_model="2DSeparable",
+            mean_kind="constant",
+            shared_time_grid=True,
+            temporal_components=(
+                {
+                    "period": 100.0,
+                    "variance_fraction": 0.8,
+                    "coherence_time": 400.0,
+                    "periodic_lengthscale": 0.7,
+                },
+                {
+                    "period": 50.0,
+                    "variance_fraction": 0.2,
+                    "coherence_time": 300.0,
+                    "periodic_lengthscale": 0.7,
+                },
+            ),
+        )
+        ordinary_run = self.make_success(ordinary, "2DWavelengthDependent")
+        harmonic_outputs = self.truth_outputs(harmonic)
+        harmonic_outputs["fitted_wavelength_lengthscale"] *= 10.0
+        harmonic_run = evaluate_synthetic_wavelength_recovery(
+            harmonic,
+            "2DSeparable",
+            **harmonic_outputs,
+        )
+
+        aggregate = aggregate_synthetic_wavelength_recovery_runs(
+            [ordinary_run, harmonic_run]
+        )
+        extras = aggregate.extra_fields
+        all_summary = extras["matched_truth_metric_summaries"][
+            "wavelength_lengthscale_factor_error"
+        ]
+        gate_summary = extras["matched_truth_gate_metric_summaries"][
+            "wavelength_lengthscale_factor_error"
+        ]
+
+        self.assertEqual(all_summary["n_available"], 2)
+        self.assertEqual(gate_summary["n_available"], 1)
+        self.assertTrue(
+            extras["d1_gate_summary"]["gates"][
+                "wavelength_lengthscale_recovery"
+            ]["passed"]
+        )
+
+    def test_population_gate_preserves_and_warns_about_long_tail(self):
+        runs = []
+        for seed in range(5):
+            case = self.make_case(
+                scenario_id="population-tail",
+                seed=seed,
+                shared_time_grid=True,
+            )
+            outputs = self.truth_outputs(case)
+            if seed == 4:
+                outputs["fitted_wavelength_lengthscale"] *= 10.0
+            runs.append(
+                evaluate_synthetic_wavelength_recovery(
+                    case,
+                    "2DWavelengthDependent",
+                    **outputs,
+                )
+            )
+
+        aggregate = aggregate_synthetic_wavelength_recovery_runs(runs)
+        gates = aggregate.extra_fields["d1_gate_summary"]
+        lengthscale = gates["gates"]["wavelength_lengthscale_recovery"]
+
+        self.assertEqual(gates["evaluation_mode"], "population")
+        self.assertTrue(gates["all_evaluated_gates_passed"])
+        self.assertTrue(lengthscale["passed"])
+        self.assertAlmostEqual(lengthscale["pass_fraction"], 0.8)
+        self.assertGreater(lengthscale["p90"], 4.0)
+        self.assertTrue(lengthscale["tail_instability_warning"])
+
+    def test_population_completion_gate_accepts_exactly_ninety_five_percent(self):
+        runs = []
+        for seed in range(20):
+            case = self.make_case(
+                scenario_id="population-completion",
+                seed=seed,
+                shared_time_grid=True,
+            )
+            if seed == 19:
+                runs.append(self.make_failure(case, "2DWavelengthDependent"))
+            else:
+                runs.append(self.make_success(case, "2DWavelengthDependent"))
+
+        aggregate = aggregate_synthetic_wavelength_recovery_runs(runs)
+        completion = aggregate.extra_fields["d1_gate_summary"]["gates"][
+            "matched_run_completion"
+        ]
+
+        self.assertTrue(completion["passed"])
+        self.assertAlmostEqual(completion["completion_fraction"], 0.95)
+        self.assertAlmostEqual(
+            completion["minimum_scenario_completion_fraction"], 0.95
+        )
 
     def test_matrix_runner_returns_typed_json_safe_report(self):
         first = self.make_case(scenario_id="matrix-one", seed=1)

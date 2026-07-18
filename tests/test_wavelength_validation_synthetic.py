@@ -105,6 +105,16 @@ class TestSyntheticWavelengthValidationCase(SyntheticCaseMixin, unittest.TestCas
         self.assertNotEqual(first.time_values, second.time_values)
         self.assertNotEqual(first.observed_flux, second.observed_flux)
 
+    def test_shared_time_grid_reuses_identical_times_in_every_band(self):
+        case = self.make_case(shared_time_grid=True)
+        times = np.asarray(case.time_values).reshape(3, 8)
+
+        np.testing.assert_allclose(times[0], times[1])
+        np.testing.assert_allclose(times[0], times[2])
+        self.assertTrue(
+            case.scenario.sampling_configuration["shared_time_grid"]
+        )
+
     def test_purpose_specific_seeds_are_recorded_separately(self):
         case = self.make_case(
             seed=None,
@@ -330,6 +340,16 @@ class TestCanonicalSyntheticCases(unittest.TestCase):
                     case.scenario.truth.noiseless_summary["linear_flux"]
                 )
 
+    def test_canonical_set_uses_shared_nominal_time_grid(self):
+        for case in self.cases:
+            with self.subTest(case=case.scenario.scenario_id):
+                self.assertTrue(
+                    case.scenario.sampling_configuration["shared_time_grid"]
+                )
+                counts = case.scenario.sampling_configuration["n_per_band"]
+                self.assertEqual(len(set(counts)), 1)
+                self.assertEqual(counts[0], 72)
+
 
 class TestSyntheticInputValidation(SyntheticCaseMixin, unittest.TestCase):
     def test_invalid_enum_values_raise(self):
@@ -351,6 +371,13 @@ class TestSyntheticInputValidation(SyntheticCaseMixin, unittest.TestCase):
             self.make_case(band_labels=("r", "J"))
         with self.assertRaisesRegex(ValueError, "match the number of bands"):
             self.make_case(n_per_band=[4, 5, 6, 7])
+
+    def test_shared_time_grid_requires_equal_band_counts(self):
+        with self.assertRaisesRegex(ValueError, "equal observation counts"):
+            self.make_case(
+                n_per_band=[6, 7, 8],
+                shared_time_grid=True,
+            )
 
     def test_all_purpose_specific_seeds_are_required_without_master(self):
         with self.assertRaisesRegex(ValueError, "master seed"):

@@ -199,6 +199,63 @@ class ParameterEstimateApplicator:
         return str(value)
 
     @staticmethod
+    def _bounds_are_strict_subset(
+        inner_bounds,
+        outer_bounds,
+    ) -> bool:
+        """Return whether valid finite inner bounds strictly narrow outer bounds."""
+        inner_lower, inner_upper = inner_bounds
+        outer_lower, outer_upper = outer_bounds
+
+        inner_lower = torch.as_tensor(inner_lower)
+        inner_upper = torch.as_tensor(
+            inner_upper,
+            device=inner_lower.device,
+        )
+        outer_lower = torch.as_tensor(
+            outer_lower,
+            device=inner_lower.device,
+        )
+        outer_upper = torch.as_tensor(
+            outer_upper,
+            device=inner_lower.device,
+        )
+
+        common_dtype = torch.promote_types(
+            torch.promote_types(inner_lower.dtype, inner_upper.dtype),
+            torch.promote_types(outer_lower.dtype, outer_upper.dtype),
+        )
+        if not torch.is_floating_point(torch.empty((), dtype=common_dtype)):
+            common_dtype = torch.get_default_dtype()
+
+        inner_lower, inner_upper, outer_lower, outer_upper = (
+            torch.broadcast_tensors(
+                inner_lower.to(dtype=common_dtype),
+                inner_upper.to(dtype=common_dtype),
+                outer_lower.to(dtype=common_dtype),
+                outer_upper.to(dtype=common_dtype),
+            )
+        )
+
+        if not bool(
+            torch.all(
+                torch.isfinite(inner_lower)
+                & torch.isfinite(inner_upper)
+                & ~torch.isnan(outer_lower)
+                & ~torch.isnan(outer_upper)
+                & (inner_lower < inner_upper)
+                & (outer_lower < outer_upper)
+            )
+        ):
+            return False
+
+        contained = (inner_lower >= outer_lower) & (inner_upper <= outer_upper)
+        strictly_narrower = (inner_lower > outer_lower) | (
+            inner_upper < outer_upper
+        )
+        return bool(torch.all(contained) and torch.any(strictly_narrower))
+
+    @staticmethod
     def _effective_constraint_bounds(target_module, parameter_name):
         """Return the bounds registered on a constrained GPyTorch parameter."""
         raw_parameter_name = (
@@ -379,6 +436,26 @@ class ParameterEstimateApplicator:
             ):
                 existing_bounds = get_bounds(existing_constraint)
                 proposed_bounds = get_bounds(proposed_constraint)
+
+                schema_bounds = None
+                if estimate.spec.constraint is not None:
+                    schema_bounds = self._transform_constraint_bounds(
+                        estimate,
+                        estimate.spec.constraint,
+                    )
+
+                if (
+                    estimate.spec.constraint_strategy
+                    is ConstraintStrategy.WAVELENGTH_MEAN
+                    and schema_bounds is not None
+                    and self._bounds_are_strict_subset(
+                        existing_bounds,
+                        schema_bounds,
+                    )
+                ):
+                    estimate.metadata["constraint_action"] = "kept_existing"
+                    return True
+
                 intersected_bounds = intersect_constraint_bounds(
                     existing_constraint,
                     proposed_constraint,
@@ -460,8 +537,14 @@ class ParameterEstimateApplicator:
         """Transform a physical-space constraint into parameter space."""
         if estimate.constraint is None:
             return None
+        return self._transform_constraint_bounds(
+            estimate,
+            estimate.constraint,
+        )
 
-        lower, upper = estimate.constraint
+    def _transform_constraint_bounds(self, estimate, constraint):
+        """Transform supplied physical-space bounds into parameter space."""
+        lower, upper = constraint
 
         if estimate.spec.scale is ParameterScale.LINEAR:
             return (lower, upper)

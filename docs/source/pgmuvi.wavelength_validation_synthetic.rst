@@ -23,3 +23,13 @@ is called.
    :members:
    :undoc-members:
    :show-inheritance:
+
+Nominal sampling
+----------------
+
+Canonical D1 cases use 72 observations per band on a shared reproducible
+irregular time grid spanning 3.2 generating periods.  The denser nominal design
+is required because six-band wavelength-lengthscale recovery is driven more by
+within-cycle sampling density than by extending a sparse baseline.  Independent,
+36-point, uneven, and longer-but-sparser designs belong to the later D2
+robustness matrix.

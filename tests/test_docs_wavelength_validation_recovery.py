@@ -19,6 +19,11 @@ class TestSyntheticWavelengthRecoveryDocumentation(unittest.TestCase):
         normalized = " ".join(page_text.split())
         self.assertIn("Missing fitted quantities remain explicit", normalized)
         self.assertIn("do not rank candidates as scientific evidence", normalized)
+        self.assertIn("correlation-matrix RMSE", normalized)
+        self.assertIn("shared irregular time grid", normalized)
+        self.assertIn("never forwarded to GP constructors", normalized)
+        self.assertIn("population contract", normalized)
+        self.assertIn("tail-instability warning", normalized)
 
     def test_package_exports_recovery_module_name(self):
         package_init = (ROOT / "pgmuvi/__init__.py").read_text(encoding="utf-8")
