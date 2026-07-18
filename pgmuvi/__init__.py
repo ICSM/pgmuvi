@@ -29,4 +29,5 @@ __all__ = [
     "wavelength_hypotheses",
     "wavelength_results",
     "wavelength_status",
+    "wavelength_validation",
 ]
