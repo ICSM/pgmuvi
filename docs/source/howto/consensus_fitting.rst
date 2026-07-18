@@ -148,8 +148,8 @@ Model and kernel roles
    * - ``2DSeparable``
      - Generic direct product-kernel baseline with a Matérn time kernel and RBF
        wavelength kernel by default.
-     - The default model has no spectral-mixture or ``period_length`` handoff;
-       do not use it as the standard consensus path.
+     - Use ``time_kernel_type="quasi_periodic"`` for period-length handoff or
+       ``"spectral_mixture"`` for frequency-space handoff.
    * - ``2DWavelengthDependent``
      - Flexible separable covariance with a smooth wavelength kernel and a
        configurable wavelength-dependent mean.
@@ -164,10 +164,10 @@ Model and kernel roles
      - Same supported consensus time-kernel choices as
        ``2DWavelengthDependent``.
 
-The generic ``2DSeparable`` family is useful as a direct product-kernel control,
-but its convenience interface does not accept ``time_kernel_type`` or
-``wavelength_kernel_type`` selectors.  Use ``2DWavelengthDependent`` when you
-need those string-configurable kernels.
+The generic ``2DSeparable`` family is useful as a direct product-kernel control.
+Its convenience interface accepts the same ``time_kernel_type`` and
+``wavelength_kernel_type`` selectors used by the other separable families while
+retaining a constant mean function.
 
 For a model-by-model explanation of the wavelength means, covariance
 assumptions, coordinate requirements, and try-first ordering, see
@@ -320,7 +320,13 @@ including:
    averaged into a midpoint period supported by neither band.
 
 ``use_acf``
-   Enables the optional ACF contribution to the consensus diagnostics.
+   Enables ACF validation and conservative LS--ACF harmonic reconciliation.
+   Direct agreement retains the Lomb--Scargle peak.  When ACF identifies a
+   longer period related to the LS period by an integer harmonic, consensus
+   promotes the lower ACF frequency as the candidate fundamental and records
+   ``selected_from='acf_fundamental_harmonic_reconciliation'``.  A shorter-period
+   ACF harmonic does not replace the slower LS candidate.  The original LS
+   frequency and period remain available in the per-band diagnostics.
 
 ``constrain_consensus`` and ``consensus_width_factor``
    Control whether and how tightly the final temporal parameters are constrained
@@ -425,6 +431,18 @@ Also inspect:
    print(lc.get_parameter_workflow_summary())
    print(lc.get_fit_history_summary())
    lc.export_fit_history_json("fit_history.json")
+
+Transform isolation during per-band diagnostics
+-----------------------------------------------
+
+Consensus splitting constructs temporary one-dimensional light curves from the
+raw time, flux, and uncertainty arrays.  These diagnostic objects deliberately
+do not inherit the parent light curve's fitted coordinate or flux transforms.
+A two-dimensional affine coordinate transform stores separate state for time
+and wavelength and cannot be applied safely to a one-dimensional time vector.
+Lomb--Scargle, ACF, and sampling diagnostics therefore remain in the original
+physical time units, while the parent multiband light curve keeps its configured
+transform for the final GP fit.
 
 The consensus diagnostics identify accepted and rejected bands, per-band
 periods or frequencies, the consensus estimate, and the parameter target used

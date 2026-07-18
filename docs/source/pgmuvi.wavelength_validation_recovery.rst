@@ -60,9 +60,10 @@ Use ``stop_on_error=True`` only when deliberate fail-fast behavior is required.
 
 The maintained LPV defaults are:
 
-* ``fit_strategy='consensus'`` and ``time_kernel_type='quasi_periodic'`` for
-  ``2DWavelengthDependent``, ``2DDustMean``, ``2DPowerLawMean``, and
-  ``2DSeparable``;
+* ``fit_strategy='consensus'``, ``time_kernel_type='quasi_periodic'``, and
+  ``use_acf=True`` for ``2DWavelengthDependent``, ``2DDustMean``,
+  ``2DPowerLawMean``, and ``2DSeparable`` so nominal D1 runs can reconcile a
+  dominant LS harmonic with a longer ACF-supported fundamental;
 * independent two-dimensional spectral-mixture initialization for ``2D`` with
   one requested component unless overridden by the validation driver;
 * ``learn_additional_noise=True`` and linear-flux fitting.

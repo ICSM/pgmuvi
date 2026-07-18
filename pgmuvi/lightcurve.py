@@ -588,6 +588,8 @@ _CONSENSUS_BAND_SCHEMA_FIELDS = MappingProxyType(
         "metrics": _consensus_schema_field(default=None, nullable=True),
         "dominant_frequency": _consensus_schema_field(default=None, nullable=True),
         "dominant_period": _consensus_schema_field(default=None, nullable=True),
+        "ls_frequency": _consensus_schema_field(default=None, nullable=True),
+        "ls_period": _consensus_schema_field(default=None, nullable=True),
         "ls_significant": _consensus_schema_field(default=None, nullable=True),
         "ls_peak_power": _consensus_schema_field(default=None, nullable=True),
         "ls_peak_prominence": _consensus_schema_field(default=None, nullable=True),
@@ -603,6 +605,9 @@ _CONSENSUS_BAND_SCHEMA_FIELDS = MappingProxyType(
         "acf_period_ratio": _consensus_schema_field(default=None, nullable=True),
         "acf_harmonic_order": _consensus_schema_field(default=None, nullable=True),
         "acf_error": _consensus_schema_field(default=None, nullable=True),
+        "harmonic_reconciliation_applied": _consensus_schema_field(
+            default=False, nullable=False
+        ),
         "selected_from": _consensus_schema_field(default=None, nullable=True),
         "gp_validation_used": _consensus_schema_field(default=False, nullable=False),
         "gp_dominant_frequency": _consensus_schema_field(default=None, nullable=True),
@@ -12832,12 +12837,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
                 else None
             )
+            # These temporary 1D light curves exist only for per-band
+            # sampling, Lomb--Scargle, and ACF diagnostics.  Do not inherit
+            # the parent transforms: a fitted 2D affine x-transform stores
+            # one offset/scale per coordinate and is therefore incompatible
+            # with the 1D time vector extracted here.  The diagnostics below
+            # operate on raw time/flux values, while the parent multiband
+            # light curve retains its transforms for the final GP fit.
             lc_band = Lightcurve(
                 t,
                 y,
                 yerr=yerr,
-                xtransform=self.xtransform,
-                ytransform=self.ytransform,
+                xtransform=None,
+                ytransform=None,
+                center_time=False,
                 name=self.name,
                 band=np.asarray([band_label], dtype=np.str_),
             )
@@ -13359,6 +13372,56 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "ratio": float(ratio),
             "harmonic_order": None,
         }
+
+    @staticmethod
+    def _consensus_reconcile_ls_acf_harmonic(
+        *,
+        ls_frequency,
+        acf_frequency,
+        comparison_status,
+        harmonic_order,
+    ):
+        """Choose a conservative effective frequency for an LS--ACF harmonic.
+
+        Direct LS--ACF agreement retains the Lomb--Scargle frequency.  For a
+        recognised harmonic relationship, the lower of the two frequencies is
+        the only candidate that can represent the shared fundamental rather
+        than a higher-order harmonic.  The ACF frequency is therefore promoted
+        only when it is lower than the LS frequency.  An ACF frequency above
+        the LS frequency is retained as diagnostic support but does not replace
+        the slower LS candidate.
+        """
+        ls_value = float(ls_frequency)
+        if not (np.isfinite(ls_value) and ls_value > 0.0):
+            raise ValueError(
+                "ls_frequency must be finite and strictly positive."
+            )
+
+        result = {
+            "frequency": ls_value,
+            "selected_from": "ls_primary_peak",
+            "applied": False,
+        }
+        if comparison_status != _ACF_STATUS_HARMONIC:
+            return result
+
+        try:
+            order_value = int(harmonic_order)
+            acf_value = float(acf_frequency)
+        except (TypeError, ValueError):
+            return result
+        if order_value < 2 or not (
+            np.isfinite(acf_value) and acf_value > 0.0
+        ):
+            return result
+
+        if acf_value < ls_value:
+            return {
+                "frequency": acf_value,
+                "selected_from": "acf_fundamental_harmonic_reconciliation",
+                "applied": True,
+            }
+        return result
 
     @staticmethod
     def _consensus_make_json_safe(value):
@@ -15136,7 +15199,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 ),
                 plausible_candidates[0],
             )
-            dominant_freq = float(best_candidate["frequency"])
+            ls_frequency = float(best_candidate["frequency"])
+            ls_period = float(1.0 / ls_frequency)
+            dominant_freq = ls_frequency
+            selected_from = "ls_primary_peak"
+            record["ls_frequency"] = ls_frequency
+            record["ls_period"] = ls_period
 
             # Final plausibility guard: frequency must meet the minimum
             # detectable frequency threshold.
@@ -15190,6 +15258,36 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         _ACF_STATUS_HARMONIC,
                     )
                 )
+                harmonic_reconciliation = (
+                    self._consensus_reconcile_ls_acf_harmonic(
+                        ls_frequency=ls_frequency,
+                        acf_frequency=record["acf_frequency"],
+                        comparison_status=acf_compare["status"],
+                        harmonic_order=acf_compare["harmonic_order"],
+                    )
+                )
+                reconciled_frequency = float(
+                    harmonic_reconciliation["frequency"]
+                )
+                if (
+                    harmonic_reconciliation["applied"]
+                    and ls_candidates["min_detectable_frequency"] > 0
+                    and reconciled_frequency
+                    < ls_candidates["min_detectable_frequency"]
+                ):
+                    harmonic_reconciliation = {
+                        "frequency": ls_frequency,
+                        "selected_from": (
+                            "ls_primary_peak_acf_fundamental_out_of_range"
+                        ),
+                        "applied": False,
+                    }
+                    reconciled_frequency = ls_frequency
+                dominant_freq = reconciled_frequency
+                selected_from = harmonic_reconciliation["selected_from"]
+                record["harmonic_reconciliation_applied"] = bool(
+                    harmonic_reconciliation["applied"]
+                )
 
                 # ACF is a direct time-domain periodicity diagnostic. Strong
                 # LS-vs-ACF disagreement is treated conservatively as likely
@@ -15207,7 +15305,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             record["dominant_frequency"] = dominant_freq
             record["dominant_period"] = dominant_period
             record["ls_significant"] = bool(best_candidate["significant"])
-            record["selected_from"] = "ls_primary_peak"
+            record["selected_from"] = selected_from
             self._consensus_set_band_status(
                 record,
                 _CONSENSUS_BAND_STATUS_ACCEPTED,
@@ -15231,6 +15329,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         _msg += (
                             f" acf_status={_record.get('acf_comparison_status')}"
                             f" harmonic_order={_record.get('acf_harmonic_order')}"
+                            f" selected_from={_record.get('selected_from')}"
                         )
                     print(_msg)
                 elif _band in rejection_reasons:

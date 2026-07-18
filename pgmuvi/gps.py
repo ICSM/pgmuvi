@@ -2190,11 +2190,30 @@ class SeparableGPModel(ExactGP):
     likelihood : gpytorch.likelihoods.Likelihood
         Likelihood function for the model.
     time_kernel : gpytorch.kernels.Kernel, optional
-        Kernel for the temporal dimension (``active_dims`` will be set to
-        ``[0]`` automatically). Defaults to a scaled Matérn-1.5.
+        Explicit kernel for the temporal dimension (``active_dims`` will be
+        set to ``[0]`` automatically). Mutually exclusive with
+        ``time_kernel_type``.
     wavelength_kernel : gpytorch.kernels.Kernel, optional
-        Kernel for the wavelength dimension (``active_dims`` will be set to
-        ``[1]`` automatically). Defaults to a scaled RBF.
+        Explicit kernel for the wavelength dimension (``active_dims`` will be
+        set to ``[1]`` automatically). Mutually exclusive with
+        ``wavelength_kernel_type``.
+    time_kernel_type : str or gpytorch.kernels.Kernel, optional
+        String-configurable temporal kernel used when ``time_kernel`` is not
+        supplied. Supported values are ``'matern'``, ``'quasi_periodic'``,
+        ``'rbf'``, and ``'spectral_mixture'``/``'sm'``. The default remains a
+        scaled Matérn-1.5 kernel.
+    wavelength_kernel_type : str or gpytorch.kernels.Kernel, optional
+        String-configurable wavelength kernel used when
+        ``wavelength_kernel`` is not supplied. Supported values are ``'rbf'``,
+        ``'matern'``, and ``'rational_quadratic'``/``'rq'``. The default
+        remains a scaled RBF kernel.
+    period : float, optional
+        Initial period for ``time_kernel_type='quasi_periodic'``. Defaults to
+        half the transformed time span.
+    wavelength_lengthscale : float, optional
+        Initial wavelength lengthscale for a string-configured wavelength
+        kernel. Defaults to half the transformed wavelength span, with a
+        minimum of 1.0.
 
     Notes
     -----
@@ -2210,15 +2229,56 @@ class SeparableGPModel(ExactGP):
         time_kernel=None,
         wavelength_kernel=None,
         mean_module=None,
+        time_kernel_type=None,
+        wavelength_kernel_type=None,
+        period=None,
+        wavelength_lengthscale=None,
+        num_mixtures=4,
+        add_flicker=False,
+        wavelength_scaling="constant",
         **kwargs
     ):
         super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean() if mean_module is None else mean_module
 
+        if time_kernel is not None and time_kernel_type is not None:
+            raise ValueError(
+                "Pass either time_kernel or time_kernel_type, not both."
+            )
+        if wavelength_kernel is not None and wavelength_kernel_type is not None:
+            raise ValueError(
+                "Pass either wavelength_kernel or wavelength_kernel_type, "
+                "not both."
+            )
+
         if time_kernel is None:
-            time_kernel = ScaleKernel(MaternKernel(nu=1.5))
+            if time_kernel_type is None:
+                time_kernel = ScaleKernel(MaternKernel(nu=1.5))
+            else:
+                if period is None:
+                    span = float(train_x[:, 0].max() - train_x[:, 0].min())
+                    period = span / 2.0
+                time_kernel = _build_time_kernel(
+                    time_kernel_type,
+                    period,
+                    num_mixtures,
+                    add_flicker=add_flicker,
+                )
+
         if wavelength_kernel is None:
-            wavelength_kernel = ScaleKernel(RBFKernel())
+            if wavelength_kernel_type is None:
+                wavelength_kernel = ScaleKernel(RBFKernel())
+            else:
+                if wavelength_lengthscale is None:
+                    wl_span = float(
+                        train_x[:, 1].max() - train_x[:, 1].min()
+                    )
+                    wavelength_lengthscale = max(wl_span / 2.0, 1.0)
+                wavelength_kernel = _build_wavelength_kernel(
+                    wavelength_kernel_type,
+                    wavelength_lengthscale,
+                    scaling=wavelength_scaling,
+                )
 
         # Restrict each sub-kernel to its own dimension via active_dims.
         time_kernel.register_buffer(

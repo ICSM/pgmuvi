@@ -40,6 +40,7 @@ def _make_lpv_like_lc():
 class TestConsensusPeriodKernelHandoff(unittest.TestCase):
     def test_quasi_periodic_lpv_models_resolve_period_length_mode(self):
         for model_name in (
+            "2DSeparable",
             "2DWavelengthDependent",
             "2DDustMean",
             "2DPowerLawMean",

@@ -809,6 +809,7 @@ def _default_fit_configuration(
             {
                 "fit_strategy": "consensus",
                 "time_kernel_type": "quasi_periodic",
+                "use_acf": True,
             }
         )
     configuration.update(dict(overrides or {}))
