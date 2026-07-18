@@ -66,4 +66,5 @@ Data, diagnostics, and validation
    pgmuvi.wavelength_results
    pgmuvi.wavelength_status
    pgmuvi.wavelength_validation
+   pgmuvi.wavelength_validation_synthetic
    pgmuvi.upload_validation
