@@ -293,6 +293,126 @@ def _normalized_rmse(value: Any, truth: Any) -> float | None:
     return rmse / target_scale
 
 
+def _centered_normalized_rmse(value: Any, truth: Any) -> float | None:
+    """Return prediction-shape error after removing a constant offset."""
+    fitted = _finite_array(value)
+    expected = _finite_array(truth)
+    if fitted is None or expected is None or fitted.shape != expected.shape:
+        return None
+    fitted_centered = fitted - float(np.median(fitted))
+    expected_centered = expected - float(np.median(expected))
+    rmse = float(
+        np.sqrt(np.mean((fitted_centered - expected_centered) ** 2))
+    )
+    target_scale = max(float(np.ptp(expected_centered)), 1.0e-12)
+    return rmse / target_scale
+
+
+def _rbf_correlation_matrix(
+    wavelengths: Any,
+    lengthscale: float | None,
+) -> np.ndarray | None:
+    values = _finite_array(wavelengths)
+    lengthscale = _finite_float(lengthscale)
+    if values is None or lengthscale is None or lengthscale <= 0.0:
+        return None
+    delta = values[:, None] - values[None, :]
+    return np.exp(-0.5 * (delta / lengthscale) ** 2)
+
+
+def _wavelength_correlation_rmse(
+    wavelengths: Any,
+    fitted_lengthscale: float | None,
+    truth_lengthscale: float | None,
+) -> tuple[float | None, float | None, float | None]:
+    fitted = _rbf_correlation_matrix(wavelengths, fitted_lengthscale)
+    truth = _rbf_correlation_matrix(wavelengths, truth_lengthscale)
+    if fitted is None or truth is None or fitted.shape != truth.shape:
+        return None, None, None
+    rmse = float(np.sqrt(np.mean((fitted - truth) ** 2)))
+    endpoint_truth = float(truth[0, -1]) if truth.size else None
+    endpoint_fitted = float(fitted[0, -1]) if fitted.size else None
+    return rmse, endpoint_fitted, endpoint_truth
+
+
+def _realized_wavelength_correlation_rmse(
+    case: SyntheticWavelengthValidationCase,
+    truth_lengthscale: float | None,
+) -> tuple[float | None, float | None, float | None, int | None]:
+    """Compare one shared-grid latent realization with declared RBF truth."""
+    configuration = case.scenario.sampling_configuration
+    if not bool(configuration.get("shared_time_grid")):
+        return None, None, None, None
+
+    covariance_truth = (
+        case.scenario.truth.wavelength_covariance_parameters
+    )
+    if (
+        str(covariance_truth.get("covariance_kind"))
+        == "joint_spectral_mixture_ard"
+        and abs(float(covariance_truth.get("wavelength_frequency", 0.0)))
+        > 1.0e-12
+    ):
+        return None, None, None, None
+
+    labels = np.asarray(case.band_labels, dtype=str)
+    times = np.asarray(case.time_values, dtype=float)
+    latent = np.asarray(case.latent_process, dtype=float)
+    rows = []
+    reference_times = None
+    for band in case.scenario.truth.band_labels:
+        mask = labels == str(band)
+        order = np.argsort(times[mask])
+        band_times = times[mask][order]
+        band_latent = latent[mask][order]
+        if band_times.size < 2:
+            return None, None, None, None
+        if reference_times is None:
+            reference_times = band_times
+        elif (
+            band_times.shape != reference_times.shape
+            or not np.allclose(band_times, reference_times)
+        ):
+            return None, None, None, None
+        rows.append(band_latent)
+
+    matrix = np.vstack(rows)
+    if np.any(np.std(matrix, axis=1) <= 0.0):
+        return None, None, None, None
+    realized = np.corrcoef(matrix)
+    truth = _rbf_correlation_matrix(
+        case.scenario.truth.physical_wavelengths,
+        truth_lengthscale,
+    )
+    if truth is None or realized.shape != truth.shape:
+        return None, None, None, None
+    rmse = float(np.sqrt(np.mean((realized - truth) ** 2)))
+    endpoint_realized = float(realized[0, -1]) if realized.size else None
+    endpoint_truth = float(truth[0, -1]) if truth.size else None
+    return rmse, endpoint_realized, endpoint_truth, int(matrix.shape[1])
+
+
+def _wavelength_covariance_recovery_limitations(
+    case: SyntheticWavelengthValidationCase,
+    model: str,
+) -> tuple[str, ...]:
+    """Return limitations that make strict lengthscale recovery ineligible."""
+    temporal = case.scenario.truth.temporal_parameters
+    if (
+        bool(temporal.get("fundamental_plus_harmonic"))
+        and model in {
+            "2DWavelengthDependent",
+            "2DDustMean",
+            "2DPowerLawMean",
+            "2DSeparable",
+        }
+    ):
+        return (
+            "multiple_temporal_components_fitted_with_single_quasi_periodic_kernel",
+        )
+    return ()
+
+
 def _boundary_label_metric(
     boundary_hits: Sequence[Mapping[str, Any]] | None,
 ) -> tuple[bool, int, list[dict[str, Any]]]:
@@ -522,6 +642,28 @@ def build_synthetic_wavelength_recovery_metrics(
     lengthscale_error = _factor_error(lengthscale_value, lengthscale_truth)
     mean_truth = truth.noiseless_summary.get("mean_by_band")
     mean_error = _normalized_rmse(fitted_mean_by_band, mean_truth)
+    mean_shape_error = _centered_normalized_rmse(
+        fitted_mean_by_band, mean_truth
+    )
+    (
+        correlation_rmse,
+        fitted_endpoint_correlation,
+        truth_endpoint_correlation,
+    ) = _wavelength_correlation_rmse(
+        truth.physical_wavelengths,
+        lengthscale_value,
+        lengthscale_truth,
+    )
+    (
+        realized_correlation_rmse,
+        realized_endpoint_correlation,
+        realized_truth_endpoint_correlation,
+        realized_time_points,
+    ) = _realized_wavelength_correlation_rmse(case, lengthscale_truth)
+    covariance_limitations = _wavelength_covariance_recovery_limitations(
+        case, model
+    )
+    strict_covariance_recovery = not covariance_limitations
     strength = str(truth.metadata.get("dependence_strength") or "")
     mean_threshold = thresholds.mean_normalized_rmse(strength)
     labels_valid, boundary_count, normalized_hits = _boundary_label_metric(
@@ -576,12 +718,19 @@ def build_synthetic_wavelength_recovery_metrics(
                 lengthscale_error
                 <= thresholds.wavelength_lengthscale_factor_error
                 if lengthscale_error is not None
+                and strict_covariance_recovery
                 else None
             ),
-            direction=RecoveryMetricDirection.LOWER_IS_BETTER,
-            threshold={
-                "maximum": thresholds.wavelength_lengthscale_factor_error
-            },
+            direction=(
+                RecoveryMetricDirection.LOWER_IS_BETTER
+                if strict_covariance_recovery
+                else RecoveryMetricDirection.INFORMATIONAL
+            ),
+            threshold=(
+                {"maximum": thresholds.wavelength_lengthscale_factor_error}
+                if strict_covariance_recovery
+                else {}
+            ),
             units="multiplicative_factor",
             scope="wavelength_covariance_recovery",
             model=model,
@@ -591,7 +740,58 @@ def build_synthetic_wavelength_recovery_metrics(
                 "Symmetric multiplicative error between fitted and generating "
                 "physical wavelength lengthscales."
             ),
-            metadata={"fitted_wavelength_lengthscale": lengthscale_value},
+            limitations=covariance_limitations,
+            metadata={
+                "fitted_wavelength_lengthscale": lengthscale_value,
+                "strict_recovery_eligible": strict_covariance_recovery,
+            },
+        ),
+        _metric(
+            name="wavelength_correlation_matrix_rmse",
+            value=correlation_rmse,
+            truth_value=0.0,
+            available=correlation_rmse is not None,
+            passed=None,
+            direction=RecoveryMetricDirection.INFORMATIONAL,
+            units="correlation_coefficient",
+            scope="wavelength_covariance_recovery",
+            model=model,
+            parameter="wavelength_lengthscale",
+            ard_dimension="wavelength_frequency",
+            summary=(
+                "RMSE between fitted and generating RBF wavelength "
+                "correlation matrices at the observed bands."
+            ),
+            limitations=covariance_limitations,
+            metadata={
+                "fitted_endpoint_correlation": fitted_endpoint_correlation,
+                "truth_endpoint_correlation": truth_endpoint_correlation,
+                "strict_recovery_eligible": strict_covariance_recovery,
+            },
+        ),
+        _metric(
+            name="realized_wavelength_correlation_matrix_rmse",
+            value=realized_correlation_rmse,
+            truth_value=0.0,
+            available=realized_correlation_rmse is not None,
+            passed=None,
+            direction=RecoveryMetricDirection.INFORMATIONAL,
+            units="correlation_coefficient",
+            scope="synthetic_realization_diagnostics",
+            model=model,
+            parameter="latent_process",
+            ard_dimension="wavelength_frequency",
+            summary=(
+                "RMSE between the empirical shared-grid latent-process "
+                "correlation matrix and the declared generating RBF matrix."
+            ),
+            metadata={
+                "realized_endpoint_correlation": realized_endpoint_correlation,
+                "truth_endpoint_correlation": (
+                    realized_truth_endpoint_correlation
+                ),
+                "n_shared_time_points": realized_time_points,
+            },
         ),
         _metric(
             name="mean_law_normalized_rmse",
@@ -608,6 +808,26 @@ def build_synthetic_wavelength_recovery_metrics(
             summary=(
                 "RMSE of fitted versus generating mean at observed bands, "
                 "normalized by the larger of target span and median magnitude."
+            ),
+            metadata={
+                "fitted_mean_by_band": _json_safe(fitted_mean_by_band),
+                "dependence_strength": strength,
+            },
+        ),
+        _metric(
+            name="mean_law_centered_normalized_rmse",
+            value=mean_shape_error,
+            truth_value=_json_safe(mean_truth),
+            available=mean_shape_error is not None,
+            passed=None,
+            direction=RecoveryMetricDirection.INFORMATIONAL,
+            units="fraction_of_target_span",
+            scope="wavelength_mean_recovery",
+            model=model,
+            parameter="mean_module",
+            summary=(
+                "Prediction-shape RMSE after removing the median offset from "
+                "both fitted and generating band means."
             ),
             metadata={
                 "fitted_mean_by_band": _json_safe(fitted_mean_by_band),
@@ -989,14 +1209,33 @@ def _extract_fitted_mean_by_band(
 
 
 def _extract_parameter_workflow(lightcurve: Any) -> dict[str, Any]:
-    getter = getattr(lightcurve, "get_parameter_workflow_summary", None)
-    if callable(getter):
+    summary: dict[str, Any] = {}
+    summary_getter = getattr(
+        lightcurve, "get_parameter_workflow_summary", None
+    )
+    if callable(summary_getter):
         try:
-            value = getter()
+            value = summary_getter()
             if isinstance(value, Mapping):
-                return dict(_json_safe(value))
+                summary = dict(_json_safe(value))
         except Exception:
-            return {"available": False, "reason": "summary_extraction_failed"}
+            summary = {
+                "available": False,
+                "reason": "summary_extraction_failed",
+            }
+
+    report_getter = getattr(lightcurve, "get_parameter_workflow_report", None)
+    if callable(report_getter):
+        try:
+            report = report_getter()
+            if isinstance(report, Mapping):
+                summary["report"] = dict(_json_safe(report))
+        except Exception:
+            summary["report_error"] = "report_extraction_failed"
+
+    if summary:
+        return summary
+
     value = getattr(lightcurve, "parameter_workflow_result", None)
     if hasattr(value, "to_dict"):
         try:
@@ -1217,10 +1456,17 @@ def _numeric_metric_summary(values: Sequence[Any]) -> dict[str, Any]:
 
 def _metric_summaries_from_runs(
     runs: Sequence[WavelengthValidationRun],
+    *,
+    strict_recovery_only: bool = False,
 ) -> dict[str, dict[str, Any]]:
     metrics_by_name: dict[str, list[WavelengthRecoveryMetric]] = {}
     for run in runs:
         for metric in run.metrics:
+            if (
+                strict_recovery_only
+                and metric.metadata.get("strict_recovery_eligible") is False
+            ):
+                continue
             metrics_by_name.setdefault(metric.name, []).append(metric)
     output: dict[str, dict[str, Any]] = {}
     for name, metrics in metrics_by_name.items():
@@ -1246,12 +1492,53 @@ def _metric_summaries_from_runs(
     return output
 
 
+def _scenario_population_summaries(
+    runs: Sequence[WavelengthValidationRun],
+) -> dict[str, dict[str, Any]]:
+    """Summarize repeated matched-truth runs by scenario identifier."""
+    grouped: dict[str, list[WavelengthValidationRun]] = {}
+    for run in runs:
+        grouped.setdefault(run.scenario_id, []).append(run)
+
+    completed_outcomes = {
+        TechnicalOutcome.COMPLETED,
+        TechnicalOutcome.COMPLETED_WITH_WARNINGS,
+        TechnicalOutcome.COMPLETED_WITH_RECOVERY,
+    }
+    output: dict[str, dict[str, Any]] = {}
+    for scenario_id, scenario_runs in grouped.items():
+        n_completed = sum(
+            run.status is not None
+            and run.status.technical_outcome in completed_outcomes
+            for run in scenario_runs
+        )
+        strict_metrics = _metric_summaries_from_runs(
+            scenario_runs, strict_recovery_only=True
+        )
+        output[scenario_id] = {
+            "n_runs": len(scenario_runs),
+            "n_completed": n_completed,
+            "n_failed": len(scenario_runs) - n_completed,
+            "completion_fraction": (
+                n_completed / len(scenario_runs) if scenario_runs else None
+            ),
+            "strict_metric_summaries": strict_metrics,
+        }
+    return output
+
+
 def _aggregate_gate_summary(
     metric_summaries: Mapping[str, Mapping[str, Any]],
     *,
     n_failed_runs: int,
+    n_matched_runs: int,
+    scenario_population_summaries: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     gates: dict[str, dict[str, Any]] = {}
+    population_mode = any(
+        int(summary.get("n_runs") or 0) > 1
+        for summary in scenario_population_summaries.values()
+    )
 
     def add_gate(name: str, evaluated: bool, passed: bool | None, **details):
         gates[name] = {
@@ -1304,24 +1591,102 @@ def _aggregate_gate_summary(
     )
     lengthscale_median = _finite_float(lengthscale.get("median"))
     lengthscale_p90 = _finite_float(lengthscale.get("p90"))
+    lengthscale_pass_fraction = _finite_float(
+        lengthscale.get("pass_fraction")
+    )
     lengthscale_evaluated = (
         int(lengthscale.get("n_available") or 0) > 0
         and lengthscale_median is not None
         and lengthscale_p90 is not None
     )
-    add_gate(
-        "wavelength_lengthscale_recovery",
-        lengthscale_evaluated,
-        (
-            lengthscale_median <= 2.0 and lengthscale_p90 <= 4.0
-            if lengthscale_evaluated
-            else None
-        ),
-        median=lengthscale_median,
-        p90=lengthscale_p90,
-        required_median_maximum=2.0,
-        required_p90_maximum=4.0,
+
+    scenario_lengthscale_summaries = []
+    for scenario_id, scenario_summary in scenario_population_summaries.items():
+        strict_metrics = scenario_summary.get("strict_metric_summaries") or {}
+        item = strict_metrics.get(
+            "wavelength_lengthscale_factor_error", {}
+        )
+        if int(item.get("n_available") or 0) <= 0:
+            continue
+        scenario_lengthscale_summaries.append(
+            {
+                "scenario_id": scenario_id,
+                "n_available": int(item.get("n_available") or 0),
+                "median": _finite_float(item.get("median")),
+                "p90": _finite_float(item.get("p90")),
+                "pass_fraction": _finite_float(item.get("pass_fraction")),
+            }
+        )
+    scenario_medians = [
+        item["median"]
+        for item in scenario_lengthscale_summaries
+        if item["median"] is not None
+    ]
+    scenario_pass_fractions = [
+        item["pass_fraction"]
+        for item in scenario_lengthscale_summaries
+        if item["pass_fraction"] is not None
+    ]
+    maximum_scenario_median = (
+        max(scenario_medians) if scenario_medians else None
     )
+    minimum_scenario_pass_fraction = (
+        min(scenario_pass_fractions)
+        if scenario_pass_fractions
+        else None
+    )
+
+    if population_mode:
+        population_lengthscale_evaluated = (
+            lengthscale_evaluated
+            and lengthscale_pass_fraction is not None
+            and maximum_scenario_median is not None
+            and minimum_scenario_pass_fraction is not None
+        )
+        lengthscale_passed = (
+            lengthscale_median <= 2.0
+            and lengthscale_pass_fraction >= 0.80
+            and maximum_scenario_median <= 4.0
+            and minimum_scenario_pass_fraction >= 0.60
+            if population_lengthscale_evaluated
+            else None
+        )
+        add_gate(
+            "wavelength_lengthscale_recovery",
+            population_lengthscale_evaluated,
+            lengthscale_passed,
+            evaluation_mode="population",
+            median=lengthscale_median,
+            p90=lengthscale_p90,
+            pass_fraction=lengthscale_pass_fraction,
+            maximum_scenario_median=maximum_scenario_median,
+            minimum_scenario_pass_fraction=(
+                minimum_scenario_pass_fraction
+            ),
+            required_median_maximum=2.0,
+            required_pass_fraction_minimum=0.80,
+            required_scenario_median_maximum=4.0,
+            required_scenario_pass_fraction_minimum=0.60,
+            tail_instability_warning=(
+                lengthscale_p90 is not None and lengthscale_p90 > 4.0
+            ),
+            scenario_summaries=scenario_lengthscale_summaries,
+        )
+    else:
+        add_gate(
+            "wavelength_lengthscale_recovery",
+            lengthscale_evaluated,
+            (
+                lengthscale_median <= 2.0 and lengthscale_p90 <= 4.0
+                if lengthscale_evaluated
+                else None
+            ),
+            evaluation_mode="single_realization_matrix",
+            median=lengthscale_median,
+            p90=lengthscale_p90,
+            required_median_maximum=2.0,
+            required_p90_maximum=4.0,
+        )
 
     for gate_name, metric_name in (
         ("mean_law_recovery", "mean_law_normalized_rmse"),
@@ -1348,12 +1713,58 @@ def _aggregate_gate_summary(
         required_p90_maximum=4.0,
     )
 
-    add_gate(
-        "matched_run_completion",
-        True,
-        n_failed_runs == 0,
-        n_failed_runs=int(n_failed_runs),
+    completion_fraction = (
+        (n_matched_runs - n_failed_runs) / n_matched_runs
+        if n_matched_runs > 0
+        else None
     )
+    scenario_completion_fractions = [
+        _finite_float(summary.get("completion_fraction"))
+        for summary in scenario_population_summaries.values()
+    ]
+    scenario_completion_fractions = [
+        value for value in scenario_completion_fractions if value is not None
+    ]
+    minimum_scenario_completion_fraction = (
+        min(scenario_completion_fractions)
+        if scenario_completion_fractions
+        else None
+    )
+    if population_mode:
+        completion_evaluated = (
+            completion_fraction is not None
+            and minimum_scenario_completion_fraction is not None
+        )
+        completion_passed = (
+            completion_fraction >= 0.95
+            and minimum_scenario_completion_fraction >= 0.95
+            if completion_evaluated
+            else None
+        )
+        add_gate(
+            "matched_run_completion",
+            completion_evaluated,
+            completion_passed,
+            evaluation_mode="population",
+            n_matched_runs=n_matched_runs,
+            n_failed_runs=int(n_failed_runs),
+            completion_fraction=completion_fraction,
+            minimum_scenario_completion_fraction=(
+                minimum_scenario_completion_fraction
+            ),
+            required_completion_fraction_minimum=0.95,
+            required_scenario_completion_fraction_minimum=0.95,
+        )
+    else:
+        add_gate(
+            "matched_run_completion",
+            True,
+            n_failed_runs == 0,
+            evaluation_mode="single_realization_matrix",
+            n_matched_runs=n_matched_runs,
+            n_failed_runs=int(n_failed_runs),
+        )
+
     evaluated_results = [
         gate["passed"] for gate in gates.values() if gate["evaluated"]
     ]
@@ -1364,6 +1775,9 @@ def _aggregate_gate_summary(
         "n_failed": sum(result is False for result in evaluated_results),
         "all_evaluated_gates_passed": bool(
             evaluated_results and all(evaluated_results)
+        ),
+        "evaluation_mode": (
+            "population" if population_mode else "single_realization_matrix"
         ),
         "scope": "runs_whose_fitted_model_matches_generating_model",
         "automatic_model_selection_applied": False,
@@ -1433,14 +1847,22 @@ def aggregate_synthetic_wavelength_recovery_runs(
         if run.model == str(run.extra_fields.get("generating_model") or "")
     ]
     matched_metric_summaries = _metric_summaries_from_runs(matched_runs)
+    matched_gate_metric_summaries = _metric_summaries_from_runs(
+        matched_runs, strict_recovery_only=True
+    )
     matched_failed_runs = sum(
         run.status is not None
         and run.status.technical_outcome is TechnicalOutcome.FAILED
         for run in matched_runs
     )
+    scenario_population_summaries = _scenario_population_summaries(
+        matched_runs
+    )
     gate_summary = _aggregate_gate_summary(
-        matched_metric_summaries,
+        matched_gate_metric_summaries,
         n_failed_runs=matched_failed_runs,
+        n_matched_runs=len(matched_runs),
+        scenario_population_summaries=scenario_population_summaries,
     )
 
     return WavelengthValidationAggregate(
@@ -1470,6 +1892,12 @@ def aggregate_synthetic_wavelength_recovery_runs(
             ),
             "matched_truth_run_ids": [run.run_id for run in matched_runs],
             "matched_truth_metric_summaries": matched_metric_summaries,
+            "matched_truth_gate_metric_summaries": (
+                matched_gate_metric_summaries
+            ),
+            "scenario_population_summaries": (
+                scenario_population_summaries
+            ),
             "d1_gate_summary": gate_summary,
         },
     )

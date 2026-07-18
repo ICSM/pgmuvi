@@ -740,6 +740,7 @@ def make_synthetic_wavelength_validation_case(
     period: float = 500.0,
     n_cycles: float = 3.2,
     irregular: bool = True,
+    shared_time_grid: bool = False,
     temporal_components: Sequence[Mapping[str, Any]] | None = None,
     mean_parameters: Mapping[str, Any] | None = None,
     covariance_parameters: Mapping[str, Any] | None = None,
@@ -812,13 +813,29 @@ def make_synthetic_wavelength_validation_case(
         rng=sampling_rng,
     )
     t_span = float(n_cycles * period)
+    if shared_time_grid and len(set(counts)) != 1:
+        raise ValueError(
+            "shared_time_grid=True requires equal observation counts in every band."
+        )
+    shared_times = None
+    if shared_time_grid:
+        shared_count = counts[0]
+        if irregular:
+            shared_times = np.sort(
+                sampling_rng.uniform(0.0, t_span, shared_count)
+            )
+        else:
+            shared_times = np.linspace(0.0, t_span, shared_count)
+
     time_blocks = []
     wavelength_blocks = []
     label_blocks = []
     for wavelength, label, count in zip(
         physical_wavelengths, labels, counts, strict=True
     ):
-        if irregular:
+        if shared_times is not None:
+            time_band = shared_times.copy()
+        elif irregular:
             time_band = np.sort(sampling_rng.uniform(0.0, t_span, count))
         else:
             time_band = np.linspace(0.0, t_span, count)
@@ -1000,6 +1017,7 @@ def make_synthetic_wavelength_validation_case(
             "n_cycles": float(n_cycles),
             "time_span": t_span,
             "irregular": bool(irregular),
+            "shared_time_grid": bool(shared_time_grid),
             "purpose_specific_seeds": seeds,
         },
         noise_configuration={
@@ -1073,17 +1091,20 @@ def canonical_synthetic_wavelength_validation_cases(
 
     The set spans the maintained wavelength-model families and includes one
     quadratic turning-point case plus one known fundamental-and-harmonic case.
-    Seeds are offset deterministically so cases remain independent while the
-    complete suite remains reproducible.
+    Nominal recovery uses 72 shared-grid observations per band over 3.2 cycles;
+    sparse and uneven designs are reserved for D2 robustness validation.  Seeds
+    are offset deterministically so cases remain independent while the complete
+    suite remains reproducible.
     """
     common = {
         "wavelengths": DEFAULT_VALIDATION_WAVELENGTHS,
         "band_labels": DEFAULT_VALIDATION_BANDS,
-        "n_per_band": 36,
+        "n_per_band": 72,
         "period": 500.0,
         "n_cycles": 3.2,
         "noise_sigma": 0.15,
         "xtransform": "minmax",
+        "shared_time_grid": True,
     }
     specifications = (
         {

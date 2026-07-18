@@ -49,11 +49,21 @@ physical interpretation.  Every affected mean parameter uses a registered
 GPyTorch raw-parameter interval, so the reported bounds remain active during
 optimization.
 
+For three or more non-flat bands, the power-law recommendation now retains the
+full exponent-profile fit and converts its same-sign, near-optimal support into
+finite data-derived intervals for offset, signed amplitude, and exponent.  This
+prevents the covariance from absorbing a clearly resolved static wavelength
+trend by driving the power-law amplitude toward zero or the exponent toward a
+flat solution.  The profile criterion, supported parameter ranges, padded
+active intervals, and effective registered constraints remain available in
+parameter-workflow provenance.
+
 With only two usable bands, the power-law exponent is not identifiable jointly
 with its offset and amplitude.  The estimator therefore keeps the documented
 ``-2`` default and fits only the linear coefficients instead of selecting an
 arbitrary grid endpoint.  An exactly flat band-median trend is not promoted to
-a dust-shape estimate.
+a dust-shape estimate, and neither under-identified case receives a fabricated
+profile interval.
 
 No logarithmic flux fitting is introduced by this workflow.  Explicit
 ``log_*`` mean parameters receive positive physical estimates and are converted

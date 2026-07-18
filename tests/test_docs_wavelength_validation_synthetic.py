@@ -18,6 +18,10 @@ class TestSyntheticWavelengthValidationDocumentation(unittest.TestCase):
         )
         self.assertIn("does not run optimization or rank models", page_text)
         self.assertIn("strictly positive linear flux", page_text)
+        normalized = " ".join(page_text.split())
+        self.assertIn("shared reproducible irregular time grid", normalized)
+        self.assertIn("D2 robustness matrix", normalized)
+        self.assertIn("72 observations per band", normalized)
 
     def test_package_exports_synthetic_validation_module_name(self):
         package_init = (ROOT / "pgmuvi/__init__.py").read_text(encoding="utf-8")

@@ -10,6 +10,7 @@ later wavelength-kernel and wavelength-mean initialization work.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -610,6 +611,36 @@ def _quadratic_mean_recommendation(
     }
 
 
+def _padded_profile_interval(
+    values: Sequence[float],
+    *,
+    center: float,
+    lower_limit: float,
+    upper_limit: float,
+    minimum_padding: float,
+) -> list[float]:
+    """Return a conservative finite interval around profile-supported values."""
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return [float(lower_limit), float(upper_limit)]
+
+    lower = float(np.min(finite))
+    upper = float(np.max(finite))
+    padding = max(0.5 * (upper - lower), float(minimum_padding))
+    lower = max(float(lower_limit), lower - padding)
+    upper = min(float(upper_limit), upper + padding)
+
+    if not lower < center < upper:
+        padding = max(padding, 0.1 * max(abs(center), 1.0))
+        lower = max(float(lower_limit), min(lower, center - padding))
+        upper = min(float(upper_limit), max(upper, center + padding))
+
+    if not lower < upper:
+        return [float(lower_limit), float(upper_limit)]
+    return [float(lower), float(upper)]
+
+
 def _power_law_mean_recommendation(
     raw_wavelengths: np.ndarray,
     fluxes: np.ndarray,
@@ -637,7 +668,9 @@ def _power_law_mean_recommendation(
             ]
         )
         exponent_estimation = "grid_profile_fit"
+
     best: tuple[float, float, float, float] | None = None
+    profile: list[tuple[float, float, float, float]] = []
     for exponent in candidates:
         basis = np.power(raw_wavelengths, exponent)
         if not np.all(np.isfinite(basis)) or float(np.ptp(basis)) <= 0.0:
@@ -646,6 +679,9 @@ def _power_law_mean_recommendation(
         offset, weight = np.linalg.lstsq(design, fluxes, rcond=None)[0]
         predicted = offset + weight * basis
         mse = float(np.mean((fluxes - predicted) ** 2))
+        rmse = float(math.sqrt(mse))
+        record = (rmse, float(offset), float(weight), float(exponent))
+        profile.append(record)
         if best is None or mse < best[0]:
             best = (mse, float(offset), float(weight), float(exponent))
 
@@ -653,6 +689,7 @@ def _power_law_mean_recommendation(
         return {"available": False, "reason": "power_law_fit_failed"}
 
     mse, offset, weight, exponent = best
+    best_rmse = float(math.sqrt(mse))
     offset_low, offset_high, flux_span = _wavelength_mean_flux_interval(fluxes)
     weight_scale = max(
         abs(weight),
@@ -660,6 +697,96 @@ def _power_law_mean_recommendation(
         0.1 * float(np.max(np.abs(fluxes))),
         1.0e-3,
     )
+    constraints = {
+        "mean_module.offset": [offset_low, offset_high],
+        "mean_module.weight": [-5.0 * weight_scale, 5.0 * weight_scale],
+        "mean_module.exponent": [-10.0, 10.0],
+    }
+    profile_support = None
+
+    if exponent_estimation == "grid_profile_fit" and profile:
+        same_branch = [
+            record
+            for record in profile
+            if record[3] * exponent > 0.0
+        ]
+        rmse_tolerance = max(best_rmse, 0.01 * flux_span, 1.0e-8)
+        rmse_maximum = best_rmse + rmse_tolerance
+        supported = [
+            record for record in same_branch if record[0] <= rmse_maximum
+        ]
+        if not supported:
+            supported = [min(same_branch, key=lambda item: item[0])]
+
+        offset_values = [record[1] for record in supported]
+        weight_values = [record[2] for record in supported]
+        exponent_values = [record[3] for record in supported]
+
+        weight_lower_limit = -5.0 * weight_scale
+        weight_upper_limit = 5.0 * weight_scale
+        if min(weight_values) > 0.0:
+            weight_lower_limit = 0.25 * min(weight_values)
+        elif max(weight_values) < 0.0:
+            weight_upper_limit = -0.25 * min(
+                abs(value) for value in weight_values
+            )
+
+        if exponent > 0.0:
+            exponent_lower_limit, exponent_upper_limit = 0.01, 10.0
+        else:
+            exponent_lower_limit, exponent_upper_limit = -10.0, -0.01
+
+        constraints = {
+            "mean_module.offset": _padded_profile_interval(
+                offset_values,
+                center=offset,
+                lower_limit=offset_low,
+                upper_limit=offset_high,
+                minimum_padding=max(2.0 * best_rmse, 0.02 * flux_span),
+            ),
+            "mean_module.weight": _padded_profile_interval(
+                weight_values,
+                center=weight,
+                lower_limit=weight_lower_limit,
+                upper_limit=weight_upper_limit,
+                minimum_padding=max(2.0 * best_rmse, 0.02 * weight_scale),
+            ),
+            "mean_module.exponent": _padded_profile_interval(
+                exponent_values,
+                center=exponent,
+                lower_limit=exponent_lower_limit,
+                upper_limit=exponent_upper_limit,
+                minimum_padding=max(0.05, 0.10 * abs(exponent)),
+            ),
+        }
+        profile_support = {
+            "criterion": "same_sign_rmse_profile",
+            "best_rmse": best_rmse,
+            "rmse_tolerance": rmse_tolerance,
+            "rmse_maximum": rmse_maximum,
+            "n_candidates": len(profile),
+            "n_same_branch_candidates": len(same_branch),
+            "n_supported_candidates": len(supported),
+            "weight_sign_preserved": bool(
+                min(weight_values) > 0.0 or max(weight_values) < 0.0
+            ),
+            "exponent_sign_preserved": True,
+            "supported_parameter_ranges": {
+                "mean_module.offset": [
+                    float(min(offset_values)),
+                    float(max(offset_values)),
+                ],
+                "mean_module.weight": [
+                    float(min(weight_values)),
+                    float(max(weight_values)),
+                ],
+                "mean_module.exponent": [
+                    float(min(exponent_values)),
+                    float(max(exponent_values)),
+                ],
+            },
+        }
+
     return {
         "available": True,
         "coordinate_basis": "physical_wavelength_and_model_flux",
@@ -668,13 +795,10 @@ def _power_law_mean_recommendation(
             "mean_module.weight": weight,
             "mean_module.exponent": exponent,
         },
-        "constraints": {
-            "mean_module.offset": [offset_low, offset_high],
-            "mean_module.weight": [-5.0 * weight_scale, 5.0 * weight_scale],
-            "mean_module.exponent": [-10.0, 10.0],
-        },
-        "fit_rmse": float(math.sqrt(mse)),
+        "constraints": constraints,
+        "fit_rmse": best_rmse,
         "exponent_estimation": exponent_estimation,
+        "profile_support": profile_support,
         "reason": None,
     }
 

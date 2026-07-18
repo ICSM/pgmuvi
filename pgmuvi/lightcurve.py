@@ -10571,6 +10571,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         variance=False,
         learn_additional_noise=False,
         fit_strategy=None,
+        verbose=False,
         **kwargs,
     ):
         """Fit the lightcurve
@@ -10761,6 +10762,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ``min_points_per_band``, ``max_gap_fraction``,
             ``min_duty_cycle``, ``outlier_sigma``, ``use_acf``,
             ``constrain_consensus``, and ``consensus_width_factor``.
+        verbose : bool, optional
+            Whether to print fitting progress and consensus diagnostics.  This
+            is a fit control and is not forwarded to model or likelihood
+            constructors.
         **kwargs : dict, optional
             Any other keyword arguments to be passed to the model constructor,
             likelihood constructor, or the optimizer.
@@ -10793,7 +10798,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         )
         _constraints_were_set_before_fit = bool(self.__CONTRAINTS_SET)
 
-        verbose = kwargs.get("verbose", False)
+        verbose = bool(verbose)
 
         # Dispatch alternative fit strategies before any stateful setup from
         # the default/general fit pathway mutates this Lightcurve instance.
@@ -10820,6 +10825,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 stopavg=stopavg,
                 variance=variance,
                 learn_additional_noise=learn_additional_noise,
+                verbose=verbose,
                 **kwargs,
             )
 
