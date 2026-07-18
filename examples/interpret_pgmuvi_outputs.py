@@ -110,8 +110,34 @@ def interpret_advisory_workflow(payload: dict[str, Any]) -> dict[str, Any]:
     ranked = [item for item in _as_list(quality.get("ranked_results")) if isinstance(item, dict)]
     outcomes = _extract_advisory_outcomes(payload)
 
+    boundary_rows = []
     constrained_rows = []
     for item in outcomes:
+        boundary_count = item.get("n_sm_ard_boundary_hits")
+        try:
+            boundary_count_value = int(boundary_count or 0)
+        except (TypeError, ValueError):
+            boundary_count_value = 0
+        if boundary_count_value > 0:
+            boundary_rows.append(
+                {
+                    "model": item.get("model"),
+                    "model_kernel_config_id": item.get(
+                        "model_kernel_config_id"
+                    ),
+                    "n_sm_ard_boundary_hits": boundary_count_value,
+                    "sm_ard_boundary_pressure_scope": item.get(
+                        "sm_ard_boundary_pressure_scope"
+                    ),
+                    "sm_ard_boundary_component_counts_by_dimension": item.get(
+                        "sm_ard_boundary_component_counts_by_dimension"
+                    ),
+                    "sm_num_mixtures": item.get("sm_num_mixtures"),
+                    "sm_num_mixtures_fixed_at_one": item.get(
+                        "sm_num_mixtures_fixed_at_one"
+                    ),
+                }
+            )
         count = item.get("n_constrained_sm_ard_components")
         try:
             count_value = int(count or 0)
@@ -163,8 +189,16 @@ def interpret_advisory_workflow(payload: dict[str, Any]) -> dict[str, Any]:
             "Comparative fit-quality ranking is unavailable; use fallback "
             "diagnostics instead of declaring a winner."
         )
-    if constrained_rows:
-        warnings.append("One or more spectral-mixture ARD scales are near a consensus upper bound.")
+    if boundary_rows:
+        warnings.append(
+            "One or more spectral-mixture ARD parameters are near a "
+            "registered lower or upper bound."
+        )
+    elif constrained_rows:
+        warnings.append(
+            "One or more spectral-mixture ARD scales are near a consensus "
+            "upper bound in a legacy report."
+        )
 
     top_row = ranked[0] if ranked else {}
     return {
@@ -210,6 +244,7 @@ def interpret_advisory_workflow(payload: dict[str, Any]) -> dict[str, Any]:
         "fallback_reason": fallback.get("reason"),
         "failure_stage_counts": fallback.get("failure_stage_counts") or {},
         "exception_type_counts": fallback.get("exception_type_counts") or {},
+        "sm_ard_boundary_rows": boundary_rows,
         "constrained_sm_ard_rows": constrained_rows,
         "warnings": warnings,
     }
@@ -230,8 +265,30 @@ def interpret_advisory_batch(payload: dict[str, Any]) -> dict[str, Any]:
         for item in config_results
         if item.get("status") == "failed" or item.get("fit_failed") is True
     ]
+    ard_boundary_hits = []
     ard_hits = []
     for item in config_results:
+        try:
+            boundary_count = int(item.get("n_sm_ard_boundary_hits") or 0)
+        except (TypeError, ValueError):
+            boundary_count = 0
+        if boundary_count:
+            ard_boundary_hits.append(
+                {
+                    "source_id": item.get("source_id"),
+                    "model": item.get("model"),
+                    "n_sm_ard_boundary_hits": boundary_count,
+                    "sm_ard_boundary_pressure_scope": item.get(
+                        "sm_ard_boundary_pressure_scope"
+                    ),
+                    "sm_ard_boundary_component_counts_by_dimension": item.get(
+                        "sm_ard_boundary_component_counts_by_dimension"
+                    ),
+                    "sm_num_mixtures_fixed_at_one": item.get(
+                        "sm_num_mixtures_fixed_at_one"
+                    ),
+                }
+            )
         try:
             count = int(item.get("n_constrained_sm_ard_components") or 0)
         except (TypeError, ValueError):
@@ -256,8 +313,16 @@ def interpret_advisory_batch(payload: dict[str, Any]) -> dict[str, Any]:
         warnings.append("At least one source-level workflow failed.")
     if config_failures:
         warnings.append("At least one model/kernel configuration failed.")
-    if ard_hits:
-        warnings.append("At least one fitted configuration has an ARD scale-ceiling hit.")
+    if ard_boundary_hits:
+        warnings.append(
+            "At least one fitted configuration has a registered ARD "
+            "boundary hit."
+        )
+    elif ard_hits:
+        warnings.append(
+            "At least one fitted configuration has an ARD scale-ceiling hit "
+            "in a legacy report."
+        )
 
     return {
         "report_type": "advisory_batch",
@@ -272,6 +337,7 @@ def interpret_advisory_batch(payload: dict[str, Any]) -> dict[str, Any]:
         "n_source_failure_rows": len(source_failures),
         "n_model_kernel_config_rows": len(config_results),
         "n_model_kernel_config_failures": len(config_failures),
+        "ard_boundary_hits": ard_boundary_hits,
         "ard_ceiling_hits": ard_hits,
         "warnings": warnings,
     }
@@ -334,6 +400,10 @@ def format_interpretation(summary: dict[str, Any]) -> str:
         ]:
             lines.append(f"{key}: {_display(summary.get(key))}")
         lines.append(
+            "sm_ard_boundary_rows: "
+            f"{len(_as_list(summary.get('sm_ard_boundary_rows')))}"
+        )
+        lines.append(
             "constrained_sm_ard_rows: "
             f"{len(_as_list(summary.get('constrained_sm_ard_rows')))}"
         )
@@ -349,7 +419,14 @@ def format_interpretation(summary: dict[str, Any]) -> str:
             "automatic_model_selection_applied",
         ]:
             lines.append(f"{key}: {_display(summary.get(key))}")
-        lines.append(f"ard_ceiling_hits: {len(_as_list(summary.get('ard_ceiling_hits')))}")
+        lines.append(
+            "ard_boundary_hits: "
+            f"{len(_as_list(summary.get('ard_boundary_hits')))}"
+        )
+        lines.append(
+            "ard_ceiling_hits: "
+            f"{len(_as_list(summary.get('ard_ceiling_hits')))}"
+        )
 
     warnings = _as_list(summary.get("warnings"))
     lines.append("")

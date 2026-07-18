@@ -2,7 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import gpytorch
 import numpy as np
+import torch
 
 from pgmuvi.wavelength_diagnostics import (
     _piwd_extract_fit_outcome,
@@ -13,7 +15,18 @@ from pgmuvi.wavelength_diagnostics import (
 
 class _KernelWithSMScales:
     def __init__(self, scales):
-        self.mixture_scales = np.asarray(scales, dtype=float)
+        self.mixture_scales = torch.as_tensor(scales, dtype=torch.float64)
+        self.mixture_means = torch.full_like(self.mixture_scales, 0.5)
+        self.raw_mixture_scales = torch.zeros_like(self.mixture_scales)
+        self.raw_mixture_means = torch.zeros_like(self.mixture_means)
+        lower = torch.tensor([[[1.0e-8, 1.0e-8]]], dtype=torch.float64)
+        upper = torch.tensor([[[0.2, 0.2]]], dtype=torch.float64)
+        self.raw_mixture_scales_constraint = gpytorch.constraints.Interval(
+            lower, upper
+        )
+        self.raw_mixture_means_constraint = gpytorch.constraints.Interval(
+            torch.zeros_like(lower), torch.ones_like(upper)
+        )
 
 
 class _ModelWithSMScales:
@@ -71,9 +84,37 @@ class TestWavelengthAdvisorySMARDDiagnostics(unittest.TestCase):
         self.assertEqual(outcome["n_constrained_sm_time_components"], 1)
         self.assertEqual(outcome["n_constrained_sm_wavelength_components"], 1)
         self.assertIn("sm_ard_scale_diagnostics", outcome)
+        self.assertIn("sm_ard_diagnostics", outcome)
+        self.assertEqual(outcome["n_sm_ard_boundary_hits"], 2)
+        self.assertEqual(outcome["sm_ard_boundary_pressure_scope"], "both")
         self.assertEqual(
             outcome["constrained_sm_ard_dimension_counts"]["wavelength_frequency"],
             1,
+        )
+
+    def test_fit_outcome_records_explicit_single_component_request(self):
+        lc = _LightcurveWithSMScales(
+            scales=[[[0.10, 0.198]]],
+            diagnostics={"consensus_success": True},
+        )
+
+        outcome = _piwd_extract_fit_outcome(
+            {
+                "model": "2D",
+                "model_kernel_config_id": "rank4_2D_baseline",
+                "fit_kwargs": {"num_mixtures": 1},
+            },
+            status="passed",
+            fitted_lightcurve=lc,
+            fit_result=object(),
+        )
+
+        self.assertEqual(outcome["sm_num_mixtures"], 1)
+        self.assertTrue(outcome["sm_num_mixtures_is_one"])
+        self.assertTrue(outcome["sm_num_mixtures_fixed_at_one"])
+        self.assertEqual(
+            outcome["sm_num_mixtures_request_source"],
+            "explicit_fit_kwargs",
         )
 
     def test_batch_long_form_csv_includes_sm_ard_columns(self):
@@ -98,6 +139,39 @@ class TestWavelengthAdvisorySMARDDiagnostics(unittest.TestCase):
                             "fit_strategy": "consensus",
                             "time_kernel_type": "spectral_mixture",
                         },
+                        "n_sm_ard_boundary_hits": 5,
+                        "sm_ard_boundary_pressure_scope": "both",
+                        "n_sm_temporal_boundary_components": 1,
+                        "n_sm_wavelength_boundary_components": 2,
+                        "sm_ard_boundary_hit_counts_by_parameter": {
+                            "mixture_means": 3,
+                            "mixture_scales": 2,
+                        },
+                        "sm_ard_boundary_hit_counts_by_dimension": {
+                            "temporal_frequency": 2,
+                            "wavelength_frequency": 3,
+                        },
+                        "sm_ard_boundary_component_counts_by_dimension": {
+                            "temporal_frequency": 1,
+                            "wavelength_frequency": 2,
+                        },
+                        "sm_ard_boundary_hit_counts_by_side": {
+                            "lower": 3,
+                            "upper": 2,
+                        },
+                        "sm_ard_boundary_hits": [
+                            {
+                                "parameter": "mixture_means",
+                                "component_index": 0,
+                                "dimension_name": "wavelength_frequency",
+                                "bound_side": "upper",
+                            }
+                        ],
+                        "sm_num_mixtures": 2,
+                        "sm_requested_num_mixtures": 2,
+                        "sm_num_mixtures_is_one": False,
+                        "sm_num_mixtures_fixed_at_one": False,
+                        "sm_num_mixtures_request_source": "explicit_fit_kwargs",
                         "n_constrained_sm_ard_components": 2,
                         "n_constrained_sm_time_components": 1,
                         "n_constrained_sm_wavelength_components": 1,
@@ -146,9 +220,24 @@ class TestWavelengthAdvisorySMARDDiagnostics(unittest.TestCase):
             detail_path = Path(report["batch_model_kernel_config_csv_path"])
             text = detail_path.read_text(encoding="utf-8")
 
+        self.assertIn("n_sm_ard_boundary_hits", text)
+        self.assertIn("sm_ard_boundary_pressure_scope", text)
+        self.assertIn("sm_ard_boundary_hit_counts_by_parameter", text)
+        self.assertIn("sm_ard_boundary_hits", text)
+        self.assertIn("sm_num_mixtures_fixed_at_one", text)
         self.assertIn("n_constrained_sm_ard_components", text)
         self.assertIn("n_constrained_sm_time_components", text)
         self.assertIn("n_constrained_sm_wavelength_components", text)
+        self.assertEqual(
+            report["model_kernel_config_results"][0]["n_sm_ard_boundary_hits"],
+            5,
+        )
+        self.assertEqual(
+            report["model_kernel_config_results"][0][
+                "sm_ard_boundary_pressure_scope"
+            ],
+            "both",
+        )
         self.assertEqual(
             report["model_kernel_config_results"][0]["n_constrained_sm_ard_components"],
             2,

@@ -82,6 +82,14 @@ class TestInterpretPgmuviOutputsScript(unittest.TestCase):
                         "model": "2D",
                         "model_kernel_config_id": "rank4_2D_baseline",
                         "status": "passed",
+                        "n_sm_ard_boundary_hits": 3,
+                        "sm_ard_boundary_pressure_scope": "both",
+                        "sm_ard_boundary_component_counts_by_dimension": {
+                            "temporal_frequency": 1,
+                            "wavelength_frequency": 1,
+                        },
+                        "sm_num_mixtures": 1,
+                        "sm_num_mixtures_fixed_at_one": True,
                         "n_constrained_sm_ard_components": 1,
                         "constrained_sm_ard_dimension_counts": {
                             "wavelength_frequency": 1
@@ -97,9 +105,16 @@ class TestInterpretPgmuviOutputsScript(unittest.TestCase):
         self.assertEqual(summary["top_ranked_model"], "2DDustMean")
         self.assertIsNone(summary["only_valid_model"])
         self.assertIsNone(summary["selected_model"])
+        self.assertEqual(len(summary["sm_ard_boundary_rows"]), 1)
         self.assertEqual(len(summary["constrained_sm_ard_rows"]), 1)
+        self.assertTrue(
+            summary["sm_ard_boundary_rows"][0][
+                "sm_num_mixtures_fixed_at_one"
+            ]
+        )
         text = self.module.format_interpretation(summary)
         self.assertIn("training_residual_fit_quality", text)
+        self.assertIn("sm_ard_boundary_rows: 1", text)
         self.assertIn("constrained_sm_ard_rows: 1", text)
 
 
@@ -203,6 +218,13 @@ class TestInterpretPgmuviOutputsScript(unittest.TestCase):
                     "source_id": "a",
                     "model": "2D",
                     "status": "passed",
+                    "n_sm_ard_boundary_hits": 4,
+                    "sm_ard_boundary_pressure_scope": "both",
+                    "sm_ard_boundary_component_counts_by_dimension": {
+                        "temporal_frequency": 1,
+                        "wavelength_frequency": 2,
+                    },
+                    "sm_num_mixtures_fixed_at_one": False,
                     "n_constrained_sm_ard_components": 2,
                     "constrained_sm_ard_dimension_counts": {
                         "time_frequency": 1,
@@ -215,6 +237,7 @@ class TestInterpretPgmuviOutputsScript(unittest.TestCase):
         summary = self.module.interpret_payload(payload)
         self.assertEqual(summary["n_source_failure_rows"], 1)
         self.assertEqual(summary["n_model_kernel_config_failures"], 1)
+        self.assertEqual(len(summary["ard_boundary_hits"]), 1)
         self.assertEqual(len(summary["ard_ceiling_hits"]), 1)
 
     def test_cli_writes_normalized_json(self):

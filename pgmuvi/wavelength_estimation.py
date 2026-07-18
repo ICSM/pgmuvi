@@ -297,9 +297,9 @@ def build_wavelength_estimation_context(
 
     Returns
     -------
-    diagnostics, band_diagnostics
-        An immutable wavelength-level summary and per-band diagnostics keyed by
-        label.
+    tuple
+        Two-element tuple containing an immutable wavelength-level summary and
+        per-band diagnostics keyed by label.
     """
     if min_points_per_band < 1:
         raise ValueError("min_points_per_band must be at least 1.")

@@ -19,9 +19,10 @@ model-coordinate values are retained in
 ``spectral_mixture_ard_provenance``.
 
 This parameterization improves initialization and constraint integrity.  It is
-not evidence that wavelength dependence is resolved, and a wavelength value at
-or near a bound must be interpreted through the separate saturation
-diagnostics planned under ``TBD[wavelength-derived-constraints]``.
+not evidence that wavelength dependence is resolved.  Inspect fitted lower and
+upper boundary pressure with
+:func:`pgmuvi.spectral_mixture_ard_diagnostics.diagnose_spectral_mixture_ard`;
+the diagnostic remains descriptive and does not select a model.
 
 .. automodule:: pgmuvi.spectral_mixture_ard
    :members:

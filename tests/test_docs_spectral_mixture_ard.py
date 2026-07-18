@@ -9,8 +9,15 @@ class TestSpectralMixtureArdDocumentation(unittest.TestCase):
     def test_api_reference_includes_module(self):
         api = (ROOT / "docs/source/api.rst").read_text()
         self.assertIn("pgmuvi.spectral_mixture_ard", api)
+        self.assertIn("pgmuvi.spectral_mixture_ard_diagnostics", api)
         self.assertTrue(
             (ROOT / "docs/source/pgmuvi.spectral_mixture_ard.rst").exists()
+        )
+        self.assertTrue(
+            (
+                ROOT
+                / "docs/source/pgmuvi.spectral_mixture_ard_diagnostics.rst"
+            ).exists()
         )
 
     def test_module_page_documents_coordinate_order(self):
@@ -39,11 +46,14 @@ class TestSpectralMixtureArdDocumentation(unittest.TestCase):
         self.assertIn("updates only ARD index 0", normalized)
         self.assertIn("wavelength-frequency bounds at ARD index 1 are preserved", normalized)
 
-    def test_future_work_keeps_saturation_validation_scope(self):
+    def test_future_work_records_diagnostics_completion_and_validation_scope(self):
         text = (ROOT / "docs/source/future_work.rst").read_text()
         normalized = " ".join(text.split())
-        self.assertIn("component/dimension saturation", normalized)
-        self.assertIn("scientifically long wavelength correlation scale", normalized)
+        self.assertIn("Completed wavelength-derived constraint tranche", normalized)
+        self.assertIn("Component- and dimension-specific fitted diagnostics", normalized)
+        self.assertIn("distance to each bound", normalized)
+        self.assertIn("num_mixtures=1", normalized)
+        self.assertNotIn("TBD[wavelength-derived-constraints]", text)
         self.assertIn("TBD[wavelength-constraint-validation]", text)
 
 
