@@ -30,5 +30,6 @@ __all__ = [
     "wavelength_results",
     "wavelength_status",
     "wavelength_validation",
+    "wavelength_validation_recovery",
     "wavelength_validation_synthetic",
 ]
