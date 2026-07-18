@@ -844,6 +844,9 @@ class TestConsensusConstraintHandoff(unittest.TestCase):
             "consensus_constraint_target_key",
             "consensus_scale_constraint_bounds",
             "consensus_scale_constraint_target_key",
+            "consensus_constraint_ard_scope",
+            "consensus_wavelength_constraint_preserved",
+            "consensus_sm_constraint_provenance",
             "default_constraints_applied_before_consensus",
             "constraints_marked_set_after_consensus",
         ]
@@ -853,6 +856,12 @@ class TestConsensusConstraintHandoff(unittest.TestCase):
                 diag,
                 f"consensus_diagnostics must contain field {field!r}",
             )
+        self.assertEqual(diag["consensus_constraint_ard_scope"], "temporal_only")
+        self.assertTrue(diag["consensus_wavelength_constraint_preserved"])
+        self.assertEqual(
+            set(diag["consensus_sm_constraint_provenance"]),
+            {"mixture_means", "mixture_scales"},
+        )
 
     def test_second_fit_matches_first_fit_constraints(self):
         """Second fit must not produce different constraints than first fit.

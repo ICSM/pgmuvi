@@ -174,7 +174,9 @@ def _as_common_dtype_tensors(first: Any, second: Any) -> tuple[torch.Tensor, tor
     if not torch.is_floating_point(torch.empty((), dtype=common_dtype)):
         common_dtype = torch.get_default_dtype()
 
-    return first_tensor.to(dtype=common_dtype), second_tensor.to(dtype=common_dtype)
+    first_tensor = first_tensor.to(dtype=common_dtype)
+    second_tensor = second_tensor.to(dtype=common_dtype)
+    return torch.broadcast_tensors(first_tensor, second_tensor)
 
 
 def bounds_are_equivalent(first: tuple[Any, Any], second: tuple[Any, Any]) -> bool:

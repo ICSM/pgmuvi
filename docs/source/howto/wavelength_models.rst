@@ -281,9 +281,11 @@ records both the proposed and effective bounds under
 ``wavelength_estimate_provenance``.
 
 This is an initialization and optimization-domain improvement, not evidence
-that a source has resolved wavelength dependence.  It does not apply to the
-full non-separable ``2D`` spectral-mixture kernel, whose temporal and wavelength
-ARD entries still share tensor-wide constraints.
+that a source has resolved wavelength dependence.  For the full non-separable
+``2D`` spectral-mixture kernel, temporal and wavelength entries now receive
+independent broadcast tensor intervals for both ``mixture_means`` and
+``mixture_scales``.  The fixed ordering is ARD index 0 for temporal frequency
+and index 1 for wavelength frequency.
 
 Data-derived wavelength mean initialization
 -------------------------------------------

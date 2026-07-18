@@ -565,8 +565,13 @@ class TestConsensusMulticompFit(unittest.TestCase):
             return_value=None,
         ), mock.patch.object(
             self.lc,
-            "set_constraint",
-            return_value=None,
+            "_consensus_apply_temporal_sm_constraint",
+            side_effect=lambda key, lower, upper: {
+                "parameter": key,
+                "ard_scope": "temporal_only",
+                "raw_proposed_bounds": [lower, upper],
+                "wavelength_bounds_preserved": True,
+            },
         ), mock.patch.object(
             self.lc,
             "_consensus_validate_applied_sm_constraints",
@@ -598,6 +603,15 @@ class TestConsensusMulticompFit(unittest.TestCase):
         self.assertEqual(
             diagnostics["constraint_strategy"],
             "global_frequency_interval",
+        )
+        self.assertEqual(
+            diagnostics["consensus_constraint_ard_scope"],
+            "temporal_only",
+        )
+        self.assertTrue(diagnostics["consensus_wavelength_constraint_preserved"])
+        self.assertEqual(
+            set(diagnostics["consensus_sm_constraint_provenance"]),
+            {"mixture_means", "mixture_scales"},
         )
         self.assertAlmostEqual(diagnostics["consensus_constraint_bounds"][0], 0.71)
         self.assertAlmostEqual(diagnostics["consensus_constraint_bounds"][1], 3.59)

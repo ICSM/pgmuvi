@@ -109,11 +109,18 @@ For the noise variance::
    reconstructed physical wavelength coordinate when an affine input transform
    is active.
 
-   For the **non-separable ``model="2D"``**, GPyTorch applies constraints
-   element-wise to the entire ``mixture_means`` tensor (which spans both time
-   and wavelength dimensions), so temporal and wavelength constraints cannot be
-   set independently.  If independent per-dimension constraints are required,
-   use one of the separable 2D model families.
+   For the full non-separable ``"2D"`` spectral-mixture baseline, GPyTorch
+   tensor-valued intervals are registered with shape ``(1, 1, 2)``.  They
+   broadcast across components while keeping ARD index 0 (temporal frequency)
+   independent from ARD index 1 (wavelength frequency).  The same separation is
+   applied to ``mixture_scales``.  Source-type period limits modify only the
+   temporal entry.
+
+   Consensus fitting also respects this separation.  Consensus frequency and
+   scale intervals intersect only ARD index 0, while the wavelength-frequency
+   bounds at ARD index 1 remain unchanged.  The multi-component workflow still
+   uses one broad temporal interval across accepted components; it does not
+   impose that temporal interval on the wavelength coordinate.
 
 Using Pre-defined Constraint Sets
 -----------------------------------

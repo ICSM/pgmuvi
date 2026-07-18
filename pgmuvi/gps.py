@@ -207,6 +207,19 @@ def spectral_mixture_parameter_schema(
     else:
         shape = (num_mixtures,)
 
+    dimension_aware = ard_num_dims == 2
+    ard_metadata = (
+        {
+            "coordinate_order": [
+                "temporal_frequency",
+                "wavelength_frequency",
+            ],
+            "parameterization": "broadcast_tensor_intervals",
+        }
+        if dimension_aware
+        else {}
+    )
+
     return ParameterSpecCollection(
         [
             ParameterSpec(
@@ -217,12 +230,25 @@ def spectral_mixture_parameter_schema(
                 shape=shape,
                 initial_value=None,
                 constraint=(1.0e-6, 1.0e6),
-                guess_strategy=GuessStrategy.CONSENSUS_FREQUENCY,
-                constraint_strategy=ConstraintStrategy.DEFAULT,
+                guess_strategy=(
+                    GuessStrategy.DIMENSION_AWARE_SM_ARD
+                    if dimension_aware
+                    else GuessStrategy.CONSENSUS_FREQUENCY
+                ),
+                constraint_strategy=(
+                    ConstraintStrategy.DIMENSION_AWARE_SM_ARD
+                    if dimension_aware
+                    else ConstraintStrategy.DEFAULT
+                ),
+                metadata={
+                    **ard_metadata,
+                    "spectral_mixture_ard_parameter": "mixture_means",
+                },
                 description=(
                     "Central frequencies of the spectral-mixture components. "
-                    "Period diagnostics should be converted to frequencies before "
-                    "constructing estimates for this parameter."
+                    "For two-dimensional kernels, temporal and wavelength "
+                    "frequencies receive independent tensor-valued values and "
+                    "bounds in ARD indices 0 and 1."
                 ),
             ),
             ParameterSpec(
@@ -233,10 +259,25 @@ def spectral_mixture_parameter_schema(
                 shape=shape,
                 initial_value=None,
                 constraint=(1.0e-6, 1.0e3),
-                guess_strategy=GuessStrategy.DEFAULT,
-                constraint_strategy=ConstraintStrategy.DEFAULT,
+                guess_strategy=(
+                    GuessStrategy.DIMENSION_AWARE_SM_ARD
+                    if dimension_aware
+                    else GuessStrategy.DEFAULT
+                ),
+                constraint_strategy=(
+                    ConstraintStrategy.DIMENSION_AWARE_SM_ARD
+                    if dimension_aware
+                    else ConstraintStrategy.DEFAULT
+                ),
+                metadata={
+                    **ard_metadata,
+                    "spectral_mixture_ard_parameter": "mixture_scales",
+                },
                 description=(
-                    "Positive frequency-space widths of the spectral-mixture components."
+                    "Positive frequency-space widths of the spectral-mixture "
+                    "components. For two-dimensional kernels, temporal and "
+                    "wavelength widths receive independent tensor-valued values "
+                    "and bounds."
                 ),
             ),
             ParameterSpec(

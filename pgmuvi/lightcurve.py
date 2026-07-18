@@ -72,8 +72,15 @@ from pgmuvi.wavelength_estimation import (
     build_wavelength_estimation_context,
     build_wavelength_mean_estimation_context,
 )
+from pgmuvi.constraint_utils import bounds_are_valid
 from pgmuvi.constraint_utils import clamp_to_constraint_interior
+from pgmuvi.constraint_utils import get_bounds
+from pgmuvi.constraint_utils import intersect_constraint_bounds
+from pgmuvi.constraint_utils import make_interval_constraint
 from pgmuvi.constraint_utils import register_constraint_preserving_value
+from pgmuvi.spectral_mixture_ard import (
+    build_dimension_aware_sm_ard_estimates,
+)
 
 try:
     from scipy.signal import find_peaks as _scipy_find_peaks
@@ -437,6 +444,15 @@ _CONSENSUS_TOP_LEVEL_SCHEMA_FIELDS = MappingProxyType(
         ),
         "consensus_scale_constraint_target_key": _consensus_schema_field(
             default=None, nullable=True
+        ),
+        "consensus_constraint_ard_scope": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_wavelength_constraint_preserved": _consensus_schema_field(
+            default=None, nullable=True
+        ),
+        "consensus_sm_constraint_provenance": _consensus_schema_field(
+            default_factory="dict", nullable=False, container_type="dict"
         ),
         "consensus_time_kernel_constraint_mode": _consensus_schema_field(
             default=None, nullable=True
@@ -6956,6 +6972,40 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         self.__PRIORS_SET = True
         pass
 
+    def _transform_frequency_like_to_model(self, values):
+        """Transform frequency-like values from raw to fitted input units.
+
+        Spectral-mixture means and scales transform inversely to coordinate
+        lengths.  For multivariate affine input transforms, the last tensor
+        axis is scaled independently, preserving ARD index 0 as time and ARD
+        index 1 as wavelength.
+        """
+        value = torch.as_tensor(
+            values,
+            dtype=self._xdata_transformed.dtype,
+            device=self._xdata_transformed.device,
+        )
+        if self.xtransform is None:
+            return value
+
+        raw = self._xdata_raw
+        model = self._xdata_transformed
+        if self.ndim > 1:
+            raw_span = raw.max(dim=0).values - raw.min(dim=0).values
+            model_span = model.max(dim=0).values - model.min(dim=0).values
+            scale = torch.ones_like(raw_span)
+            valid = (raw_span > 0) & (model_span > 0)
+            scale[valid] = raw_span[valid] / model_span[valid]
+            if value.ndim > 0 and value.shape[-1] == self.ndim:
+                return value * scale
+            return value * scale[0]
+
+        raw_span = raw.max() - raw.min()
+        model_span = model.max() - model.min()
+        if raw_span > 0 and model_span > 0:
+            return value * (raw_span / model_span)
+        return value
+
     def set_constraint(self, constraint, debug=False, **kwargs):
         """Set the constraint for the model parameters
 
@@ -6995,83 +7045,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         constraint[key],
                     )
                 elif any(p in key for p in pars_to_transform["x"]):
-                    # now apply the x transform
-                    # remember that the means and scales are in fourier space
-                    # so we need to transform them back to real space
-                    # before applying the transform
-                    # and then transform them back to fourier space
-                    # luckily, when the shift is removed from the transform,
-                    # the factors of 2pi cancel out for the scales
-                    # so we can just do 1/ for both means and scales
+                    transformed_constraint = constraint[key]
                     if self.xtransform is not None:
-                        # now things get complicated...
-                        # if we have gotten to here, we know that the parameter
-                        # is a mixture mean or scale, so we need to transform
-                        # it to real space, apply the constraint, and then
-                        # transform it back to fourier space
-                        # luckily, when the shift is removed from the transform,
-                        # the factors of 2pi cancel out for the scales
-                        # so we can just do 1/ for both means and scales
+                        lower, upper = get_bounds(constraint[key])
+                        transformed_constraint = make_interval_constraint(
+                            self._transform_frequency_like_to_model(lower),
+                            self._transform_frequency_like_to_model(upper),
+                        )
                         if debug:
-                            print(constraint[key])
-                        if constraint[key].lower_bound not in [
-                            torch.tensor(0),
-                            torch.tensor(-torch.inf),
-                        ]:
-                            # we need to transform the lower bound
-                            # NOTE: For 2D data, GPyTorch constraints are scalar
-                            # and apply element-wise to all parameter elements
-                            # (time and wavelength).
-                            # We transform using dimension 0 (time) as it's
-                            # typically the primary independent variable.
-                            # Users setting manual constraints should be aware
-                            # that the same constraint applies to both
-                            # dimensions.
-                            transformed_bound = 1.0 / self.xtransform.transform(
-                                1.0 / constraint[key].lower_bound, shift=False
+                            print(
+                                "Transformed frequency-like constraint with "
+                                "independent input-dimension scales:"
                             )
-                            # Handle both 1D and 2D cases
-                            if transformed_bound.numel() > 1:
-                                # For 2D case, use the first dimension's
-                                # transformation. Take element [0, 0] to get
-                                # a scalar
-                                transformed_bound = transformed_bound.flatten()[0]
-                            if debug:
-                                print(f"Transformed lower bound: {transformed_bound}")
-                            constraint[key].lower_bound = torch.tensor(
-                                transformed_bound.item()
-                            )
-                            if debug:
-                                print(constraint[key].lower_bound)
-                                print(constraint[key])
-                        if constraint[key].upper_bound not in [
-                            torch.tensor(0),
-                            torch.tensor(torch.inf),
-                        ]:
-                            # we need to transform the upper bound
-                            # (Same dimension-0 transformation logic as
-                            # lower_bound above)
-                            transformed_bound = 1.0 / self.xtransform.transform(
-                                1.0 / constraint[key].upper_bound, shift=False
-                            )
-                            # Handle both 1D and 2D cases
-                            if transformed_bound.numel() > 1:
-                                # For 2D case, use the first dimension's
-                                # transformation. Take element [0, 0] to get
-                                # a scalar
-                                transformed_bound = transformed_bound.flatten()[0]
-                            constraint[key].upper_bound = torch.tensor(
-                                transformed_bound.item()
-                            )
-                            if debug:
-                                print(constraint[key].upper_bound)
-                                print(constraint[key])
-                        if debug:
-                            print(constraint[key])
+                            print(transformed_constraint)
                     register_constraint_preserving_value(
                         self._model_pars[key]["module"],
                         k,
-                        constraint[key],
+                        transformed_constraint,
                     )
                 elif any(p in key for p in pars_to_transform["y"]):
                     if self.ytransform is not None:
@@ -7748,175 +7738,224 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # (e.g. Matérn, quasi-periodic, separable) do not have this parameter
         # and must not be constrained here; they would raise KeyError otherwise.
         if "mixture_means" in self._model_pars:
-            # this should correspond to the longest frequency entirely
-            # contained in the dataset:
-            if self.ndim > 1:
-                # For 2D spectral-mixture models the mixture_means parameter
-                # has shape (num_mixtures, 1, ard_num_dims), where ard_num_dims
-                # equals the number of input dimensions (typically 2: time and
-                # wavelength).  GPyTorch applies a *single scalar* constraint
-                # element-wise to every entry in that tensor — it is not
-                # possible to set different lower bounds for the time dimension
-                # and the wavelength dimension simultaneously via the standard
-                # register_constraint API.
-                #
-                # We therefore base the lower bound exclusively on the *time*
-                # dimension (column 0 of xdata_transformed):
-                #
-                #   lower_bound = 1 / time_span
-                #
-                # This guarantees that the time-axis frequencies are always
-                # >= 1/time_span, i.e., that the inferred periods are not
-                # longer than the observational baseline — a physically
-                # meaningful and stable lower bound.
-                #
-                # Note that this same lower bound is also applied to the
-                # wavelength-axis frequency elements of mixture_means.  In
-                # practice, wavelength frequencies represent the spatial
-                # frequency of the SED variation across bands; constraining
-                # them to be >= 1/time_span is conservative (frequencies
-                # corresponding to structures much narrower in wavelength than
-                # the observation baseline are still allowed), and is
-                # preferable to using min(time_bound, wavelength_bound) which
-                # would make the time lower bound arbitrarily permissive
-                # whenever the wavelength span is large or the wavelength
-                # range is zero.
-                #
-                # Users who need achromatic behaviour (wavelength-frequency
-                # near zero) should use the separable model classes
-                # (AchromaticGPModel, WavelengthDependentGPModel) which apply
-                # kernels to each dimension independently, avoiding this
-                # limitation entirely.
-                time_span = (
-                    self._xdata_transformed[:, 0].max()
-                    - self._xdata_transformed[:, 0].min()
+            covar_module = self._model_pars["mixture_means"]["module"]
+            if self.ndim > 1 and getattr(covar_module, "ard_num_dims", 1) == 2:
+                context = self._build_parameter_estimation_context()
+                diagnostics = context.spectral_mixture_ard_diagnostics
+                if diagnostics is None:
+                    raise RuntimeError(
+                        "Dimension-aware spectral-mixture ARD diagnostics "
+                        "could not be constructed."
+                    )
+                model_coordinate = diagnostics["model_coordinate"]
+                means_record = model_coordinate["mixture_means"]
+                raw_means = covar_module.raw_mixture_means
+                means_lower = torch.as_tensor(
+                    means_record["constraint_lower"],
+                    dtype=raw_means.dtype,
+                    device=raw_means.device,
                 )
-                if float(time_span) <= 0.0:
-                    raise ValueError(
-                        "set_default_constraints requires a dataset whose "
-                        "timestamps span a positive time range, but all "
-                        "timestamps in the 2D input are identical "
-                        "(time_span = 0). Ensure the training data covers "
-                        "more than one distinct observation time."
-                    )
-                lower_frequency = 1.0 / time_span
-
-                # Compute the Nyquist upper bound from the minimum positive
-                # gap between consecutive sorted timestamps (O(N log N), O(N)
-                # memory — avoids the O(N²) pairwise-difference matrix).
-                t_sorted = self._xdata_transformed[:, 0].sort().values
-                consecutive_diffs = (t_sorted[1:] - t_sorted[:-1])
-                positive_diffs = consecutive_diffs[consecutive_diffs > 0]
-                if positive_diffs.numel() > 0:
-                    min_diff = positive_diffs.min()
-                    max_freq = 1 / (2 * min_diff)  # Nyquist based on time sampling
-                    mixture_means_constraint = Interval(lower_frequency, max_freq)
-                else:
-                    # time_span > 0 guarantees at least two distinct timestamps,
-                    # so positive_diffs is always non-empty here.  This branch
-                    # is unreachable in practice.
-                    raise ValueError(  # pragma: no cover
-                        "Unexpected degenerate timestamps: time_span > 0 but "
-                        "no consecutive positive differences found."
-                    )
-            else:
-                # 1D case: base the lower-frequency bound on the time span
-                # (max - min) rather than the absolute maximum. This prevents
-                # allowing periods longer than the observational baseline and
-                # is consistent with the 2D logic above.
-                time_span = (
-                    self._xdata_transformed.max()
-                    - self._xdata_transformed.min()
+                means_upper = torch.as_tensor(
+                    means_record["constraint_upper"],
+                    dtype=raw_means.dtype,
+                    device=raw_means.device,
                 )
-                if float(time_span) <= 0.0:
-                    raise ValueError(
-                        "set_default_constraints requires a dataset whose "
-                        "timestamps span a positive time range, but all "
-                        "timestamps in the 1D input are identical "
-                        "(time_span = 0). Ensure the training data covers "
-                        "more than one distinct observation time."
-                    )
-                mixture_means_constraint = GreaterThan(1 / time_span)
 
-            # Apply any constraint_set period bounds to the mixture_means
-            # constraint
-            if constraint_set is not None:
-                cs = get_constraint_set(constraint_set)
-                if "period" in cs:
-                    period_bounds = cs["period"]
-                    lower_val, lower_active = period_bounds["lower"]
-                    upper_val, upper_active = period_bounds["upper"]
-
-                    # Compute the scale factor to convert a period in original
-                    # (untransformed) units to a frequency in transformed space.
-                    # For any linear rescaling transform:
-                    #   freq_transformed = freq_original * (x_orig_span /
-                    #                                       x_trans_span)
-                    if self.ndim > 1:
-                        x_orig_span = float(
+                if constraint_set is not None:
+                    cs = get_constraint_set(constraint_set)
+                    if "period" in cs:
+                        period_bounds = cs["period"]
+                        lower_val, lower_active = period_bounds["lower"]
+                        upper_val, upper_active = period_bounds["upper"]
+                        raw_time_span = float(
                             self._xdata_raw[:, 0].max()
                             - self._xdata_raw[:, 0].min()
                         )
-                        x_trans_span = float(
+                        model_time_span = float(
                             self._xdata_transformed[:, 0].max()
                             - self._xdata_transformed[:, 0].min()
                         )
-                    else:
-                        x_orig_span = float(
-                            self._xdata_raw.max() - self._xdata_raw.min()
+                        freq_scale = (
+                            raw_time_span / model_time_span
+                            if model_time_span > 0
+                            else 1.0
                         )
-                        x_trans_span = float(
-                            self._xdata_transformed.max()
-                            - self._xdata_transformed.min()
-                        )
-                    freq_scale = (
-                        x_orig_span / x_trans_span if x_trans_span > 0 else 1.0
+                        if lower_active and lower_val is not None:
+                            proposed_upper = freq_scale / lower_val
+                            if proposed_upper > float(means_lower[0, 0, 0]):
+                                means_upper[0, 0, 0] = min(
+                                    float(means_upper[0, 0, 0]),
+                                    proposed_upper,
+                                )
+                        if upper_active and upper_val is not None:
+                            proposed_lower = freq_scale / upper_val
+                            if proposed_lower < float(means_upper[0, 0, 0]):
+                                means_lower[0, 0, 0] = max(
+                                    float(means_lower[0, 0, 0]),
+                                    proposed_lower,
+                                )
+
+                if torch.any(means_lower >= means_upper):
+                    raise ValueError(
+                        "The temporal period limits conflict with the "
+                        "dimension-aware spectral-mixture frequency bounds."
                     )
+                proposed_means_constraint = Interval(
+                    means_lower,
+                    means_upper,
+                )
+                existing_means_constraint = getattr(
+                    covar_module,
+                    "raw_mixture_means_constraint",
+                    None,
+                )
+                effective_means_bounds = intersect_constraint_bounds(
+                    existing_means_constraint,
+                    proposed_means_constraint,
+                )
+                if bounds_are_valid(effective_means_bounds):
+                    means_constraint = make_interval_constraint(
+                        *effective_means_bounds
+                    )
+                else:
+                    means_constraint = existing_means_constraint
+                register_constraint_preserving_value(
+                    covar_module,
+                    "raw_mixture_means",
+                    means_constraint,
+                )
 
-                    # Period lower limit → frequency upper limit
-                    if lower_active and lower_val is not None:
-                        max_freq_from_period = freq_scale / lower_val
-                        cur_lower = float(mixture_means_constraint.lower_bound)
-                        if max_freq_from_period > cur_lower:
-                            if isinstance(mixture_means_constraint, GreaterThan):
-                                mixture_means_constraint = Interval(
-                                    cur_lower, max_freq_from_period
-                                )
-                            else:
-                                # Already an Interval: tighten the upper bound
-                                cur_upper = float(
-                                    mixture_means_constraint.upper_bound
-                                )
-                                mixture_means_constraint = Interval(
-                                    cur_lower,
-                                    min(cur_upper, max_freq_from_period),
-                                )
+                scale_record = model_coordinate["mixture_scales"]
+                raw_scales = covar_module.raw_mixture_scales
+                scales_lower = torch.as_tensor(
+                    scale_record["constraint_lower"],
+                    dtype=raw_scales.dtype,
+                    device=raw_scales.device,
+                )
+                scales_upper = torch.as_tensor(
+                    scale_record["constraint_upper"],
+                    dtype=raw_scales.dtype,
+                    device=raw_scales.device,
+                )
+                proposed_scales_constraint = Interval(
+                    scales_lower,
+                    scales_upper,
+                )
+                existing_scales_constraint = getattr(
+                    covar_module,
+                    "raw_mixture_scales_constraint",
+                    None,
+                )
+                effective_scales_bounds = intersect_constraint_bounds(
+                    existing_scales_constraint,
+                    proposed_scales_constraint,
+                )
+                if bounds_are_valid(effective_scales_bounds):
+                    scales_constraint = make_interval_constraint(
+                        *effective_scales_bounds
+                    )
+                else:
+                    scales_constraint = existing_scales_constraint
+                register_constraint_preserving_value(
+                    covar_module,
+                    "raw_mixture_scales",
+                    scales_constraint,
+                )
+                effective_means_lower, effective_means_upper = get_bounds(
+                    means_constraint
+                )
+                effective_scales_lower, effective_scales_upper = get_bounds(
+                    scales_constraint
+                )
+                self._spectral_mixture_ard_constraint_provenance = {
+                    "schema_version": diagnostics["schema_version"],
+                    "parameterization": diagnostics["parameterization"],
+                    "coordinate_order": diagnostics["coordinate_order"],
+                    "ard_index": diagnostics["ard_index"],
+                    "constraint_set": constraint_set,
+                    "mixture_means": {
+                        "proposed_lower": means_lower.detach().cpu().tolist(),
+                        "proposed_upper": means_upper.detach().cpu().tolist(),
+                        "effective_lower": torch.as_tensor(
+                            effective_means_lower
+                        ).detach().cpu().tolist(),
+                        "effective_upper": torch.as_tensor(
+                            effective_means_upper
+                        ).detach().cpu().tolist(),
+                    },
+                    "mixture_scales": {
+                        "proposed_lower": scales_lower.detach().cpu().tolist(),
+                        "proposed_upper": scales_upper.detach().cpu().tolist(),
+                        "effective_lower": torch.as_tensor(
+                            effective_scales_lower
+                        ).detach().cpu().tolist(),
+                        "effective_upper": torch.as_tensor(
+                            effective_scales_upper
+                        ).detach().cpu().tolist(),
+                    },
+                }
+            else:
+                time_values = (
+                    self._xdata_transformed[:, 0]
+                    if self.ndim > 1
+                    else self._xdata_transformed
+                )
+                time_span = time_values.max() - time_values.min()
+                if float(time_span) <= 0.0:
+                    raise ValueError(
+                        "set_default_constraints requires timestamps that "
+                        "span a positive range."
+                    )
+                mixture_means_constraint = GreaterThan(1.0 / time_span)
 
-                    # Period upper limit → frequency lower limit
-                    if upper_active and upper_val is not None:
-                        min_freq_from_period = freq_scale / upper_val
-                        cur_lower = float(mixture_means_constraint.lower_bound)
-                        cur_upper = (
-                            float(mixture_means_constraint.upper_bound)
-                            if isinstance(mixture_means_constraint, Interval)
-                            else float("inf")
+                if constraint_set is not None:
+                    cs = get_constraint_set(constraint_set)
+                    if "period" in cs:
+                        period_bounds = cs["period"]
+                        lower_val, lower_active = period_bounds["lower"]
+                        upper_val, upper_active = period_bounds["upper"]
+                        raw_time = (
+                            self._xdata_raw[:, 0]
+                            if self.ndim > 1
+                            else self._xdata_raw
                         )
-                        new_lower = max(cur_lower, min_freq_from_period)
-                        if new_lower < cur_upper:
-                            if isinstance(mixture_means_constraint, GreaterThan):
-                                mixture_means_constraint = GreaterThan(new_lower)
-                            else:
-                                mixture_means_constraint = Interval(
-                                    new_lower, cur_upper
-                                )
+                        raw_time_span = float(raw_time.max() - raw_time.min())
+                        model_time_span = float(time_span)
+                        freq_scale = (
+                            raw_time_span / model_time_span
+                            if model_time_span > 0
+                            else 1.0
+                        )
+                        current_lower = float(
+                            mixture_means_constraint.lower_bound
+                        )
+                        current_upper = float("inf")
+                        if lower_active and lower_val is not None:
+                            proposed_upper = freq_scale / lower_val
+                            if proposed_upper > current_lower:
+                                current_upper = proposed_upper
+                        if upper_active and upper_val is not None:
+                            proposed_lower = freq_scale / upper_val
+                            current_lower = max(
+                                current_lower,
+                                proposed_lower,
+                            )
+                        if math.isfinite(current_upper):
+                            mixture_means_constraint = Interval(
+                                current_lower,
+                                current_upper,
+                            )
+                        else:
+                            mixture_means_constraint = GreaterThan(
+                                current_lower
+                            )
 
-            register_constraint_preserving_value(
-                self._model_pars["mixture_means"]["module"],
-                "raw_mixture_means",
-                mixture_means_constraint,
-            )
+                register_constraint_preserving_value(
+                    covar_module,
+                    "raw_mixture_means",
+                    mixture_means_constraint,
+                )
 
-        # to-do - check if constraints on mixture scales are useful!
         self.__CONTRAINTS_SET = True
 
     def get_constraints(self):
@@ -7999,58 +8038,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         for key in hypers:
             # first, check if the parameter needs to be transformed:
             if any(p in key for p in pars_to_transform["x"]):
-                # now apply the x transform
-                # remember that the means and scales are in fourier space
-                # so we need to transform them back to real space
-                # before applying the transform
-                # and then transform them back to fourier space
-                # luckily, when the shift is removed from the transform,
-                # the factors of 2pi cancel out for the scales
-                # so we can just do 1/ for both means and scales
                 if self.xtransform is not None:
                     if debug:
-                        print(f"Applying x-transform to {key}")
-                    # Check if the parameter is 2D (for multi-dimensional data)
-                    if hypers[key].dim() == 2:
-                        # For 2D hyperparameters (num_mixtures, ard_num_dims),
-                        # the transform should be applied considering each
-                        # dimension's range. Since transform was fit on
-                        # (n_samples, 2) data, we need to handle this
-                        # carefully
-                        _num_mixtures, ard_num_dims = hypers[key].shape
-                        transformed = torch.zeros_like(hypers[key])
-
-                        # For each dimension of the 2D parameter
-                        for dim in range(ard_num_dims):
-                            # Get the range for this dimension from the
-                            # fitted transformer
-                            if (
-                                hasattr(self.xtransform, "range")
-                                and self.xtransform.range.shape[0] > dim
-                            ):
-                                # Apply dimension-specific scaling to the
-                                # Fourier space parameters
-                                # Formula: f_transformed = 1 / ((1 / f_raw)
-                                # / range)
-                                # This accounts for the data transformation
-                                # applied to each dimension
-                                # The 1/x transformations handle the Fourier
-                                # space representation
-                                dim_values = hypers[key][:, dim]
-                                # Transform back to real space, apply
-                                # scaling, then back to Fourier
-                                transformed[:, dim] = 1 / (
-                                    (1 / dim_values) / self.xtransform.range[0, dim]
-                                )
-                            else:
-                                # Fallback: just copy the values
-                                transformed[:, dim] = hypers[key][:, dim]
-                        hypers[key] = transformed
-                    else:
-                        # 1D case - original behavior
-                        hypers[key] = 1 / self.xtransform.transform(
-                            1 / hypers[key], shift=False
-                        )
+                        print(f"Applying dimension-aware x-transform to {key}")
+                    hypers[key] = self._transform_frequency_like_to_model(
+                        hypers[key]
+                    )
             elif any(p in key for p in pars_to_transform["y"]):
                 # now apply the y transform
                 # the mean function and noise are not defined in fourier
@@ -8060,14 +8053,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         print(f"Applying y-transform to {key}")
                     hypers[key] = self.ytransform.transform(hypers[key])
         # GPyTorch validates constrained parameters when initialize() is called.
-        # The only known problematic path here is the 2D spectral-mixture
-        # initialiser, which builds a [num_mixtures, ard_num_dims] tensor whose
-        # temporal column is scientifically meaningful while the wavelength
-        # column is a placeholder.  GPyTorch applies the same scalar constraint
-        # element-wise to both columns, so only that multi-dimensional placeholder
-        # path should be clamped.  Do not clamp ordinary 1D MLS frequencies here:
-        # that silently changes the user/MLS-specified ordering and breaks the
-        # long-standing 1D initialisation contract.
+        # Clamp only multi-dimensional spectral-mixture means here. Their
+        # tensor-valued constraint broadcasts across mixture components while
+        # preserving distinct temporal and wavelength bounds. Ordinary 1D MLS
+        # frequencies retain their long-standing initialization contract.
         for key, value in list(hypers.items()):
             if "mixture_means" not in key:
                 continue
@@ -10129,6 +10118,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         wavelength_diagnostics = None
         wavelength_mean_diagnostics = None
+        spectral_mixture_ard_diagnostics = None
         band_diagnostics = {}
         if self.ndim > 1:
             uncertainty_values = None
@@ -10184,6 +10174,27 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 metadata=mean_metadata,
             )
 
+            covar_module = getattr(
+                getattr(self, "model", None),
+                "covar_module",
+                None,
+            )
+            mixture_means = getattr(covar_module, "mixture_means", None)
+            if (
+                mixture_means is not None
+                and getattr(covar_module, "ard_num_dims", 1) == 2
+            ):
+                spectral_mixture_ard_diagnostics = (
+                    build_dimension_aware_sm_ard_estimates(
+                        raw_inputs=input_values,
+                        model_inputs=(
+                            self._xdata_transformed.detach().cpu().numpy()
+                        ),
+                        num_mixtures=int(mixture_means.shape[0]),
+                        wavelength_diagnostics=wavelength_diagnostics,
+                    )
+                )
+
         if finite_flux_values.size == 0:
             global_diagnostics = LightcurveDiagnostics(
                 baseline_duration=baseline_duration,
@@ -10212,6 +10223,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             band_diagnostics=band_diagnostics,
             wavelength_diagnostics=wavelength_diagnostics,
             wavelength_mean_diagnostics=wavelength_mean_diagnostics,
+            spectral_mixture_ard_diagnostics=(
+                spectral_mixture_ard_diagnostics
+            ),
         )
 
     def _apply_parameter_workflow_estimates(self):
@@ -10222,6 +10236,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return None
 
         context = self._build_parameter_estimation_context()
+        self._parameter_estimation_context = context
 
         self.parameter_workflow_result = build_and_apply_parameter_estimates(
             model=self.model,
@@ -10324,6 +10339,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "constraint_action",
                 "wavelength_estimate_provenance",
                 "wavelength_mean_estimate_provenance",
+                "spectral_mixture_ard_provenance",
             ):
                 if optional_key in info:
                     entry[optional_key] = copy.deepcopy(info[optional_key])
@@ -10333,11 +10349,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             else:
                 skipped.append(entry)
 
-        return {
+        report = {
             "available": True,
             "applied": applied,
             "skipped": skipped,
         }
+        if hasattr(self, "_spectral_mixture_ard_constraint_provenance"):
+            report["spectral_mixture_ard_constraint_provenance"] = (
+                copy.deepcopy(
+                    self._spectral_mixture_ard_constraint_provenance
+                )
+            )
+        return report
 
     def fit(self, *args, **kwargs):
         """Fit wrapper that records lightweight in-memory fit history."""
@@ -10628,10 +10651,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             frequencies.  Set to ``False`` to disable this behaviour and, for
             models that call it, fall back to GPyTorch's
             ``initialize_from_data``.  Note that several 2D spectral-mixture
-            models do not currently call ``initialize_from_data`` at all, so
-            for those models MLS-based or period-based frequency seeding is
-            not applied and the underlying GPyTorch defaults are used
-            instead.
+            models do not call ``initialize_from_data``.  Their full 2D
+            spectral-mixture tensors instead receive dimension-aware values
+            from the parameter workflow, with optional best-band temporal
+            replacement when requested.
         use_best_band_init : bool, optional
             If ``True`` and the lightcurve is multiband (``ndim > 1``) and
             ``use_mls_init=True`` and ``periods`` is ``None``, a 1D
@@ -10639,11 +10662,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             spectral-mixture frequency initialisation instead of the
             standard multiband LS.  For 2D spectral-mixture models
             (``ard_num_dims == 2``, non-SKI), the fitted temporal
-            frequencies are also used to initialise the temporal dimension
-            of the kernel mixture means, with the minimum wavelength
-            frequency (1/wavelength_span) as the default for the
-            wavelength dimension, corresponding to approximately achromatic
-            variability.  This can improve convergence for sources with a
+            frequencies are used to replace only ARD index 0 of the kernel
+            mixture means.  ARD index 1 retains its independently
+            wavelength-derived initialization.  This can improve convergence
+            for sources with a
             large dynamic range in the number of observations across bands.
             Has no effect for 1D lightcurves or when ``use_mls_init=False``.
         use_parameter_workflow : bool, optional
@@ -11214,60 +11236,27 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             and hasattr(self.model.covar_module, "mixture_means")
             and getattr(self.model.covar_module, "ard_num_dims", 1) == 2
         ):
-            # For 2D SM models: initialise the temporal dimension (dim 0)
-            # from the best-band 1D LS frequencies and use the minimum
-            # wavelength frequency (1/wavelength_span) as a placeholder for
-            # the wavelength dimension (dim 1), which encodes approximately
-            # achromatic variability.  This avoids leaving all mixture means
-            # at GPyTorch defaults while still seeding the most informative
-            # (temporal) dimension from the best-sampled band.
-            _bands_raw = self._xdata_raw[:, 1]
-            _wl_span = float(_bands_raw.max() - _bands_raw.min())
-            _default_wl_freq = 1.0 / _wl_span if _wl_span > 0 else 1e-6
+            # Build the raw-coordinate ARD tensor independently. Replace only
+            # index 0 with best-band temporal frequencies; index 1 retains the
+            # wavelength-derived initialization and is transformed with its own
+            # coordinate scale by set_hypers().
             _n_mix = len(_init_freqs)
-            # Build a [num_mixtures, 2] tensor: col 0 = temporal frequencies
-            # from the best-band LS, col 1 = default wavelength frequency.
-            # Using new_full preserves device and dtype of _init_freqs.
-            _init_freqs_2d = torch.stack(
-                [
-                    _init_freqs,
-                    _init_freqs.new_full((_n_mix,), _default_wl_freq),
-                ],
-                dim=1,  # shape: [num_mixtures, 2]
+            _context = self._build_parameter_estimation_context()
+            _ard_diagnostics = build_dimension_aware_sm_ard_estimates(
+                raw_inputs=self._xdata_raw.detach().cpu().numpy(),
+                model_inputs=self._xdata_transformed.detach().cpu().numpy(),
+                num_mixtures=_n_mix,
+                wavelength_diagnostics=_context.wavelength_diagnostics,
             )
-            # The mixture_means constraint is derived from the temporal
-            # dimension and is applied element-wise to all entries,
-            # including the wavelength dimension.  The wavelength
-            # frequency (1/wavelength_span) may fall below the
-            # temporal-based lower bound, causing a RuntimeError.
-            # Clamp to the constraint bounds only when xtransform is None
-            # (i.e. raw and transformed spaces are identical).  When an
-            # xtransform is active, _init_freqs_2d is still in raw units
-            # but the constraint bounds are in transformed space; clamping
-            # in the wrong space could create new out-of-bounds values
-            # after set_hypers() applies the transform, so we skip
-            # clamping and let set_hypers() handle the transform instead.
-            if self.xtransform is None:
-                _mixture_means_constraint = getattr(
-                    self.model.covar_module,
-                    "raw_mixture_means_constraint",
-                    None,
-                )
-                if _mixture_means_constraint is not None and hasattr(
-                    _mixture_means_constraint, "lower_bound"
-                ):
-                    _clamp_lower = float(
-                        _mixture_means_constraint.lower_bound
-                    )
-                    _clamp_upper = (
-                        float(_mixture_means_constraint.upper_bound)
-                        if hasattr(_mixture_means_constraint, "upper_bound")
-                        else float("inf")
-                    )
-                    _init_freqs_2d = _init_freqs_2d.clamp(
-                        min=_clamp_lower, max=_clamp_upper
-                    )
-            _hypers_to_set["covar_module.mixture_means"] = _init_freqs_2d
+            _raw_means = torch.as_tensor(
+                _ard_diagnostics["raw_coordinate"]["mixture_means"][
+                    "initial_value"
+                ],
+                dtype=_init_freqs.dtype,
+                device=_init_freqs.device,
+            )
+            _raw_means[:, 0, 0] = _init_freqs.reshape(-1)
+            _hypers_to_set["covar_module.mixture_means"] = _raw_means
         if guess is not None:
             _hypers_to_set.update(guess)
         if _hypers_to_set:
@@ -11589,6 +11578,192 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise exc
         return mode, keys
 
+    @staticmethod
+    def _consensus_temporal_bound_value(bound):
+        """Return the temporal (ARD index 0) value from a constraint bound."""
+        tensor = torch.as_tensor(bound)
+        if tensor.numel() == 0:
+            raise ValueError("Constraint bound is empty.")
+        if tensor.numel() == 1:
+            return float(tensor.reshape(-1)[0])
+        if tensor.ndim == 0:
+            return float(tensor)
+        temporal = tensor[..., 0].reshape(-1)
+        reference = temporal[0]
+        if not torch.allclose(temporal, reference.expand_as(temporal)):
+            raise ValueError(
+                "Temporal constraint bounds differ across broadcast entries."
+            )
+        return float(reference)
+
+    def _consensus_apply_temporal_sm_constraint(
+        self,
+        parameter_key,
+        lower,
+        upper,
+    ):
+        """Intersect a consensus interval with only ARD index 0.
+
+        The supplied bounds are expressed in raw temporal-frequency units.
+        They are converted to the fitted temporal coordinate before
+        registration.  For the full two-dimensional spectral-mixture kernel,
+        all wavelength-coordinate bounds (ARD index 1) are retained exactly.
+        """
+        model_pars = getattr(self, "_model_pars", None)
+        if not isinstance(model_pars, dict) or parameter_key not in model_pars:
+            raise ConsensusFitError(
+                "Consensus temporal constraint application failed: parameter "
+                f"{parameter_key!r} is unavailable."
+            )
+        metadata = model_pars[parameter_key]
+        if not isinstance(metadata, dict) or metadata.get("module") is None:
+            raise ConsensusFitError(
+                "Consensus temporal constraint application failed: parameter "
+                f"metadata for {parameter_key!r} has no target module."
+            )
+
+        module = metadata["module"]
+        parameter_name = parameter_key.split(".")[-1].removeprefix("raw_")
+        raw_name = f"raw_{parameter_name}"
+        current_value = getattr(module, parameter_name, None)
+        if current_value is None or not torch.is_tensor(current_value):
+            raise ConsensusFitError(
+                "Consensus temporal constraint application failed: constrained "
+                f"parameter {parameter_name!r} is unavailable on "
+                f"{module.__class__.__name__}."
+            )
+        existing = getattr(module, f"{raw_name}_constraint", None)
+        if existing is None:
+            raise ConsensusFitError(
+                "Consensus temporal constraint application failed: no existing "
+                f"constraint is registered for {parameter_key!r}."
+            )
+
+        raw_lower = float(lower)
+        raw_upper = float(upper)
+        if not (
+            math.isfinite(raw_lower)
+            and math.isfinite(raw_upper)
+            and raw_lower < raw_upper
+        ):
+            raise ConsensusFitError(
+                "Consensus temporal constraint application failed: proposed "
+                f"bounds [{raw_lower}, {raw_upper}] are invalid."
+            )
+
+        proposed_lower = self._transform_frequency_like_to_model(raw_lower).to(
+            dtype=current_value.dtype,
+            device=current_value.device,
+        )
+        proposed_upper = self._transform_frequency_like_to_model(raw_upper).to(
+            dtype=current_value.dtype,
+            device=current_value.device,
+        )
+        if proposed_lower.numel() != 1 or proposed_upper.numel() != 1:
+            raise ConsensusFitError(
+                "Consensus temporal constraint application failed: temporal "
+                "frequency conversion did not produce scalar bounds."
+            )
+        proposed_lower = proposed_lower.reshape(())
+        proposed_upper = proposed_upper.reshape(())
+
+        existing_lower, existing_upper = get_bounds(existing)
+        ard_dims = int(current_value.shape[-1]) if current_value.ndim else 1
+        bound_shape = (1,) * max(current_value.ndim - 1, 0) + (ard_dims,)
+        try:
+            lower_tensor = torch.broadcast_to(
+                torch.as_tensor(
+                    existing_lower,
+                    dtype=current_value.dtype,
+                    device=current_value.device,
+                ),
+                bound_shape,
+            ).clone()
+            upper_tensor = torch.broadcast_to(
+                torch.as_tensor(
+                    existing_upper,
+                    dtype=current_value.dtype,
+                    device=current_value.device,
+                ),
+                bound_shape,
+            ).clone()
+        except RuntimeError as exc:
+            raise ConsensusFitError(
+                "Consensus temporal constraint application failed: existing "
+                f"bounds for {parameter_key!r} cannot broadcast to ARD shape "
+                f"{bound_shape}."
+            ) from exc
+
+        wavelength_lower_before = (
+            lower_tensor[..., 1:].clone() if ard_dims > 1 else None
+        )
+        wavelength_upper_before = (
+            upper_tensor[..., 1:].clone() if ard_dims > 1 else None
+        )
+        effective_lower = torch.maximum(lower_tensor[..., 0], proposed_lower)
+        effective_upper = torch.minimum(upper_tensor[..., 0], proposed_upper)
+        if not torch.all(effective_lower < effective_upper):
+            raise ConsensusFitError(
+                "Consensus temporal constraint application failed: the "
+                "consensus interval does not overlap the existing temporal "
+                f"bounds for {parameter_key!r}. raw_proposed_bounds="
+                f"[{raw_lower:.6g}, {raw_upper:.6g}], model_proposed_bounds="
+                f"[{float(proposed_lower):.6g}, {float(proposed_upper):.6g}]."
+            )
+
+        lower_tensor[..., 0] = effective_lower
+        upper_tensor[..., 0] = effective_upper
+        final_constraint = make_interval_constraint(lower_tensor, upper_tensor)
+        register_constraint_preserving_value(module, raw_name, final_constraint)
+
+        wavelength_preserved = None
+        if ard_dims > 1:
+            wavelength_preserved = bool(
+                torch.equal(lower_tensor[..., 1:], wavelength_lower_before)
+                and torch.equal(upper_tensor[..., 1:], wavelength_upper_before)
+            )
+            if not wavelength_preserved:
+                raise ConsensusFitError(
+                    "Consensus temporal constraint application modified the "
+                    f"wavelength ARD bounds for {parameter_key!r}."
+                )
+
+        return self._consensus_make_json_safe(
+            {
+                "parameter": parameter_key,
+                "ard_scope": "temporal_only",
+                "coordinate_order": [
+                    "temporal_frequency",
+                    "wavelength_frequency",
+                ][:ard_dims],
+                "raw_proposed_bounds": [raw_lower, raw_upper],
+                "model_proposed_bounds": [proposed_lower, proposed_upper],
+                "existing_bounds": {
+                    "lower": torch.broadcast_to(
+                        torch.as_tensor(
+                            existing_lower,
+                            dtype=current_value.dtype,
+                            device=current_value.device,
+                        ),
+                        bound_shape,
+                    ),
+                    "upper": torch.broadcast_to(
+                        torch.as_tensor(
+                            existing_upper,
+                            dtype=current_value.dtype,
+                            device=current_value.device,
+                        ),
+                        bound_shape,
+                    ),
+                },
+                "effective_bounds": {
+                    "lower": lower_tensor,
+                    "upper": upper_tensor,
+                },
+                "wavelength_bounds_preserved": wavelength_preserved,
+            }
+        )
+
     def _consensus_validate_applied_sm_constraints(
         self, keys, consensus_frequencies, frequency_bounds
     ):
@@ -11711,7 +11886,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"got={_freqs_arr.tolist()}, mixture_means_key={_mm_key!r}, "
                 f"expected_frequency_bounds={frequency_bounds}."
             )
-        _target_freq = float(np.median(_freqs_arr))
+        _target_freq_raw = float(np.median(_freqs_arr))
+        _target_freq = float(
+            self._transform_frequency_like_to_model(_target_freq_raw)
+        )
         try:
             import math as _math
             _lower_raw = getattr(_found, "lower_bound", None)
@@ -11725,8 +11903,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"expected_frequency_bounds={frequency_bounds}, "
                     f"consensus_frequency={_target_freq:.6g}."
                 )
-            _upper = float(_upper_raw)
-            _lower = float(_lower_raw)
+            _upper = self._consensus_temporal_bound_value(_upper_raw)
+            _lower = self._consensus_temporal_bound_value(_lower_raw)
             if _math.isinf(_upper):
                 raise ConsensusFitError(
                     "Consensus constraint validation failed: the registered "
@@ -11799,7 +11977,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if _lower is None or _upper is None:
             return None
 
-        return [float(_lower), float(_upper)]
+        try:
+            return [
+                self._consensus_temporal_bound_value(_lower),
+                self._consensus_temporal_bound_value(_upper),
+            ]
+        except (TypeError, ValueError):
+            return None
 
 
     def _consensus_get_registered_period_constraint_bounds(self, keys):
@@ -12074,11 +12258,45 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 f"{int(expected_num_mixtures)})."
             )
 
+        def merge_temporal_values(parameter_key, temporal_values):
+            metadata = getattr(self, "_model_pars", {}).get(parameter_key, {})
+            module = metadata.get("module") if isinstance(metadata, dict) else None
+            parameter_name = parameter_key.split(".")[-1]
+            current = (
+                getattr(module, parameter_name, None)
+                if module is not None
+                else None
+            )
+            if current is None or not torch.is_tensor(current):
+                return temporal_values
+
+            component_values = temporal_values.reshape(-1)
+            if current.ndim < 3 or current.shape[-2] != 1:
+                return temporal_values
+            if current.shape[-3] != component_values.numel():
+                raise ValueError(
+                    "Consensus initialization component count does not match "
+                    f"the fitted parameter shape for {parameter_key!r}: "
+                    f"{component_values.numel()} != {current.shape[-3]}."
+                )
+
+            merged = current.detach().clone()
+            target = merged[..., :, 0, 0]
+            reshape = (1,) * (target.ndim - 1) + (component_values.numel(),)
+            target.copy_(component_values.reshape(reshape).expand_as(target))
+            return merged
+
         guess = {
-            keys["mixture_means"]: init["mixture_means"],
+            keys["mixture_means"]: merge_temporal_values(
+                keys["mixture_means"],
+                init["mixture_means"],
+            ),
         }
         if init["mixture_scales"] is not None:
-            guess[keys["mixture_scales"]] = init["mixture_scales"]
+            guess[keys["mixture_scales"]] = merge_temporal_values(
+                keys["mixture_scales"],
+                init["mixture_scales"],
+            )
 
         return guess
 
@@ -13767,13 +13985,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         # --- 1. Required top-level keys must all be present ---
-        _pr55_optional_top_level_keys = {
+        _compat_optional_top_level_keys = {
             "consensus_time_kernel_constraint_mode",
             "consensus_period_constraint_bounds",
             "consensus_period_constraint_bounds_final",
+            "consensus_constraint_ard_scope",
+            "consensus_wavelength_constraint_preserved",
+            "consensus_sm_constraint_provenance",
         }
         missing_keys = _CONSENSUS_REQUIRED_RESULT_KEYS - (
-            set(diagnostics.keys()) | _pr55_optional_top_level_keys
+            set(diagnostics.keys()) | _compat_optional_top_level_keys
         )
         if missing_keys:
             raise RuntimeError(
@@ -17727,6 +17948,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if apply_consensus_constraints:
             _constraint_dict = {}
+            _sm_constraint_provenance = {}
             # --- Step 1: apply default/LPV constraints as a base first -------
             # This ensures any constraint_set period bounds are registered
             # before the consensus constraints override the time-kernel target.
@@ -17771,11 +17993,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 _global_lower = float(_lowers.min())
                 _global_upper = float(_uppers.max())
                 _frequency_constraint_bounds = (_global_lower, _global_upper)
-                if _constraint_mode == "spectral_mixture":
-                    _constraint_dict[_keys["mixture_means"]] = Interval(
-                        _global_lower, _global_upper
-                    )
-                elif _constraint_mode == "period_length":
+                if _constraint_mode == "period_length":
                     _period_constraint_bounds = (
                         self._consensus_frequency_bounds_to_period_bounds(
                             _frequency_constraint_bounds
@@ -17798,14 +18016,28 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     consensus_scale_width_factor=consensus_scale_width_factor,
                 )
                 _scale_upper = float(_scale_info["upper"])
-                # Practical lower bound - scales must be positive.
-                _constraint_dict[_keys["mixture_scales"]] = Interval(
-                    _CONSENSUS_MIN_SCALE_BOUND, _scale_upper
-                )
             # --- Step 3: apply consensus constraints on top of defaults ------
-            # These must win over the defaults applied in step 1.
+            # Period-kernel constraints use the ordinary scalar path. For
+            # spectral-mixture kernels, update only temporal ARD index 0 and
+            # retain the wavelength bounds installed by the defaults.
             if _constraint_dict:
                 self.set_constraint(_constraint_dict)
+            if _constraint_mode == "spectral_mixture":
+                if _frequency_constraint_bounds is not None:
+                    _sm_constraint_provenance["mixture_means"] = (
+                        self._consensus_apply_temporal_sm_constraint(
+                            _keys["mixture_means"],
+                            *_frequency_constraint_bounds,
+                        )
+                    )
+                if _scale_upper is not None:
+                    _sm_constraint_provenance["mixture_scales"] = (
+                        self._consensus_apply_temporal_sm_constraint(
+                            _keys["mixture_scales"],
+                            _CONSENSUS_MIN_SCALE_BOUND,
+                            _scale_upper,
+                        )
+                    )
             # --- Step 4: mark constraints as set so _fit_core skips defaults -
             # set_default_constraints already set this flag in step 1, but we
             # re-assert it here to make the intent explicit and guard against
@@ -17844,6 +18076,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if _constraint_mode == "spectral_mixture"
                 else _keys.get("period_length")
             )
+            result_diagnostics["consensus_constraint_ard_scope"] = (
+                "temporal_only"
+                if _constraint_mode == "spectral_mixture"
+                else "period_parameter"
+            )
+            result_diagnostics["consensus_sm_constraint_provenance"] = (
+                _sm_constraint_provenance
+                if _constraint_mode == "spectral_mixture"
+                else {}
+            )
+            _preservation_flags = [
+                item.get("wavelength_bounds_preserved")
+                for item in _sm_constraint_provenance.values()
+                if item.get("wavelength_bounds_preserved") is not None
+            ]
+            result_diagnostics["consensus_wavelength_constraint_preserved"] = (
+                all(_preservation_flags) if _preservation_flags else None
+            )
             result_diagnostics["consensus_scale_constraint_bounds"] = (
                 [float(_CONSENSUS_MIN_SCALE_BOUND), float(_scale_upper)]
                 if _scale_upper is not None
@@ -17881,6 +18131,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 False
             )
             result_diagnostics["constraints_marked_set_after_consensus"] = False
+            result_diagnostics["consensus_constraint_ard_scope"] = None
+            result_diagnostics["consensus_wavelength_constraint_preserved"] = None
+            result_diagnostics["consensus_sm_constraint_provenance"] = {}
 
 
         if (
@@ -18459,7 +18712,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 model_name=_requested_model,
                 time_kernel_type=fit_kwargs.get("time_kernel_type"),
             )
-            _constraint_dict = {}
+            _sm_constraint_provenance = {}
             _keys = self._consensus_resolve_time_spectral_mixture_keys()
             _constraint_set_for_defaults = fit_kwargs.get("constraint_set")
             self.set_default_constraints(
@@ -18480,10 +18733,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _global_lower = float(_lowers.min())
             _global_upper = float(_uppers.max())
             _frequency_constraint_bounds = (_global_lower, _global_upper)
-            _constraint_dict[_keys["mixture_means"]] = Interval(
-                _global_lower,
-                _global_upper,
-            )
 
             _scale_info = self._consensus_resolve_scale_constraint_upper(
                 _freqs,
@@ -18492,11 +18741,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 consensus_scale_width_factor=consensus_scale_width_factor,
             )
             _scale_upper = float(_scale_info["upper"])
-            _constraint_dict[_keys["mixture_scales"]] = Interval(
-                _CONSENSUS_MIN_SCALE_BOUND,
-                _scale_upper,
+            _sm_constraint_provenance["mixture_means"] = (
+                self._consensus_apply_temporal_sm_constraint(
+                    _keys["mixture_means"],
+                    *_frequency_constraint_bounds,
+                )
             )
-            self.set_constraint(_constraint_dict)
+            _sm_constraint_provenance["mixture_scales"] = (
+                self._consensus_apply_temporal_sm_constraint(
+                    _keys["mixture_scales"],
+                    _CONSENSUS_MIN_SCALE_BOUND,
+                    _scale_upper,
+                )
+            )
             self.__CONTRAINTS_SET = True
             result_diagnostics[
                 "constraints_marked_set_after_consensus"
@@ -18512,6 +18769,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
             result_diagnostics["consensus_constraint_target_key"] = (
                 _keys.get("mixture_means")
+            )
+            result_diagnostics["consensus_constraint_ard_scope"] = "temporal_only"
+            result_diagnostics["consensus_sm_constraint_provenance"] = (
+                _sm_constraint_provenance
+            )
+            _preservation_flags = [
+                item.get("wavelength_bounds_preserved")
+                for item in _sm_constraint_provenance.values()
+                if item.get("wavelength_bounds_preserved") is not None
+            ]
+            result_diagnostics["consensus_wavelength_constraint_preserved"] = (
+                all(_preservation_flags) if _preservation_flags else None
             )
             result_diagnostics["consensus_scale_constraint_bounds"] = [
                 float(_CONSENSUS_MIN_SCALE_BOUND),
@@ -18550,6 +18819,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 False
             )
             result_diagnostics["constraints_marked_set_after_consensus"] = False
+            result_diagnostics["consensus_constraint_ard_scope"] = None
+            result_diagnostics["consensus_wavelength_constraint_preserved"] = None
+            result_diagnostics["consensus_sm_constraint_provenance"] = {}
 
         consensus_guess = self._consensus_build_guess(
             frequencies=consensus_frequencies,

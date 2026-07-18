@@ -19,6 +19,7 @@ __all__ = [
     "initialization",
     "lightcurve",
     "priors",
+    "spectral_mixture_ard",
     "synthetic",
     "trainers",
     "wavelength_conclusions",

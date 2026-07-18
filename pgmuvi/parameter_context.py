@@ -162,6 +162,7 @@ class ParameterEstimationContext:
     consensus_diagnostics: ConsensusDiagnostics | None = None
     wavelength_diagnostics: WavelengthEstimationDiagnostics | None = None
     wavelength_mean_diagnostics: WavelengthMeanEstimationDiagnostics | None = None
+    spectral_mixture_ard_diagnostics: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def bands(self) -> list[str]:
