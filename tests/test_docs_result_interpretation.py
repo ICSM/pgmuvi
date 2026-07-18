@@ -113,13 +113,19 @@ class TestResultInterpretationDocs(unittest.TestCase):
 
     def test_ard_ceiling_interpretation_is_coordinate_specific(self):
         required = [
-            "time_frequency",
+            "temporal_frequency",
             "wavelength_frequency",
+            "mixture_means",
+            "mixture_scales",
+            "sm_ard_boundary_hits",
+            "sm_ard_boundary_hit_counts_by_parameter",
+            "sm_ard_boundary_component_counts_by_dimension",
+            "sm_ard_boundary_pressure_scope",
+            "sm_num_mixtures_fixed_at_one",
             "constrained_sm_ard_components",
-            "constrained_sm_ard_dimension_counts",
-            "n_constrained_sm_ard_components",
-            "boundary-limited",
-            "fraction_of_upper",
+            "compatibility aliases",
+            "raw input coordinate",
+            "Boundary-limited ARD parameters",
         ]
         for token in required:
             with self.subTest(token=token):

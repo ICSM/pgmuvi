@@ -105,6 +105,11 @@ class TestAttemptResultAdapter(unittest.TestCase):
             ],
             "fit_kwargs": {"training_iter": 20},
             "fit_quality": {"available": True, "normalized_rmse": 0.4},
+            "sm_ard_diagnostics": {
+                "available": True,
+                "boundary_pressure_scope": "wavelength_only",
+                "n_boundary_hits": 1,
+            },
             "fit_quality_score": 4.2,
             "consensus_success": True,
             "consensus_period": 600.0,
@@ -143,6 +148,12 @@ class TestAttemptResultAdapter(unittest.TestCase):
         self.assertEqual(typed["warnings"][0]["message"], "synthetic warning")
         self.assertEqual(typed["hypothesis"]["mean_structure"], "dust_attenuation")
         self.assertEqual(typed["diagnostics"]["consensus"]["consensus_period"], 600.0)
+        self.assertEqual(
+            typed["diagnostics"]["sm_ard_diagnostics"][
+                "boundary_pressure_scope"
+            ],
+            "wavelength_only",
+        )
         json.dumps(typed)
 
     def test_legacy_status_is_derived_when_canonical_fields_are_absent(self):

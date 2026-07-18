@@ -7,7 +7,7 @@ Interpreting PGMUVI results
 
    This guide explains how to read period summaries, wavelength-trend
    diagnostics, training-residual fit-quality scores, spectral-mixture ARD
-   scale-ceiling diagnostics, and failure/fallback reports.  These outputs are
+   registered-boundary diagnostics, and failure/fallback reports.  These outputs are
    diagnostics.  They do not turn the current advisory workflow into automatic
    model selection.
 
@@ -293,36 +293,59 @@ These are full-data training quantities, not held-out predictive scores and not
 Bayesian model probabilities.  Compare them only when candidates use identical
 analysis data, target transforms, likelihood policy, and fitting assumptions.
 
-Spectral-mixture ARD scale-ceiling diagnostics
-----------------------------------------------
+Spectral-mixture ARD boundary diagnostics
+-----------------------------------------
 
-For the full ``2D`` spectral-mixture baseline, ARD diagnostics report fitted
-scale values by component and coordinate dimension.  Dimension names are:
+For the full ``2D`` spectral-mixture baseline, ``sm_ard_diagnostics`` reports
+fitted values and registered bounds separately for ``mixture_means`` and
+``mixture_scales``.  The last-axis coordinate names are:
 
-``time_frequency``
-   The spectral-mixture scale associated with the time coordinate.
+``temporal_frequency``
+   ARD index 0, associated with the time coordinate.
 
 ``wavelength_frequency``
-   The spectral-mixture scale associated with the wavelength coordinate.
+   ARD index 1, associated with the wavelength coordinate.
 
-``constrained_sm_ard_components`` lists component/dimension pairs whose fitted
-scale lies within the configured tolerance of the consensus upper bound.
-``constrained_sm_ard_dimension_counts`` and
-``n_constrained_sm_ard_components`` summarize those hits.
+Each component/dimension row records the model-coordinate value, lower and
+upper bounds, absolute and normalized distance to each bound, interval
+position, and the unconstrained GPyTorch raw parameter.  When PR124 parameter
+workflow provenance is retained, the same fitted value and effective bounds are
+also transformed back to the raw input coordinate.
 
-A ceiling hit means the optimum is boundary-limited under the current
-constraint and initialization.  It does not prove that the corresponding
+``sm_ard_boundary_hits`` lists lower- and upper-bound pressure for both
+parameters.  ``sm_ard_boundary_hit_counts_by_parameter``,
+``sm_ard_boundary_hit_counts_by_dimension``,
+``sm_ard_boundary_component_counts_by_dimension``, and
+``sm_ard_boundary_hit_counts_by_side`` provide complementary summaries.
+``sm_ard_boundary_pressure_scope`` is ``none``, ``temporal_only``,
+``wavelength_only``, or ``both``.
+
+``sm_num_mixtures_is_one`` describes the fitted kernel.
+``sm_num_mixtures_fixed_at_one`` is true only when ``num_mixtures=1`` was
+explicitly supplied in the fit configuration.  A one-component fit cannot
+demonstrate component-to-component stability, so this distinction must be
+carried into interpretation.
+
+The older ``constrained_sm_ard_components`` fields remain compatibility aliases
+for *upper-bound hits in ``mixture_scales`` only*.  New analyses should use the
+full boundary fields above.
+
+A boundary hit means the optimum is constraint-sensitive under the current
+initialization, sampling, and optimizer path.  It does not prove that a
 physical dependence is absent, infinitely broad, or scientifically preferred.
-Check the recorded upper bound, ``fraction_of_upper``, learned noise, time
-centering, training stability, and whether repeated fits reproduce the hit.
+A long wavelength correlation scale and optimizer pressure can produce similar
+boundary behavior; distinguish them through repeated seeds, synthetic recovery,
+wavelength coverage, learned noise, and residual diagnostics.
 
-Interpret the coordinate explicitly:
+Interpret the coordinate and parameter explicitly:
 
-* time-frequency ceiling hits concern temporal spectral width/coherence;
-* wavelength-frequency ceiling hits concern the wavelength-coordinate spectral
-  width; and
-* hits in both dimensions may indicate that the common ARD constraint is too
-  restrictive for that component or that the fit is weakly identified.
+* temporal ``mixture_means`` pressure concerns fitted temporal frequencies;
+* wavelength ``mixture_means`` pressure concerns wavelength-frequency
+  structure;
+* temporal ``mixture_scales`` pressure concerns temporal spectral width or
+  coherence; and
+* wavelength ``mixture_scales`` pressure concerns wavelength-coordinate
+  spectral width.
 
 Failure and fallback diagnostics
 --------------------------------
@@ -480,10 +503,10 @@ Spurious or aliased periods
    observing baseline.  Compare with sampling metrics and independent period
    diagnostics.
 
-Boundary-limited ARD scales
-   One or more entries appear in ``constrained_sm_ard_components``.  Treat the
-   corresponding scale as constraint-sensitive rather than as a well-measured
-   interior optimum.
+Boundary-limited ARD parameters
+   One or more entries appear in ``sm_ard_boundary_hits``.  Treat each named
+   parameter, component, dimension, and bound side as constraint-sensitive
+   rather than as a well-measured interior optimum.
 
 All advisory configs failed
    ``fallback_report.available`` is true.  No fit-based ranking is available,

@@ -28,8 +28,8 @@ The batch helper writes three levels of output:
 * one row per distinct model/kernel config aggregated across the batch.
 
 It also records data-hygiene metadata, per-source output directories, failure
-artifacts, spectral-mixture ARD scale-ceiling diagnostics, and fallback failure
-summaries.  These fields are intended to make a large real-source batch
+artifacts, spectral-mixture ARD registered-boundary diagnostics, and
+fallback failure summaries.  These fields make a large real-source batch
 auditable without reconstructing state from console logs.
 
 
@@ -446,13 +446,22 @@ Important columns include:
        reason for failed configs.
    * - ``is_consensus_failure`` / ``is_numerical_failure`` / ``is_input_validation_failure``
      - Boolean triage flags for common failure modes.
-   * - ``n_constrained_sm_ard_components``
-     - Number of full-``2D`` spectral-mixture ARD scale components near the scale ceiling.
-   * - ``n_constrained_sm_time_components`` / ``n_constrained_sm_wavelength_components``
-     - Whether constrained ARD scales are associated with time-frequency,
-       wavelength-frequency, or both.
-   * - ``constrained_sm_ard_components``
-     - Machine-readable details for constrained ARD scale components.
+   * - ``n_sm_ard_boundary_hits`` / ``sm_ard_boundary_pressure_scope``
+     - Number and temporal/wavelength scope of registered lower- or upper-bound
+       pressure across spectral-mixture means and scales.
+   * - ``n_sm_temporal_boundary_components`` /
+       ``n_sm_wavelength_boundary_components``
+     - Unique fitted components with boundary pressure in each ARD dimension.
+   * - ``sm_ard_boundary_hits``
+     - Parameter-, component-, dimension-, side-, and distance-specific details.
+   * - ``sm_num_mixtures_is_one`` / ``sm_num_mixtures_fixed_at_one``
+     - Distinguishes the fitted one-component shape from an explicit
+       ``num_mixtures=1`` request.
+   * - ``n_constrained_sm_ard_components`` /
+       ``n_constrained_sm_time_components`` /
+       ``n_constrained_sm_wavelength_components`` /
+       ``constrained_sm_ard_components``
+     - Compatibility aliases for upper-bound ``mixture_scales`` hits only.
 
 Aggregate model/kernel-config CSV
 ---------------------------------
@@ -589,16 +598,23 @@ Triage failures in this order
    Aggregate rankings are advisory and can be distorted by systematic failure
    patterns.
 
-Spectral-mixture ARD scale diagnostics
---------------------------------------
+Spectral-mixture ARD boundary diagnostics
+-----------------------------------------
 
 For advisory runs that evaluate the full ``2D`` spectral-mixture baseline, the
-long-form model/kernel-config CSV flags fitted spectral-mixture ARD scales near
-the consensus scale ceiling.  The most useful summary fields are
-``n_constrained_sm_ard_components``, ``n_constrained_sm_time_components``, and
-``n_constrained_sm_wavelength_components``; the detailed component list is in
-``constrained_sm_ard_components``.  These fields help identify whether the
-fit is saturating in time-frequency, wavelength-frequency, or both.
+long-form model/kernel-config CSV reports registered-bound pressure for both
+``mixture_means`` and ``mixture_scales``.  Use
+``n_sm_ard_boundary_hits``, ``sm_ard_boundary_pressure_scope``,
+``n_sm_temporal_boundary_components``, and
+``n_sm_wavelength_boundary_components`` for compact triage.  The parameter,
+dimension, side, distance-to-bound, and coordinate details are retained in
+``sm_ard_boundary_hits`` and the ``sm_ard_boundary_*`` count mappings.
+
+``sm_num_mixtures_is_one`` records the fitted component count, while
+``sm_num_mixtures_fixed_at_one`` identifies an explicit ``num_mixtures=1``
+request.  The older ``constrained_sm_ard_*`` columns remain compatibility
+aliases for upper-bound ``mixture_scales`` hits only.
+
 Advisory failure fallback reporting
 -----------------------------------
 

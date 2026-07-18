@@ -42,7 +42,7 @@ Validation and model-selection boundaries
 Wavelength-derived fitting constraints and validation
 -----------------------------------------------------
 
-**TBD[wavelength-derived-constraints]**
+Completed wavelength-derived constraint tranche (PR121--PR125)
     The shared wavelength-sampling context is implemented, and its data-derived
     covariance lengthscale is now transformed into the GP input coordinate and
     applied to the separable wavelength kernels in
@@ -66,11 +66,13 @@ Wavelength-derived fitting constraints and validation
     independently wavelength-derived values and bounds.  Source-type period
     limits alter only index 0, and raw/model-coordinate provenance is retained.
 
-    The remaining work in this tranche is explicit component/dimension
-    saturation and distance-to-bound reporting.  It must distinguish a
-    scientifically long wavelength correlation scale from optimizer pressure,
-    identify the affected component and ARD dimension, and record whether the
-    spectral-mixture component count was fixed at one.
+    Component- and dimension-specific fitted diagnostics are now implemented
+    for both ``mixture_means`` and ``mixture_scales``.  They report lower and
+    upper boundary pressure, distance to each bound, raw/model-coordinate
+    values, affected component and ARD dimension, and whether
+    ``num_mixtures=1`` was explicitly fixed or merely obtained in the fitted
+    kernel.  These records remain descriptive and do not convert constraint
+    pressure into model-selection evidence.
 
 **TBD[wavelength-constraint-validation]**
     Validate the wavelength-derived initialization and constraint tranche with

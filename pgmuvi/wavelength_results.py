@@ -563,6 +563,7 @@ class WavelengthModelAttemptResult:
                 "fit_failure_diagnostics",
                 "structured_failure_diagnostics",
                 "consensus_diagnostics",
+                "sm_ard_diagnostics",
                 "sm_ard_scale_diagnostics",
             )
             if key in payload

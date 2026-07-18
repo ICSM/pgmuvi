@@ -24,12 +24,12 @@ class TestWavelengthConclusionDocumentation(unittest.TestCase):
             (ROOT / "docs/source/future_work.rst").read_text().split()
         )
         advisory = (ROOT / "docs/source/howto/wavelength_advisory.rst").read_text()
-        for marker in (
-            "TBD[wavelength-derived-constraints]",
-            "TBD[wavelength-constraint-validation]",
-        ):
-            self.assertIn(marker, future_work)
-            self.assertIn(marker, advisory)
+        self.assertNotIn("TBD[wavelength-derived-constraints]", future_work)
+        self.assertNotIn("TBD[wavelength-derived-constraints]", advisory)
+        self.assertIn("Completed wavelength-derived constraint tranche", future_work)
+        self.assertIn("complete through PR125", advisory)
+        self.assertIn("TBD[wavelength-constraint-validation]", future_work)
+        self.assertIn("TBD[wavelength-constraint-validation]", advisory)
         self.assertIn("2DWavelengthDependent", future_work)
         self.assertIn("2DDustMean", future_work)
         self.assertIn("2DPowerLawMean", future_work)

@@ -23,6 +23,9 @@ except ImportError:  # pragma: no cover - pgmuvi normally depends on torch
 
 from pgmuvi.preprocess.quality import assess_sampling_quality, robust_scale
 from pgmuvi.preprocess.variability import is_variable
+from pgmuvi.spectral_mixture_ard_diagnostics import (
+    diagnose_spectral_mixture_ard,
+)
 from pgmuvi.wavelength_conclusions import (
     synthesize_wavelength_advisory_conclusions,
 )
@@ -4230,78 +4233,98 @@ def _piwd_extract_sm_ard_scale_diagnostics(
     diagnostics: dict[str, Any] | None = None,
     *,
     ceiling_tolerance_fraction: float = 0.05,
+    requested_num_mixtures: int | None = None,
+    full_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Summarize fitted SM ARD scales near the consensus scale ceiling.
+    """Return backward-compatible scale-ceiling fields plus full ARD details.
 
-    The primary use case is the full 2D spectral-mixture baseline in the
-    wavelength advisory workflow.  When a consensus fit applies a single SM
-    scale interval to an ARD kernel, this helper records which component and
-    which ARD dimension are near the upper bound.  Dimension 0 is interpreted
-    as the time-frequency axis and dimension 1 as the wavelength-frequency
-    axis for 2D kernels.
+    PR125 diagnoses registered lower and upper bounds independently for
+    ``mixture_means`` and ``mixture_scales``.  The historical fields returned
+    here remain aliases for *upper-bound hits in mixture_scales* so existing
+    readers keep their original meaning.
     """
-    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
-    scales = _piwd_find_spectral_mixture_scale_array(fitted_lightcurve)
-    if scales is None:
-        return {
-            "available": False,
-            "reason": "fitted model does not expose spectral-mixture ARD scales",
-            "fitted_sm_ard_scales": None,
-            "sm_ard_dimension_names": [],
-            "sm_scale_constraint_lower": None,
-            "sm_scale_constraint_upper": None,
-            "sm_scale_ceiling_tolerance_fraction": float(ceiling_tolerance_fraction),
-            "constrained_sm_ard_components": [],
-            "n_constrained_sm_ard_components": 0,
-            "constrained_sm_ard_dimension_counts": {},
-        }
-
-    lower, upper = _piwd_consensus_scale_upper_from_diagnostics(diagnostics)
-    dim_names = _piwd_sm_ard_dimension_names(scales.shape[1])
-    tolerance = float(ceiling_tolerance_fraction)
-    if not (np.isfinite(tolerance) and 0.0 <= tolerance < 1.0):
-        tolerance = 0.05
+    full = full_diagnostics
+    if not isinstance(full, dict):
+        full = diagnose_spectral_mixture_ard(
+            fitted_lightcurve,
+            boundary_tolerance_fraction=ceiling_tolerance_fraction,
+            requested_num_mixtures=requested_num_mixtures,
+        )
+    scale_record = (full.get("parameters") or {}).get("mixture_scales") or {}
+    values = scale_record.get("model_coordinate_values")
+    lower_bounds = scale_record.get("model_coordinate_lower_bounds")
+    upper_bounds = scale_record.get("model_coordinate_upper_bounds")
+    dim_names = [
+        "time_frequency" if name == "temporal_frequency" else name
+        for name in (full.get("coordinate_order") or [])
+    ]
 
     constrained = []
-    counts = {name: 0 for name in dim_names}
-    if upper is not None:
-        threshold = (1.0 - tolerance) * upper
-        for component_index in range(scales.shape[0]):
-            for dimension_index in range(scales.shape[1]):
-                scale = float(scales[component_index, dimension_index])
-                if not np.isfinite(scale):
-                    continue
-                if scale >= threshold:
-                    dim_name = dim_names[dimension_index]
-                    counts[dim_name] += 1
-                    constrained.append(
-                        {
-                            "component_index": int(component_index),
-                            "dimension_index": int(dimension_index),
-                            "dimension_name": dim_name,
-                            "scale": scale,
-                            "constraint_upper": float(upper),
-                            "fraction_of_upper": float(scale / upper),
-                            "ceiling_tolerance_fraction": tolerance,
-                        }
-                    )
+    counts: dict[str, int] = {}
+    for hit in scale_record.get("boundary_hits") or []:
+        if hit.get("bound_side") != "upper":
+            continue
+        dimension_name = str(hit.get("dimension_name"))
+        if dimension_name == "temporal_frequency":
+            dimension_name = "time_frequency"
+        counts[dimension_name] = counts.get(dimension_name, 0) + 1
+        value = hit.get("model_coordinate_value")
+        upper = hit.get("model_coordinate_upper_bound")
+        fraction_of_upper = None
+        try:
+            if upper is not None and float(upper) != 0:
+                fraction_of_upper = float(value) / float(upper)
+        except (TypeError, ValueError):
+            fraction_of_upper = None
+        constrained.append(
+            {
+                "component_index": hit.get("component_index"),
+                "dimension_index": hit.get("dimension_index"),
+                "dimension_name": dimension_name,
+                "scale": value,
+                "constraint_upper": upper,
+                "fraction_of_upper": fraction_of_upper,
+                "ceiling_tolerance_fraction": float(
+                    ceiling_tolerance_fraction
+                ),
+                "at_upper": bool(hit.get("at_bound")),
+                "distance_to_upper": hit.get("distance_to_upper"),
+                "normalized_distance_to_upper": hit.get(
+                    "normalized_distance_to_upper"
+                ),
+            }
+        )
 
-    counts = {key: value for key, value in counts.items() if value}
+    def _collapse_uniform(bounds):
+        try:
+            array = np.asarray(bounds, dtype=float)
+        except (TypeError, ValueError):
+            return bounds
+        finite = array[np.isfinite(array)]
+        if finite.size and np.allclose(finite, finite[0]):
+            return float(finite[0])
+        return bounds
+
+    reason = full.get("reason")
+    if full.get("available") and not scale_record.get("constraint_registered"):
+        reason = "no registered spectral-mixture scale constraint was found"
+
     return _clean_scalar_dict(
         {
-            "available": True,
-            "reason": None if upper is not None else "no consensus SM scale upper bound was recorded",
-            "fitted_sm_ard_scales": scales.tolist(),
+            "available": bool(full.get("available") and scale_record.get("available")),
+            "reason": reason,
+            "fitted_sm_ard_scales": values,
             "sm_ard_dimension_names": dim_names,
-            "sm_scale_constraint_lower": lower,
-            "sm_scale_constraint_upper": upper,
-            "sm_scale_ceiling_tolerance_fraction": tolerance,
+            "sm_scale_constraint_lower": _collapse_uniform(lower_bounds),
+            "sm_scale_constraint_upper": _collapse_uniform(upper_bounds),
+            "sm_scale_ceiling_tolerance_fraction": float(
+                ceiling_tolerance_fraction
+            ),
             "constrained_sm_ard_components": constrained,
             "n_constrained_sm_ard_components": len(constrained),
             "constrained_sm_ard_dimension_counts": counts,
         }
     )
-
 
 def _piwd_classify_model_kernel_config_failure(
     exception: BaseException | None,
@@ -4555,12 +4578,31 @@ def _piwd_extract_fit_outcome(
             "model/kernel config fit did not complete"
         )
     )
+    fit_kwargs = dict(candidate.get("fit_kwargs") or {})
+    requested_num_mixtures = fit_kwargs.get("num_mixtures")
+    try:
+        requested_num_mixtures = (
+            int(requested_num_mixtures)
+            if requested_num_mixtures is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        requested_num_mixtures = None
+    sm_ard_full = diagnose_spectral_mixture_ard(
+        fitted_lightcurve,
+        requested_num_mixtures=requested_num_mixtures,
+    )
     sm_ard_diagnostics = _piwd_extract_sm_ard_scale_diagnostics(
         fitted_lightcurve,
         diagnostics,
+        requested_num_mixtures=requested_num_mixtures,
+        full_diagnostics=sm_ard_full,
     )
     sm_ard_counts = (
         sm_ard_diagnostics.get("constrained_sm_ard_dimension_counts") or {}
+    )
+    sm_boundary_component_counts = (
+        sm_ard_full.get("boundary_component_counts_by_dimension") or {}
     )
     failure_info = _piwd_classify_model_kernel_config_failure(
         exception, fitted_lightcurve=fitted_lightcurve
@@ -4568,7 +4610,6 @@ def _piwd_extract_fit_outcome(
     failure_record = _piwd_failure_record(exception, failure_info)
     warning_records = _piwd_warning_records(captured_warnings)
     recovery = _piwd_training_recovery_metadata(fitted_lightcurve, fit_result)
-    fit_kwargs = dict(candidate.get("fit_kwargs") or {})
     attempt_status = derive_wavelength_attempt_status(
         legacy_status=status,
         training_iter=fit_kwargs.get("training_iter"),
@@ -4664,6 +4705,43 @@ def _piwd_extract_fit_outcome(
         **recovery,
         "warning_count": len(warning_records),
         "warning_records": warning_records,
+        "sm_ard_diagnostics": sm_ard_full,
+        "sm_ard_boundary_hits": sm_ard_full.get("boundary_hits"),
+        "n_sm_ard_boundary_hits": sm_ard_full.get("n_boundary_hits"),
+        "sm_ard_boundary_pressure_scope": sm_ard_full.get(
+            "boundary_pressure_scope"
+        ),
+        "sm_ard_boundary_hit_counts_by_parameter": sm_ard_full.get(
+            "boundary_hit_counts_by_parameter"
+        ),
+        "sm_ard_boundary_hit_counts_by_dimension": sm_ard_full.get(
+            "boundary_hit_counts_by_dimension"
+        ),
+        "sm_ard_boundary_component_counts_by_dimension": (
+            sm_boundary_component_counts
+        ),
+        "sm_ard_boundary_hit_counts_by_side": sm_ard_full.get(
+            "boundary_hit_counts_by_side"
+        ),
+        "sm_num_mixtures": sm_ard_full.get("num_mixtures"),
+        "sm_requested_num_mixtures": sm_ard_full.get(
+            "requested_num_mixtures"
+        ),
+        "sm_num_mixtures_is_one": sm_ard_full.get(
+            "num_mixtures_is_one"
+        ),
+        "sm_num_mixtures_fixed_at_one": sm_ard_full.get(
+            "num_mixtures_fixed_at_one"
+        ),
+        "sm_num_mixtures_request_source": sm_ard_full.get(
+            "num_mixtures_request_source"
+        ),
+        "n_sm_temporal_boundary_components": sm_boundary_component_counts.get(
+            "temporal_frequency", 0
+        ),
+        "n_sm_wavelength_boundary_components": (
+            sm_boundary_component_counts.get("wavelength_frequency", 0)
+        ),
         "sm_ard_scale_diagnostics": sm_ard_diagnostics,
         "constrained_sm_ard_components": sm_ard_diagnostics.get(
             "constrained_sm_ard_components"
@@ -5679,7 +5757,7 @@ def _piwd_build_advisory_workflow_fallback_summary(
             "Inspect exception_type, exception_message, and failure_stage for each model/kernel config.",
             "Use the period-independent wavelength diagnostics and parameter-plan metadata as the fallback interpretation; no model is selected automatically.",
             "If failures are consensus dominated, inspect LS/ACF/consensus period diagnostics and consider rerunning with safer consensus settings or a smaller model/kernel-config set.",
-            "If failures are numerical, inspect constraints, learned noise, time-centering, and SM ARD scale-ceiling diagnostics before trusting fit-quality comparisons.",
+            "If failures are numerical, inspect constraints, learned noise, time-centering, and SM ARD registered-boundary diagnostics before trusting fit-quality comparisons.",
         ]
     elif ranking_status == "single_valid_candidate":
         reason = "only_one_model_kernel_config_has_fit_quality"
@@ -6709,6 +6787,42 @@ def _piwd_batch_extract_model_kernel_config_rows(*, source_row, workflow):
             "training_measurement_uncertainty_added_separately": item.get(
                 "training_measurement_uncertainty_added_separately"
             ),
+            "n_sm_ard_boundary_hits": item.get("n_sm_ard_boundary_hits"),
+            "sm_ard_boundary_pressure_scope": item.get(
+                "sm_ard_boundary_pressure_scope"
+            ),
+            "n_sm_temporal_boundary_components": item.get(
+                "n_sm_temporal_boundary_components"
+            ),
+            "n_sm_wavelength_boundary_components": item.get(
+                "n_sm_wavelength_boundary_components"
+            ),
+            "sm_ard_boundary_hit_counts_by_parameter": item.get(
+                "sm_ard_boundary_hit_counts_by_parameter"
+            ),
+            "sm_ard_boundary_hit_counts_by_dimension": item.get(
+                "sm_ard_boundary_hit_counts_by_dimension"
+            ),
+            "sm_ard_boundary_component_counts_by_dimension": item.get(
+                "sm_ard_boundary_component_counts_by_dimension"
+            ),
+            "sm_ard_boundary_hit_counts_by_side": item.get(
+                "sm_ard_boundary_hit_counts_by_side"
+            ),
+            "sm_ard_boundary_hits": item.get("sm_ard_boundary_hits"),
+            "sm_num_mixtures": item.get("sm_num_mixtures"),
+            "sm_requested_num_mixtures": item.get(
+                "sm_requested_num_mixtures"
+            ),
+            "sm_num_mixtures_is_one": item.get(
+                "sm_num_mixtures_is_one"
+            ),
+            "sm_num_mixtures_fixed_at_one": item.get(
+                "sm_num_mixtures_fixed_at_one"
+            ),
+            "sm_num_mixtures_request_source": item.get(
+                "sm_num_mixtures_request_source"
+            ),
             "n_constrained_sm_ard_components": item.get(
                 "n_constrained_sm_ard_components"
             ),
@@ -6793,6 +6907,20 @@ def _piwd_batch_model_kernel_config_csv_fields():
         "training_predictive_variance_kind",
         "training_standardization_sigma_source",
         "training_measurement_uncertainty_added_separately",
+        "n_sm_ard_boundary_hits",
+        "sm_ard_boundary_pressure_scope",
+        "n_sm_temporal_boundary_components",
+        "n_sm_wavelength_boundary_components",
+        "sm_ard_boundary_hit_counts_by_parameter",
+        "sm_ard_boundary_hit_counts_by_dimension",
+        "sm_ard_boundary_component_counts_by_dimension",
+        "sm_ard_boundary_hit_counts_by_side",
+        "sm_ard_boundary_hits",
+        "sm_num_mixtures",
+        "sm_requested_num_mixtures",
+        "sm_num_mixtures_is_one",
+        "sm_num_mixtures_fixed_at_one",
+        "sm_num_mixtures_request_source",
         "n_constrained_sm_ard_components",
         "n_constrained_sm_time_components",
         "n_constrained_sm_wavelength_components",

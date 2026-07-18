@@ -20,6 +20,7 @@ __all__ = [
     "lightcurve",
     "priors",
     "spectral_mixture_ard",
+    "spectral_mixture_ard_diagnostics",
     "synthetic",
     "trainers",
     "wavelength_conclusions",

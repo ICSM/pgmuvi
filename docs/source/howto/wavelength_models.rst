@@ -322,10 +322,10 @@ Interpreting model-specific diagnostics
 ---------------------------------------
 
 For ``2D``
-   Inspect spectral-mixture ARD scale-ceiling diagnostics separately for the
-   ``time_frequency`` and ``wavelength_frequency`` dimensions.  Saturation is a
-   warning about constraint pressure or identifiability, not proof of a useful
-   wavelength dependence.
+   Inspect spectral-mixture ARD registered-boundary diagnostics separately
+   for the ``temporal_frequency`` and ``wavelength_frequency`` dimensions.
+   Saturation is a warning about constraint pressure or identifiability, not
+   proof of a useful wavelength dependence.
 
 For separable models
    Inspect the time-kernel parameters, wavelength-kernel length scale, mean

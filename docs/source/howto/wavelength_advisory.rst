@@ -75,8 +75,8 @@ The workflow answers questions such as:
   wavelength?
 * Which LPV-relevant model families should be evaluated explicitly?
 * Which model/kernel configurations completed successfully?
-* Did the full ``2D`` spectral-mixture baseline push ARD scales toward the
-  consensus scale ceiling in time-frequency, wavelength-frequency, or both?
+* Did the full ``2D`` spectral-mixture baseline push ARD means or scales
+  toward registered bounds in the temporal, wavelength, or both dimensions?
 * If advisory fits failed, were the failures mostly consensus, numerical, or
   input-validation failures?
 * What should be inspected next before making a scientific choice?
@@ -598,8 +598,8 @@ conclusion and ambiguity summaries, while the existing legacy ranking and
 fallback fields remain unchanged.
 
 
-Remaining wavelength-constraint tranche
----------------------------------------
+Completed wavelength-constraint implementation
+----------------------------------------------
 
 The conclusion synthesis is separate from parameter fitting.  Subsequent
 packages now provide data-derived wavelength sampling summaries, separable
@@ -608,8 +608,10 @@ initialization with enforceable constraints for ``2DWavelengthDependent``,
 ``2DDustMean``, and ``2DPowerLawMean``.  Those fitting changes do not turn the
 conclusion records into automatic selection evidence.
 
-The remaining roadmap is tracked by ``TBD[wavelength-derived-constraints]`` and
+The diagnostic tranche is complete through PR125.
+Scientific recovery and robustness work remains under
 ``TBD[wavelength-constraint-validation]``.  Independent temporal and wavelength
-ARD bounds are now implemented for the full ``2D`` spectral-mixture baseline.
-The remaining work covers component/dimension saturation provenance, synthetic
-recovery, consensus compatibility, and real-LPV validation.
+ARD bounds and component/dimension boundary provenance are implemented for the
+full ``2D`` spectral-mixture baseline.  The remaining work is synthetic
+recovery, robustness across sampling and seeds, and representative real-LPV
+validation.
