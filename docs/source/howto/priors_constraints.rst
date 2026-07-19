@@ -150,6 +150,17 @@ individual constraints that are appropriate for your data span::
 
 See :mod:`pgmuvi.constraints` for the full API.
 
+Maintained wavelength-constraint tutorial
+-----------------------------------------
+
+The public :doc:`../notebooks/tutorial_wavelength_constraints` notebook shows
+how wavelength sampling produces raw and model-coordinate intervals, how mean
+and covariance constraints differ, how registration-before-value ordering is
+preserved, and how near-bound and at-bound diagnostics should be interpreted.
+Its quasi-periodic fitting example is the tested LPV default hypothesis rather
+than a universal requirement for every source.
+
+
 Common Pitfalls
 ----------------
 

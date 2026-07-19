@@ -25,7 +25,7 @@ class TestWavelengthRobustnessEmpiricalDocumentation(unittest.TestCase):
         self.assertIn("advisory evidence only", text)
         self.assertIn("validation_outputs/", text)
 
-    def test_notebook_todo_retains_calibration_context(self):
+    def test_completed_notebook_retains_calibration_context(self):
         notebook_status = (
             ROOT / "docs" / "source" / "notebook_status.rst"
         ).read_text(encoding="utf-8")
@@ -33,16 +33,17 @@ class TestWavelengthRobustnessEmpiricalDocumentation(unittest.TestCase):
             ROOT / "docs" / "source" / "future_work.rst"
         ).read_text(encoding="utf-8")
 
-        self.assertIn(
+        self.assertNotIn(
             "TBD[wavelength-constraint-notebook]",
             notebook_status,
         )
-        self.assertIn("canonical 20-seed", notebook_status)
-        self.assertIn(
+        self.assertIn("tutorial_wavelength_constraints.ipynb", notebook_status)
+        self.assertIn("PR133", notebook_status)
+        self.assertNotIn(
             "TBD[wavelength-constraint-notebook]",
             future_work,
         )
-        self.assertIn("canonical 20-seed", future_work)
+        self.assertIn("tutorial_wavelength_constraints", future_work)
 
     def test_generated_validation_outputs_are_ignored(self):
         patterns = (

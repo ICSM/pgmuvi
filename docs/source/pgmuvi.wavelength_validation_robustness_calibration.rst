@@ -43,10 +43,11 @@ failure or as evidence for achromatic variability.
 These results are advisory evidence only.  They do not perform automatic
 model selection.  Generated run records and reports remain local under
 ``validation_outputs/`` and are intentionally excluded from version
-control.  The maintained wavelength-constraint notebook remains the next
-documentation step and should explain these empirical boundaries alongside
-constraint provenance, initialization, fitted values, and distances from
-bounds.
+control.  The maintained
+:doc:`notebooks/tutorial_wavelength_constraints` notebook explains these
+empirical boundaries alongside constraint provenance, initialization, fitted
+values, and distances from bounds without depending on the generated output
+directory.
 
 .. automodule:: pgmuvi.wavelength_validation_robustness_calibration
    :members:

@@ -338,6 +338,17 @@ For every family
    numerical failure may reflect optimization or constraints; an input failure
    may indicate invalid fluxes, errors, wavelengths, or too few usable bands.
 
+Maintained constraint walkthrough
+----------------------------------
+
+Use :doc:`../notebooks/tutorial_wavelength_constraints` for an executable,
+deterministic walkthrough of wavelength evidence, coordinate transformations,
+mean and covariance constraints, independent joint-``2D`` ARD bounds, optional
+reduced fits, and the PR133 empirical robustness boundaries.  The walkthrough
+does not select a model and does not treat an upper-bound wavelength scale as
+achromatic evidence.
+
+
 Known limitations and future work
 ---------------------------------
 
