@@ -566,6 +566,41 @@ class TestSyntheticRecoveryRun(RecoveryCaseMixin, unittest.TestCase):
         self.assertEqual(run.status.execution_stage, ExecutionStage.OPTIMIZATION)
         self.assertEqual(run.failure.exception_type, "RuntimeError")
 
+    def test_fit_exception_preserves_structured_failure_diagnostics(self):
+        case = self.make_case()
+
+        class ConsensusLikeError(RuntimeError):
+            def __init__(self):
+                super().__init__("consensus rejected")
+                self.failure_diagnostics = {
+                    "reason": "insufficient_consensus_inliers",
+                    "accepted_bands": ("J",),
+                    "nonfinite_value": float("nan"),
+                }
+
+        def fail(*_args):
+            raise ConsensusLikeError()
+
+        run = run_synthetic_wavelength_recovery(
+            case,
+            "2DSeparable",
+            lightcurve_factory=lambda _: object(),
+            fit_runner=fail,
+        )
+
+        diagnostics = run.failure.diagnostics
+        structured = diagnostics["structured_failure_diagnostics"]
+
+        self.assertEqual(run.failure.exception_type, "ConsensusLikeError")
+        self.assertIn("RuntimeError", diagnostics["exception_mro"])
+        self.assertEqual(
+            structured["reason"],
+            "insufficient_consensus_inliers",
+        )
+        self.assertEqual(structured["accepted_bands"], ["J"])
+        self.assertIsNone(structured["nonfinite_value"])
+        json.dumps(run.to_dict(), allow_nan=False)
+
     def test_stop_on_error_reraises_fit_exception(self):
         case = self.make_case()
 

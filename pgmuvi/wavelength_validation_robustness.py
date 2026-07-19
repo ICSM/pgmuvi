@@ -789,6 +789,32 @@ def _expectation_applies(
     return str(model) in {str(item) for item in models}
 
 
+def _exception_type_matches_expectation(
+    run: WavelengthValidationRun,
+    acceptable_exception_types: Sequence[str],
+) -> bool:
+    """Match serialized exception names with captured subclass provenance."""
+    acceptable = {str(item) for item in acceptable_exception_types}
+    if not acceptable:
+        return True
+    if run.failure is None:
+        return False
+    actual = str(run.failure.exception_type or "")
+    if actual in acceptable:
+        return True
+    diagnostics = run.failure.diagnostics
+    hierarchy = (
+        diagnostics.get("exception_mro")
+        if isinstance(diagnostics, Mapping)
+        else None
+    )
+    if not isinstance(hierarchy, Sequence) or isinstance(
+        hierarchy, (str, bytes, bytearray)
+    ):
+        return False
+    return any(str(item) in acceptable for item in hierarchy)
+
+
 def _evaluate_failure_expectation(
     case: SyntheticWavelengthValidationCase,
     run: WavelengthValidationRun,
@@ -872,9 +898,8 @@ def _evaluate_failure_expectation(
         "comparison_eligibility": (
             actual_eligibility is expectation.comparison_eligibility
         ),
-        "exception_type": (
-            not expectation.acceptable_exception_types
-            or actual_exception in expectation.acceptable_exception_types
+        "exception_type": _exception_type_matches_expectation(
+            run, expectation.acceptable_exception_types
         ),
     }
     matched = all(checks.values())
@@ -888,6 +913,12 @@ def _evaluate_failure_expectation(
         "actual_failure_code": actual_code,
         "actual_failure_stage": actual_stage.value,
         "actual_exception_type": actual_exception,
+        "actual_exception_mro": (
+            list(run.failure.diagnostics.get("exception_mro") or ())
+            if run.failure is not None
+            and isinstance(run.failure.diagnostics, Mapping)
+            else []
+        ),
     }
 
 

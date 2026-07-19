@@ -1296,6 +1296,19 @@ def _failure_record(
     stage: ExecutionStage,
     substage: str,
 ) -> WavelengthFailureRecord:
+    exception_type = exception.__class__
+    exception_mro = tuple(
+        item.__name__ for item in exception_type.__mro__
+    )
+    diagnostics = {
+        "exception_type": exception_type.__name__,
+        "exception_module": exception_type.__module__,
+        "exception_qualname": exception_type.__qualname__,
+        "exception_mro": list(exception_mro),
+    }
+    structured = getattr(exception, "failure_diagnostics", None)
+    if isinstance(structured, Mapping):
+        diagnostics["structured_failure_diagnostics"] = _json_safe(structured)
     return WavelengthFailureRecord(
         failure_code=(
             "synthetic_recovery_fit_failed"
@@ -1304,9 +1317,9 @@ def _failure_record(
         ),
         stage=stage,
         substage=substage,
-        exception_type=exception.__class__.__name__,
+        exception_type=exception_type.__name__,
         message=str(exception),
-        diagnostics={"exception_type": exception.__class__.__name__},
+        diagnostics=diagnostics,
         traceback_reference=None,
     )
 
