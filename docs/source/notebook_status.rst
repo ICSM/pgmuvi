@@ -81,6 +81,13 @@ workflow is implemented, tested, and has documented convergence and posterior-
 predictive diagnostics.  Do not restore the deleted notebook verbatim; it used
 stale installation, parameter-setting, likelihood, and plotting patterns.
 
+**TBD[wavelength-constraint-notebook]:** after the D2 multi-seed robustness and
+failure-boundary calibration is complete, add a maintained public notebook that
+shows how wavelength-kernel scales and bounds are derived, transformed, applied,
+and diagnosed.  It must distinguish covariance constraints from wavelength-
+dependent mean constraints and explain the tested sparse/noisy failure
+boundaries before it is added to the Tutorials toctree.
+
 Notebook maintenance rules
 --------------------------
 

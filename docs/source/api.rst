@@ -68,4 +68,5 @@ Data, diagnostics, and validation
    pgmuvi.wavelength_validation
    pgmuvi.wavelength_validation_synthetic
    pgmuvi.wavelength_validation_recovery
+   pgmuvi.wavelength_validation_robustness
    pgmuvi.upload_validation
