@@ -49,9 +49,11 @@ Aggregation boundary
 
 D2 aggregates report completion, recovery metrics, expected-failure matches,
 unexpected failures, and summaries by perturbation axis, severity, and model.
-The initial framework deliberately marks empirical failure boundaries as not yet
-calibrated.  The multi-seed validation tranche will establish those boundaries
-without weakening the frozen D1 recovery gates.
+The scenario layer deliberately leaves empirical boundary calibration to
+:mod:`pgmuvi.wavelength_validation_robustness_calibration`.  That module adds
+truth-matched reference populations, paired base seeds, multi-seed execution,
+constraint-boundary summaries, and advisory empirical classes without
+weakening or reusing the frozen D1 aggregate gates.
 
 Documentation notebook plan
 ---------------------------

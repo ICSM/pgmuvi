@@ -20,7 +20,8 @@ class TestSyntheticWavelengthRobustnessDocumentation(unittest.TestCase):
         normalized = " ".join(page_text.split())
         self.assertIn("does not reuse the D1 population gates", normalized)
         self.assertIn("expected failure remains a failed", normalized)
-        self.assertIn("empirical failure boundaries as not yet calibrated", normalized)
+        self.assertIn("wavelength_validation_robustness_calibration", normalized)
+        self.assertIn("truth-matched reference populations", normalized)
         self.assertIn("maintained Jupyter notebook", normalized)
         self.assertIn("do not rank models", normalized)
 
@@ -34,8 +35,8 @@ class TestSyntheticWavelengthRobustnessDocumentation(unittest.TestCase):
         )
         normalized = " ".join(future.split())
 
-        self.assertIn("core D2 robustness/failure-boundary", normalized)
-        self.assertIn("multi-seed D2 calibration", normalized)
+        self.assertIn("core D2 scenario/runner framework", normalized)
+        self.assertIn("resumable multi-seed execution", normalized)
         self.assertIn("wavelength-constraint Jupyter notebook", normalized)
 
     def test_notebook_status_tracks_constraint_walkthrough(self):
