@@ -89,7 +89,9 @@ irregular time grid spanning 3.2 periods.  This prevents finite-sampling phase
 differences from being misidentified as wavelength-dependent structure and
 provides enough within-cycle information for population-level wavelength-scale
 recovery.  Independent, 36-point, uneven, and longer-but-sparser band sampling
-are reserved for the D2 robustness matrix.
+are implemented as controlled scenarios in
+:mod:`pgmuvi.wavelength_validation_robustness`; D2 aggregates do not reuse the
+frozen D1 gates.
 
 The maintained LPV defaults are:
 

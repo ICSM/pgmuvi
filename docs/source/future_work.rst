@@ -75,11 +75,15 @@ Completed wavelength-derived constraint tranche (PR121--PR125)
     pressure into model-selection evidence.
 
 **TBD[wavelength-constraint-validation]**
-    Validate the wavelength-derived initialization and constraint tranche with
-    synthetic recovery, sparse and uneven band coverage, missing bands, large
-    wavelength gaps, weak and strong wavelength dependence, supported
-    non-monotonic cases, seed stability, constraint-ceiling diagnostics,
-    consensus periodic or quasi-periodic time kernels, and real LPV sources.
+    D1 nominal synthetic recovery and the core D2 robustness/failure-boundary
+    scenario, runner, and aggregation framework are implemented.  Complete the
+    multi-seed D2 calibration for sparse and uneven band coverage, missing
+    bands, large wavelength gaps, weak and strong wavelength dependence,
+    supported non-monotonic cases, seed stability, constraint-ceiling
+    diagnostics, and consensus quasi-periodic time kernels.  Then add the
+    maintained wavelength-constraint Jupyter notebook covering derivation,
+    application, diagnostics, mean-versus-covariance constraints, and tested
+    failure boundaries before proceeding to representative real LPV sources.
     Successful optimization alone is not sufficient validation.
 
 Wavelength-model extensions
@@ -105,6 +109,14 @@ Wavelength-model extensions
 
 Documentation tutorial extensions
 ---------------------------------
+
+**TBD[wavelength-constraint-notebook]**
+    Add a maintained Jupyter notebook after the D2 multi-seed robustness
+    calibration is complete.  The notebook must demonstrate wavelength-scale
+    derivation, coordinate transformation, constraint application, fitted
+    boundary diagnostics, the distinction between wavelength-dependent mean
+    and covariance constraints, and the empirically tested D2 failure
+    boundaries.
 
 **TBD[batch-notebook]**
     Add a maintained notebook for the batch wavelength-advisory workflow.

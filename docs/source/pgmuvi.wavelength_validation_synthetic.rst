@@ -31,5 +31,7 @@ Canonical D1 cases use 72 observations per band on a shared reproducible
 irregular time grid spanning 3.2 generating periods.  The denser nominal design
 is required because six-band wavelength-lengthscale recovery is driven more by
 within-cycle sampling density than by extending a sparse baseline.  Independent,
-36-point, uneven, and longer-but-sparser designs belong to the later D2
-robustness matrix.
+36-point, uneven, and longer-but-sparser designs are constructed by the D2
+robustness matrix framework in
+:mod:`pgmuvi.wavelength_validation_robustness`; their empirical multi-seed
+boundaries remain a separate validation run.
