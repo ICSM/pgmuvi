@@ -1,6 +1,53 @@
 Synthetic wavelength robustness calibration
 ===========================================
 
+Twenty-seed empirical calibration
+---------------------------------
+
+PR133 executed the canonical D2 robustness matrix for base seeds 0 through 19:
+420 canonical runs spanning seven truth-matched references, thirteen
+scientifically valid perturbations, and one explicit invalid-sampling
+scenario.  The run completed with 393 completed fits and 27 recorded
+failures.
+
+Twenty failures came from
+``d2-insufficient-per-band-sampling``.  Every one matched the declared
+expected-failure contract.  The remaining seven failures were structured
+consensus-stage rejections rather than optimizer crashes: six occurred for
+base seed 7 and one for base seed 10.  Their preserved diagnostics report
+either ``insufficient_consensus_inliers`` or ``no_accepted_bands``.
+
+The empirical advisory classifications were:
+
+* seven reference populations;
+* ten robust perturbations;
+* one degraded perturbation, ``d2-large-wavelength-gap``;
+* two failure boundaries, ``d2-uneven-band-counts`` and
+  ``d2-longer-sparse-baseline``; and
+* one reproducible expected-failure boundary,
+  ``d2-insufficient-per-band-sampling``.
+
+The longer sparse baseline is primarily a period-recovery boundary: only
+4 of 20 runs passed the configured period criterion.  Uneven per-band
+counts are primarily a wavelength-lengthscale recovery boundary: only 8
+of 19 completed runs passed that criterion.  A large wavelength gap is
+measurably degraded but remains below the configured failure-boundary
+threshold.
+
+For the joint ``2D`` spectral-mixture reference and sparse perturbation,
+both temporal and wavelength ARD parameters were near their configured
+bounds in every run while recovery remained robust.  Boundary pressure is
+therefore reported separately and must not be interpreted as recovery
+failure or as evidence for achromatic variability.
+
+These results are advisory evidence only.  They do not perform automatic
+model selection.  Generated run records and reports remain local under
+``validation_outputs/`` and are intentionally excluded from version
+control.  The maintained wavelength-constraint notebook remains the next
+documentation step and should explain these empirical boundaries alongside
+constraint provenance, initialization, fitted values, and distances from
+bounds.
+
 .. automodule:: pgmuvi.wavelength_validation_robustness_calibration
    :members:
    :undoc-members:

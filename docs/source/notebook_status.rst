@@ -88,6 +88,13 @@ and diagnosed.  It must distinguish covariance constraints from wavelength-
 dependent mean constraints and explain the tested sparse/noisy failure
 boundaries before it is added to the Tutorials toctree.
 
+**D2 calibration prerequisite completed:** the canonical 20-seed,
+420-run robustness calibration is now recorded in
+:mod:`pgmuvi.wavelength_validation_robustness_calibration`.  The notebook
+itself remains outstanding and should use those empirical robust,
+degraded, failure-boundary, and expected-failure-boundary results without
+turning them into automatic model-selection rules.
+
 Notebook maintenance rules
 --------------------------
 

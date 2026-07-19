@@ -145,3 +145,6 @@ debug*.txt
 *.orig
 *.rej
 pgmuvi_current*.zip
+
+# Local synthetic-validation and calibration outputs
+validation_outputs/

@@ -254,6 +254,60 @@ class TestRobustnessRun(RobustnessCaseMixin, unittest.TestCase):
         self.assertTrue(evaluation["matched"])
         self.assertTrue(metric.passed)
 
+    def test_runtime_subclass_matches_expected_base_exception(self):
+        specification = next(
+            item
+            for item in canonical_synthetic_wavelength_robustness_specifications()
+            if item.expected_failure is not None
+        )
+        case = make_synthetic_wavelength_robustness_case(specification, seed=5)
+
+        class SpecializedRuntimeError(RuntimeError):
+            pass
+
+        def fail(_lightcurve, _fit_kwargs, _case):
+            raise SpecializedRuntimeError("specialized consensus failure")
+
+        run = run_synthetic_wavelength_robustness(
+            case,
+            lightcurve_factory=lambda _: object(),
+            fit_runner=fail,
+        )
+        evaluation = run.extra_fields["expected_failure_evaluation"]
+
+        self.assertTrue(evaluation["matched"])
+        self.assertTrue(evaluation["checks"]["exception_type"])
+        self.assertEqual(
+            evaluation["actual_exception_type"], "SpecializedRuntimeError"
+        )
+        self.assertIn("RuntimeError", evaluation["actual_exception_mro"])
+        self.assertEqual(
+            run.failure.diagnostics["exception_mro"][:2],
+            ["SpecializedRuntimeError", "RuntimeError"],
+        )
+
+    def test_unrelated_exception_does_not_match_expected_runtime_error(self):
+        specification = next(
+            item
+            for item in canonical_synthetic_wavelength_robustness_specifications()
+            if item.expected_failure is not None
+        )
+        case = make_synthetic_wavelength_robustness_case(specification, seed=5)
+
+        def fail(_lightcurve, _fit_kwargs, _case):
+            raise KeyError("unrelated failure")
+
+        run = run_synthetic_wavelength_robustness(
+            case,
+            lightcurve_factory=lambda _: object(),
+            fit_runner=fail,
+        )
+        evaluation = run.extra_fields["expected_failure_evaluation"]
+
+        self.assertFalse(evaluation["matched"])
+        self.assertFalse(evaluation["checks"]["exception_type"])
+        self.assertNotIn("RuntimeError", evaluation["actual_exception_mro"])
+
     def test_mismatched_failure_stage_is_preserved(self):
         specification = next(
             item

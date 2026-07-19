@@ -119,6 +119,12 @@ Documentation tutorial extensions
     and covariance constraints, and the empirically tested D2 failure
     boundaries.
 
+**D2 evidence available:** a canonical 20-seed, 420-run robustness
+calibration has now established the empirical cases that the notebook must
+explain, including uneven-band-count and longer-sparse-baseline failure
+boundaries, large-wavelength-gap degradation, reproducible invalid-sampling
+failure, and joint-``2D`` ARD boundary pressure.
+
 **TBD[batch-notebook]**
     Add a maintained notebook for the batch wavelength-advisory workflow.
     The current command-line walkthrough and deterministic preparation script
