@@ -425,8 +425,14 @@ def _base_configuration(**updates: Any) -> dict[str, Any]:
 
 def canonical_synthetic_wavelength_robustness_specifications(
 ) -> tuple[SyntheticWavelengthRobustnessSpecification, ...]:
-    """Return the canonical controlled D2 perturbation specifications."""
-    reference_id = "d2-reference-separable-moderate"
+    """Return canonical D2 perturbations with truth-matched references."""
+    separable_reference = "d2-reference-separable-moderate"
+    quadratic_reference = "d2-reference-wavelength-quadratic-moderate"
+    turning_reference = "d2-reference-wavelength-quadratic-strong-turning"
+    dust_strong_reference = "d2-reference-dust-strong"
+    dust_moderate_reference = "d2-reference-dust-moderate"
+    power_law_reference = "d2-reference-power-law-moderate"
+    joint_reference = "d2-reference-joint-sm-ard-moderate"
     insufficient_sampling = WavelengthValidationFailureExpectation(
         failure_code="synthetic_recovery_fit_failed",
         stage=ExecutionStage.OPTIMIZATION,
@@ -448,11 +454,87 @@ def canonical_synthetic_wavelength_robustness_specifications(
     )
     definitions = (
         (
-            reference_id,
+            separable_reference,
             SyntheticWavelengthRobustnessAxis.REFERENCE,
             SyntheticWavelengthRobustnessSeverity.REFERENCE,
             "Dense shared-grid separable reference for paired D2 comparisons.",
             _base_configuration(),
+            None,
+            None,
+        ),
+        (
+            quadratic_reference,
+            SyntheticWavelengthRobustnessAxis.REFERENCE,
+            SyntheticWavelengthRobustnessSeverity.REFERENCE,
+            "Dense quadratic-mean reference for sampling and noise perturbations.",
+            _base_configuration(
+                generating_model="2DWavelengthDependent",
+                mean_kind="quadratic",
+            ),
+            None,
+            None,
+        ),
+        (
+            turning_reference,
+            SyntheticWavelengthRobustnessAxis.REFERENCE,
+            SyntheticWavelengthRobustnessSeverity.REFERENCE,
+            "Dense strong turning-point reference for missing-band comparisons.",
+            _base_configuration(
+                generating_model="2DWavelengthDependent",
+                mean_kind="quadratic",
+                strength="strong",
+                turning_point=True,
+            ),
+            None,
+            None,
+        ),
+        (
+            dust_strong_reference,
+            SyntheticWavelengthRobustnessAxis.REFERENCE,
+            SyntheticWavelengthRobustnessSeverity.REFERENCE,
+            "Dense strong dust-mean reference for coverage perturbations.",
+            _base_configuration(
+                generating_model="2DDustMean",
+                mean_kind="dust",
+                strength="strong",
+            ),
+            None,
+            None,
+        ),
+        (
+            dust_moderate_reference,
+            SyntheticWavelengthRobustnessAxis.REFERENCE,
+            SyntheticWavelengthRobustnessSeverity.REFERENCE,
+            "Dense moderate dust-mean reference for dependence-strength tests.",
+            _base_configuration(
+                generating_model="2DDustMean",
+                mean_kind="dust",
+            ),
+            None,
+            None,
+        ),
+        (
+            power_law_reference,
+            SyntheticWavelengthRobustnessAxis.REFERENCE,
+            SyntheticWavelengthRobustnessSeverity.REFERENCE,
+            "Dense power-law-mean reference for cadence and noise perturbations.",
+            _base_configuration(
+                generating_model="2DPowerLawMean",
+                mean_kind="power_law",
+            ),
+            None,
+            None,
+        ),
+        (
+            joint_reference,
+            SyntheticWavelengthRobustnessAxis.REFERENCE,
+            SyntheticWavelengthRobustnessSeverity.REFERENCE,
+            "Dense joint spectral-mixture ARD reference.",
+            _base_configuration(
+                generating_model="2D",
+                covariance_kind="joint_spectral_mixture_ard",
+            ),
+            None,
             None,
         ),
         (
@@ -461,6 +543,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
             SyntheticWavelengthRobustnessSeverity.MILD,
             "Dense independent irregular time grids across wavelength bands.",
             _base_configuration(shared_time_grid=False),
+            separable_reference,
             None,
         ),
         (
@@ -473,6 +556,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 mean_kind="quadratic",
                 n_per_band=36,
             ),
+            quadratic_reference,
             None,
         ),
         (
@@ -487,6 +571,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 n_per_band=(72, 54, 42, 30, 24, 18),
                 shared_time_grid=False,
             ),
+            dust_strong_reference,
             None,
         ),
         (
@@ -501,6 +586,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 n_cycles=6.4,
                 shared_time_grid=False,
             ),
+            power_law_reference,
             None,
         ),
         (
@@ -512,6 +598,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 wavelengths=DEFAULT_VALIDATION_WAVELENGTHS[1:],
                 band_labels=DEFAULT_VALIDATION_BANDS[1:],
             ),
+            separable_reference,
             None,
         ),
         (
@@ -523,6 +610,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 wavelengths=DEFAULT_VALIDATION_WAVELENGTHS[:-1],
                 band_labels=DEFAULT_VALIDATION_BANDS[:-1],
             ),
+            separable_reference,
             None,
         ),
         (
@@ -538,6 +626,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 wavelengths=(0.55, 0.80, 1.25, 3.40, 4.60),
                 band_labels=("V", "I", "J", "W1", "W2"),
             ),
+            turning_reference,
             None,
         ),
         (
@@ -552,6 +641,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 wavelengths=(0.55, 0.80, 1.25, 4.60),
                 band_labels=("V", "I", "J", "W2"),
             ),
+            dust_strong_reference,
             None,
         ),
         (
@@ -564,6 +654,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 mean_kind="power_law",
                 heteroscedastic_fraction=1.0,
             ),
+            power_law_reference,
             None,
         ),
         (
@@ -576,6 +667,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 mean_kind="quadratic",
                 noise_sigma=0.45,
             ),
+            quadratic_reference,
             None,
         ),
         (
@@ -584,6 +676,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
             SyntheticWavelengthRobustnessSeverity.BOUNDARY,
             "Weak separable wavelength covariance and nearly constant mean.",
             _base_configuration(strength="weak"),
+            separable_reference,
             None,
         ),
         (
@@ -596,6 +689,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 mean_kind="dust",
                 strength="strong",
             ),
+            dust_moderate_reference,
             None,
         ),
         (
@@ -609,6 +703,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 n_per_band=36,
                 shared_time_grid=False,
             ),
+            joint_reference,
             None,
         ),
         (
@@ -622,6 +717,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
                 n_per_band=2,
                 shared_time_grid=False,
             ),
+            separable_reference,
             insufficient_sampling,
         ),
     )
@@ -632,11 +728,7 @@ def canonical_synthetic_wavelength_robustness_specifications(
             severity=severity,
             description=description,
             generator_configuration=configuration,
-            reference_scenario_id=(
-                None
-                if axis is SyntheticWavelengthRobustnessAxis.REFERENCE
-                else reference_id
-            ),
+            reference_scenario_id=reference_scenario_id,
             expected_failure=expected_failure,
         )
         for (
@@ -645,10 +737,10 @@ def canonical_synthetic_wavelength_robustness_specifications(
             severity,
             description,
             configuration,
+            reference_scenario_id,
             expected_failure,
         ) in definitions
     )
-
 
 def canonical_synthetic_wavelength_robustness_cases(
     *, seed: int = 0

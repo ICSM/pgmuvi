@@ -32,5 +32,6 @@ __all__ = [
     "wavelength_validation",
     "wavelength_validation_recovery",
     "wavelength_validation_robustness",
+    "wavelength_validation_robustness_calibration",
     "wavelength_validation_synthetic",
 ]
