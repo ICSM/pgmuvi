@@ -1,11 +1,10 @@
 {
   "base_fit_kwargs": {
-    "training_iter": 500,
-    "miniter": 100,
     "fit_strategy": "consensus",
-    "time_kernel_type": "quasi_periodic",
-    "learn_additional_noise": true
+    "learn_additional_noise": true,
+    "miniter": 100,
+    "training_iter": 500
   },
-  "make_text_report": true,
-  "make_plots": false
+  "make_plots": false,
+  "make_text_report": true
 }

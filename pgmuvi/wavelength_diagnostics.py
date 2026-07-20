@@ -3513,7 +3513,25 @@ def build_period_independent_wavelength_model_kernel_configs(
             "period-independent wavelength parameter plan."
         )
 
-    include_set = {str(model) for model in include_models} if include_models else None
+    normalized_include_models: list[str] = []
+    if include_models is not None:
+        for raw_model in include_models:
+            model = str(raw_model).strip()
+            if not model or model in normalized_include_models:
+                continue
+            normalized_include_models.append(model)
+
+        if not normalized_include_models:
+            raise ValueError(
+                "include_models must contain at least one non-empty "
+                "model name when provided."
+            )
+
+    include_set = (
+        set(normalized_include_models)
+        if include_models is not None
+        else None
+    )
     suggestions = plan.get("model_parameter_suggestions", {})
 
     candidates: list[dict[str, Any]] = []
@@ -3555,6 +3573,73 @@ def build_period_independent_wavelength_model_kernel_configs(
             ).to_dict(),
         }
         candidates.append(candidate)
+
+    if include_models is not None:
+        requested_models = normalized_include_models
+
+        for requested_model in requested_models:
+            if requested_model == "2D" or requested_model in seen:
+                continue
+
+            seen.add(requested_model)
+            fit_kwargs = _piwd_candidate_fit_kwargs(
+                requested_model,
+                base_fit_kwargs=base_fit_kwargs,
+                fit_strategy=fit_strategy,
+                lpv_time_kernel_type=lpv_time_kernel_type,
+                learn_additional_noise=learn_additional_noise,
+            )
+            reason = (
+                "Explicitly requested comparison candidate retained even "
+                "though it was absent from the parameter-plan ranking."
+            )
+            candidates.append(
+                {
+                    "model_kernel_config_id": (
+                        f"rank{len(candidates) + 1}_{requested_model}"
+                    ),
+                    "rank": len(candidates) + 1,
+                    "source": "explicit_include_models",
+                    "source_plan_rank": None,
+                    "model": requested_model,
+                    "fit_kwargs": fit_kwargs,
+                    "recommendation_strength": "advisory",
+                    "hard_exclusion": False,
+                    "primary_reason": reason,
+                    "reason": reason,
+                    "applies_parameter_suggestions": False,
+                    "parameter_suggestions_applied": False,
+                    "applies_constraints": False,
+                    "parameter_suggestions": (
+                        suggestions.get(requested_model)
+                        if include_parameter_suggestions
+                        else None
+                    ),
+                    "model_hypothesis": (
+                        describe_wavelength_model_hypothesis(
+                            requested_model,
+                            fit_kwargs=fit_kwargs,
+                        ).to_dict()
+                    ),
+                }
+            )
+
+        requested_order = {
+            model: index
+            for index, model in enumerate(requested_models)
+            if model != "2D"
+        }
+        candidates.sort(
+            key=lambda candidate: requested_order.get(
+                candidate["model"],
+                len(requested_order),
+            )
+        )
+        for index, candidate in enumerate(candidates, start=1):
+            candidate["rank"] = index
+            candidate["model_kernel_config_id"] = (
+                f"rank{index}_{candidate['model']}"
+            )
 
     if include_2d_baseline and (include_set is None or "2D" in include_set) and "2D" not in seen:
         baseline_kwargs = _piwd_candidate_fit_kwargs(

@@ -1,0 +1,406 @@
+{
+  "batch_id": "pr136-corrected-sampled-1000-100-per-channel",
+  "execution": {
+    "consensus_frequency_per_day": 0.0016740147349865707,
+    "consensus_period_days": 597.3663069387632,
+    "models": [
+      "2DWavelengthDependent",
+      "2DDustMean",
+      "2DPowerLawMean",
+      "2DSeparable",
+      "2D"
+    ],
+    "n_accepted_observational_channels": 9,
+    "n_attempted": 5,
+    "n_failed": 0,
+    "n_passed": 5,
+    "n_rejected_observational_channels": 8,
+    "technical_outcome_counts": {
+      "completed_with_warnings": 5
+    }
+  },
+  "execution_scope": "deterministically_sampled_representative_observed_lpv",
+  "failure_evidence": {
+    "by_code": {},
+    "by_stage": {},
+    "n_failed_attempts": 0
+  },
+  "fit_quality": {
+    "interpretation": "Descriptive transformed-training-space residual comparison only; not held-out predictive model selection.",
+    "n_with_fit_quality": 5,
+    "ranked_models": [
+      "2DDustMean",
+      "2DWavelengthDependent",
+      "2DSeparable",
+      "2DPowerLawMean",
+      "2D"
+    ],
+    "ranking_available": true,
+    "ranking_status": "available",
+    "score_kind": "training_residual_fit_quality",
+    "top_ranked_fit_quality_score": -1454.9713807659482,
+    "top_ranked_model": "2DDustMean"
+  },
+  "kind": "representative_lpv_calibration_summary",
+  "model_results": [
+    {
+      "constraint_diagnostics": {
+        "n_constrained_sm_ard_components": 0,
+        "n_sm_ard_boundary_hits": 0
+      },
+      "fit_configuration": {
+        "fit_strategy": "consensus",
+        "learn_additional_noise": true,
+        "miniter": 100,
+        "time_kernel_type": "quasi_periodic",
+        "training_iter": 500
+      },
+      "fit_quality": {
+        "fit_quality_score": -1631.3012073348584,
+        "quality_rank": 2,
+        "training_median_abs_standardized_residual": 0.07169611866104225,
+        "training_nrmse_by_target_scale": 69.22902480717192,
+        "training_outlier_fraction_3sigma": 0.005069708491761723,
+        "training_reduced_chi2": 0.43541700073461415
+      },
+      "model": "2DWavelengthDependent",
+      "model_hypothesis": {
+        "baseline": false,
+        "comparison_cautions": [
+          "This label describes a complete mean-plus-covariance GP configuration, not an isolated physical mechanism.",
+          "A score difference from 2DSeparable changes both the mean structure and potentially the instantiated covariance configuration."
+        ],
+        "covariance_separable": true,
+        "covariance_structure": "separable_smooth_wavelength",
+        "covariance_wavelength_dependent": true,
+        "lpv_advisory_priority": 1,
+        "mean_structure": "quadratic",
+        "mean_wavelength_dependent": true,
+        "metadata": {},
+        "model": "2DWavelengthDependent",
+        "role": "mean_and_covariance",
+        "schema_version": "pgmuvi-wavelength-hypotheses-v1",
+        "summary": "Quadratic wavelength-dependent mean plus separable configurable time covariance and smooth wavelength covariance.",
+        "temporal_kernel_configurable": true
+      },
+      "model_kernel_config_id": "rank1_2DWavelengthDependent",
+      "period_evidence": {
+        "consensus_frequency_per_day": 0.0016740147349865707,
+        "consensus_period_days": 597.3663069387632,
+        "consensus_success": true,
+        "n_accepted_observational_channels": 9,
+        "n_rejected_observational_channels": 8
+      },
+      "residual_wavelength_structure": {
+        "available": true,
+        "largest_absolute_bias": 11.578223673679465,
+        "largest_absolute_bias_physical_wavelength": 3.4935196814573,
+        "n_physical_wavelengths": 16,
+        "worst_rmse": 34.15528443353768,
+        "worst_rmse_physical_wavelength": 3.4935196814573
+      },
+      "status": "passed",
+      "technical_outcome": "completed_with_warnings",
+      "warning_count": 1
+    },
+    {
+      "constraint_diagnostics": {
+        "n_constrained_sm_ard_components": 0,
+        "n_sm_ard_boundary_hits": 0
+      },
+      "fit_configuration": {
+        "fit_strategy": "consensus",
+        "learn_additional_noise": true,
+        "miniter": 100,
+        "time_kernel_type": "quasi_periodic",
+        "training_iter": 500
+      },
+      "fit_quality": {
+        "fit_quality_score": -1454.9713807659482,
+        "quality_rank": 1,
+        "training_median_abs_standardized_residual": 0.05681669151988894,
+        "training_nrmse_by_target_scale": 62.179631224529466,
+        "training_outlier_fraction_3sigma": 0.005069708491761723,
+        "training_reduced_chi2": 0.3219341526115374
+      },
+      "model": "2DDustMean",
+      "model_hypothesis": {
+        "baseline": false,
+        "comparison_cautions": [
+          "This label describes a complete mean-plus-covariance GP configuration, not an isolated physical mechanism.",
+          "This is not a mean-only hypothesis; it also contains wavelength covariance.",
+          "A better complete-fit score alone does not isolate evidence for the dust mean law."
+        ],
+        "covariance_separable": true,
+        "covariance_structure": "separable_smooth_wavelength",
+        "covariance_wavelength_dependent": true,
+        "lpv_advisory_priority": 2,
+        "mean_structure": "dust_attenuation",
+        "mean_wavelength_dependent": true,
+        "metadata": {},
+        "model": "2DDustMean",
+        "role": "mean_and_covariance",
+        "schema_version": "pgmuvi-wavelength-hypotheses-v1",
+        "summary": "Dust-attenuation wavelength mean plus the same broad family of separable configurable time and smooth wavelength covariance.",
+        "temporal_kernel_configurable": true
+      },
+      "model_kernel_config_id": "rank2_2DDustMean",
+      "period_evidence": {
+        "consensus_frequency_per_day": 0.0016740147349865707,
+        "consensus_period_days": 597.3663069387632,
+        "consensus_success": true,
+        "n_accepted_observational_channels": 9,
+        "n_rejected_observational_channels": 8
+      },
+      "residual_wavelength_structure": {
+        "available": true,
+        "largest_absolute_bias": 18.35278393068747,
+        "largest_absolute_bias_physical_wavelength": 3.4935196814573,
+        "n_physical_wavelengths": 16,
+        "worst_rmse": 30.764432563053976,
+        "worst_rmse_physical_wavelength": 3.4935196814573
+      },
+      "status": "passed",
+      "technical_outcome": "completed_with_warnings",
+      "warning_count": 1
+    },
+    {
+      "constraint_diagnostics": {
+        "n_constrained_sm_ard_components": 0,
+        "n_sm_ard_boundary_hits": 0
+      },
+      "fit_configuration": {
+        "fit_strategy": "consensus",
+        "learn_additional_noise": true,
+        "miniter": 100,
+        "time_kernel_type": "quasi_periodic",
+        "training_iter": 500
+      },
+      "fit_quality": {
+        "fit_quality_score": -5262.670183498213,
+        "quality_rank": 4,
+        "training_median_abs_standardized_residual": 0.100800064205042,
+        "training_nrmse_by_target_scale": 214.47675239707033,
+        "training_outlier_fraction_3sigma": 0.005069708491761723,
+        "training_reduced_chi2": 0.620155532807821
+      },
+      "model": "2DPowerLawMean",
+      "model_hypothesis": {
+        "baseline": false,
+        "comparison_cautions": [
+          "This label describes a complete mean-plus-covariance GP configuration, not an isolated physical mechanism.",
+          "This is not a mean-only hypothesis; it also contains wavelength covariance.",
+          "A better complete-fit score alone does not isolate evidence for the power-law mean."
+        ],
+        "covariance_separable": true,
+        "covariance_structure": "separable_smooth_wavelength",
+        "covariance_wavelength_dependent": true,
+        "lpv_advisory_priority": 3,
+        "mean_structure": "power_law",
+        "mean_wavelength_dependent": true,
+        "metadata": {},
+        "model": "2DPowerLawMean",
+        "role": "mean_and_covariance",
+        "schema_version": "pgmuvi-wavelength-hypotheses-v1",
+        "summary": "Power-law wavelength mean plus the same broad family of separable configurable time and smooth wavelength covariance.",
+        "temporal_kernel_configurable": true
+      },
+      "model_kernel_config_id": "rank3_2DPowerLawMean",
+      "period_evidence": {
+        "consensus_frequency_per_day": 0.0016740147349865707,
+        "consensus_period_days": 597.3663069387632,
+        "consensus_success": true,
+        "n_accepted_observational_channels": 9,
+        "n_rejected_observational_channels": 8
+      },
+      "residual_wavelength_structure": {
+        "available": true,
+        "largest_absolute_bias": 52.82666764537064,
+        "largest_absolute_bias_physical_wavelength": 3.4935196814573,
+        "n_physical_wavelengths": 16,
+        "worst_rmse": 106.58952214900647,
+        "worst_rmse_physical_wavelength": 3.4935196814573
+      },
+      "status": "passed",
+      "technical_outcome": "completed_with_warnings",
+      "warning_count": 1
+    },
+    {
+      "constraint_diagnostics": {
+        "n_constrained_sm_ard_components": 0,
+        "n_sm_ard_boundary_hits": 0
+      },
+      "fit_configuration": {
+        "fit_strategy": "consensus",
+        "learn_additional_noise": true,
+        "miniter": 100,
+        "time_kernel_type": "quasi_periodic",
+        "training_iter": 500
+      },
+      "fit_quality": {
+        "fit_quality_score": -3584.562813133531,
+        "quality_rank": 3,
+        "training_median_abs_standardized_residual": 0.0945801418349322,
+        "training_nrmse_by_target_scale": 147.35403333247598,
+        "training_outlier_fraction_3sigma": 0.005069708491761723,
+        "training_reduced_chi2": 0.5672862187514763
+      },
+      "model": "2DSeparable",
+      "model_hypothesis": {
+        "baseline": false,
+        "comparison_cautions": [
+          "This label describes a complete mean-plus-covariance GP configuration, not an isolated physical mechanism.",
+          "A constant mean can leave wavelength-dependent baseline structure to the covariance model or residuals."
+        ],
+        "covariance_separable": true,
+        "covariance_structure": "separable_product",
+        "covariance_wavelength_dependent": true,
+        "lpv_advisory_priority": 4,
+        "mean_structure": "constant",
+        "mean_wavelength_dependent": false,
+        "metadata": {},
+        "model": "2DSeparable",
+        "role": "covariance_focused",
+        "schema_version": "pgmuvi-wavelength-hypotheses-v1",
+        "summary": "Constant mean with a separable product of configurable time and wavelength covariance kernels.",
+        "temporal_kernel_configurable": true
+      },
+      "model_kernel_config_id": "rank4_2DSeparable",
+      "period_evidence": {
+        "consensus_frequency_per_day": 0.0016740147349865707,
+        "consensus_period_days": 597.3663069387632,
+        "consensus_success": true,
+        "n_accepted_observational_channels": 9,
+        "n_rejected_observational_channels": 8
+      },
+      "residual_wavelength_structure": {
+        "available": true,
+        "largest_absolute_bias": 39.01477477309959,
+        "largest_absolute_bias_physical_wavelength": 3.4935196814573,
+        "n_physical_wavelengths": 16,
+        "worst_rmse": 73.16911673874033,
+        "worst_rmse_physical_wavelength": 3.4935196814573
+      },
+      "status": "passed",
+      "technical_outcome": "completed_with_warnings",
+      "warning_count": 1
+    },
+    {
+      "constraint_diagnostics": {
+        "n_constrained_sm_ard_components": 1,
+        "n_sm_ard_boundary_hits": 4
+      },
+      "fit_configuration": {
+        "fit_strategy": "consensus",
+        "learn_additional_noise": true,
+        "miniter": 100,
+        "time_kernel_type": "model_default",
+        "training_iter": 500
+      },
+      "fit_quality": {
+        "fit_quality_score": -41654.74765547373,
+        "quality_rank": 5,
+        "training_median_abs_standardized_residual": 0.24255135804441103,
+        "training_nrmse_by_target_scale": 1670.0941997981872,
+        "training_outlier_fraction_3sigma": 0.029150823827629912,
+        "training_reduced_chi2": 5.077129923922273
+      },
+      "model": "2D",
+      "model_hypothesis": {
+        "baseline": true,
+        "comparison_cautions": [
+          "This label describes a complete mean-plus-covariance GP configuration, not an isolated physical mechanism.",
+          "Its joint spectral-mixture covariance is not the same parameterization as the separable LPV configurations."
+        ],
+        "covariance_separable": false,
+        "covariance_structure": "joint_2d_spectral_mixture",
+        "covariance_wavelength_dependent": true,
+        "lpv_advisory_priority": 5,
+        "mean_structure": "constant",
+        "mean_wavelength_dependent": false,
+        "metadata": {},
+        "model": "2D",
+        "role": "joint_baseline",
+        "schema_version": "pgmuvi-wavelength-hypotheses-v1",
+        "summary": "Constant mean with one joint non-separable two-dimensional spectral-mixture covariance over time and wavelength.",
+        "temporal_kernel_configurable": false
+      },
+      "model_kernel_config_id": "rank5_2D_baseline",
+      "period_evidence": {
+        "consensus_frequency_per_day": 0.0016740147349865707,
+        "consensus_period_days": 597.3663069387632,
+        "consensus_success": true,
+        "n_accepted_observational_channels": 9,
+        "n_rejected_observational_channels": 8
+      },
+      "residual_wavelength_structure": {
+        "available": true,
+        "largest_absolute_bias": 585.3591233602872,
+        "largest_absolute_bias_physical_wavelength": 3.4935196814573,
+        "n_physical_wavelengths": 16,
+        "worst_rmse": 816.5365337341327,
+        "worst_rmse_physical_wavelength": 3.4935196814573
+      },
+      "status": "passed",
+      "technical_outcome": "completed_with_warnings",
+      "warning_count": 1
+    }
+  ],
+  "phase": "D3",
+  "residual_wavelength_structure": {
+    "aggregation_scope": "physical_wavelength",
+    "available": true,
+    "n_models_with_evidence": 5,
+    "shared_wavelength_observational_channels_aggregated": true
+  },
+  "schema_version": "1.0",
+  "scientific_boundaries": {
+    "advisory_only": true,
+    "automatic_model_selection_applied": false,
+    "closes_wavelength_constraint_validation_marker": false,
+    "full_data_execution_completed": false,
+    "instrument_channel_calibration_applied": false,
+    "instrument_channel_calibration_marker": "TBD[instrument-channel-calibration]",
+    "limitations": [
+      "The execution used a deterministic sample rather than all 10815 observations.",
+      "The ranking uses transformed training-space residual diagnostics, not held-out prediction.",
+      "The evidence comes from one representative observed LPV.",
+      "Observational channels sharing a physical wavelength remain aggregated.",
+      "All five fits emitted a small-noise NumericalWarning."
+    ],
+    "selected_model": null,
+    "single_source_only": true,
+    "truth_recovery_evidence": false
+  },
+  "source_data": {
+    "linear_flux": true,
+    "max_samples": 1000,
+    "max_samples_per_observational_channel": 100,
+    "maximum_retained_samples_per_observational_channel": 100,
+    "multiple_observational_channels_per_wavelength": true,
+    "n_distinct_physical_wavelengths": 16,
+    "n_observational_channels": 17,
+    "n_rows_original": 10815,
+    "n_rows_sampled": 789,
+    "public_source_path": "examples/data/10131+3049.csv",
+    "shared_wavelength_policy": "preserve_channels_without_calibration"
+  },
+  "source_id": "10131+3049",
+  "warning_evidence": {
+    "by_category": {
+      "NumericalWarning": 5
+    },
+    "interpretation": "Each candidate completed after GPyTorch raised very small noise values to 1e-6.",
+    "n_warning_records": 5
+  },
+  "workflow_configuration": {
+    "base_fit_kwargs": {
+      "fit_strategy": "consensus",
+      "learn_additional_noise": true,
+      "miniter": 100,
+      "training_iter": 500
+    },
+    "make_plots": false,
+    "make_text_report": true
+  }
+}

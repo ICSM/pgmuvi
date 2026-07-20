@@ -242,11 +242,9 @@ class TestRepresentativeLPVCLI(unittest.TestCase):
             ]["fit_strategy"],
             "consensus",
         )
-        self.assertEqual(
-            captured["workflow_kwargs"][
-                "base_fit_kwargs"
-            ]["time_kernel_type"],
-            "quasi_periodic",
+        self.assertNotIn(
+            "time_kernel_type",
+            captured["workflow_kwargs"]["base_fit_kwargs"],
         )
         self.assertTrue(
             captured["workflow_kwargs"][
