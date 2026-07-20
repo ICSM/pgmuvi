@@ -75,17 +75,14 @@ Completed wavelength-derived constraint tranche (PR121--PR125)
     pressure into model-selection evidence.
 
 **TBD[wavelength-constraint-validation]**
-    D1 nominal recovery, the core D2 scenario/runner framework, truth-matched
-    reference pairing, resumable multi-seed execution, recovery-retention
-    summaries, and separable/joint-ARD boundary-pressure calibration are
-    implemented.  Execute and document the full D2 population for sparse and
-    uneven band coverage, missing bands, large wavelength gaps, weak and strong
-    wavelength dependence, supported non-monotonic cases, seed stability,
-    constraint-ceiling diagnostics, and consensus quasi-periodic time kernels.
-    Then add the maintained wavelength-constraint Jupyter notebook covering
-    derivation, application, diagnostics, mean-versus-covariance constraints,
-    and tested failure boundaries before proceeding to representative real LPV
-    sources.  Successful optimization alone is not sufficient validation.
+    D1 nominal recovery, the canonical 20-seed D2 robustness calibration, and
+    the maintained wavelength-constraint notebook are complete.  The remaining
+    validation step is D3 application to representative real LPV sources across
+    the maintained model families, with source-level period evidence, fit
+    quality, residual wavelength structure, constraint diagnostics, warnings,
+    and failure semantics reported together.  Successful optimization alone is
+    not sufficient validation, and D3 must remain advisory rather than define
+    an automatic model-selection rule.
 
 Wavelength-model extensions
 ---------------------------
@@ -111,19 +108,13 @@ Wavelength-model extensions
 Documentation tutorial extensions
 ---------------------------------
 
-**TBD[wavelength-constraint-notebook]**
-    Add a maintained Jupyter notebook after the D2 multi-seed robustness
-    calibration is complete.  The notebook must demonstrate wavelength-scale
-    derivation, coordinate transformation, constraint application, fitted
-    boundary diagnostics, the distinction between wavelength-dependent mean
-    and covariance constraints, and the empirically tested D2 failure
-    boundaries.
-
-**D2 evidence available:** a canonical 20-seed, 420-run robustness
-calibration has now established the empirical cases that the notebook must
-explain, including uneven-band-count and longer-sparse-baseline failure
-boundaries, large-wavelength-gap degradation, reproducible invalid-sampling
-failure, and joint-``2D`` ARD boundary pressure.
+Completed wavelength-constraint notebook (PR134)
+    The maintained :doc:`notebooks/tutorial_wavelength_constraints` tutorial
+    now demonstrates wavelength-scale derivation, affine coordinate
+    transformation and round trips, separable covariance and physical-mean
+    constraints, independent temporal/wavelength ARD diagnostics, and the
+    empirically tested D2 failure boundaries.  It uses reduced deterministic
+    examples, keeps fitting optional, and remains explicitly advisory.
 
 **TBD[batch-notebook]**
     Add a maintained notebook for the batch wavelength-advisory workflow.

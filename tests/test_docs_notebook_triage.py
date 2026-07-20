@@ -23,11 +23,12 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         self.assertIn("notebooks/tutorial_preprocessing", text)
         self.assertIn("notebooks/tutorial_synthetic", text)
         self.assertIn("notebooks/tutorial_wavelength_advisory", text)
+        self.assertIn("notebooks/tutorial_wavelength_constraints", text)
         self.assertIn("notebooks/pgmuvi_mock_data_from_gp", text)
 
     def test_status_page_records_notebook_refresh_completion(self):
         text = STATUS.read_text(encoding="utf-8")
-        self.assertIn("current through PR108", text)
+        self.assertIn("current through PR134", text)
         self.assertIn("No quarantined or pending-refresh", text)
         self.assertIn("notebook files remain in the repository", text)
         self.assertIn("pgmuvi_tutorial_mcmc.ipynb", text)
@@ -50,6 +51,12 @@ class TestNotebookDocumentationTriage(unittest.TestCase):
         self.assertIn("Refreshed in PR107", text)
         self.assertNotIn("Quarantined stub", text)
         self.assertNotIn("Quarantined TODO skeleton", text)
+
+    def test_status_page_records_wavelength_constraint_notebook(self):
+        text = STATUS.read_text(encoding="utf-8")
+        self.assertIn("tutorial_wavelength_constraints.ipynb", text)
+        self.assertIn("Added in PR134", text)
+        self.assertNotIn("TBD[wavelength-constraint-notebook]", text)
 
     def test_status_page_defines_notebook_admission_rules(self):
         text = STATUS.read_text(encoding="utf-8")

@@ -55,15 +55,15 @@ truth-matched reference populations, paired base seeds, multi-seed execution,
 constraint-boundary summaries, and advisory empirical classes without
 weakening or reusing the frozen D1 aggregate gates.
 
-Documentation notebook plan
----------------------------
+Maintained documentation notebook
+---------------------------------
 
-After the empirical D2 boundaries are established, add a maintained Jupyter
-notebook that demonstrates wavelength-kernel scale derivation, coordinate
-transformation, constraint application, fitted boundary diagnostics, the
-distinction between wavelength mean and covariance constraints, and the tested
-sparse/noisy failure boundaries.  The notebook must be registered in the public
-Tutorials toctree and in ``notebook_status.rst``.
+The public :doc:`notebooks/tutorial_wavelength_constraints` notebook now
+demonstrates wavelength-kernel scale derivation, coordinate transformation,
+constraint application, fitted boundary diagnostics, the distinction between
+wavelength mean and covariance constraints, and the tested sparse/noisy
+failure boundaries.  It uses deterministic reduced examples and does not rerun
+the full D2 population.
 
 Model-selection boundary
 ------------------------

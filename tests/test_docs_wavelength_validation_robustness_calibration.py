@@ -43,7 +43,7 @@ class TestSyntheticWavelengthRobustnessCalibrationDocumentation(
             '"wavelength_validation_robustness_calibration"', package_init
         )
 
-    def test_constraint_notebook_remains_after_empirical_calibration(self):
+    def test_constraint_notebook_is_completed_after_empirical_calibration(self):
         future = (ROOT / "docs/source/future_work.rst").read_text(
             encoding="utf-8"
         )
@@ -52,8 +52,13 @@ class TestSyntheticWavelengthRobustnessCalibrationDocumentation(
         )
 
         self.assertIn("TBD[wavelength-constraint-validation]", future)
-        self.assertIn("TBD[wavelength-constraint-notebook]", status)
-        self.assertIn("representative real LPV sources", " ".join(future.split()))
+        self.assertNotIn("TBD[wavelength-constraint-notebook]", status)
+        self.assertIn("tutorial_wavelength_constraints.ipynb", status)
+        normalized = " ".join(future.split())
+        self.assertIn("canonical 20-seed D2 robustness calibration", normalized)
+        self.assertIn("maintained wavelength-constraint notebook are complete", normalized)
+        self.assertIn("D3 application to representative real LPV sources", normalized)
+        self.assertNotIn("Execute and document the full D2 population", future)
 
 
 if __name__ == "__main__":

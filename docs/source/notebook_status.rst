@@ -3,7 +3,7 @@ Notebook status and maintenance
 
 .. note::
 
-   **Documentation status:** current through PR108.
+   **Documentation status:** current through PR134.
 
    Every notebook currently shipped under ``docs/source/notebooks`` is part of
    the public Tutorials documentation.  No quarantined or pending-refresh
@@ -46,6 +46,9 @@ These notebooks are linked from the main Tutorials toctree:
    * - ``tutorial_wavelength_advisory.ipynb``
      - Maintained period-independent wavelength-advisory tutorial.
      - Refreshed and renamed in PR106 to replace stale automatic-model-selection framing with diagnostics, parameter planning, model/kernel-config preparation, and an explicit no-fitting default.
+   * - ``tutorial_wavelength_constraints.ipynb``
+     - Maintained data-derived wavelength-constraint tutorial.
+     - Added in PR134 with coordinate round trips, covariance and mean constraints, independent joint-``2D`` ARD diagnostics, reduced optional fits, and the PR133 empirical failure boundaries.
    * - ``pgmuvi_mock_data_from_gp.ipynb``
      - Maintained GP-prior mock-data tutorial.
      - Refreshed in PR107 with current parameter schemas, physical-space parameter application, reproducible quasi-periodic/Matérn/spectral-mixture prior draws, and an explicit no-fitting boundary.
@@ -81,19 +84,14 @@ workflow is implemented, tested, and has documented convergence and posterior-
 predictive diagnostics.  Do not restore the deleted notebook verbatim; it used
 stale installation, parameter-setting, likelihood, and plotting patterns.
 
-**TBD[wavelength-constraint-notebook]:** after the D2 multi-seed robustness and
-failure-boundary calibration is complete, add a maintained public notebook that
-shows how wavelength-kernel scales and bounds are derived, transformed, applied,
-and diagnosed.  It must distinguish covariance constraints from wavelength-
-dependent mean constraints and explain the tested sparse/noisy failure
-boundaries before it is added to the Tutorials toctree.
+**Completed in PR134:** ``tutorial_wavelength_constraints.ipynb`` is now a
+maintained public tutorial.  It derives wavelength sampling evidence and
+mean/covariance intervals, demonstrates physical-to-model coordinate
+round trips, keeps time and wavelength ARD dimensions independent, and
+explains the empirically calibrated sparse/noisy failure boundaries.  The
+notebook remains advisory and does not convert constraint pressure into
+automatic model selection.
 
-**D2 calibration prerequisite completed:** the canonical 20-seed,
-420-run robustness calibration is now recorded in
-:mod:`pgmuvi.wavelength_validation_robustness_calibration`.  The notebook
-itself remains outstanding and should use those empirical robust,
-degraded, failure-boundary, and expected-failure-boundary results without
-turning them into automatic model-selection rules.
 
 Notebook maintenance rules
 --------------------------
