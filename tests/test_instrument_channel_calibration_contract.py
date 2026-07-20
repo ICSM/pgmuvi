@@ -11,9 +11,7 @@ from pgmuvi.instrument_channel_calibration import (
     INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION,
     INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
     InstrumentChannelCalibrationStatus,
-    apply_instrument_channel_calibration,
     assess_instrument_channel_calibration_requirement,
-    fit_instrument_channel_calibration,
 )
 
 
@@ -127,28 +125,6 @@ class TestInstrumentChannelCalibrationAssessment(unittest.TestCase):
             )
 
 
-class TestUnsupportedCalibrationCallables(unittest.TestCase):
-    def test_fit_raises_not_implemented(self):
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            r"TBD\[instrument-channel-calibration\]",
-        ):
-            fit_instrument_channel_calibration(
-                [1.0, 1.0],
-                [2.0, 2.1],
-                ["channel-a", "channel-b"],
-            )
-
-    def test_apply_raises_not_implemented(self):
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            r"TBD\[instrument-channel-calibration\]",
-        ):
-            apply_instrument_channel_calibration(
-                [2.0, 2.1],
-                ["channel-a", "channel-b"],
-                calibration={},
-            )
 
 
 if __name__ == "__main__":

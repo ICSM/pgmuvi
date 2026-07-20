@@ -18,14 +18,14 @@ wavelengths.  Multiple channels may share one wavelength, so channel-level
 summaries and distinct physical wavelengths are reported separately.
 
 **TBD[instrument-channel-calibration]:** No instrument-channel calibration is
-performed.  When two or more usable observational channels share a physical
-wavelength, PGMUVI preserves their channel-level diagnostics but excludes that
-uncalibrated wavelength from cross-wavelength trend summaries and
-wavelength-mean fits.  It does not silently combine flux summaries, infer
-offsets or scales, or assign artificial wavelength differences.  The
-metadata includes the JSON-safe requirement assessment from
-:mod:`pgmuvi.instrument_channel_calibration`; no calibration is fitted or
-applied.
+performed by this wavelength-estimation workflow.  The low-level API in
+:mod:`pgmuvi.instrument_channel_calibration` can fit and apply an affine mapping
+from caller-supplied paired measurements, but this workflow does not construct
+such pairs or receive a fitted mapping.  When multiple usable observational
+channels share one physical wavelength, their channel-level diagnostics are
+preserved while that wavelength is excluded from cross-wavelength trend
+summaries and wavelength-mean fits.  No flux summaries are silently combined,
+and no artificial wavelength differences are assigned.
 
 The diagnostics retain the length-scale recommendation in the **raw
 wavelength coordinate** and also record the corresponding value and interval in

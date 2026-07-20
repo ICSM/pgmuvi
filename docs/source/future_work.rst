@@ -113,19 +113,13 @@ Wavelength-model extensions
 ---------------------------
 
 **TBD[instrument-channel-calibration]**
-    Add an explicit, tested calibration model for multiple observational channels
-    that share one physical wavelength but have instrument-dependent offsets,
-    scales, throughput differences, or noise properties.  Current wavelength
-    diagnostics preserve the separate channel identities and flag the shared
-    wavelength, but they do not estimate or apply a calibration correction.  Any
-    public calibration API introduced before implementation must raise
-    ``NotImplementedError`` rather than silently approximating a correction.
-
-    The public contract and requirement-assessment primitives now live in
-    :mod:`pgmuvi.instrument_channel_calibration`.  They report shared-wavelength
-    channel groups and preserve the current uncalibrated policy.  The fit and
-    application callables deliberately raise ``NotImplementedError``; this does
-    not close the marker or constitute a calibration implementation.
+    The public low-level fitting and application callables now accept
+    caller-supplied paired measurements from distinct observational channels
+    and implement an explicit affine mapping.  This does not close the marker:
+    automatic pair construction, dataset-level orchestration across shared-
+    wavelength observational channels, fitted-coefficient uncertainty
+    propagation, workflow integration, and scientific validation remain future
+    work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current
