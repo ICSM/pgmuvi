@@ -43,22 +43,33 @@ class TestSyntheticWavelengthRobustnessCalibrationDocumentation(
             '"wavelength_validation_robustness_calibration"', package_init
         )
 
-    def test_constraint_notebook_is_completed_after_empirical_calibration(self):
-        future = (ROOT / "docs/source/future_work.rst").read_text(
-            encoding="utf-8"
-        )
-        status = (ROOT / "docs/source/notebook_status.rst").read_text(
-            encoding="utf-8"
-        )
+    def test_constraint_notebook_and_d3_validation_are_completed(self):
+        future_work = (
+            Path(__file__).resolve().parents[1]
+            / "docs/source/future_work.rst"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(future_work.split())
 
-        self.assertIn("TBD[wavelength-constraint-validation]", future)
-        self.assertNotIn("TBD[wavelength-constraint-notebook]", status)
-        self.assertIn("tutorial_wavelength_constraints.ipynb", status)
-        normalized = " ".join(future.split())
-        self.assertIn("canonical 20-seed D2 robustness calibration", normalized)
-        self.assertIn("maintained wavelength-constraint notebook are complete", normalized)
-        self.assertIn("D3 representative observed-LPV validation infrastructure", normalized)
-        self.assertNotIn("Execute and document the full D2 population", future)
+        self.assertNotIn(
+            "TBD[wavelength-constraint-validation]",
+            future_work,
+        )
+        self.assertIn(
+            "TBD[instrument-channel-calibration]",
+            future_work,
+        )
+        self.assertIn(
+            'Completed wavelength-constraint notebook (PR134)',
+            normalized,
+        )
+        self.assertIn(
+            'Completed: representative wavelength-constraint validation',
+            normalized,
+        )
+        self.assertIn(
+            '597.37 days',
+            normalized,
+        )
 
 
 if __name__ == "__main__":

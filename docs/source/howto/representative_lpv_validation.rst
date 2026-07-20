@@ -212,3 +212,72 @@ The report therefore always retains:
 A successful optimization is not, by itself, validation.  Period evidence,
 residual structure, constraint pressure, warning state, and failed attempts
 must be reviewed together before drawing a scientific conclusion.
+
+D3 execution result and validation closeout
+-------------------------------------------
+
+The representative workflow was executed on a deterministic bounded
+sample of the public ``examples/data/10131+3049.csv`` light curve.
+The sample retained 789 of 10,815 observations, all 17 observational
+channels, and all 16 distinct physical wavelengths.  The sampling
+limit was 1,000 total observations and 100 observations per
+observational channel.
+
+The execution attempted and completed the five maintained
+LPV-relevant candidates in this order:
+
+1. ``2DWavelengthDependent``
+2. ``2DDustMean``
+3. ``2DPowerLawMean``
+4. ``2DSeparable``
+5. ``2D``
+
+The four separable candidates used consensus fitting with a
+quasi-periodic time kernel and learned additional noise.  The
+non-separable ``2D`` baseline retained its model-default
+spectral-mixture time-kernel configuration.
+
+All five fits returned a consensus period of
+``597.3663069387632`` days, corresponding to a frequency of
+``0.0016740147349865707`` per day.  Nine observational channels
+were accepted and eight were rejected by the consensus evidence.
+
+All five technical outcomes were ``completed_with_warnings``.
+Each fit recorded a GPyTorch ``NumericalWarning`` because a very
+small noise value was rounded to ``1e-6``.  No fit attempt failed.
+
+The descriptive transformed-training-space residual ranking was:
+
+1. ``2DDustMean``
+2. ``2DWavelengthDependent``
+3. ``2DSeparable``
+4. ``2DPowerLawMean``
+5. ``2D``
+
+This ordering is advisory only.  It is not based on held-out
+prediction and does not select a preferred model automatically.
+The workflow therefore leaves ``selected_model`` unset.
+
+Residual wavelength evidence is available for all five candidates
+and is aggregated by physical wavelength.  Observational channels
+sharing one physical wavelength remain grouped because
+instrument-specific channel calibration has not been implemented.
+That separate limitation remains tracked by
+``TBD[instrument-channel-calibration]``.
+
+The validation establishes that the maintained candidate set can be
+executed consistently on one representative observed LPV and that
+its wavelength-related diagnostics can be exported and interpreted
+without conflating observational channels with physical
+wavelengths.  It does not establish population-level performance,
+truth recovery, uniqueness of the inferred wavelength dependence,
+or full-data computational feasibility.
+
+The compact deterministic result is committed as
+``examples/validation/d3_representative_lpv_calibration_summary.json``.
+The larger reports and fit products remain under the ignored
+``validation_outputs/d3_real_lpv/`` tree.
+
+With the execution result, scientific boundaries, documentation,
+and regression contracts consolidated, the D3
+wavelength-constraint validation marker is closed.

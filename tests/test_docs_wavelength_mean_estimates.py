@@ -56,11 +56,33 @@ class TestWavelengthMeanEstimateDocumentation(unittest.TestCase):
         self.assertIn("enforced during", self.constraints_normalized)
         self.assertIn("optimization", self.constraints_normalized)
 
-    def test_full_2d_ard_and_validation_remain_future_work(self):
-        self.assertIn("Data-derived wavelength-mean initialization", self.future_normalized)
-        self.assertIn("full ``2D``", self.future_normalized)
-        self.assertIn("temporal and wavelength ARD dimensions", self.future_normalized)
-        self.assertIn("TBD[wavelength-constraint-validation]", self.future_normalized)
+    def test_full_2d_ard_and_representative_validation_are_completed(self):
+        future_work = (
+            Path(__file__).resolve().parents[1]
+            / "docs/source/future_work.rst"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(future_work.split())
+
+        self.assertNotIn(
+            "TBD[wavelength-constraint-validation]",
+            future_work,
+        )
+        self.assertIn(
+            "TBD[instrument-channel-calibration]",
+            future_work,
+        )
+        self.assertIn(
+            'The full ``2D`` spectral-mixture baseline now gives temporal and wavelength ARD',
+            normalized,
+        )
+        self.assertIn(
+            'Completed: representative wavelength-constraint validation',
+            normalized,
+        )
+        self.assertIn(
+            '789 of the 10,815 public',
+            normalized,
+        )
 
 
 if __name__ == "__main__":

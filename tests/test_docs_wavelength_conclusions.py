@@ -19,22 +19,45 @@ class TestWavelengthConclusionDocumentation(unittest.TestCase):
         )
 
 
-    def test_future_work_tracks_constraint_and_validation_tranche(self):
-        future_work = " ".join(
-            (ROOT / "docs/source/future_work.rst").read_text().split()
+    def test_future_work_tracks_completed_constraint_validation_tranche(self):
+        future_work = (
+            Path(__file__).resolve().parents[1]
+            / "docs/source/future_work.rst"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(future_work.split())
+
+        self.assertNotIn(
+            "TBD[wavelength-constraint-validation]",
+            future_work,
         )
-        advisory = (ROOT / "docs/source/howto/wavelength_advisory.rst").read_text()
-        self.assertNotIn("TBD[wavelength-derived-constraints]", future_work)
-        self.assertNotIn("TBD[wavelength-derived-constraints]", advisory)
-        self.assertIn("Completed wavelength-derived constraint tranche", future_work)
-        self.assertIn("complete through PR125", advisory)
-        self.assertIn("TBD[wavelength-constraint-validation]", future_work)
-        self.assertIn("TBD[wavelength-constraint-validation]", advisory)
-        self.assertIn("2DWavelengthDependent", future_work)
-        self.assertIn("2DDustMean", future_work)
-        self.assertIn("2DPowerLawMean", future_work)
-        self.assertIn("2DSeparable", future_work)
-        self.assertIn("temporal and wavelength ARD dimensions", future_work)
+        self.assertIn(
+            "TBD[instrument-channel-calibration]",
+            future_work,
+        )
+        self.assertIn(
+            'Completed: representative wavelength-constraint validation',
+            normalized,
+        )
+        self.assertIn(
+            '2DWavelengthDependent',
+            normalized,
+        )
+        self.assertIn(
+            '2DDustMean',
+            normalized,
+        )
+        self.assertIn(
+            '2DPowerLawMean',
+            normalized,
+        )
+        self.assertIn(
+            '2DSeparable',
+            normalized,
+        )
+        self.assertIn(
+            'descriptive and advisory',
+            normalized,
+        )
 
     def test_advisory_docs_define_conclusions_and_ambiguities(self):
         advisory = (ROOT / "docs/source/howto/wavelength_advisory.rst").read_text()
