@@ -60,7 +60,7 @@ class TestRepresentativeLPVCalibrationSummary(
         )
         self.assertLessEqual(
             source[
-                "maximum_retained_observational_channel_count"
+                "maximum_retained_samples_per_observational_channel"
             ],
             source[
                 "max_samples_per_observational_channel"

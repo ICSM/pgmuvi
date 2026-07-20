@@ -3513,7 +3513,25 @@ def build_period_independent_wavelength_model_kernel_configs(
             "period-independent wavelength parameter plan."
         )
 
-    include_set = {str(model) for model in include_models} if include_models else None
+    normalized_include_models: list[str] = []
+    if include_models is not None:
+        for raw_model in include_models:
+            model = str(raw_model).strip()
+            if not model or model in normalized_include_models:
+                continue
+            normalized_include_models.append(model)
+
+        if not normalized_include_models:
+            raise ValueError(
+                "include_models must contain at least one non-empty "
+                "model name when provided."
+            )
+
+    include_set = (
+        set(normalized_include_models)
+        if include_models is not None
+        else None
+    )
     suggestions = plan.get("model_parameter_suggestions", {})
 
     candidates: list[dict[str, Any]] = []
@@ -3556,8 +3574,8 @@ def build_period_independent_wavelength_model_kernel_configs(
         }
         candidates.append(candidate)
 
-    if include_models:
-        requested_models = [str(model) for model in include_models]
+    if include_models is not None:
+        requested_models = normalized_include_models
 
         for requested_model in requested_models:
             if requested_model == "2D" or requested_model in seen:

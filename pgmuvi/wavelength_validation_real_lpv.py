@@ -553,11 +553,11 @@ def _warning_evidence(
     for row in rows:
         model = row.get("model")
         config_id = row.get("model_kernel_config_id")
-        warning_records = (
-            row.get("warning_records")
-            or row.get("warnings")
-            or ()
-        )
+        if "warning_records" in row:
+            warning_records = row.get("warning_records") or ()
+        else:
+            warning_records = row.get("warnings") or ()
+
         for warning in warning_records:
             if not isinstance(warning, Mapping):
                 continue

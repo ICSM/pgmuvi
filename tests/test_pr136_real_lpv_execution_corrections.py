@@ -18,6 +18,57 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestRepresentativeLPVRequestedModelCoverage(unittest.TestCase):
+    def test_include_models_are_stripped_deduplicated_and_validated(
+        self,
+    ):
+        plan = {
+            "kind": "period_independent_wavelength_parameter_plan",
+            "ranked_candidates": [
+                {
+                    "rank": 1,
+                    "model": "2DDustMean",
+                    "recommendation_strength": "advisory",
+                }
+            ],
+            "model_parameter_suggestions": {},
+        }
+
+        report = (
+            build_period_independent_wavelength_model_kernel_configs(
+                plan,
+                include_models=[
+                    " 2DDustMean ",
+                    "",
+                    "   ",
+                    "2DSeparable",
+                    "2DSeparable",
+                    " 2D ",
+                ],
+                include_2d_baseline=True,
+            )
+        )
+
+        self.assertEqual(
+            [
+                candidate["model"]
+                for candidate in report["model_kernel_configs"]
+            ],
+            [
+                "2DDustMean",
+                "2DSeparable",
+                "2D",
+            ],
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "at least one non-empty model name",
+        ):
+            build_period_independent_wavelength_model_kernel_configs(
+                plan,
+                include_models=["", "   "],
+            )
+
     def test_all_requested_models_are_built_in_requested_order(self):
         plan = {
             "kind": "period_independent_wavelength_parameter_plan",
@@ -138,6 +189,28 @@ class TestRepresentativeLPVWarningEvidence(unittest.TestCase):
             evidence["records"][0]["model"],
             "2DDustMean",
         )
+
+    def test_explicit_empty_warning_records_override_legacy_field(
+        self,
+    ):
+        evidence = _warning_evidence(
+            [
+                {
+                    "model": "2DDustMean",
+                    "warning_records": [],
+                    "warnings": [
+                        {
+                            "category": "UserWarning",
+                            "message": "stale legacy warning",
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(evidence["n_warning_records"], 0)
+        self.assertEqual(evidence["by_category"], {})
+        self.assertEqual(evidence["records"], [])
 
     def test_legacy_warnings_field_remains_supported(self):
         evidence = _warning_evidence(

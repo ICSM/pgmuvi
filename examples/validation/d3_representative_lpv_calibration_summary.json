@@ -376,7 +376,7 @@
     "linear_flux": true,
     "max_samples": 1000,
     "max_samples_per_observational_channel": 100,
-    "maximum_retained_observational_channel_count": 100,
+    "maximum_retained_samples_per_observational_channel": 100,
     "multiple_observational_channels_per_wavelength": true,
     "n_distinct_physical_wavelengths": 16,
     "n_observational_channels": 17,
