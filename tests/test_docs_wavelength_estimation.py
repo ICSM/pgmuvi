@@ -52,30 +52,28 @@ class TestWavelengthEstimationDocumentation(unittest.TestCase):
         self.assertIn("quasi-periodic", self.consensus_text)
 
     def test_future_work_records_mean_ard_and_d3_completion(self):
-        future_work = (
-            Path(__file__).resolve().parents[1]
-            / "docs/source/future_work.rst"
-        ).read_text(encoding="utf-8")
-        normalized = " ".join(future_work.split())
+        normalized = " ".join(self.future_work_text.split())
 
         self.assertNotIn(
             "TBD[wavelength-constraint-validation]",
-            future_work,
+            self.future_work_text,
         )
         self.assertIn(
             "TBD[instrument-channel-calibration]",
-            future_work,
+            self.future_work_text,
         )
         self.assertIn(
-            'Data-derived wavelength-mean initialization and enforceable constraints',
+            "Data-derived wavelength-mean initialization "
+            "and enforceable constraints",
             normalized,
         )
         self.assertIn(
-            'The full ``2D`` spectral-mixture baseline now gives temporal and wavelength ARD',
+            "The full ``2D`` spectral-mixture baseline now gives "
+            "temporal and wavelength ARD",
             normalized,
         )
         self.assertIn(
-            'Completed: representative wavelength-constraint validation',
+            "Completed: representative wavelength-constraint validation",
             normalized,
         )
 
