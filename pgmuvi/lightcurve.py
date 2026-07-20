@@ -3516,6 +3516,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         return self.xdata.shape[-1] if self.xdata.dim() > 1 else 1
 
     @property
+    def observational_channel_labels(self):
+        """Return observational-channel labels for the retained observations.
+
+        ``band`` remains the legacy storage attribute and constructor keyword.
+        An observational channel identifies an instrument/filter/data-stream
+        combination and is distinct from the numeric physical wavelength in
+        ``xdata[:, 1]``. Multiple observational channels may therefore share
+        one physical wavelength.
+        """
+        return self.band
+
+    @property
     def magnitudes(self):
         pass
 
@@ -10132,16 +10144,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if isinstance(uncertainty_values, torch.Tensor):
                     uncertainty_values = uncertainty_values.detach().cpu().numpy()
 
-            band_labels = None
+            observational_channel_labels = None
             if self.band is not None and len(self.band) == flux_values_all.size:
-                band_labels = np.asarray(self.band, dtype=str)
+                observational_channel_labels = np.asarray(
+                    self.band,
+                    dtype=str,
+                )
 
             wavelength_diagnostics, band_diagnostics = (
                 build_wavelength_estimation_context(
                     wavelengths=input_values[:, 1],
                     fluxes=flux_values_all,
                     uncertainties=uncertainty_values,
-                    band_labels=band_labels,
+                    observational_channel_labels=(
+                        observational_channel_labels
+                    ),
                 )
             )
             wavelength_diagnostics = (
@@ -10163,7 +10180,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     raw_wavelengths=input_values[:, 1],
                     model_wavelengths=model_wavelengths,
                     model_fluxes=model_fluxes,
-                    band_labels=band_labels,
+                    observational_channel_labels=(
+                        observational_channel_labels
+                    ),
                 )
             )
             mean_metadata = dict(wavelength_mean_diagnostics.metadata)

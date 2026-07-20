@@ -19,6 +19,7 @@ Each guide is focused on a single workflow and assumes you have already read the
    wavelength_models
    wavelength_advisory
    wavelength_advisory_batch
+   representative_lpv_validation
    legacy_wavelength_candidates
    priors_constraints
    multiband

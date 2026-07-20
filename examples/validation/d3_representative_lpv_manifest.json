@@ -1,0 +1,17 @@
+{
+  "sources": [
+    {
+      "source_id": "10131+3049",
+      "source_path": "../data/10131+3049.csv",
+      "description": "Public representative multiwavelength LPV validation source.",
+      "sample_role": "public_validation_source",
+      "selection_reason": "Public LPV with broad wavelength coverage, 17 observational channels, 16 physical wavelengths, and two observational channels sharing one physical wavelength.",
+      "seed": 0,
+      "metadata": {
+        "flux_domain": "linear",
+        "instrument_channel_calibration": "not_implemented",
+        "instrument_channel_calibration_marker": "TBD[instrument-channel-calibration]"
+      }
+    }
+  ]
+}

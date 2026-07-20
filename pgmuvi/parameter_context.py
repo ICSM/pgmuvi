@@ -28,7 +28,12 @@ class LightcurveDiagnostics:
 
 @dataclass(frozen=True)
 class BandDiagnostics:
-    """Diagnostics for one band in a multiband light curve."""
+    """Diagnostics for one observational channel in a multiband light curve.
+
+    ``band`` is retained as the legacy serialized field name for backward
+    compatibility. It identifies an observational channel, not necessarily a
+    unique physical wavelength.
+    """
 
     band: str
     wavelength: float | None = None
@@ -52,6 +57,16 @@ class BandDiagnostics:
     noise_corrected_half_amplitude_q05_q95: float | None = None
     noise_corrected_half_amplitude_q10_q90: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def observational_channel(self) -> str:
+        """Return the observational-channel identifier."""
+        return self.band
+
+
+# Preferred public name. ``BandDiagnostics`` remains the serialized and import
+# compatibility name used by existing callers.
+ObservationalChannelDiagnostics = BandDiagnostics
 
 
 WAVELENGTH_ESTIMATION_SCHEMA_VERSION = "pgmuvi-wavelength-estimation-v2"
@@ -108,6 +123,21 @@ class WavelengthEstimationDiagnostics:
         """Return a JSON-safe dictionary representation."""
         return asdict(self)
 
+    @property
+    def n_usable_observational_channels(self) -> int:
+        """Return the number of usable observational channels."""
+        return self.n_usable_bands
+
+    @property
+    def min_points_per_observational_channel(self) -> int:
+        """Return the minimum retained points per observational channel."""
+        return self.min_points_per_band
+
+    @property
+    def excluded_observational_channels(self) -> tuple[str, ...]:
+        """Return observational channels excluded from wavelength evidence."""
+        return self.excluded_bands
+
 
 WAVELENGTH_MEAN_ESTIMATION_SCHEMA_VERSION = "pgmuvi-wavelength-mean-estimation-v1"
 
@@ -137,6 +167,11 @@ class WavelengthMeanEstimationDiagnostics:
         """Return a JSON-safe dictionary representation."""
         return asdict(self)
 
+    @property
+    def n_usable_observational_channels(self) -> int:
+        """Return the number of usable observational channels."""
+        return self.n_usable_bands
+
 
 @dataclass(frozen=True)
 class ConsensusDiagnostics:
@@ -165,13 +200,34 @@ class ParameterEstimationContext:
     spectral_mixture_ard_diagnostics: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def bands(self) -> list[str]:
-        """Return the available band names."""
+    @property
+    def observational_channel_diagnostics(
+        self,
+    ) -> dict[str, BandDiagnostics]:
+        """Return diagnostics keyed by observational-channel identifier."""
+        return self.band_diagnostics
+
+    def observational_channels(self) -> list[str]:
+        """Return the available observational-channel identifiers."""
         return list(self.band_diagnostics.keys())
 
-    def get_band(self, band: str) -> BandDiagnostics:
-        """Return diagnostics for one band."""
+    def get_observational_channel(
+        self,
+        observational_channel: str,
+    ) -> BandDiagnostics:
+        """Return diagnostics for one observational channel."""
         try:
-            return self.band_diagnostics[band]
+            return self.band_diagnostics[observational_channel]
         except KeyError as exc:
-            raise KeyError(f"No diagnostics found for band {band!r}.") from exc
+            raise KeyError(
+                "No diagnostics found for observational channel "
+                f"{observational_channel!r}."
+            ) from exc
+
+    def bands(self) -> list[str]:
+        """Return observational-channel identifiers using the legacy name."""
+        return self.observational_channels()
+
+    def get_band(self, band: str) -> BandDiagnostics:
+        """Return observational-channel diagnostics using the legacy name."""
+        return self.get_observational_channel(band)

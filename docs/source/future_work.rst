@@ -76,16 +76,30 @@ Completed wavelength-derived constraint tranche (PR121--PR125)
 
 **TBD[wavelength-constraint-validation]**
     D1 nominal recovery, the canonical 20-seed D2 robustness calibration, and
-    the maintained wavelength-constraint notebook are complete.  The remaining
-    validation step is D3 application to representative real LPV sources across
-    the maintained model families, with source-level period evidence, fit
-    quality, residual wavelength structure, constraint diagnostics, warnings,
-    and failure semantics reported together.  Successful optimization alone is
-    not sufficient validation, and D3 must remain advisory rather than define
-    an automatic model-selection rule.
+    the maintained wavelength-constraint notebook are complete.  D3
+    representative observed-LPV validation infrastructure is now implemented
+    as a failure-aware, non-selecting reporting layer over the maintained
+    advisory workflow.  The remaining work is to execute and review the D3
+    validation on a representative source set across the maintained model
+    families.  Source-level period evidence, fit quality, residual wavelength
+    structure, constraint diagnostics, warnings, and failure semantics must be
+    reported together.  Successful optimization alone is not sufficient
+    validation, and D3 must remain advisory rather than define an automatic
+    model-selection rule.  Instrument-specific treatment of observational
+    channels sharing one physical wavelength remains
+    ``TBD[instrument-channel-calibration]``.
 
 Wavelength-model extensions
 ---------------------------
+
+**TBD[instrument-channel-calibration]**
+    Add an explicit, tested calibration model for multiple observational channels
+    that share one physical wavelength but have instrument-dependent offsets,
+    scales, throughput differences, or noise properties.  Current wavelength
+    diagnostics preserve the separate channel identities and flag the shared
+    wavelength, but they do not estimate or apply a calibration correction.  Any
+    public calibration API introduced before implementation must raise
+    ``NotImplementedError`` rather than silently approximating a correction.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current
