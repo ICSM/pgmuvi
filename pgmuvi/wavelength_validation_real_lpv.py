@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 
 from .instrument_channel_calibration import (
+    INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
     assess_instrument_channel_calibration_requirement,
 )
 
@@ -296,7 +297,7 @@ def build_representative_lpv_source_summary(
                 calibration_assessment.required
             ),
             "instrument_calibration_marker": (
-                "TBD[instrument-channel-calibration]"
+                INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER
             ),
             "instrument_channel_calibration": (
                 calibration_assessment.to_dict()
