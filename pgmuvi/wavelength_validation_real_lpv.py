@@ -21,6 +21,11 @@ from typing import Any
 
 import numpy as np
 
+from .instrument_channel_calibration import (
+    INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+    assess_instrument_channel_calibration_requirement,
+)
+
 from .wavelength_validation import (
     WavelengthValidationPhase,
     WavelengthValidationScenario,
@@ -243,7 +248,6 @@ def build_representative_lpv_source_summary(
     unique_wavelengths = np.unique(wavelengths)
 
     channels_by_wavelength: dict[str, list[str]] = {}
-    shared: dict[str, list[str]] = {}
     for wavelength in unique_wavelengths:
         mask = wavelengths == wavelength
         attached_channels = sorted(
@@ -251,8 +255,19 @@ def build_representative_lpv_source_summary(
         )
         key = format(float(wavelength), ".17g")
         channels_by_wavelength[key] = attached_channels
-        if len(attached_channels) > 1:
-            shared[key] = attached_channels
+
+    calibration_assessment = (
+        assess_instrument_channel_calibration_requirement(
+            wavelengths,
+            channels,
+        )
+    )
+    shared = {
+        format(wavelength, ".17g"): list(attached_channels)
+        for wavelength, attached_channels in (
+            calibration_assessment.shared_wavelength_channels.items()
+        )
+    }
 
     return _json_safe(
         {
@@ -273,14 +288,21 @@ def build_representative_lpv_source_summary(
                 shared
             ),
             "observational_channels_by_shared_wavelength": shared,
-            "instrument_calibration_status": "not_implemented",
-            "instrument_calibration_tbd": True,
+            "instrument_calibration_status": (
+                "not_implemented"
+                if calibration_assessment.required
+                else "not_required"
+            ),
+            "instrument_calibration_tbd": (
+                calibration_assessment.required
+            ),
             "instrument_calibration_marker": (
-                "TBD[instrument-channel-calibration]"
+                INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER
             ),
-            "shared_wavelength_policy": (
-                "preserve_channels_without_calibration"
+            "instrument_channel_calibration": (
+                calibration_assessment.to_dict()
             ),
+            "shared_wavelength_policy": calibration_assessment.policy,
             "linear_flux": True,
         }
     )

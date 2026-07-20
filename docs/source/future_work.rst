@@ -121,6 +121,12 @@ Wavelength-model extensions
     public calibration API introduced before implementation must raise
     ``NotImplementedError`` rather than silently approximating a correction.
 
+    The public contract and requirement-assessment primitives now live in
+    :mod:`pgmuvi.instrument_channel_calibration`.  They report shared-wavelength
+    channel groups and preserve the current uncalibrated policy.  The fit and
+    application callables deliberately raise ``NotImplementedError``; this does
+    not close the marker or constitute a calibration implementation.
+
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current
     limited multi-component diagnostics and consensus infrastructure.

@@ -22,7 +22,10 @@ performed.  When two or more usable observational channels share a physical
 wavelength, PGMUVI preserves their channel-level diagnostics but excludes that
 uncalibrated wavelength from cross-wavelength trend summaries and
 wavelength-mean fits.  It does not silently combine flux summaries, infer
-offsets or scales, or assign artificial wavelength differences.
+offsets or scales, or assign artificial wavelength differences.  The
+metadata includes the JSON-safe requirement assessment from
+:mod:`pgmuvi.instrument_channel_calibration`; no calibration is fitted or
+applied.
 
 The diagnostics retain the length-scale recommendation in the **raw
 wavelength coordinate** and also record the corresponding value and interval in
