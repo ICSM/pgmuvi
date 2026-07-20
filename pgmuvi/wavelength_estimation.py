@@ -16,6 +16,10 @@ from typing import Any
 
 import numpy as np
 
+from .instrument_channel_calibration import (
+    assess_instrument_channel_calibration_requirement,
+)
+
 from pgmuvi.parameter_context import (
     BandDiagnostics,
     WAVELENGTH_ESTIMATION_SCHEMA_VERSION,
@@ -437,15 +441,15 @@ def build_wavelength_estimation_context(
         else None
     )
 
-    channels_by_wavelength: dict[float, list[str]] = {}
-    for item in usable:
-        wavelength = float(item.wavelength)
-        channels_by_wavelength.setdefault(wavelength, []).append(item.band)
-    shared_wavelength_channels = {
-        wavelength: tuple(channels)
-        for wavelength, channels in channels_by_wavelength.items()
-        if len(channels) > 1
-    }
+    calibration_assessment = (
+        assess_instrument_channel_calibration_requirement(
+            [float(item.wavelength) for item in usable],
+            [item.band for item in usable],
+        )
+    )
+    shared_wavelength_channels = (
+        calibration_assessment.shared_wavelength_channels
+    )
     shared_wavelengths = set(shared_wavelength_channels)
 
     # TBD[instrument-channel-calibration]: An explicit calibration model is
@@ -548,6 +552,9 @@ def build_wavelength_estimation_context(
                 else "not_required"
             ),
             "instrument_calibration_tbd": bool(shared_wavelength_channels),
+            "instrument_channel_calibration": (
+                calibration_assessment.to_dict()
+            ),
             "shared_wavelength_trend_policy": (
                 "exclude_uncalibrated_shared_wavelengths"
                 if shared_wavelength_channels
@@ -644,11 +651,16 @@ def _wavelength_mean_observational_channel_points(
     channels_by_wavelength: dict[float, list[str]] = {}
     for raw_value, _, _, label in rows:
         channels_by_wavelength.setdefault(raw_value, []).append(label)
-    shared_wavelength_channels = {
-        wavelength: tuple(channels)
-        for wavelength, channels in channels_by_wavelength.items()
-        if len(channels) > 1
-    }
+
+    calibration_assessment = (
+        assess_instrument_channel_calibration_requirement(
+            [item[0] for item in rows],
+            [item[3] for item in rows],
+        )
+    )
+    shared_wavelength_channels = (
+        calibration_assessment.shared_wavelength_channels
+    )
     shared_wavelengths = set(shared_wavelength_channels)
 
     # TBD[instrument-channel-calibration]: Separate observational channels at
@@ -681,6 +693,9 @@ def _wavelength_mean_observational_channel_points(
             else "not_required"
         ),
         "instrument_calibration_tbd": bool(shared_wavelength_channels),
+        "instrument_channel_calibration": (
+            calibration_assessment.to_dict()
+        ),
         "shared_wavelength_mean_policy": (
             "exclude_uncalibrated_shared_wavelengths"
             if shared_wavelength_channels

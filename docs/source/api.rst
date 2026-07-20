@@ -59,6 +59,7 @@ Data, diagnostics, and validation
    pgmuvi.multiband_ls_significance
    pgmuvi.wavelength_conclusions
    pgmuvi.wavelength_diagnostics
+   pgmuvi.instrument_channel_calibration
    pgmuvi.wavelength_estimation
    pgmuvi.spectral_mixture_ard
    pgmuvi.spectral_mixture_ard_diagnostics

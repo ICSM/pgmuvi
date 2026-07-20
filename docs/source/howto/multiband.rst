@@ -118,7 +118,9 @@ using the existing compatibility method::
    calibration corrections when multiple observational channels share one
    physical wavelength.  Preserve the separate channel labels.  No silent
    calibration or wavelength reassignment is performed; an explicit calibration
-   model is future work.
+   model is future work.  The public fit and apply callables in
+   :mod:`pgmuvi.instrument_channel_calibration` raise ``NotImplementedError``
+   until that model exists.
 
 Visualising 2D Results
 -----------------------

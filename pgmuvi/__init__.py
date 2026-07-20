@@ -17,6 +17,7 @@ __all__ = [
     "constraints",
     "gps",
     "initialization",
+    "instrument_channel_calibration",
     "lightcurve",
     "priors",
     "spectral_mixture_ard",
