@@ -46,15 +46,37 @@ class TestSpectralMixtureArdDocumentation(unittest.TestCase):
         self.assertIn("updates only ARD index 0", normalized)
         self.assertIn("wavelength-frequency bounds at ARD index 1 are preserved", normalized)
 
-    def test_future_work_records_diagnostics_completion_and_validation_scope(self):
-        text = (ROOT / "docs/source/future_work.rst").read_text()
-        normalized = " ".join(text.split())
-        self.assertIn("Completed wavelength-derived constraint tranche", normalized)
-        self.assertIn("Component- and dimension-specific fitted diagnostics", normalized)
-        self.assertIn("distance to each bound", normalized)
-        self.assertIn("num_mixtures=1", normalized)
-        self.assertNotIn("TBD[wavelength-derived-constraints]", text)
-        self.assertIn("TBD[wavelength-constraint-validation]", text)
+    def test_future_work_records_diagnostics_and_d3_completion(self):
+        future_work = (
+            Path(__file__).resolve().parents[1]
+            / "docs/source/future_work.rst"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(future_work.split())
+
+        self.assertNotIn(
+            "TBD[wavelength-constraint-validation]",
+            future_work,
+        )
+        self.assertIn(
+            "TBD[instrument-channel-calibration]",
+            future_work,
+        )
+        self.assertIn(
+            'Completed: representative wavelength-constraint validation',
+            normalized,
+        )
+        self.assertIn(
+            'temporal and wavelength ARD dimensions',
+            normalized,
+        )
+        self.assertIn(
+            'Component- and dimension-specific fitted diagnostics',
+            normalized,
+        )
+        self.assertIn(
+            '597.37 days',
+            normalized,
+        )
 
 
 if __name__ == "__main__":

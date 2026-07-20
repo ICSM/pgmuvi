@@ -608,10 +608,10 @@ initialization with enforceable constraints for ``2DWavelengthDependent``,
 ``2DDustMean``, and ``2DPowerLawMean``.  Those fitting changes do not turn the
 conclusion records into automatic selection evidence.
 
-The diagnostic tranche is complete through PR125.
-Scientific recovery and robustness work remains under
-``TBD[wavelength-constraint-validation]``.  Independent temporal and wavelength
-ARD bounds and component/dimension boundary provenance are implemented for the
-full ``2D`` spectral-mixture baseline.  The remaining work is synthetic
-recovery, robustness across sampling and seeds, and representative real-LPV
-validation.
+The D3 representative observed-LPV execution now provides the
+completed wavelength-constraint validation evidence.  It records
+period evidence, fit quality, residual wavelength structure,
+constraint diagnostics, warnings, and structured failure semantics
+for all five maintained candidates.  See
+:doc:`representative_lpv_validation` for the execution result,
+limitations, and interpretation boundaries.

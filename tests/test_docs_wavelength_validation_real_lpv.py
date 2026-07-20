@@ -209,19 +209,35 @@ class TestRepresentativeLPVHowToGuide(unittest.TestCase):
 
 
 class TestRepresentativeLPVFutureWorkStatus(unittest.TestCase):
-    def test_future_work_no_longer_calls_d3_the_next_unimplemented_step(self):
+    def test_future_work_records_completed_d3_execution(self):
+        future_work = (
+            DOCS / "future_work.rst"
+        ).read_text(encoding="utf-8")
         normalized = _normalized(DOCS / "future_work.rst")
 
         self.assertNotIn(
-            "The next validation step is D3 application",
-            normalized,
-        )
-        self.assertIn(
-            "D3 representative observed-LPV validation infrastructure",
-            normalized,
+            "TBD[wavelength-constraint-validation]",
+            future_work,
         )
         self.assertIn(
             "TBD[instrument-channel-calibration]",
+            future_work,
+        )
+        self.assertIn(
+            "Completed: representative wavelength-constraint validation",
+            normalized,
+        )
+        self.assertIn(
+            "All five maintained LPV-relevant candidates completed",
+            normalized,
+        )
+        self.assertIn(
+            "597.37 days",
+            normalized,
+        )
+        self.assertIn(
+            "examples/validation/"
+            "d3_representative_lpv_calibration_summary.json",
             normalized,
         )
 

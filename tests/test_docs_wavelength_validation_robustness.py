@@ -30,16 +30,33 @@ class TestSyntheticWavelengthRobustnessDocumentation(unittest.TestCase):
         package_init = (ROOT / "pgmuvi/__init__.py").read_text(encoding="utf-8")
         self.assertIn('"wavelength_validation_robustness"', package_init)
 
-    def test_future_work_tracks_d3_after_d2_and_notebook_completion(self):
-        future = (ROOT / "docs/source/future_work.rst").read_text(
-            encoding="utf-8"
-        )
-        normalized = " ".join(future.split())
+    def test_future_work_records_d3_completion_after_d2(self):
+        future_work = (
+            Path(__file__).resolve().parents[1]
+            / "docs/source/future_work.rst"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(future_work.split())
 
-        self.assertIn("canonical 20-seed D2 robustness calibration", normalized)
-        self.assertIn("maintained wavelength-constraint notebook are complete", normalized)
-        self.assertIn("D3 representative observed-LPV validation infrastructure", normalized)
-        self.assertNotIn("Execute and document the full D2 population", future)
+        self.assertNotIn(
+            "TBD[wavelength-constraint-validation]",
+            future_work,
+        )
+        self.assertIn(
+            "TBD[instrument-channel-calibration]",
+            future_work,
+        )
+        self.assertIn(
+            'Completed: representative wavelength-constraint validation',
+            normalized,
+        )
+        self.assertIn(
+            'D3 representative observed-LPV validation',
+            normalized,
+        )
+        self.assertIn(
+            'structured failure semantics',
+            normalized,
+        )
 
     def test_notebook_status_tracks_constraint_walkthrough(self):
         status = (ROOT / "docs/source/notebook_status.rst").read_text(

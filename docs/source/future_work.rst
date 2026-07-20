@@ -74,20 +74,40 @@ Completed wavelength-derived constraint tranche (PR121--PR125)
     kernel.  These records remain descriptive and do not convert constraint
     pressure into model-selection evidence.
 
-**TBD[wavelength-constraint-validation]**
-    D1 nominal recovery, the canonical 20-seed D2 robustness calibration, and
-    the maintained wavelength-constraint notebook are complete.  D3
-    representative observed-LPV validation infrastructure is now implemented
-    as a failure-aware, non-selecting reporting layer over the maintained
-    advisory workflow.  The remaining work is to execute and review the D3
-    validation on a representative source set across the maintained model
-    families.  Source-level period evidence, fit quality, residual wavelength
-    structure, constraint diagnostics, warnings, and failure semantics must be
-    reported together.  Successful optimization alone is not sufficient
-    validation, and D3 must remain advisory rather than define an automatic
-    model-selection rule.  Instrument-specific treatment of observational
-    channels sharing one physical wavelength remains
-    ``TBD[instrument-channel-calibration]``.
+**Completed: representative wavelength-constraint validation**
+
+The D3 representative observed-LPV validation has been executed,
+summarized, documented, and covered by regression tests.  The
+bounded deterministic execution used 789 of the 10,815 public
+``10131+3049`` observations while retaining all 17 observational
+channels and all 16 distinct physical wavelengths.
+
+All five maintained LPV-relevant candidates completed:
+
+* ``2DWavelengthDependent``
+* ``2DDustMean``
+* ``2DPowerLawMean``
+* ``2DSeparable``
+* ``2D``
+
+The execution records source-level period evidence, transformed
+training-space fit quality, residual structure by physical
+wavelength, constraint diagnostics, warnings, and structured
+failure semantics.  The common consensus period was approximately
+597.37 days.
+
+The resulting ranking is descriptive and advisory.  It is not
+held-out predictive evidence, truth recovery, or automatic model
+selection.  The detailed execution contract and limitations are
+documented in ``howto/representative_lpv_validation.rst`` and the
+compact committed result is stored in
+``examples/validation/d3_representative_lpv_calibration_summary.json``.
+
+This documentation consolidation closes the D3
+wavelength-constraint validation marker.  The calibration summary
+correctly records that the preceding execution PR did not itself
+close the marker; closure occurs here after consolidation and
+regression coverage.
 
 Wavelength-model extensions
 ---------------------------
