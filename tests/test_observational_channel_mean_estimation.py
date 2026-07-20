@@ -126,6 +126,23 @@ class TestObservationalChannelMeanEstimation(unittest.TestCase):
 
         metadata = diagnostics.metadata
         self.assertEqual(metadata["n_usable_observational_channels"], 5)
+        self.assertEqual(diagnostics.n_usable_bands, 3)
+        self.assertEqual(
+            diagnostics.n_usable_observational_channels,
+            5,
+        )
+        self.assertEqual(
+            diagnostics.n_usable_bands,
+            len(diagnostics.raw_wavelengths),
+        )
+        self.assertEqual(
+            diagnostics.n_usable_bands,
+            len(diagnostics.model_wavelengths),
+        )
+        self.assertEqual(
+            diagnostics.n_usable_bands,
+            len(diagnostics.model_median_fluxes),
+        )
         self.assertEqual(metadata["n_distinct_physical_wavelengths"], 4)
         self.assertEqual(
             metadata["n_physical_wavelengths_used_for_mean_estimation"],

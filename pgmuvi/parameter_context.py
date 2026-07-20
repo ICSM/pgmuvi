@@ -170,7 +170,12 @@ class WavelengthMeanEstimationDiagnostics:
     @property
     def n_usable_observational_channels(self) -> int:
         """Return the number of usable observational channels."""
-        return self.n_usable_bands
+        metadata_count = self.metadata.get(
+            "n_usable_observational_channels"
+        )
+        if metadata_count is None:
+            return self.n_usable_bands
+        return int(metadata_count)
 
 
 @dataclass(frozen=True)

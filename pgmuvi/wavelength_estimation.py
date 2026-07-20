@@ -1098,9 +1098,7 @@ def build_wavelength_mean_estimation_context(
 
     return WavelengthMeanEstimationDiagnostics(
         available=any(record.get("available") for record in recommendations.values()),
-        n_usable_bands=int(
-            channel_metadata["n_usable_observational_channels"]
-        ),
+        n_usable_bands=int(raw.size),
         raw_wavelengths=tuple(float(value) for value in raw),
         model_wavelengths=tuple(float(value) for value in model),
         model_median_fluxes=tuple(float(value) for value in flux),
