@@ -333,6 +333,15 @@ class InstrumentChannelCalibration:
         )
         object.__setattr__(self, "channel", channel)
 
+        if not isinstance(self.fit_method, str):
+            raise TypeError("fit_method must be a string.")
+
+        fit_method = self.fit_method.strip()
+        if not fit_method:
+            raise ValueError("fit_method must be non-empty.")
+
+        object.__setattr__(self, "fit_method", fit_method)
+
         finite_values = {
             "wavelength": self.wavelength,
             "offset": self.offset,
@@ -648,13 +657,49 @@ def fit_instrument_channel_calibration(
             selected_residual
         )
 
-        if residual_scale <= 0.0:
-            break
-
-        updated = (
-            np.abs(residual - centre)
-            <= sigma_clip * residual_scale
+        absolute_deviation = np.abs(residual - centre)
+        numerical_tolerance = (
+            64.0
+            * np.finfo(float).eps
+            * max(
+                1.0,
+                float(np.max(np.abs(reference))),
+                float(
+                    np.max(
+                        np.abs(offset + scale * target)
+                    )
+                ),
+            )
         )
+
+        if residual_scale <= numerical_tolerance:
+            updated = (
+                absolute_deviation <= numerical_tolerance
+            )
+
+            if (
+                np.count_nonzero(updated) < min_pairs
+                or float(np.ptp(target[updated])) <= 0.0
+            ):
+                positive_deviation = absolute_deviation[
+                    absolute_deviation > numerical_tolerance
+                ]
+
+                if positive_deviation.size == 0:
+                    break
+
+                fallback_scale = float(
+                    np.min(positive_deviation)
+                )
+                updated = (
+                    absolute_deviation
+                    <= sigma_clip * fallback_scale
+                )
+        else:
+            updated = (
+                absolute_deviation
+                <= sigma_clip * residual_scale
+            )
 
         if np.count_nonzero(updated) < min_pairs:
             break

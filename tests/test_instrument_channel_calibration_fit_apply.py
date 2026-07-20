@@ -57,6 +57,34 @@ class TestInstrumentChannelCalibrationFit(unittest.TestCase):
         self.assertAlmostEqual(calibration.offset, 0.125, delta=0.002)
         self.assertAlmostEqual(calibration.scale, 1.35, delta=0.002)
 
+    def test_zero_mad_outliers_are_clipped(self):
+        channel_flux = np.linspace(0.0, 1.0, 61)
+        reference_flux = 0.25 + 1.4 * channel_flux
+        reference_flux[[0, 30, 60]] += np.array(
+            [5.0, -10.0, 5.0]
+        )
+
+        calibration = fit_instrument_channel_calibration(
+            reference_flux,
+            channel_flux,
+            reference_channel="reference",
+            channel="target",
+            wavelength=0.656,
+        )
+
+        self.assertEqual(calibration.n_pairs, 61)
+        self.assertEqual(calibration.n_inliers, 58)
+        self.assertAlmostEqual(
+            calibration.offset,
+            0.25,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            calibration.scale,
+            1.4,
+            places=12,
+        )
+
     def test_optional_measurement_errors_are_supported(self):
         calibration = fit_instrument_channel_calibration(
             self.reference_flux,
@@ -156,6 +184,41 @@ class TestInstrumentChannelCalibrationFit(unittest.TestCase):
         )
         self.assertFalse(payload["automatic_time_matching"])
         self.assertFalse(payload["automatic_model_selection"])
+
+    def test_fit_method_is_normalized_and_type_checked(self):
+        common = {
+            "schema_version": (
+                INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION
+            ),
+            "reference_channel": "reference",
+            "channel": "target",
+            "wavelength": 0.656,
+            "offset": 0.25,
+            "scale": 1.5,
+            "n_pairs": 20,
+            "n_inliers": 18,
+            "residual_mad_sigma": 0.01,
+        }
+
+        calibration = InstrumentChannelCalibration(
+            **common,
+            fit_method=" custom-affine ",
+        )
+
+        self.assertEqual(
+            calibration.fit_method,
+            "custom-affine",
+        )
+        json.dumps(calibration.to_dict(), allow_nan=False)
+
+        with self.assertRaisesRegex(
+            TypeError,
+            "fit_method must be a string",
+        ):
+            InstrumentChannelCalibration(
+                **common,
+                fit_method=object(),
+            )
 
 
 class TestInstrumentChannelCalibrationApply(unittest.TestCase):
