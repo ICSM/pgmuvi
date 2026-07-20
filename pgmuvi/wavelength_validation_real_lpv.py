@@ -414,18 +414,93 @@ def _residual_wavelength_evidence(
         diagnostics if isinstance(diagnostics, Mapping) else {}
     )
 
+    by_model: dict[str, dict[str, Any]] = {}
+
+    for row in _workflow_attempt_rows(workflow_report):
+        model = str(row.get("model") or "").strip()
+        if not model:
+            continue
+
+        fit_quality = row.get("fit_quality")
+        if not isinstance(fit_quality, Mapping):
+            continue
+
+        wavelength_rows = []
+
+        for wavelength_row in fit_quality.get("by_band") or ():
+            if not isinstance(wavelength_row, Mapping):
+                continue
+
+            wavelength = wavelength_row.get("wavelength")
+            if wavelength is None:
+                continue
+
+            wavelength_rows.append(
+                _json_safe(
+                    {
+                        "physical_wavelength": wavelength,
+                        "n_points": wavelength_row.get("n_points"),
+                        "bias": wavelength_row.get("bias"),
+                        "mae": wavelength_row.get("mae"),
+                        "median_abs_residual": wavelength_row.get(
+                            "median_abs_residual"
+                        ),
+                        "rmse": wavelength_row.get("rmse"),
+                    }
+                )
+            )
+
+        wavelength_rows.sort(
+            key=lambda item: item["physical_wavelength"]
+        )
+
+        if not wavelength_rows:
+            continue
+
+        by_model[model] = _json_safe(
+            {
+                "model_kernel_config_id": row.get(
+                    "model_kernel_config_id"
+                ),
+                "residual_space": fit_quality.get("space"),
+                "n_points": fit_quality.get("n_points"),
+                "n_physical_wavelengths": len(wavelength_rows),
+                "by_physical_wavelength": wavelength_rows,
+            }
+        )
+
     result = dict(_json_safe(diagnostics))
-    result.setdefault(
-        "n_observational_channels",
-        source_summary.get("n_observational_channels"),
+    result.update(
+        {
+            "available": bool(by_model),
+            "aggregation_scope": "physical_wavelength",
+            "n_models_with_residual_wavelength_evidence": (
+                len(by_model)
+            ),
+            "n_observational_channels": source_summary.get(
+                "n_observational_channels"
+            ),
+            "n_distinct_physical_wavelengths": source_summary.get(
+                "n_distinct_physical_wavelengths"
+            ),
+            "shared_wavelength_observational_channels_aggregated": (
+                bool(
+                    source_summary.get(
+                        "multiple_observational_channels_per_wavelength"
+                    )
+                )
+            ),
+            "by_model": by_model,
+            "interpretation": (
+                "Descriptive transformed-training-space residual "
+                "summaries grouped by physical wavelength. "
+                "Observational channels sharing a physical wavelength "
+                "remain aggregated pending instrument-channel "
+                "calibration."
+            ),
+            "truth_recovery_evidence": False,
+        }
     )
-    result.setdefault(
-        "n_distinct_physical_wavelengths",
-        source_summary.get(
-            "n_distinct_physical_wavelengths"
-        ),
-    )
-    result["truth_recovery_evidence"] = False
     return result
 
 
@@ -478,7 +553,12 @@ def _warning_evidence(
     for row in rows:
         model = row.get("model")
         config_id = row.get("model_kernel_config_id")
-        for warning in row.get("warnings") or ():
+        warning_records = (
+            row.get("warning_records")
+            or row.get("warnings")
+            or ()
+        )
+        for warning in warning_records:
             if not isinstance(warning, Mapping):
                 continue
             record = {
