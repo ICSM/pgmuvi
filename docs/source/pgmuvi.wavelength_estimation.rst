@@ -4,13 +4,25 @@ pgmuvi.wavelength_estimation
 This module builds the shared wavelength-estimation context used by the
 parameter workflow.  It records:
 
-* usable and excluded bands;
+* usable and excluded observational channels;
 * total wavelength span and adjacent wavelength spacings;
 * the largest wavelength gap and spacing irregularity;
-* robust per-band median, scatter, and multiple quantile amplitudes;
+* robust per-observational-channel median, scatter, and quantile amplitudes;
 * fractional and uncertainty-corrected amplitude summaries;
 * monotonicity indicators for median flux, amplitude, and scatter; and
+* the number of observational channels and distinct physical wavelengths; and
 * an auditable wavelength-length-scale value and interval.
+
+Observational channels are identified independently of their numeric physical
+wavelengths.  Multiple channels may share one wavelength, so channel-level
+summaries and distinct physical wavelengths are reported separately.
+
+**TBD[instrument-channel-calibration]:** No instrument-channel calibration is
+performed.  When two or more usable observational channels share a physical
+wavelength, PGMUVI preserves their channel-level diagnostics but excludes that
+uncalibrated wavelength from cross-wavelength trend summaries and
+wavelength-mean fits.  It does not silently combine flux summaries, infer
+offsets or scales, or assign artificial wavelength differences.
 
 The diagnostics retain the length-scale recommendation in the **raw
 wavelength coordinate** and also record the corresponding value and interval in
@@ -32,7 +44,7 @@ dimension-aware spectral-mixture ARD layer documented in
 :mod:`pgmuvi.spectral_mixture_ard`.
 
 The same module now builds model-ready wavelength-mean recommendations from
-robust per-band median fluxes.  ``GuessStrategy.WAVELENGTH_MEAN`` and
+robust per-observational-channel median fluxes.  ``GuessStrategy.WAVELENGTH_MEAN`` and
 ``ConstraintStrategy.WAVELENGTH_MEAN`` initialize and constrain:
 
 * the quadratic bias and coefficients in ``2DWavelengthDependent``;
@@ -49,7 +61,7 @@ physical interpretation.  Every affected mean parameter uses a registered
 GPyTorch raw-parameter interval, so the reported bounds remain active during
 optimization.
 
-For three or more non-flat bands, the power-law recommendation now retains the
+For three or more non-flat physical-wavelength evidence points, the power-law recommendation now retains the
 full exponent-profile fit and converts its same-sign, near-optimal support into
 finite data-derived intervals for offset, signed amplitude, and exponent.  This
 prevents the covariance from absorbing a clearly resolved static wavelength
@@ -58,10 +70,10 @@ flat solution.  The profile criterion, supported parameter ranges, padded
 active intervals, and effective registered constraints remain available in
 parameter-workflow provenance.
 
-With only two usable bands, the power-law exponent is not identifiable jointly
+With only two usable physical-wavelength evidence points, the power-law exponent is not identifiable jointly
 with its offset and amplitude.  The estimator therefore keeps the documented
 ``-2`` default and fits only the linear coefficients instead of selecting an
-arbitrary grid endpoint.  An exactly flat band-median trend is not promoted to
+arbitrary grid endpoint.  An exactly flat wavelength-median trend is not promoted to
 a dust-shape estimate, and neither under-identified case receives a fabricated
 profile interval.
 

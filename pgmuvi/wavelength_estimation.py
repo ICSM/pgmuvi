@@ -1,8 +1,9 @@
 """Wavelength-domain summaries for parameter estimation.
 
 The routines in this module summarize the wavelength sampling and robust
-per-band flux distributions of a multiband light curve.  They do not mutate a
-GP model and they do not claim that a particular wavelength model is selected.
+per-observational-channel flux distributions of a multiband light curve. They
+do not mutate a GP model and they do not claim that a particular wavelength
+model is selected.
 The resulting diagnostics are intended to provide a shared, auditable input to
 later wavelength-kernel and wavelength-mean initialization work.
 """
@@ -275,35 +276,73 @@ def build_wavelength_estimation_context(
     uncertainties: Any | None = None,
     band_labels: Any | None = None,
     *,
-    min_points_per_band: int = 3,
+    min_points_per_band: int | None = None,
+    observational_channel_labels: Any | None = None,
+    min_points_per_observational_channel: int | None = None,
 ) -> tuple[WavelengthEstimationDiagnostics, dict[str, BandDiagnostics]]:
-    """Build wavelength sampling and robust per-band diagnostics.
+    """Build wavelength sampling and observational-channel diagnostics.
 
     Parameters
     ----------
     wavelengths
-        Numeric wavelength coordinate for each observation.
+        Numeric physical-wavelength coordinate for each observation.
     fluxes
-        Flux or magnitude value for each observation.  The values are summarized
-        in their supplied linear coordinate; no log-flux transformation is used.
+        Flux value for each observation. The values are summarized in their
+        supplied linear coordinate; no log-flux transformation is used.
     uncertainties
-        Optional measurement uncertainties.  Only finite positive values enter
+        Optional measurement uncertainties. Only finite positive values enter
         the uncertainty and noise-corrected summaries.
+    observational_channel_labels
+        Preferred row-wise identifiers for instrument, detector, filter, or
+        data-stream combinations. Multiple observational channels may share
+        one physical wavelength.
     band_labels
-        Optional row-wise labels.  When absent, exact numeric wavelengths define
-        the groups.
+        Legacy alias for ``observational_channel_labels``.
+    min_points_per_observational_channel
+        Preferred minimum number of finite wavelength/flux pairs required for
+        one observational channel to enter wavelength evidence.
     min_points_per_band
-        Minimum number of finite wavelength/flux pairs required for a band to
-        enter cross-wavelength trend and length-scale summaries.
+        Legacy alias for ``min_points_per_observational_channel``.
 
     Returns
     -------
     tuple
-        Two-element tuple containing an immutable wavelength-level summary and
-        per-band diagnostics keyed by label.
+        An immutable wavelength-level summary and diagnostics keyed by
+        observational-channel identifier.
     """
-    if min_points_per_band < 1:
-        raise ValueError("min_points_per_band must be at least 1.")
+    if (
+        observational_channel_labels is not None
+        and band_labels is not None
+    ):
+        raise ValueError(
+            "observational_channel_labels and band_labels cannot both be "
+            "provided."
+        )
+    if (
+        min_points_per_observational_channel is not None
+        and min_points_per_band is not None
+    ):
+        raise ValueError(
+            "min_points_per_observational_channel and min_points_per_band "
+            "cannot both be provided."
+        )
+
+    channel_labels = (
+        observational_channel_labels
+        if observational_channel_labels is not None
+        else band_labels
+    )
+    minimum_points = (
+        min_points_per_observational_channel
+        if min_points_per_observational_channel is not None
+        else min_points_per_band
+    )
+    if minimum_points is None:
+        minimum_points = 3
+    if minimum_points < 1:
+        raise ValueError(
+            "min_points_per_observational_channel must be at least 1."
+        )
 
     wavelength_values = _finite_array(wavelengths)
     flux_values = _finite_array(fluxes)
@@ -319,7 +358,7 @@ def build_wavelength_estimation_context(
     else:
         uncertainty_values = None
 
-    if band_labels is None:
+    if channel_labels is None:
         labels = np.asarray(
             [
                 _band_label_for_wavelength(value)
@@ -330,16 +369,17 @@ def build_wavelength_estimation_context(
             dtype=str,
         )
     else:
-        labels = np.asarray(band_labels, dtype=str).reshape(-1)
+        labels = np.asarray(channel_labels, dtype=str).reshape(-1)
         if labels.size != flux_values.size:
             raise ValueError(
-                "band_labels must have the same length as wavelengths and fluxes."
+                "observational_channel_labels must have the same length as "
+                "wavelengths and fluxes."
             )
 
-    band_diagnostics: dict[str, BandDiagnostics] = {}
+    observational_channel_diagnostics: dict[str, BandDiagnostics] = {}
     for label in dict.fromkeys(labels.tolist()):
         mask = labels == label
-        band_diagnostics[label] = _build_band_diagnostics(
+        observational_channel_diagnostics[label] = _build_band_diagnostics(
             band=label,
             wavelengths=wavelength_values[mask],
             fluxes=flux_values[mask],
@@ -348,12 +388,12 @@ def build_wavelength_estimation_context(
                 if uncertainty_values is not None
                 else None
             ),
-            min_points_per_band=min_points_per_band,
+            min_points_per_band=minimum_points,
         )
 
     usable = [
         item
-        for item in band_diagnostics.values()
+        for item in observational_channel_diagnostics.values()
         if item.metadata.get("usable_for_wavelength_estimation")
     ]
     usable.sort(key=lambda item: float(item.wavelength))
@@ -397,27 +437,49 @@ def build_wavelength_estimation_context(
         else None
     )
 
+    channels_by_wavelength: dict[float, list[str]] = {}
+    for item in usable:
+        wavelength = float(item.wavelength)
+        channels_by_wavelength.setdefault(wavelength, []).append(item.band)
+    shared_wavelength_channels = {
+        wavelength: tuple(channels)
+        for wavelength, channels in channels_by_wavelength.items()
+        if len(channels) > 1
+    }
+    shared_wavelengths = set(shared_wavelength_channels)
+
+    # TBD[instrument-channel-calibration]: An explicit calibration model is
+    # required before flux summaries from multiple observational channels at
+    # one physical wavelength can be combined. Until then, omit those physical
+    # wavelengths from cross-wavelength trend summaries rather than silently
+    # calibrating or double-counting them.
+    usable_for_trends = [
+        item
+        for item in usable
+        if float(item.wavelength) not in shared_wavelengths
+    ]
+
     median_fluxes = [
         float(item.median_flux)
-        for item in usable
+        for item in usable_for_trends
         if item.median_flux is not None and math.isfinite(item.median_flux)
     ]
     amplitudes = [
         float(item.raw_half_amplitude_q05_q95)
-        for item in usable
+        for item in usable_for_trends
         if item.raw_half_amplitude_q05_q95 is not None
         and math.isfinite(item.raw_half_amplitude_q05_q95)
     ]
     scatters = [
         float(item.robust_scatter)
-        for item in usable
+        for item in usable_for_trends
         if item.robust_scatter is not None and math.isfinite(item.robust_scatter)
     ]
 
     initial, bounds, method = _lengthscale_recommendation(distinct_wavelengths)
     excluded = tuple(
         label
-        for label, item in band_diagnostics.items()
+        for label, item in observational_channel_diagnostics.items()
         if not item.metadata.get("usable_for_wavelength_estimation")
     )
 
@@ -428,7 +490,7 @@ def build_wavelength_estimation_context(
         ),
         n_distinct_wavelengths=int(distinct_wavelengths.size),
         n_usable_bands=len(usable),
-        min_points_per_band=min_points_per_band,
+        min_points_per_band=minimum_points,
         wavelengths=tuple(float(value) for value in distinct_wavelengths),
         wavelength_min=(
             float(distinct_wavelengths[0]) if distinct_wavelengths.size else None
@@ -469,21 +531,52 @@ def build_wavelength_estimation_context(
             "model_lengthscale_units": "raw_wavelength_coordinate",
             "lengthscale_applied_to_models": False,
             "trend_order": "ascending_wavelength",
+            "n_usable_observational_channels": len(usable),
+            "n_distinct_physical_wavelengths": int(
+                distinct_wavelengths.size
+            ),
+            "multiple_observational_channels_per_wavelength": bool(
+                shared_wavelength_channels
+            ),
+            "observational_channels_by_shared_wavelength": {
+                f"{wavelength:.17g}": list(channels)
+                for wavelength, channels in shared_wavelength_channels.items()
+            },
+            "instrument_calibration_status": (
+                "not_implemented"
+                if shared_wavelength_channels
+                else "not_required"
+            ),
+            "instrument_calibration_tbd": bool(shared_wavelength_channels),
+            "shared_wavelength_trend_policy": (
+                "exclude_uncalibrated_shared_wavelengths"
+                if shared_wavelength_channels
+                else "not_applicable"
+            ),
+            "n_physical_wavelengths_used_for_trend_diagnostics": len(
+                usable_for_trends
+            ),
         },
     )
 
-    return diagnostics, band_diagnostics
+    return diagnostics, observational_channel_diagnostics
 
 
-def _wavelength_mean_band_points(
+def _wavelength_mean_observational_channel_points(
     raw_wavelengths: Any,
     model_wavelengths: Any,
     model_fluxes: Any,
-    band_labels: Any | None,
+    observational_channel_labels: Any | None,
     *,
-    min_points_per_band: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[str, ...]]:
-    """Return robust per-band points for wavelength-mean estimation."""
+    min_points_per_observational_channel: int,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    tuple[str, ...],
+    dict[str, Any],
+]:
+    """Return robust channel points safe for wavelength-mean estimation."""
     raw = _finite_array(raw_wavelengths)
     model = _finite_array(model_wavelengths)
     flux = _finite_array(model_fluxes)
@@ -493,7 +586,7 @@ def _wavelength_mean_band_points(
             "have the same length."
         )
 
-    if band_labels is None:
+    if observational_channel_labels is None:
         labels = np.asarray(
             [
                 _band_label_for_wavelength(value)
@@ -504,10 +597,14 @@ def _wavelength_mean_band_points(
             dtype=str,
         )
     else:
-        labels = np.asarray(band_labels, dtype=str).reshape(-1)
+        labels = np.asarray(
+            observational_channel_labels,
+            dtype=str,
+        ).reshape(-1)
         if labels.size != raw.size:
             raise ValueError(
-                "band_labels must have the same length as wavelength inputs."
+                "observational_channel_labels must have the same length as "
+                "wavelength inputs."
             )
 
     rows: list[tuple[float, float, float, str]] = []
@@ -518,7 +615,7 @@ def _wavelength_mean_band_points(
         raw_values = raw[finite]
         model_values = model[finite]
         flux_values = flux[finite]
-        if flux_values.size < min_points_per_band:
+        if flux_values.size < min_points_per_observational_channel:
             excluded.append(label)
             continue
         raw_median = float(np.median(raw_values))
@@ -544,11 +641,61 @@ def _wavelength_mean_band_points(
         )
 
     rows.sort(key=lambda item: item[0])
+    channels_by_wavelength: dict[float, list[str]] = {}
+    for raw_value, _, _, label in rows:
+        channels_by_wavelength.setdefault(raw_value, []).append(label)
+    shared_wavelength_channels = {
+        wavelength: tuple(channels)
+        for wavelength, channels in channels_by_wavelength.items()
+        if len(channels) > 1
+    }
+    shared_wavelengths = set(shared_wavelength_channels)
+
+    # TBD[instrument-channel-calibration]: Separate observational channels at
+    # one physical wavelength cannot contribute independent mean-fit points
+    # until an explicit calibration model exists. Excluding the wavelength is
+    # safer than silently combining channel medians or double-counting it.
+    retained_rows = [
+        item for item in rows if item[0] not in shared_wavelengths
+    ]
+    excluded_from_mean = [
+        item[3] for item in rows if item[0] in shared_wavelengths
+    ]
+
+    metadata = {
+        "n_usable_observational_channels": len(rows),
+        "n_distinct_physical_wavelengths": len(channels_by_wavelength),
+        "n_physical_wavelengths_used_for_mean_estimation": len(
+            {item[0] for item in retained_rows}
+        ),
+        "multiple_observational_channels_per_wavelength": bool(
+            shared_wavelength_channels
+        ),
+        "observational_channels_by_shared_wavelength": {
+            f"{wavelength:.17g}": list(channels)
+            for wavelength, channels in shared_wavelength_channels.items()
+        },
+        "instrument_calibration_status": (
+            "not_implemented"
+            if shared_wavelength_channels
+            else "not_required"
+        ),
+        "instrument_calibration_tbd": bool(shared_wavelength_channels),
+        "shared_wavelength_mean_policy": (
+            "exclude_uncalibrated_shared_wavelengths"
+            if shared_wavelength_channels
+            else "not_applicable"
+        ),
+        "observational_channels_excluded_from_mean_estimation": (
+            excluded_from_mean
+        ),
+    }
     return (
-        np.asarray([item[0] for item in rows], dtype=float),
-        np.asarray([item[1] for item in rows], dtype=float),
-        np.asarray([item[2] for item in rows], dtype=float),
+        np.asarray([item[0] for item in retained_rows], dtype=float),
+        np.asarray([item[1] for item in retained_rows], dtype=float),
+        np.asarray([item[2] for item in retained_rows], dtype=float),
         tuple(excluded),
+        metadata,
     )
 
 
@@ -873,32 +1020,82 @@ def build_wavelength_mean_estimation_context(
     model_fluxes: Any,
     band_labels: Any | None = None,
     *,
-    min_points_per_band: int = 3,
+    min_points_per_band: int | None = None,
+    observational_channel_labels: Any | None = None,
+    min_points_per_observational_channel: int | None = None,
 ) -> WavelengthMeanEstimationDiagnostics:
-    """Build model-ready wavelength-mean estimates from robust band medians.
+    """Build model-ready wavelength-mean estimates from channel medians.
 
     Dust and power-law recommendations use raw positive wavelength values but
-    fluxes in the transformed training-target coordinate.  The quadratic model
+    fluxes in the transformed training-target coordinate. The quadratic model
     uses the transformed wavelength coordinate because its coefficients are not
     assigned a physical wavelength interpretation.
+
+    ``observational_channel_labels`` and
+    ``min_points_per_observational_channel`` are the preferred argument names.
+    ``band_labels`` and ``min_points_per_band`` remain supported as legacy
+    aliases.
     """
-    raw, model, flux, excluded = _wavelength_mean_band_points(
-        raw_wavelengths,
-        model_wavelengths,
-        model_fluxes,
-        band_labels,
-        min_points_per_band=min_points_per_band,
+    if (
+        observational_channel_labels is not None
+        and band_labels is not None
+    ):
+        raise ValueError(
+            "observational_channel_labels and band_labels cannot both be "
+            "provided."
+        )
+    if (
+        min_points_per_observational_channel is not None
+        and min_points_per_band is not None
+    ):
+        raise ValueError(
+            "min_points_per_observational_channel and min_points_per_band "
+            "cannot both be provided."
+        )
+
+    channel_labels = (
+        observational_channel_labels
+        if observational_channel_labels is not None
+        else band_labels
+    )
+    minimum_points = (
+        min_points_per_observational_channel
+        if min_points_per_observational_channel is not None
+        else min_points_per_band
+    )
+    if minimum_points is None:
+        minimum_points = 3
+    if minimum_points < 1:
+        raise ValueError(
+            "min_points_per_observational_channel must be at least 1."
+        )
+
+    raw, model, flux, excluded, channel_metadata = (
+        _wavelength_mean_observational_channel_points(
+            raw_wavelengths,
+            model_wavelengths,
+            model_fluxes,
+            channel_labels,
+            min_points_per_observational_channel=minimum_points,
+        )
     )
     recommendations = {
         "2DWavelengthDependent": _quadratic_mean_recommendation(model, flux),
         "2DPowerLawMean": _power_law_mean_recommendation(raw, flux),
         "2DDustMean": _dust_mean_recommendation(raw, flux),
     }
-    warnings = tuple(
+    warnings = [
         f"{model_name}: {record.get('reason')}"
         for model_name, record in recommendations.items()
         if not record.get("available")
-    )
+    ]
+    if channel_metadata["multiple_observational_channels_per_wavelength"]:
+        warnings.append(
+            "Instrument-channel calibration is not implemented; physical "
+            "wavelengths shared by multiple observational channels were "
+            "excluded from wavelength-mean estimation."
+        )
+
     return WavelengthMeanEstimationDiagnostics(
         available=any(record.get("available") for record in recommendations.values()),
         n_usable_bands=int(raw.size),
@@ -906,14 +1103,17 @@ def build_wavelength_mean_estimation_context(
         model_wavelengths=tuple(float(value) for value in model),
         model_median_fluxes=tuple(float(value) for value in flux),
         recommendations=recommendations,
-        warnings=warnings,
+        warnings=tuple(warnings),
         metadata={
             "uses_log_flux": False,
             "physical_mean_wavelength_coordinate": "raw_positive_wavelength",
             "quadratic_mean_wavelength_coordinate": "model_input_wavelength",
             "flux_coordinate": "model_training_target",
             "excluded_bands": list(excluded),
+            "excluded_observational_channels": list(excluded),
+            "min_points_per_observational_channel": minimum_points,
             "recommendations_applied_to_models": False,
+            **channel_metadata,
         },
     )
 

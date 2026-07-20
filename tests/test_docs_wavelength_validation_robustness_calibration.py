@@ -57,7 +57,7 @@ class TestSyntheticWavelengthRobustnessCalibrationDocumentation(
         normalized = " ".join(future.split())
         self.assertIn("canonical 20-seed D2 robustness calibration", normalized)
         self.assertIn("maintained wavelength-constraint notebook are complete", normalized)
-        self.assertIn("D3 application to representative real LPV sources", normalized)
+        self.assertIn("D3 representative observed-LPV validation infrastructure", normalized)
         self.assertNotIn("Execute and document the full D2 population", future)
 
 

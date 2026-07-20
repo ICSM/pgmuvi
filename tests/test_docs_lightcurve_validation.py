@@ -23,7 +23,7 @@ class TestLightcurveValidationDocs(unittest.TestCase):
             "CSV input contract",
             "Auto-detected CSV columns",
             "Numeric wavelength",
-            "String band label",
+            "Observational-channel label",
             "shape ``(N, 2)``",
             "arbitrary numeric indices",
             "actual numeric wavelengths",

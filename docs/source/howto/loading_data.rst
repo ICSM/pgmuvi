@@ -14,8 +14,8 @@ The validation sequence
 
 A reliable input workflow has five distinct stages:
 
-1. identify the time, measurement, uncertainty, wavelength, and band-label
-   columns;
+1. identify the time, measurement, uncertainty, physical-wavelength, and
+   observational-channel label columns;
 2. construct a 1-D or 2-D :class:`~pgmuvi.lightcurve.Lightcurve`;
 3. inspect rows removed because of non-finite values;
 4. decide whether non-positive fluxes or uncertainties are scientifically
@@ -49,7 +49,7 @@ diagnostics.
 For a multiband light curve, ``xdata`` must have shape ``(N, 2)``:
 
 * column 0 contains time;
-* column 1 contains a numeric wavelength coordinate; and
+* column 1 contains a numeric physical wavelength coordinate; and
 * ``ydata`` and ``yerr`` remain one-dimensional arrays of length ``N``.
 
 For example::
@@ -57,8 +57,14 @@ For example::
     xdata = np.column_stack([times, wavelengths_um])
     lc = Lightcurve(xdata, fluxes, errors, band=band_labels)
 
-String band labels are metadata for reporting and plotting.  They do not replace
-the numeric wavelength coordinate used by the GP.
+An observational-channel label identifies the instrument, detector, filter, or
+data stream used for an observation.  Observational-channel labels are metadata
+for reporting, grouping, and diagnostics; they do not replace the numeric physical
+wavelength coordinate used by the GP.  In particular, multiple observational
+channels may share one physical wavelength.  Lightcurve.band is retained as the
+legacy attribute, while
+:attr:`~pgmuvi.lightcurve.Lightcurve.observational_channel_labels` exposes the
+preferred terminology.
 
 CSV input contract
 ------------------
@@ -85,7 +91,7 @@ loader searches the following aliases in order:
    * - Numeric wavelength
      - ``wavelength``, ``wave``, ``wl``, ``lambda``, ``freq``, ``frequency``,
        ``channel``
-   * - String band label
+   * - Observational-channel label
      - ``band``, ``filter``, ``filtername``, ``filter_name``
 
 A minimal single-band file is therefore::
@@ -107,8 +113,8 @@ Use explicit names when the file uses project-specific headers::
         yerrcol="relative_flux_error",
     )
 
-A multiband file should include both numeric wavelengths and, optionally,
-human-readable labels::
+A multiwavelength file should include numeric physical wavelengths and may also
+include human-readable observational-channel labels::
 
     mjd,wavelength_um,band,flux,flux_error
     59000.0,0.55,V,1.02,0.03
@@ -136,19 +142,21 @@ numeric wavelength value produces a 1-D light curve.
    for ``2DWavelengthDependent``, ``2DDustMean``, ``2DPowerLawMean``, and other
    workflows whose interpretation depends on wavelength.
 
-Band labels and mixed-band input
---------------------------------
+Observational-channel labels and mixed-channel input
+------------------------------------------------------
 
-A recognised string band column is handled independently of the numeric
-wavelength column.  For 2-D data, the labels are stored row by row in
-``lc.band``.  For 1-D data, a single distinct non-empty label is stored as the
-single-band label.
+A recognised string label column is handled independently of the numeric
+physical-wavelength column.  For 2-D data, observational-channel labels are
+stored row by row in ``lc.band`` and exposed through
+``lc.observational_channel_labels``.  For 1-D data, a single distinct non-empty
+label is stored as the single-channel label.  The legacy ``band`` name remains
+part of the public input and serialization contract.
 
-If a nominally 1-D file contains several distinct string labels but no usable
-numeric wavelength coordinate, :meth:`~pgmuvi.lightcurve.Lightcurve.from_csv`
-leaves ``lc.band`` unset and warns that the mixed-band input was not promoted to
-2-D.  Fix the file by supplying a numeric wavelength column rather than ignoring
-the warning.
+If a nominally 1-D file contains several distinct observational-channel labels
+but no usable numeric physical-wavelength coordinate,
+:meth:`~pgmuvi.lightcurve.Lightcurve.from_csv` leaves ``lc.band`` unset and warns
+that the mixed-channel input was not promoted to 2-D.  Fix the file by supplying
+a numeric physical-wavelength column rather than ignoring the warning.
 
 Finite-value filtering
 ----------------------

@@ -1,8 +1,8 @@
 Multiwavelength (2D) Analysis
 ==============================
 
-This guide explains how to fit GP models to light curves observed simultaneously in
-multiple photometric bands or across a range of wavelengths.
+This guide explains how to fit GP models to light curves observed through
+multiple observational channels or across a range of physical wavelengths.
 
 .. contents:: On this page
    :local:
@@ -11,30 +11,32 @@ multiple photometric bands or across a range of wavelengths.
 Overview
 --------
 
-When a source is observed in multiple bands, ``pgmuvi`` can fit a **2D Gaussian
-process** whose inputs are ``(time, wavelength)``.  The model captures:
+When a source is observed in multiple observational channels, ``pgmuvi`` can
+fit a **2D Gaussian process** whose inputs are ``(time, wavelength)``.  The model
+captures:
 
-* the temporal variability structure (periods, noise) shared across bands,
-* the wavelength dependence of variability amplitude and coherence,
-* band-specific noise levels.
+* the temporal variability structure shared across observational channels;
+* the wavelength dependence of variability amplitude and coherence; and
+* the measurement-noise information supplied with each observation.
 
-This is more informative than fitting each band independently because the model
-borrows statistical strength across bands, particularly when some bands have sparse
-coverage.
+This is more informative than fitting each observational channel independently
+because the model borrows statistical strength across physical wavelengths,
+particularly when some channels have sparse coverage.
 
 Data Format for 2D Models
 --------------------------
 
 For 2D / multiband fitting, ``xdata`` must have shape ``(N, 2)`` where:
 
-* column 0 is the **observation time** (same unit across all observations),
-* column 1 is the **wavelength or band identifier** and **must be numeric**.
-  Use the effective wavelength (e.g., in microns or nanometres) for
-  wavelength-dependent (separable 2D) kernels, or integer band codes
-  (0, 1, 2 …) for generic categorical band identification.
-  A physically meaningful numeric wavelength is strongly recommended for
-  separable 2D kernels so that the kernel can learn the correct wavelength
-  scaling.
+* column 0 is the **observation time** (same unit across all observations); and
+* column 1 is the **numeric physical wavelength coordinate**.
+
+Use an effective wavelength in a documented physical unit for wavelength-dependent
+models.  An observational channel is a separate string identifier for an
+instrument/filter/data-stream combination.  The distinction matters:
+observational-channel labels do not replace the numeric physical wavelength
+coordinate, and multiple observational
+channels may legitimately share one physical wavelength.
 
   .. note::
 
@@ -50,16 +52,18 @@ For 2D / multiband fitting, ``xdata`` must have shape ``(N, 2)`` where:
      :class:`~pgmuvi.lightcurve.Lightcurve` constructor itself still requires
      numeric ``xdata``; passing string arrays directly will raise an error.
 
-Human-readable band labels (e.g. ``"V"``, ``"R"``) can be stored separately in
-the :attr:`~pgmuvi.lightcurve.Lightcurve.band` attribute for labelling plots,
-but they play no role in the GP computation.
+Human-readable observational-channel labels can be stored separately in the
+legacy :attr:`~pgmuvi.lightcurve.Lightcurve.band` attribute and read through
+:attr:`~pgmuvi.lightcurve.Lightcurve.observational_channel_labels`.  The labels
+are used for reporting, grouping, and channel-level diagnostics, but the GP
+receives the numeric physical wavelength coordinate.
 
-All bands are stacked into a single array::
+All observations are stacked into a single array::
 
     import numpy as np
     import pgmuvi
 
-    # Two bands: times_b0/b1, fluxes_b0/b1, errors_b0/b1
+    # Two observational channels at two physical wavelengths
     times_all  = np.concatenate([times_b0,  times_b1])
     fluxes_all = np.concatenate([fluxes_b0, fluxes_b1])
     errors_all = np.concatenate([errors_b0, errors_b1])
@@ -82,27 +86,39 @@ The fitting workflow is the same as in 1D::
 
     lc.fit(model="2D")
 
-For heterogeneous band sampling (e.g., one band has far more observations than
-others), consider using the best-band initialisation option::
+For heterogeneous channel sampling (for example, one observational channel has
+far more observations than the others), consider using the legacy best-band
+initialisation option::
 
     lc.fit(model="2D", use_best_band_init=True)
 
-This uses a 1-D Lomb–Scargle on the most densely sampled band instead of the
-multiband periodogram to seed the spectral-mixture kernel frequencies.  This
-can substantially improve frequency initialisation when one band has far more
-observations than the others.
+This uses a 1-D Lomb–Scargle calculation on the most densely sampled
+observational channel instead of the multiwavelength periodogram to seed the
+spectral-mixture kernel frequencies.  This can improve frequency initialisation
+when one channel has far more observations than the others.
 
-Assessing Sampling Quality per Band
--------------------------------------
+Assessing sampling quality per observational channel
+------------------------------------------------------
 
-Because each band may have a different cadence, it is important to assess data quality
-per band before fitting::
+Because each observational channel may have a different cadence, assess data
+quality per channel before fitting.  The existing method name is retained for
+backward compatibility::
 
     lc.assess_sampling_quality_per_band()
 
-You can then filter out bands that have insufficient coverage::
+You can then filter out observational channels that have insufficient coverage
+using the existing compatibility method::
 
     lc = lc.filter_well_sampled_bands(min_points=20)
+
+.. warning::
+
+   **TBD[instrument-channel-calibration]:** PGMUVI does not currently estimate
+   additive offsets, multiplicative scales, or other instrument-channel
+   calibration corrections when multiple observational channels share one
+   physical wavelength.  Preserve the separate channel labels.  No silent
+   calibration or wavelength reassignment is performed; an explicit calibration
+   model is future work.
 
 Visualising 2D Results
 -----------------------
