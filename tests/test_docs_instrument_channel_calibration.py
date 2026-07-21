@@ -58,6 +58,8 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         self.assertIn("row indices", text)
         self.assertIn("time-separation", text)
         self.assertIn("nearest_within_tolerance", text)
+        self.assertIn("O(n_reference * n_channel)", text)
+        self.assertIn("time and memory cost", text)
         self.assertIn("affine", text.lower())
         self.assertIn(
             "does not propagate uncertainty in the fitted offset or scale",

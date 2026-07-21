@@ -33,6 +33,11 @@ The inputs must already share one time coordinate and unit.  PGMUVI does not
 infer or convert time systems in this callable.  It does not determine whether
 the selected method or tolerance is scientifically appropriate.
 
+Both construction methods currently use a dynamic-programming grid with
+``O(n_reference * n_channel)`` time and memory cost.  Callers with large
+channels should restrict the input observations to the time range relevant to
+the calibration before constructing pairs.
+
 The fitting API accepts **caller-supplied paired** flux measurements for one
 observational channel and an explicitly named reference channel.  It fits the
 affine mapping

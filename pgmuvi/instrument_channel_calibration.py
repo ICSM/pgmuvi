@@ -29,7 +29,7 @@ INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER = (
     "TBD[instrument-channel-calibration]"
 )
 INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION = (
-    "pgmuvi-instrument-channel-pairing-v1"
+    "pgmuvi-instrument-channel-pairing-v2"
 )
 
 
@@ -659,7 +659,7 @@ class InstrumentChannelPairing:
 
     @property
     def n_pairs(self) -> int:
-        """Number of caller-supplied pairs."""
+        """Number of recorded pairs."""
 
         return len(self.reference_row_indices)
 
@@ -952,6 +952,11 @@ def construct_instrument_channel_pairing(
     pairs and, among maximum-cardinality solutions, minimizes the summed
     absolute time separation. Deterministic tie-breaking favours earlier sorted
     observations.
+
+    Pair construction uses a dynamic-programming grid with
+    ``O(n_reference * n_channel)`` time and memory cost. Callers with large
+    channels should restrict inputs to the time range relevant to calibration
+    before invoking this callable.
 
     This callable does not interpolate, reuse observations, select a reference
     channel, choose a method or tolerance, fit a calibration, merge channels,

@@ -41,6 +41,10 @@ class TestInstrumentChannelPairConstruction(unittest.TestCase):
             pairing.method,
             InstrumentChannelPairingMethod.EXACT_TIMESTAMP.value,
         )
+        self.assertEqual(
+            pairing.schema_version,
+            "pgmuvi-instrument-channel-pairing-v2",
+        )
         self.assertIsNone(pairing.maximum_time_separation)
         self.assertEqual(len(set(pairing.reference_row_indices)), 3)
         self.assertEqual(len(set(pairing.channel_row_indices)), 3)
