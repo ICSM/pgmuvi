@@ -115,9 +115,10 @@ Wavelength-model extensions
 **TBD[instrument-channel-calibration]**
     The public low-level API now constructs deterministic one-to-one
     exact-timestamp or nearest-within-caller-tolerance pairs, preserves
-    row/time and construction provenance, and fits and applies an affine
-    mapping.  This does not close the marker: scientifically validated
-    instrument-specific tolerance guidance, dataset-level orchestration across
+    row/time and construction provenance, fits and applies an affine mapping,
+    and defines an inert JSON-safe dataset-level orchestration plan contract.
+    This does not close the marker: scientifically validated instrument-specific
+    tolerance guidance, execution of orchestration plans across
     shared-wavelength observational channels, fitted-coefficient uncertainty
     propagation, workflow integration, and representative calibration
     validation remain future work.

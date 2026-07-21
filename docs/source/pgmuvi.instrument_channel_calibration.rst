@@ -38,6 +38,28 @@ Both construction methods currently use a dynamic-programming grid with
 channels should restrict the input observations to the time range relevant to
 the calibration before constructing pairs.
 
+Dataset-level orchestration contract
+------------------------------------
+
+The
+:func:`~pgmuvi.instrument_channel_calibration.define_instrument_channel_calibration_plan`
+callable validates an immutable, JSON-safe plan covering every
+shared-wavelength group reported by an explicit
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibrationAssessment`.
+
+For each group, the caller must select the reference channel.  Every other
+observational channel receives an explicit ``planned``, ``skipped``, or
+``unavailable`` disposition.  Planned entries require a caller-selected pairing
+method, time unit, calibration family, and any applicable non-zero tolerance.
+Skipped and unavailable entries instead require a reason.
+
+Optional
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairing` and
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibration`
+records can be attached to preserve pairing and fitted-coefficient provenance.
+The plan itself does not construct pairs, fit or apply mappings, merge channels,
+alter wavelengths, mutate a light curve, or integrate calibration into fitting.
+
 The fitting API accepts **caller-supplied paired** flux measurements for one
 observational channel and an explicitly named reference channel.  It fits the
 affine mapping
@@ -77,7 +99,8 @@ still lacks:
 
 * scientifically validated instrument-specific rules for choosing
   pairing methods and tolerances;
-* dataset-level orchestration across shared-wavelength channel groups;
+* execution of dataset-level orchestration plans across
+  shared-wavelength channel groups;
 * propagation of fitted-coefficient uncertainty;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.
