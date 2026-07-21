@@ -97,6 +97,17 @@ class TestInstrumentChannelPairing(unittest.TestCase):
                 reference_times=(10.0, np.nan, 30.0),
             )
 
+    def test_boolean_times_are_rejected(self):
+        for value in (True, np.bool_(False)):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    "numeric times, not boolean values",
+                ):
+                    self._pairing(
+                        channel_times=(10.0, value, 30.4),
+                    )
+
     def test_negative_or_boolean_indices_are_rejected(self):
         with self.assertRaisesRegex(
             ValueError,

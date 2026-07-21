@@ -485,11 +485,22 @@ class InstrumentChannelPairing:
         except TypeError as exc:
             raise TypeError(f"{name} must be an iterable of times.") from exc
 
-        normalized = tuple(float(value) for value in sequence)
-        if any(not math.isfinite(value) for value in normalized):
-            raise ValueError(f"{name} must contain only finite values.")
+        normalized: list[float] = []
+        for value in sequence:
+            if isinstance(value, (bool, np.bool_)):
+                raise TypeError(
+                    f"{name} must contain numeric times, not boolean values."
+                )
 
-        return normalized
+            normalized_value = float(value)
+            if not math.isfinite(normalized_value):
+                raise ValueError(
+                    f"{name} must contain only finite values."
+                )
+
+            normalized.append(normalized_value)
+
+        return tuple(normalized)
 
     @property
     def n_pairs(self) -> int:
