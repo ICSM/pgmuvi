@@ -60,6 +60,26 @@ records can be attached to preserve pairing and fitted-coefficient provenance.
 The plan itself does not construct pairs, fit or apply mappings, merge channels,
 alter wavelengths, mutate a light curve, or integrate calibration into fitting.
 
+Executing an explicit plan
+--------------------------
+
+The
+:func:`~pgmuvi.instrument_channel_calibration.execute_instrument_channel_calibration_plan`
+callable executes only the choices recorded in an
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibrationPlan`.
+For each ``planned`` entry it reuses attached provenance when present, or
+constructs pairs using the recorded method and tolerance, fits the recorded
+``affine`` family, and applies the mapping to all rows of that target channel at
+the shared wavelength. ``skipped`` and ``unavailable`` entries remain unchanged.
+
+Execution returns an immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibrationExecution`
+containing copied calibrated arrays, the exact source-row indices transformed,
+and a completed plan with pairing and fitted calibration provenance. It
+does not mutate input arrays, merge channels, alter wavelengths, choose
+scientific configuration automatically, propagate fitted-
+coefficient uncertainty, or integrate calibration into ``Lightcurve.fit()``.
+
 The fitting API accepts **caller-supplied paired** flux measurements for one
 observational channel and an explicitly named reference channel.  It fits the
 affine mapping
@@ -99,8 +119,6 @@ still lacks:
 
 * scientifically validated instrument-specific rules for choosing
   pairing methods and tolerances;
-* execution of dataset-level orchestration plans across
-  shared-wavelength channel groups;
 * propagation of fitted-coefficient uncertainty;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.

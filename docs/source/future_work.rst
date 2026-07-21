@@ -116,12 +116,13 @@ Wavelength-model extensions
     The public low-level API now constructs deterministic one-to-one
     exact-timestamp or nearest-within-caller-tolerance pairs, preserves
     row/time and construction provenance, fits and applies an affine mapping,
-    and defines an inert JSON-safe dataset-level orchestration plan contract.
-    This does not close the marker: scientifically validated instrument-specific
-    tolerance guidance, execution of orchestration plans across
-    shared-wavelength observational channels, fitted-coefficient uncertainty
-    propagation, workflow integration, and representative calibration
-    validation remain future work.
+    defines an inert JSON-safe dataset-level orchestration plan contract, and
+    executes caller-authored plans across shared-wavelength observational channels
+    into copied calibrated arrays with completed pairing and fit
+    provenance. This does not close the marker: scientifically
+    validated instrument-specific tolerance guidance, fitted-coefficient
+    uncertainty propagation, workflow integration, and representative
+    calibration validation remain future work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current
