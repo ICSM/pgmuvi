@@ -287,6 +287,60 @@ class TestInstrumentChannelCalibrationOrchestrationExecution(
             [3.0, 5.0, 7.0, 3.0, 5.0, 7.0],
         )
 
+    def test_execution_rejects_booleans_in_object_vectors(self):
+        times, flux, error, wavelengths, channels = self._data()
+
+        cases = (
+            (
+                "flux",
+                {
+                    "flux": np.asarray(
+                        [3.0, 5.0, 7.0, 1.0, True, 3.0],
+                        dtype=object,
+                    ),
+                },
+            ),
+            (
+                "flux_error",
+                {
+                    "flux_error": np.asarray(
+                        [0.3, 0.3, 0.3, 0.1, False, 0.1],
+                        dtype=object,
+                    ),
+                },
+            ),
+            (
+                "physical_wavelengths",
+                {
+                    "physical_wavelengths": np.asarray(
+                        [1.0, 1.0, 1.0, 1.0, True, 1.0],
+                        dtype=object,
+                    ),
+                },
+            ),
+        )
+
+        for expected_name, overrides in cases:
+            arguments = {
+                "plan": self._plan(),
+                "times": times,
+                "flux": flux,
+                "physical_wavelengths": wavelengths,
+                "observational_channel_labels": channels,
+                "flux_error": error,
+            }
+            arguments.update(overrides)
+
+            with self.subTest(name=expected_name):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    rf"{expected_name} must contain numeric values, "
+                    "not booleans",
+                ):
+                    execute_instrument_channel_calibration_plan(
+                        **arguments
+                    )
+
     def test_execution_rejects_assessment_mismatch(self):
         times, flux, error, wavelengths, channels = self._data()
         channels = channels.copy()

@@ -2073,7 +2073,17 @@ def _as_finite_execution_vector(
     non_negative: bool = False,
 ) -> np.ndarray:
     raw = np.asarray(values)
-    if raw.dtype.kind == "b":
+    contains_boolean = (
+        raw.dtype.kind == "b"
+        or (
+            raw.dtype.kind == "O"
+            and any(
+                isinstance(value, (bool, np.bool_))
+                for value in raw.flat
+            )
+        )
+    )
+    if contains_boolean:
         raise TypeError(
             f"{name} must contain numeric values, not booleans."
         )
