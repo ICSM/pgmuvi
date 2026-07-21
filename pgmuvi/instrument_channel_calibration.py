@@ -4,11 +4,12 @@ An observational channel identifies an instrument, detector, filter, or data
 stream.  It is distinct from the numeric physical wavelength coordinate used by
 the GP, and multiple observational channels may share one physical wavelength.
 
-This module provides immutable, JSON-safe requirement and explicit-pairing
-records together with low-level fitting and application primitives for an
-affine mapping between caller-paired measurements.  It does not construct
-temporal pairs, choose a calibration family, merge channels, alter wavelengths,
-or integrate calibration automatically into a light-curve fit.
+This module provides immutable, JSON-safe requirement and pairing records,
+an explicit deterministic time-pair construction callable, and low-level
+fitting and application primitives for an affine mapping.  It does not choose
+a reference channel, pairing method, time tolerance, or calibration family;
+merge channels; alter wavelengths; or integrate calibration automatically into
+a light-curve fit.
 """
 
 from __future__ import annotations
@@ -41,9 +42,11 @@ __all__ = [
     "InstrumentChannelCalibrationAssessment",
     "InstrumentChannelCalibrationStatus",
     "InstrumentChannelPairing",
+    "InstrumentChannelPairingMethod",
     "SharedWavelengthChannelGroup",
     "apply_instrument_channel_calibration",
     "assess_instrument_channel_calibration_requirement",
+    "construct_instrument_channel_pairing",
     "fit_instrument_channel_calibration",
 ]
 
@@ -60,6 +63,13 @@ class InstrumentChannelCalibrationStatus(_StringEnum):
 
     NOT_REQUIRED = "not_required"
     REQUIRED_NOT_IMPLEMENTED = "required_not_implemented"
+
+
+class InstrumentChannelPairingMethod(_StringEnum):
+    """Caller-selected deterministic time-pair construction method."""
+
+    EXACT_TIMESTAMP = "exact_timestamp"
+    NEAREST_WITHIN_TOLERANCE = "nearest_within_tolerance"
 
 
 @dataclass(frozen=True)
@@ -286,14 +296,15 @@ def assess_instrument_channel_calibration_requirement(
 
 @dataclass(frozen=True)
 class InstrumentChannelPairing:
-    """Caller-supplied pairing provenance for two observational channels.
+    """Pairing provenance for two observational channels.
 
-    This record describes pairs already selected by the caller. It validates
-    their structural consistency and preserves row and time provenance, but it
-    does not decide whether the pairing is scientifically appropriate.
+    The record can describe pairs supplied directly by a caller or pairs
+    produced by :func:`construct_instrument_channel_pairing`. It preserves
+    source-row and time provenance without claiming that the caller-selected
+    method or tolerance is scientifically appropriate.
 
-    No nearest-neighbour matching, interpolation, cadence reconciliation, or
-    automatic reference-channel selection is performed.
+    Pair construction never interpolates measurements, reuses observations,
+    chooses a reference channel, or selects a method or tolerance.
     """
 
     schema_version: str
@@ -306,6 +317,10 @@ class InstrumentChannelPairing:
     channel_times: tuple[float, ...]
     time_unit: str
     method: str = "caller_supplied_explicit_pairs"
+    maximum_time_separation: float | None = None
+    pairing_source: str = "caller_supplied_explicit_pairs"
+    n_reference_observations: int | None = None
+    n_channel_observations: int | None = None
     allow_reference_reuse: bool = False
     allow_channel_reuse: bool = False
     interpolation_used: bool = False
@@ -377,6 +392,38 @@ class InstrumentChannelPairing:
             self.method,
             name="method",
         )
+        pairing_source = self._normalize_text(
+            self.pairing_source,
+            name="pairing_source",
+        )
+
+        maximum_time_separation = self.maximum_time_separation
+        if maximum_time_separation is not None:
+            if isinstance(
+                maximum_time_separation,
+                (bool, np.bool_),
+            ):
+                raise TypeError(
+                    "maximum_time_separation must be numeric, not boolean."
+                )
+            maximum_time_separation = float(maximum_time_separation)
+            if (
+                not math.isfinite(maximum_time_separation)
+                or maximum_time_separation < 0.0
+            ):
+                raise ValueError(
+                    "maximum_time_separation must be finite and "
+                    "non-negative when supplied."
+                )
+
+        n_reference_observations = self._normalize_optional_count(
+            self.n_reference_observations,
+            name="n_reference_observations",
+        )
+        n_channel_observations = self._normalize_optional_count(
+            self.n_channel_observations,
+            name="n_channel_observations",
+        )
 
         for name in (
             "allow_reference_reuse",
@@ -403,6 +450,78 @@ class InstrumentChannelPairing:
                 "allow_channel_reuse is False."
             )
 
+        if (
+            n_reference_observations is not None
+            and n_reference_observations < len(set(reference_indices))
+        ):
+            raise ValueError(
+                "n_reference_observations cannot be smaller than the "
+                "number of distinct matched reference rows."
+            )
+        if (
+            n_channel_observations is not None
+            and n_channel_observations < len(set(channel_indices))
+        ):
+            raise ValueError(
+                "n_channel_observations cannot be smaller than the "
+                "number of distinct matched channel rows."
+            )
+
+        absolute_time_differences = tuple(
+            abs(reference_time - channel_time)
+            for reference_time, channel_time in zip(
+                reference_times,
+                channel_times,
+                strict=True,
+            )
+        )
+
+        if method == InstrumentChannelPairingMethod.EXACT_TIMESTAMP.value:
+            if (
+                maximum_time_separation is not None
+                and maximum_time_separation != 0.0
+            ):
+                raise ValueError(
+                    "exact_timestamp pairing permits no non-zero "
+                    "maximum_time_separation."
+                )
+            if any(value != 0.0 for value in absolute_time_differences):
+                raise ValueError(
+                    "exact_timestamp pairing requires identical paired "
+                    "time coordinates."
+                )
+        elif (
+            method
+            == InstrumentChannelPairingMethod.NEAREST_WITHIN_TOLERANCE.value
+        ):
+            if (
+                maximum_time_separation is None
+                or maximum_time_separation <= 0.0
+            ):
+                raise ValueError(
+                    "nearest_within_tolerance pairing requires a finite "
+                    "positive maximum_time_separation."
+                )
+            if any(
+                value > maximum_time_separation
+                for value in absolute_time_differences
+            ):
+                raise ValueError(
+                    "A paired time separation exceeds "
+                    "maximum_time_separation."
+                )
+
+        if pairing_source == "pgmuvi_deterministic_time_matching":
+            if (
+                self.allow_reference_reuse
+                or self.allow_channel_reuse
+                or self.interpolation_used
+            ):
+                raise ValueError(
+                    "PGMUVI deterministic pair construction prohibits "
+                    "row reuse and interpolation."
+                )
+
         object.__setattr__(
             self,
             "reference_channel",
@@ -428,6 +547,22 @@ class InstrumentChannelPairing:
         object.__setattr__(self, "channel_times", channel_times)
         object.__setattr__(self, "time_unit", time_unit)
         object.__setattr__(self, "method", method)
+        object.__setattr__(
+            self,
+            "maximum_time_separation",
+            maximum_time_separation,
+        )
+        object.__setattr__(self, "pairing_source", pairing_source)
+        object.__setattr__(
+            self,
+            "n_reference_observations",
+            n_reference_observations,
+        )
+        object.__setattr__(
+            self,
+            "n_channel_observations",
+            n_channel_observations,
+        )
 
     @staticmethod
     def _normalize_text(
@@ -441,6 +576,26 @@ class InstrumentChannelPairing:
         normalized = value.strip()
         if not normalized:
             raise ValueError(f"{name} must be non-empty.")
+
+        return normalized
+
+    @staticmethod
+    def _normalize_optional_count(
+        value: Any,
+        *,
+        name: str,
+    ) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value,
+            (int, np.integer),
+        ):
+            raise TypeError(f"{name} must be an integer when supplied.")
+
+        normalized = int(value)
+        if normalized < 1:
+            raise ValueError(f"{name} must be at least 1 when supplied.")
 
         return normalized
 
@@ -558,6 +713,22 @@ class InstrumentChannelPairing:
             "time_differences": list(self.time_differences),
             "time_unit": self.time_unit,
             "method": self.method,
+            "maximum_time_separation": self.maximum_time_separation,
+            "pairing_source": self.pairing_source,
+            "n_reference_observations": self.n_reference_observations,
+            "n_channel_observations": self.n_channel_observations,
+            "n_unmatched_reference_observations": (
+                None
+                if self.n_reference_observations is None
+                else self.n_reference_observations
+                - len(set(self.reference_row_indices))
+            ),
+            "n_unmatched_channel_observations": (
+                None
+                if self.n_channel_observations is None
+                else self.n_channel_observations
+                - len(set(self.channel_row_indices))
+            ),
             "n_pairs": self.n_pairs,
             "maximum_absolute_time_difference": float(
                 np.max(absolute_differences)
@@ -574,10 +745,368 @@ class InstrumentChannelPairing:
             "usable_for_affine_calibration": (
                 self.usable_for_affine_calibration
             ),
-            "caller_supplied_pairing": True,
-            "automatic_pair_construction": False,
+            "caller_supplied_pairing": (
+                self.pairing_source == "caller_supplied_explicit_pairs"
+            ),
+            "automatic_pair_construction": (
+                self.pairing_source
+                == "pgmuvi_deterministic_time_matching"
+            ),
+            "automatic_reference_channel_selection": False,
+            "automatic_pairing_method_selection": False,
+            "automatic_time_tolerance_selection": False,
             "scientific_pairing_validation_performed": False,
         }
+
+
+def _normalize_pairing_method(
+    method: Any,
+) -> InstrumentChannelPairingMethod:
+    if isinstance(method, InstrumentChannelPairingMethod):
+        return method
+    if not isinstance(method, str):
+        raise TypeError(
+            "method must be an InstrumentChannelPairingMethod or string."
+        )
+
+    normalized = method.strip()
+    try:
+        return InstrumentChannelPairingMethod(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(
+            member.value for member in InstrumentChannelPairingMethod
+        )
+        raise ValueError(
+            f"Unknown instrument-channel pairing method {method!r}; "
+            f"expected one of: {allowed}."
+        ) from exc
+
+
+def _normalize_pairing_source_indices(
+    values: Any | None,
+    *,
+    size: int,
+    name: str,
+) -> tuple[int, ...]:
+    if values is None:
+        return tuple(range(size))
+
+    normalized = InstrumentChannelPairing._normalize_indices(
+        values,
+        name=name,
+    )
+    if len(normalized) != size:
+        raise ValueError(
+            f"{name} must contain one source-row index per input time."
+        )
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(
+            f"{name} must not identify the same source row more than once."
+        )
+
+    return normalized
+
+
+def _construct_monotonic_time_pairs(
+    reference_records: tuple[tuple[float, int, int], ...],
+    channel_records: tuple[tuple[float, int, int], ...],
+    *,
+    maximum_time_separation: float,
+) -> tuple[tuple[int, int], ...]:
+    """Maximize pair count, then minimize summed absolute separation."""
+
+    n_reference = len(reference_records)
+    n_channel = len(channel_records)
+
+    pair_counts = np.zeros(
+        (n_reference + 1, n_channel + 1),
+        dtype=np.int64,
+    )
+    total_separations = np.zeros(
+        (n_reference + 1, n_channel + 1),
+        dtype=float,
+    )
+    actions = np.zeros(
+        (n_reference, n_channel),
+        dtype=np.int8,
+    )
+
+    match_action = 1
+    skip_reference_action = 2
+    skip_channel_action = 3
+
+    for reference_position in range(n_reference - 1, -1, -1):
+        for channel_position in range(n_channel - 1, -1, -1):
+            candidates = [
+                (
+                    int(pair_counts[reference_position + 1, channel_position]),
+                    float(
+                        total_separations[
+                            reference_position + 1,
+                            channel_position,
+                        ]
+                    ),
+                    1,
+                    skip_reference_action,
+                ),
+                (
+                    int(pair_counts[reference_position, channel_position + 1]),
+                    float(
+                        total_separations[
+                            reference_position,
+                            channel_position + 1,
+                        ]
+                    ),
+                    2,
+                    skip_channel_action,
+                ),
+            ]
+
+            separation = abs(
+                reference_records[reference_position][0]
+                - channel_records[channel_position][0]
+            )
+            if separation <= maximum_time_separation:
+                candidates.append(
+                    (
+                        1
+                        + int(
+                            pair_counts[
+                                reference_position + 1,
+                                channel_position + 1,
+                            ]
+                        ),
+                        separation
+                        + float(
+                            total_separations[
+                                reference_position + 1,
+                                channel_position + 1,
+                            ]
+                        ),
+                        0,
+                        match_action,
+                    )
+                )
+
+            best = max(
+                candidates,
+                key=lambda candidate: (
+                    candidate[0],
+                    -candidate[1],
+                    -candidate[2],
+                ),
+            )
+            pair_counts[reference_position, channel_position] = best[0]
+            total_separations[
+                reference_position,
+                channel_position,
+            ] = best[1]
+            actions[reference_position, channel_position] = best[3]
+
+    pairs: list[tuple[int, int]] = []
+    reference_position = 0
+    channel_position = 0
+
+    while (
+        reference_position < n_reference
+        and channel_position < n_channel
+    ):
+        action = int(actions[reference_position, channel_position])
+        if action == match_action:
+            pairs.append((reference_position, channel_position))
+            reference_position += 1
+            channel_position += 1
+        elif action == skip_reference_action:
+            reference_position += 1
+        elif action == skip_channel_action:
+            channel_position += 1
+        else:
+            raise RuntimeError(
+                "Internal instrument-channel pairing reconstruction failed."
+            )
+
+    return tuple(pairs)
+
+
+def construct_instrument_channel_pairing(
+    reference_times: Any,
+    channel_times: Any,
+    *,
+    reference_channel: str,
+    channel: str,
+    wavelength: float,
+    time_unit: str,
+    method: InstrumentChannelPairingMethod | str,
+    maximum_time_separation: float | None = None,
+    reference_row_indices: Any | None = None,
+    channel_row_indices: Any | None = None,
+) -> InstrumentChannelPairing:
+    """Construct deterministic one-to-one time pairs.
+
+    The caller must explicitly choose the reference channel, pairing method,
+    and—when using nearest-within-tolerance matching—the positive maximum time
+    separation. Inputs must already use the same time coordinate and unit.
+
+    Exact matching accepts only numerically identical timestamps. Nearest-
+    within-tolerance matching maximizes the number of chronological one-to-one
+    pairs and, among maximum-cardinality solutions, minimizes the summed
+    absolute time separation. Deterministic tie-breaking favours earlier sorted
+    observations.
+
+    This callable does not interpolate, reuse observations, select a reference
+    channel, choose a method or tolerance, fit a calibration, merge channels,
+    or claim that the selected tolerance is scientifically appropriate.
+    """
+
+    normalized_method = _normalize_pairing_method(method)
+
+    normalized_reference_times = InstrumentChannelPairing._normalize_times(
+        reference_times,
+        name="reference_times",
+    )
+    normalized_channel_times = InstrumentChannelPairing._normalize_times(
+        channel_times,
+        name="channel_times",
+    )
+
+    if not normalized_reference_times:
+        raise ValueError("reference_times must contain at least one value.")
+    if not normalized_channel_times:
+        raise ValueError("channel_times must contain at least one value.")
+
+    normalized_reference_indices = _normalize_pairing_source_indices(
+        reference_row_indices,
+        size=len(normalized_reference_times),
+        name="reference_row_indices",
+    )
+    normalized_channel_indices = _normalize_pairing_source_indices(
+        channel_row_indices,
+        size=len(normalized_channel_times),
+        name="channel_row_indices",
+    )
+
+    if normalized_method is InstrumentChannelPairingMethod.EXACT_TIMESTAMP:
+        if maximum_time_separation is None:
+            normalized_maximum_separation = 0.0
+            recorded_maximum_separation = None
+        else:
+            if isinstance(
+                maximum_time_separation,
+                (bool, np.bool_),
+            ):
+                raise TypeError(
+                    "maximum_time_separation must be numeric, not boolean."
+                )
+            normalized_maximum_separation = float(
+                maximum_time_separation
+            )
+            if normalized_maximum_separation != 0.0:
+                raise ValueError(
+                    "exact_timestamp pairing requires "
+                    "maximum_time_separation to be None or zero."
+                )
+            recorded_maximum_separation = 0.0
+    else:
+        if maximum_time_separation is None:
+            raise ValueError(
+                "nearest_within_tolerance pairing requires "
+                "maximum_time_separation."
+            )
+        if isinstance(maximum_time_separation, (bool, np.bool_)):
+            raise TypeError(
+                "maximum_time_separation must be numeric, not boolean."
+            )
+
+        normalized_maximum_separation = float(maximum_time_separation)
+        if (
+            not math.isfinite(normalized_maximum_separation)
+            or normalized_maximum_separation <= 0.0
+        ):
+            raise ValueError(
+                "nearest_within_tolerance pairing requires a finite "
+                "positive maximum_time_separation."
+            )
+        recorded_maximum_separation = normalized_maximum_separation
+
+    reference_records = tuple(
+        sorted(
+            (
+                (time_value, row_index, input_position)
+                for input_position, (time_value, row_index) in enumerate(
+                    zip(
+                        normalized_reference_times,
+                        normalized_reference_indices,
+                        strict=True,
+                    )
+                )
+            ),
+            key=lambda record: (record[0], record[1], record[2]),
+        )
+    )
+    channel_records = tuple(
+        sorted(
+            (
+                (time_value, row_index, input_position)
+                for input_position, (time_value, row_index) in enumerate(
+                    zip(
+                        normalized_channel_times,
+                        normalized_channel_indices,
+                        strict=True,
+                    )
+                )
+            ),
+            key=lambda record: (record[0], record[1], record[2]),
+        )
+    )
+
+    matched_positions = _construct_monotonic_time_pairs(
+        reference_records,
+        channel_records,
+        maximum_time_separation=normalized_maximum_separation,
+    )
+    if not matched_positions:
+        raise ValueError(
+            "No eligible one-to-one instrument-channel time pairs were "
+            "found for the caller-selected method and tolerance."
+        )
+
+    matched_reference_records = tuple(
+        reference_records[reference_position]
+        for reference_position, _ in matched_positions
+    )
+    matched_channel_records = tuple(
+        channel_records[channel_position]
+        for _, channel_position in matched_positions
+    )
+
+    return InstrumentChannelPairing(
+        schema_version=INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION,
+        reference_channel=reference_channel,
+        channel=channel,
+        wavelength=wavelength,
+        reference_row_indices=tuple(
+            record[1] for record in matched_reference_records
+        ),
+        channel_row_indices=tuple(
+            record[1] for record in matched_channel_records
+        ),
+        reference_times=tuple(
+            record[0] for record in matched_reference_records
+        ),
+        channel_times=tuple(
+            record[0] for record in matched_channel_records
+        ),
+        time_unit=time_unit,
+        method=normalized_method.value,
+        maximum_time_separation=recorded_maximum_separation,
+        pairing_source="pgmuvi_deterministic_time_matching",
+        n_reference_observations=len(normalized_reference_times),
+        n_channel_observations=len(normalized_channel_times),
+        allow_reference_reuse=False,
+        allow_channel_reuse=False,
+        interpolation_used=False,
+    )
+
 
 INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION = "1.0"
 

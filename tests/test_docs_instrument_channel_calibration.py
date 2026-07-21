@@ -54,10 +54,10 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
     def test_page_documents_explicit_paired_calibration(self):
         text = PAGE.read_text(encoding="utf-8")
         self.assertIn("caller-supplied paired", text)
-        self.assertIn("does not construct time pairs", text)
+        self.assertIn("construct_instrument_channel_pairing", text)
         self.assertIn("row indices", text)
         self.assertIn("time-separation", text)
-        self.assertIn("nearest-neighbour matching", text)
+        self.assertIn("nearest_within_tolerance", text)
         self.assertIn("affine", text.lower())
         self.assertIn(
             "does not propagate uncertainty in the fitted offset or scale",
@@ -68,10 +68,13 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         text = " ".join(FUTURE.read_text(encoding="utf-8").split())
 
         self.assertIn("TBD[instrument-channel-calibration]", text)
-        self.assertIn("pairing record", text)
-        self.assertIn("caller-supplied", text)
+        self.assertIn("low-level API", text)
+        self.assertIn("caller-tolerance", text)
         self.assertIn("does not close", text)
-        self.assertIn("scientific validation", text)
+        self.assertIn(
+            "representative calibration validation",
+            text,
+        )
 
     def test_estimation_and_multiband_guides_reference_contract(self):
         estimation = ESTIMATION.read_text(encoding="utf-8")
@@ -93,11 +96,15 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         )
         normalized_multiband = " ".join(multiband.split())
         self.assertIn(
-            "caller-supplied pair provenance",
+            "preserve their provenance",
             normalized_multiband,
         )
         self.assertIn(
-            "do not construct time pairs",
+            "construct deterministic one-to-one",
+            normalized_multiband,
+        )
+        self.assertIn(
+            "does not choose the reference channel",
             normalized_multiband,
         )
         self.assertNotIn("NotImplementedError", normalized_multiband)

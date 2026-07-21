@@ -16,12 +16,22 @@ does not alter wavelengths, merge channels, average their measurements, or
 apply a correction.
 
 The :class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairing`
-record provides a strict JSON-safe provenance contract for pairs already
-selected by the caller.  It records row indices, paired times, time units,
-reuse permissions, interpolation provenance, and derived time-separation
-summaries.  It validates structural consistency only: it does not determine
-whether a time separation, interpolation rule, or reuse policy is
-scientifically appropriate.
+record provides a strict JSON-safe provenance contract for explicit pairs.  It
+records source-row indices, paired times, time units, construction provenance,
+the caller-supplied tolerance when applicable, unmatched counts, reuse policy,
+interpolation provenance, and derived time-separation summaries.
+
+:func:`~pgmuvi.instrument_channel_calibration.construct_instrument_channel_pairing`
+implements two caller-selected methods:
+
+* ``exact_timestamp`` pairs only numerically identical time coordinates;
+* ``nearest_within_tolerance`` requires a finite positive tolerance supplied by
+  the caller, maximizes the number of chronological one-to-one pairs, and then
+  minimizes their summed absolute time separation.
+
+The inputs must already share one time coordinate and unit.  PGMUVI does not
+infer or convert time systems in this callable.  It does not determine whether
+the selected method or tolerance is scientifically appropriate.
 
 The fitting API accepts **caller-supplied paired** flux measurements for one
 observational channel and an explicitly named reference channel.  It fits the
@@ -37,12 +47,16 @@ where ``b`` is the stored offset and ``a`` is the strictly positive stored
 scale.  Optional measurement uncertainties contribute to weighted least
 squares, and iterative MAD clipping can reject discrepant pairs.
 
-PGMUVI does not construct time pairs from asynchronous light curves.  The
-pairing record does not perform nearest-neighbour matching, interpolation,
-cadence reconciliation, or reference-channel selection.  PGMUVI also does not
-select between additive, multiplicative, affine, or other calibration
-families.  Pair construction and the decision to use this explicit affine
-model remain the caller's scientific responsibility.
+Pair construction is explicit rather than implicit: the caller selects
+the reference channel, method, and any non-zero tolerance.  The construction
+callable does not interpolate, reuse an observation, reconcile time systems,
+select a tolerance, or select a reference channel.  Non-exact pairs are
+described as nearest-within-tolerance pairs rather than as simultaneous
+measurements.
+
+PGMUVI also does not select between additive, multiplicative, affine, or other
+calibration families.  The pairing configuration and the decision to use this
+explicit affine model remain the caller's scientific responsibility.
 
 Applying a fitted calibration maps fluxes onto the reference-channel scale.
 Flux uncertainties are multiplied by the absolute fitted scale.  The current
@@ -56,8 +70,8 @@ The low-level paired affine fit and application primitives do not complete the
 instrument-channel calibration work.  The marker remains open because PGMUVI
 still lacks:
 
-* scientifically validated rules and implementations for constructing
-  calibration pairs;
+* scientifically validated instrument-specific rules for choosing
+  pairing methods and tolerances;
 * dataset-level orchestration across shared-wavelength channel groups;
 * propagation of fitted-coefficient uncertainty;
 * integration into the normal light-curve fitting workflow; and
