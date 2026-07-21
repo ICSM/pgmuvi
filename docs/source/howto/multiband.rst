@@ -113,11 +113,12 @@ using the existing compatibility method::
 
 .. warning::
 
-   **TBD[instrument-channel-calibration]:** The low-level callables in
-   :mod:`pgmuvi.instrument_channel_calibration` can fit and apply an explicit
-   affine mapping from caller-supplied paired measurements.  They do not
-   construct time pairs, choose a calibration family, merge observational
-   channels, or integrate calibration automatically into a light-curve fit.
+   **TBD[instrument-channel-calibration]:** The pairing record and low-level
+   callables in :mod:`pgmuvi.instrument_channel_calibration` preserve explicit
+   caller-supplied pair provenance and can fit and apply an affine mapping.
+   They do not construct time pairs, choose a time tolerance, perform
+   interpolation, select a calibration family, merge observational channels,
+   or integrate calibration automatically into a light-curve fit.
 
 Visualising 2D Results
 -----------------------

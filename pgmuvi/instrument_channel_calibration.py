@@ -4,11 +4,11 @@ An observational channel identifies an instrument, detector, filter, or data
 stream.  It is distinct from the numeric physical wavelength coordinate used by
 the GP, and multiple observational channels may share one physical wavelength.
 
-This module provides an immutable, JSON-safe requirement assessment together
-with low-level fitting and application primitives for an explicit affine
-mapping between caller-paired measurements.  It does not construct temporal
-pairs, choose a calibration family, merge channels, alter wavelengths, or
-integrate calibration automatically into a light-curve fit.
+This module provides immutable, JSON-safe requirement and explicit-pairing
+records together with low-level fitting and application primitives for an
+affine mapping between caller-paired measurements.  It does not construct
+temporal pairs, choose a calibration family, merge channels, alter wavelengths,
+or integrate calibration automatically into a light-curve fit.
 """
 
 from __future__ import annotations
@@ -27,15 +27,20 @@ INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER = (
     "TBD[instrument-channel-calibration]"
 )
+INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-v1"
+)
 
 
 __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER",
+    "INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION",
     "InstrumentChannelCalibration",
     "InstrumentChannelCalibrationAssessment",
     "InstrumentChannelCalibrationStatus",
+    "InstrumentChannelPairing",
     "SharedWavelengthChannelGroup",
     "apply_instrument_channel_calibration",
     "assess_instrument_channel_calibration_requirement",
@@ -277,6 +282,291 @@ def assess_instrument_channel_calibration_requirement(
         ),
     )
 
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairing:
+    """Caller-supplied pairing provenance for two observational channels.
+
+    This record describes pairs already selected by the caller. It validates
+    their structural consistency and preserves row and time provenance, but it
+    does not decide whether the pairing is scientifically appropriate.
+
+    No nearest-neighbour matching, interpolation, cadence reconciliation, or
+    automatic reference-channel selection is performed.
+    """
+
+    schema_version: str
+    reference_channel: str
+    channel: str
+    wavelength: float
+    reference_row_indices: tuple[int, ...]
+    channel_row_indices: tuple[int, ...]
+    reference_times: tuple[float, ...]
+    channel_times: tuple[float, ...]
+    time_unit: str
+    method: str = "caller_supplied_explicit_pairs"
+    allow_reference_reuse: bool = False
+    allow_channel_reuse: bool = False
+    interpolation_used: bool = False
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel pairing schema version: "
+                f"{self.schema_version!r}."
+            )
+
+        reference_channel = _normalize_calibration_channel(
+            self.reference_channel,
+            name="reference_channel",
+        )
+        channel = _normalize_calibration_channel(
+            self.channel,
+            name="channel",
+        )
+        if reference_channel == channel:
+            raise ValueError(
+                "reference_channel and channel must identify different "
+                "observational channels."
+            )
+
+        wavelength = float(self.wavelength)
+        if not math.isfinite(wavelength):
+            raise ValueError("wavelength must be finite.")
+
+        reference_indices = self._normalize_indices(
+            self.reference_row_indices,
+            name="reference_row_indices",
+        )
+        channel_indices = self._normalize_indices(
+            self.channel_row_indices,
+            name="channel_row_indices",
+        )
+        reference_times = self._normalize_times(
+            self.reference_times,
+            name="reference_times",
+        )
+        channel_times = self._normalize_times(
+            self.channel_times,
+            name="channel_times",
+        )
+
+        lengths = {
+            len(reference_indices),
+            len(channel_indices),
+            len(reference_times),
+            len(channel_times),
+        }
+        if len(lengths) != 1:
+            raise ValueError(
+                "Pairing index and time sequences must have the same length."
+            )
+        if not reference_indices:
+            raise ValueError(
+                "Instrument-channel pairing requires at least one pair."
+            )
+
+        time_unit = self._normalize_text(
+            self.time_unit,
+            name="time_unit",
+        )
+        method = self._normalize_text(
+            self.method,
+            name="method",
+        )
+
+        for name in (
+            "allow_reference_reuse",
+            "allow_channel_reuse",
+            "interpolation_used",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool.")
+
+        if (
+            not self.allow_reference_reuse
+            and len(set(reference_indices)) != len(reference_indices)
+        ):
+            raise ValueError(
+                "reference_row_indices contain reused rows, but "
+                "allow_reference_reuse is False."
+            )
+        if (
+            not self.allow_channel_reuse
+            and len(set(channel_indices)) != len(channel_indices)
+        ):
+            raise ValueError(
+                "channel_row_indices contain reused rows, but "
+                "allow_channel_reuse is False."
+            )
+
+        object.__setattr__(
+            self,
+            "reference_channel",
+            reference_channel,
+        )
+        object.__setattr__(self, "channel", channel)
+        object.__setattr__(self, "wavelength", wavelength)
+        object.__setattr__(
+            self,
+            "reference_row_indices",
+            reference_indices,
+        )
+        object.__setattr__(
+            self,
+            "channel_row_indices",
+            channel_indices,
+        )
+        object.__setattr__(
+            self,
+            "reference_times",
+            reference_times,
+        )
+        object.__setattr__(self, "channel_times", channel_times)
+        object.__setattr__(self, "time_unit", time_unit)
+        object.__setattr__(self, "method", method)
+
+    @staticmethod
+    def _normalize_text(
+        value: Any,
+        *,
+        name: str,
+    ) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{name} must be a string.")
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"{name} must be non-empty.")
+
+        return normalized
+
+    @staticmethod
+    def _normalize_indices(
+        values: Any,
+        *,
+        name: str,
+    ) -> tuple[int, ...]:
+        try:
+            sequence = tuple(values)
+        except TypeError as exc:
+            raise TypeError(f"{name} must be an iterable of integers.") from exc
+
+        normalized: list[int] = []
+        for value in sequence:
+            if isinstance(value, bool) or not isinstance(
+                value,
+                (int, np.integer),
+            ):
+                raise TypeError(
+                    f"{name} must contain only integer row indices."
+                )
+
+            index = int(value)
+            if index < 0:
+                raise ValueError(
+                    f"{name} must contain only non-negative row indices."
+                )
+            normalized.append(index)
+
+        return tuple(normalized)
+
+    @staticmethod
+    def _normalize_times(
+        values: Any,
+        *,
+        name: str,
+    ) -> tuple[float, ...]:
+        try:
+            sequence = tuple(values)
+        except TypeError as exc:
+            raise TypeError(f"{name} must be an iterable of times.") from exc
+
+        normalized = tuple(float(value) for value in sequence)
+        if any(not math.isfinite(value) for value in normalized):
+            raise ValueError(f"{name} must contain only finite values.")
+
+        return normalized
+
+    @property
+    def n_pairs(self) -> int:
+        """Number of caller-supplied pairs."""
+
+        return len(self.reference_row_indices)
+
+    @property
+    def time_differences(self) -> tuple[float, ...]:
+        """Reference time minus channel time for every pair."""
+
+        return tuple(
+            reference_time - channel_time
+            for reference_time, channel_time in zip(
+                self.reference_times,
+                self.channel_times,
+                strict=True,
+            )
+        )
+
+    @property
+    def absolute_time_differences(self) -> tuple[float, ...]:
+        """Absolute time separation for every pair."""
+
+        return tuple(
+            abs(value)
+            for value in self.time_differences
+        )
+
+    @property
+    def usable_for_affine_calibration(self) -> bool:
+        """Whether the record meets the affine fitter's minimum pair count."""
+
+        return self.n_pairs >= 3
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe provenance representation."""
+
+        absolute_differences = np.asarray(
+            self.absolute_time_differences,
+            dtype=float,
+        )
+
+        return {
+            "schema_version": self.schema_version,
+            "reference_channel": self.reference_channel,
+            "channel": self.channel,
+            "wavelength": self.wavelength,
+            "reference_row_indices": list(
+                self.reference_row_indices
+            ),
+            "channel_row_indices": list(self.channel_row_indices),
+            "reference_times": list(self.reference_times),
+            "channel_times": list(self.channel_times),
+            "time_differences": list(self.time_differences),
+            "time_unit": self.time_unit,
+            "method": self.method,
+            "n_pairs": self.n_pairs,
+            "maximum_absolute_time_difference": float(
+                np.max(absolute_differences)
+            ),
+            "median_absolute_time_difference": float(
+                np.median(absolute_differences)
+            ),
+            "n_exact_time_matches": int(
+                np.count_nonzero(absolute_differences == 0.0)
+            ),
+            "allow_reference_reuse": self.allow_reference_reuse,
+            "allow_channel_reuse": self.allow_channel_reuse,
+            "interpolation_used": self.interpolation_used,
+            "usable_for_affine_calibration": (
+                self.usable_for_affine_calibration
+            ),
+            "caller_supplied_pairing": True,
+            "automatic_pair_construction": False,
+            "scientific_pairing_validation_performed": False,
+        }
 
 INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION = "1.0"
 
