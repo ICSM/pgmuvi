@@ -4,9 +4,10 @@ An observational channel identifies an instrument, detector, filter, or data
 stream.  It is distinct from the numeric physical wavelength coordinate used by
 the GP, and multiple observational channels may share one physical wavelength.
 
-This module provides immutable, JSON-safe requirement and pairing records,
-an explicit deterministic time-pair construction callable, and low-level
-fitting and application primitives for an affine mapping.  It does not choose
+This module provides immutable, JSON-safe requirement, pairing, and
+dataset-level orchestration records, an explicit deterministic time-pair
+construction callable, and low-level fitting and application primitives for an
+affine mapping.  It does not choose
 a reference channel, pairing method, time tolerance, or calibration family;
 merge channels; alter wavelengths; or integrate calibration automatically into
 a light-curve fit.
@@ -31,15 +32,23 @@ INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER = (
 INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-v2"
 )
+INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-calibration-plan-v1"
+)
 
 
 __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER",
     "INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION",
     "InstrumentChannelCalibration",
     "InstrumentChannelCalibrationAssessment",
+    "InstrumentChannelCalibrationChannelPlan",
+    "InstrumentChannelCalibrationDisposition",
+    "InstrumentChannelCalibrationGroupPlan",
+    "InstrumentChannelCalibrationPlan",
     "InstrumentChannelCalibrationStatus",
     "InstrumentChannelPairing",
     "InstrumentChannelPairingMethod",
@@ -47,6 +56,7 @@ __all__ = [
     "apply_instrument_channel_calibration",
     "assess_instrument_channel_calibration_requirement",
     "construct_instrument_channel_pairing",
+    "define_instrument_channel_calibration_plan",
     "fit_instrument_channel_calibration",
 ]
 
@@ -70,6 +80,14 @@ class InstrumentChannelPairingMethod(_StringEnum):
 
     EXACT_TIMESTAMP = "exact_timestamp"
     NEAREST_WITHIN_TOLERANCE = "nearest_within_tolerance"
+
+
+class InstrumentChannelCalibrationDisposition(_StringEnum):
+    """Caller-selected disposition for one non-reference channel."""
+
+    PLANNED = "planned"
+    SKIPPED = "skipped"
+    UNAVAILABLE = "unavailable"
 
 
 @dataclass(frozen=True)
@@ -1227,6 +1245,589 @@ class InstrumentChannelCalibration:
             "automatic_time_matching": False,
             "automatic_model_selection": False,
         }
+
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationChannelPlan:
+    """Explicit plan for one non-reference observational channel.
+
+    A planned entry records caller-selected pairing and calibration
+    configuration. Skipped and unavailable entries require a reason and
+    contain no executable pairing or calibration configuration.
+
+    Optional pairing and fitted-calibration records preserve provenance.
+    This record never constructs pairs, fits a calibration, or applies one.
+    """
+
+    channel: str
+    disposition: InstrumentChannelCalibrationDisposition | str
+    pairing_method: str | None = None
+    maximum_time_separation: float | None = None
+    time_unit: str | None = None
+    calibration_family: str | None = None
+    reason: str | None = None
+    pairing: InstrumentChannelPairing | None = None
+    calibration: InstrumentChannelCalibration | None = None
+
+    def __post_init__(self) -> None:
+        channel = str(self.channel).strip()
+        if not channel:
+            raise ValueError("channel must be non-empty.")
+
+        disposition = self.disposition
+        if not isinstance(
+            disposition,
+            InstrumentChannelCalibrationDisposition,
+        ):
+            try:
+                disposition = InstrumentChannelCalibrationDisposition(
+                    str(disposition)
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported instrument-channel calibration "
+                    f"disposition: {self.disposition!r}."
+                ) from exc
+
+        pairing_method = self._normalize_optional_text(
+            self.pairing_method,
+            name="pairing_method",
+        )
+        if pairing_method is not None:
+            try:
+                pairing_method = InstrumentChannelPairingMethod(
+                    pairing_method
+                ).value
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported instrument-channel pairing method: "
+                    f"{pairing_method!r}."
+                ) from exc
+
+        time_unit = self._normalize_optional_text(
+            self.time_unit,
+            name="time_unit",
+        )
+        calibration_family = self._normalize_optional_text(
+            self.calibration_family,
+            name="calibration_family",
+        )
+        reason = self._normalize_optional_text(
+            self.reason,
+            name="reason",
+        )
+
+        maximum_time_separation = self.maximum_time_separation
+        if maximum_time_separation is not None:
+            if isinstance(
+                maximum_time_separation,
+                (bool, np.bool_),
+            ):
+                raise TypeError(
+                    "maximum_time_separation must be numeric, "
+                    "not boolean."
+                )
+            maximum_time_separation = float(
+                maximum_time_separation
+            )
+            if (
+                not math.isfinite(maximum_time_separation)
+                or maximum_time_separation < 0.0
+            ):
+                raise ValueError(
+                    "maximum_time_separation must be finite and "
+                    "non-negative when supplied."
+                )
+
+        if (
+            disposition
+            is InstrumentChannelCalibrationDisposition.PLANNED
+        ):
+            if pairing_method is None:
+                raise ValueError(
+                    "A planned channel requires caller-selected "
+                    "pairing_method."
+                )
+            if time_unit is None:
+                raise ValueError(
+                    "A planned channel requires an explicit time_unit."
+                )
+            if calibration_family is None:
+                raise ValueError(
+                    "A planned channel requires caller-selected "
+                    "calibration_family."
+                )
+            if reason is not None:
+                raise ValueError(
+                    "A planned channel must not carry a skip or "
+                    "unavailable reason."
+                )
+
+            if (
+                pairing_method
+                == InstrumentChannelPairingMethod.EXACT_TIMESTAMP.value
+            ):
+                if (
+                    maximum_time_separation is not None
+                    and maximum_time_separation != 0.0
+                ):
+                    raise ValueError(
+                        "exact_timestamp planning permits no non-zero "
+                        "maximum_time_separation."
+                    )
+            elif (
+                pairing_method
+                == InstrumentChannelPairingMethod
+                .NEAREST_WITHIN_TOLERANCE.value
+            ):
+                if (
+                    maximum_time_separation is None
+                    or maximum_time_separation <= 0.0
+                ):
+                    raise ValueError(
+                        "nearest_within_tolerance planning requires a "
+                        "finite positive maximum_time_separation."
+                    )
+        else:
+            if reason is None:
+                raise ValueError(
+                    "Skipped and unavailable channels require a reason."
+                )
+            if any(
+                value is not None
+                for value in (
+                    pairing_method,
+                    maximum_time_separation,
+                    time_unit,
+                    calibration_family,
+                    self.pairing,
+                    self.calibration,
+                )
+            ):
+                raise ValueError(
+                    "Skipped and unavailable channels cannot contain "
+                    "pairing or calibration configuration."
+                )
+
+        if self.pairing is not None:
+            if not isinstance(self.pairing, InstrumentChannelPairing):
+                raise TypeError(
+                    "pairing must be an InstrumentChannelPairing "
+                    "instance when supplied."
+                )
+            if self.pairing.channel != channel:
+                raise ValueError(
+                    "pairing.channel must match the planned channel."
+                )
+            if self.pairing.method != pairing_method:
+                raise ValueError(
+                    "pairing.method must match pairing_method."
+                )
+            if self.pairing.time_unit != time_unit:
+                raise ValueError(
+                    "pairing.time_unit must match the planned time_unit."
+                )
+
+            planned_separation = maximum_time_separation
+            pairing_separation = (
+                self.pairing.maximum_time_separation
+            )
+            if (
+                pairing_method
+                == InstrumentChannelPairingMethod.EXACT_TIMESTAMP.value
+            ):
+                planned_separation = (
+                    0.0
+                    if planned_separation is None
+                    else planned_separation
+                )
+                pairing_separation = (
+                    0.0
+                    if pairing_separation is None
+                    else pairing_separation
+                )
+
+            if pairing_separation != planned_separation:
+                raise ValueError(
+                    "Pairing tolerance provenance must match the "
+                    "planned maximum_time_separation."
+                )
+
+        if self.calibration is not None:
+            if not isinstance(
+                self.calibration,
+                InstrumentChannelCalibration,
+            ):
+                raise TypeError(
+                    "calibration must be an "
+                    "InstrumentChannelCalibration instance when supplied."
+                )
+            if self.pairing is None:
+                raise ValueError(
+                    "A fitted calibration requires pairing provenance."
+                )
+            if self.calibration.channel != channel:
+                raise ValueError(
+                    "calibration.channel must match the planned channel."
+                )
+            if calibration_family != "affine":
+                raise ValueError(
+                    "InstrumentChannelCalibration provenance requires "
+                    "calibration_family='affine'."
+                )
+            if self.calibration.n_pairs > self.pairing.n_pairs:
+                raise ValueError(
+                    "calibration.n_pairs cannot exceed pairing.n_pairs."
+                )
+
+        object.__setattr__(self, "channel", channel)
+        object.__setattr__(self, "disposition", disposition)
+        object.__setattr__(
+            self,
+            "pairing_method",
+            pairing_method,
+        )
+        object.__setattr__(
+            self,
+            "maximum_time_separation",
+            maximum_time_separation,
+        )
+        object.__setattr__(self, "time_unit", time_unit)
+        object.__setattr__(
+            self,
+            "calibration_family",
+            calibration_family,
+        )
+        object.__setattr__(self, "reason", reason)
+
+    @staticmethod
+    def _normalize_optional_text(
+        value: Any,
+        *,
+        name: str,
+    ) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError(f"{name} must be a string when supplied.")
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                f"{name} must be non-empty when supplied."
+            )
+        return normalized
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe representation."""
+
+        return {
+            "channel": self.channel,
+            "disposition": self.disposition.value,
+            "pairing_method": self.pairing_method,
+            "maximum_time_separation": (
+                self.maximum_time_separation
+            ),
+            "time_unit": self.time_unit,
+            "calibration_family": self.calibration_family,
+            "reason": self.reason,
+            "pairing": (
+                None
+                if self.pairing is None
+                else self.pairing.to_dict()
+            ),
+            "calibration": (
+                None
+                if self.calibration is None
+                else self.calibration.to_dict()
+            ),
+            "calibration_applied": False,
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationGroupPlan:
+    """Explicit calibration plan for one shared-wavelength group."""
+
+    physical_wavelength: float
+    reference_channel: str
+    channel_plans: tuple[
+        InstrumentChannelCalibrationChannelPlan,
+        ...,
+    ]
+
+    def __post_init__(self) -> None:
+        wavelength = float(self.physical_wavelength)
+        if not math.isfinite(wavelength):
+            raise ValueError(
+                "physical_wavelength must be finite."
+            )
+
+        reference_channel = _normalize_calibration_channel(
+            self.reference_channel,
+            name="reference_channel",
+        )
+        channel_plans = tuple(self.channel_plans)
+        if not channel_plans:
+            raise ValueError(
+                "A calibration group plan requires at least one "
+                "non-reference channel plan."
+            )
+        if any(
+            not isinstance(
+                channel_plan,
+                InstrumentChannelCalibrationChannelPlan,
+            )
+            for channel_plan in channel_plans
+        ):
+            raise TypeError(
+                "channel_plans must contain only "
+                "InstrumentChannelCalibrationChannelPlan instances."
+            )
+
+        planned_channels = [
+            channel_plan.channel
+            for channel_plan in channel_plans
+        ]
+        if len(set(planned_channels)) != len(planned_channels):
+            raise ValueError(
+                "Each non-reference channel may appear only once in a "
+                "calibration group plan."
+            )
+        if reference_channel in planned_channels:
+            raise ValueError(
+                "reference_channel cannot also be a non-reference "
+                "channel plan."
+            )
+
+        for channel_plan in channel_plans:
+            pairing = channel_plan.pairing
+            if pairing is not None:
+                if pairing.reference_channel != reference_channel:
+                    raise ValueError(
+                        "pairing.reference_channel must match the group "
+                        "reference_channel."
+                    )
+                if pairing.wavelength != wavelength:
+                    raise ValueError(
+                        "pairing.wavelength must match the group "
+                        "physical_wavelength."
+                    )
+
+            calibration = channel_plan.calibration
+            if calibration is not None:
+                if (
+                    calibration.reference_channel
+                    != reference_channel
+                ):
+                    raise ValueError(
+                        "calibration.reference_channel must match the "
+                        "group reference_channel."
+                    )
+                if calibration.wavelength != wavelength:
+                    raise ValueError(
+                        "calibration.wavelength must match the group "
+                        "physical_wavelength."
+                    )
+
+        object.__setattr__(
+            self,
+            "physical_wavelength",
+            wavelength,
+        )
+        object.__setattr__(
+            self,
+            "reference_channel",
+            reference_channel,
+        )
+        object.__setattr__(
+            self,
+            "channel_plans",
+            tuple(
+                sorted(
+                    channel_plans,
+                    key=lambda item: item.channel,
+                )
+            ),
+        )
+
+    @property
+    def observational_channels(self) -> tuple[str, ...]:
+        """Return all channels represented by this group plan."""
+
+        return tuple(
+            sorted(
+                (
+                    self.reference_channel,
+                    *(
+                        item.channel
+                        for item in self.channel_plans
+                    ),
+                )
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe representation."""
+
+        return {
+            "physical_wavelength": self.physical_wavelength,
+            "reference_channel": self.reference_channel,
+            "observational_channels": list(
+                self.observational_channels
+            ),
+            "channel_plans": [
+                channel_plan.to_dict()
+                for channel_plan in self.channel_plans
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationPlan:
+    """Immutable dataset-level calibration orchestration contract."""
+
+    schema_version: str
+    assessment: InstrumentChannelCalibrationAssessment
+    group_plans: tuple[
+        InstrumentChannelCalibrationGroupPlan,
+        ...,
+    ]
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel calibration plan "
+                f"schema version: {self.schema_version!r}."
+            )
+        if not isinstance(
+            self.assessment,
+            InstrumentChannelCalibrationAssessment,
+        ):
+            raise TypeError(
+                "assessment must be an "
+                "InstrumentChannelCalibrationAssessment instance."
+            )
+
+        group_plans = tuple(self.group_plans)
+        if any(
+            not isinstance(
+                group_plan,
+                InstrumentChannelCalibrationGroupPlan,
+            )
+            for group_plan in group_plans
+        ):
+            raise TypeError(
+                "group_plans must contain only "
+                "InstrumentChannelCalibrationGroupPlan instances."
+            )
+
+        observed_wavelengths = [
+            group_plan.physical_wavelength
+            for group_plan in group_plans
+        ]
+        if (
+            len(set(observed_wavelengths))
+            != len(observed_wavelengths)
+        ):
+            raise ValueError(
+                "Each shared physical wavelength may have only one "
+                "calibration group plan."
+            )
+
+        expected_groups = {
+            group.physical_wavelength: (
+                group.observational_channels
+            )
+            for group in (
+                self.assessment.shared_wavelength_groups
+            )
+        }
+        observed_groups = {
+            group_plan.physical_wavelength: (
+                group_plan.observational_channels
+            )
+            for group_plan in group_plans
+        }
+
+        if observed_groups != expected_groups:
+            raise ValueError(
+                "group_plans must cover exactly the shared-wavelength "
+                "groups and observational channels in assessment."
+            )
+
+        object.__setattr__(
+            self,
+            "group_plans",
+            tuple(
+                sorted(
+                    group_plans,
+                    key=lambda item: item.physical_wavelength,
+                )
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "assessment": self.assessment.to_dict(),
+            "group_plans": [
+                group_plan.to_dict()
+                for group_plan in self.group_plans
+            ],
+            "n_shared_wavelength_groups": len(
+                self.group_plans
+            ),
+            "automatic_reference_channel_selection": False,
+            "automatic_pairing_method_selection": False,
+            "automatic_time_tolerance_selection": False,
+            "automatic_calibration_family_selection": False,
+            "automatic_pair_construction": False,
+            "automatic_calibration_fit": False,
+            "automatic_calibration_application": False,
+            "channel_merging_performed": False,
+            "wavelength_reassignment_performed": False,
+            "lightcurve_mutation_performed": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+
+def define_instrument_channel_calibration_plan(
+    assessment: InstrumentChannelCalibrationAssessment,
+    group_plans: Any,
+) -> InstrumentChannelCalibrationPlan:
+    """Validate and record explicit dataset-level calibration choices.
+
+    The caller supplies every reference channel, per-channel disposition,
+    pairing method, tolerance, time unit, and calibration family. Optional
+    pairing and fitted-calibration records are retained as provenance.
+
+    This callable does not construct pairs, fit or apply calibrations,
+    merge channels, alter wavelengths, mutate a light curve, or select any
+    scientific configuration automatically.
+    """
+
+    if not isinstance(
+        assessment,
+        InstrumentChannelCalibrationAssessment,
+    ):
+        raise TypeError(
+            "assessment must be an "
+            "InstrumentChannelCalibrationAssessment instance."
+        )
+
+    return InstrumentChannelCalibrationPlan(
+        schema_version=(
+            INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION
+        ),
+        assessment=assessment,
+        group_plans=tuple(group_plans),
+    )
 
 
 def _as_calibration_vector(
