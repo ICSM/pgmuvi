@@ -116,11 +116,13 @@ using the existing compatibility method::
    **TBD[instrument-channel-calibration]:** The low-level API in
    :mod:`pgmuvi.instrument_channel_calibration` can construct deterministic
    one-to-one exact-time or nearest-within-caller-tolerance pairs, preserve
-   their provenance, fit and apply an affine mapping, and record explicit
-   dataset-level plans across shared-wavelength groups.  It does not choose the
-   reference channel, pairing method, tolerance, or calibration family; execute
-   an orchestration plan; interpolate measurements; merge observational
-   channels; or integrate calibration automatically into a light-curve fit.
+   their provenance, fit and apply an affine mapping, record explicit
+   dataset-level plans across shared-wavelength groups, and execute only the
+   choices recorded in those plans. Execution returns copied arrays and
+   completed provenance; it does not choose the reference channel, pairing
+   method, tolerance, or calibration family; interpolate measurements; mutate
+   input arrays; merge observational channels; propagate fitted-coefficient
+   uncertainty; or integrate calibration automatically into a light-curve fit.
 
 Visualising 2D Results
 -----------------------

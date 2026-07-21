@@ -5,9 +5,9 @@ stream.  It is distinct from the numeric physical wavelength coordinate used by
 the GP, and multiple observational channels may share one physical wavelength.
 
 This module provides immutable, JSON-safe requirement, pairing, and
-dataset-level orchestration records, an explicit deterministic time-pair
-construction callable, and low-level fitting and application primitives for an
-affine mapping.  It does not choose
+dataset-level orchestration records and execution results, explicit
+deterministic time-pair construction and plan-execution callables, and low-level
+fitting and application primitives for an affine mapping.  It does not choose
 a reference channel, pairing method, time tolerance, or calibration family;
 merge channels; alter wavelengths; or integrate calibration automatically into
 a light-curve fit.
@@ -15,7 +15,7 @@ a light-curve fit.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import math
 from typing import Any
@@ -35,9 +35,13 @@ INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-plan-v1"
 )
+INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-calibration-execution-v1"
+)
 
 
 __all__ = [
+    "INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
@@ -47,6 +51,7 @@ __all__ = [
     "InstrumentChannelCalibrationAssessment",
     "InstrumentChannelCalibrationChannelPlan",
     "InstrumentChannelCalibrationDisposition",
+    "InstrumentChannelCalibrationExecution",
     "InstrumentChannelCalibrationGroupPlan",
     "InstrumentChannelCalibrationPlan",
     "InstrumentChannelCalibrationStatus",
@@ -57,6 +62,7 @@ __all__ = [
     "assess_instrument_channel_calibration_requirement",
     "construct_instrument_channel_pairing",
     "define_instrument_channel_calibration_plan",
+    "execute_instrument_channel_calibration_plan",
     "fit_instrument_channel_calibration",
 ]
 
@@ -1835,6 +1841,657 @@ def define_instrument_channel_calibration_plan(
         ),
         assessment=assessment,
         group_plans=tuple(group_plans),
+    )
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationExecution:
+    """Immutable result of executing an explicit calibration plan.
+
+    The result contains copied calibrated arrays and a completed plan carrying
+    the pairing and affine-calibration provenance used for every planned
+    non-reference channel. Input arrays are never mutated.
+
+    This record does not claim that the caller-selected reference channels,
+    pairing methods, tolerances, or affine family are scientifically optimal.
+    Fitted-coefficient uncertainty is not propagated.
+    """
+
+    schema_version: str
+    plan: InstrumentChannelCalibrationPlan
+    source_row_indices: tuple[int, ...]
+    calibrated_flux: tuple[float, ...]
+    calibrated_flux_error: tuple[float, ...] | None
+    applied_channels: tuple[str, ...]
+    applied_source_row_indices: tuple[int, ...]
+    n_applied_observations: int
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel calibration execution "
+                f"schema version: {self.schema_version!r}."
+            )
+
+        if not isinstance(
+            self.plan,
+            InstrumentChannelCalibrationPlan,
+        ):
+            raise TypeError(
+                "plan must be an InstrumentChannelCalibrationPlan "
+                "instance."
+            )
+
+        calibrated_flux = tuple(
+            float(value)
+            for value in self.calibrated_flux
+        )
+        if any(
+            not math.isfinite(value)
+            for value in calibrated_flux
+        ):
+            raise ValueError("calibrated_flux must contain finite values.")
+
+        source_row_indices = (
+            _normalize_pairing_source_indices(
+                self.source_row_indices,
+                size=len(calibrated_flux),
+                name="source_row_indices",
+            )
+        )
+
+        calibrated_flux_error = self.calibrated_flux_error
+        if calibrated_flux_error is not None:
+            calibrated_flux_error = tuple(
+                float(value)
+                for value in calibrated_flux_error
+            )
+            if len(calibrated_flux_error) != len(calibrated_flux):
+                raise ValueError(
+                    "calibrated_flux_error must have the same length as "
+                    "calibrated_flux."
+                )
+            if any(
+                not math.isfinite(value) or value < 0.0
+                for value in calibrated_flux_error
+            ):
+                raise ValueError(
+                    "calibrated_flux_error must contain finite "
+                    "non-negative values."
+                )
+
+        applied_channels = tuple(
+            sorted(
+                {
+                    _normalize_calibration_channel(
+                        channel,
+                        name="applied channel",
+                    )
+                    for channel in self.applied_channels
+                }
+            )
+        )
+
+        applied_source_row_indices = (
+            InstrumentChannelPairing._normalize_indices(
+                self.applied_source_row_indices,
+                name="applied_source_row_indices",
+            )
+        )
+        if (
+            len(set(applied_source_row_indices))
+            != len(applied_source_row_indices)
+        ):
+            raise ValueError(
+                "applied_source_row_indices must not contain "
+                "duplicate source rows."
+            )
+
+        source_row_index_set = set(source_row_indices)
+        missing_applied_indices = tuple(
+            index
+            for index in applied_source_row_indices
+            if index not in source_row_index_set
+        )
+        if missing_applied_indices:
+            raise ValueError(
+                "applied_source_row_indices must be drawn from "
+                "source_row_indices; missing="
+                f"{missing_applied_indices!r}."
+            )
+
+        planned_channels = {
+            channel_plan.channel
+            for group_plan in self.plan.group_plans
+            for channel_plan in group_plan.channel_plans
+            if channel_plan.disposition
+            is InstrumentChannelCalibrationDisposition.PLANNED
+        }
+        if set(applied_channels) != planned_channels:
+            raise ValueError(
+                "applied_channels must match exactly the planned "
+                "channels in plan."
+            )
+
+        if (
+            isinstance(self.n_applied_observations, (bool, np.bool_))
+            or not isinstance(
+                self.n_applied_observations,
+                (int, np.integer),
+            )
+        ):
+            raise TypeError(
+                "n_applied_observations must be an integer."
+            )
+        n_applied_observations = int(
+            self.n_applied_observations
+        )
+        if n_applied_observations < 0:
+            raise ValueError(
+                "n_applied_observations must be non-negative."
+            )
+        if n_applied_observations != len(
+            applied_source_row_indices
+        ):
+            raise ValueError(
+                "n_applied_observations must equal the number of "
+                "applied_source_row_indices."
+            )
+
+        object.__setattr__(
+            self,
+            "source_row_indices",
+            source_row_indices,
+        )
+        object.__setattr__(
+            self,
+            "calibrated_flux",
+            calibrated_flux,
+        )
+        object.__setattr__(
+            self,
+            "calibrated_flux_error",
+            calibrated_flux_error,
+        )
+        object.__setattr__(
+            self,
+            "applied_channels",
+            applied_channels,
+        )
+        object.__setattr__(
+            self,
+            "applied_source_row_indices",
+            applied_source_row_indices,
+        )
+        object.__setattr__(
+            self,
+            "n_applied_observations",
+            n_applied_observations,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe execution representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "plan": self.plan.to_dict(),
+            "source_row_indices": list(self.source_row_indices),
+            "calibrated_flux": list(self.calibrated_flux),
+            "calibrated_flux_error": (
+                None
+                if self.calibrated_flux_error is None
+                else list(self.calibrated_flux_error)
+            ),
+            "applied_channels": list(self.applied_channels),
+            "applied_source_row_indices": list(
+                self.applied_source_row_indices
+            ),
+            "n_applied_channels": len(self.applied_channels),
+            "n_applied_observations": (
+                self.n_applied_observations
+            ),
+            "plan_execution_performed": True,
+            "input_mutation_performed": False,
+            "channel_merging_performed": False,
+            "wavelength_reassignment_performed": False,
+            "automatic_reference_channel_selection": False,
+            "automatic_pairing_method_selection": False,
+            "automatic_time_tolerance_selection": False,
+            "automatic_calibration_family_selection": False,
+            "fitted_coefficient_uncertainty_propagated": False,
+            "scientific_pairing_validation_performed": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+
+def _as_finite_execution_vector(
+    values: Any,
+    *,
+    name: str,
+    non_negative: bool = False,
+) -> np.ndarray:
+    raw = np.asarray(values)
+    contains_boolean = (
+        raw.dtype.kind == "b"
+        or (
+            raw.dtype.kind == "O"
+            and any(
+                isinstance(value, (bool, np.bool_))
+                for value in raw.flat
+            )
+        )
+    )
+    if contains_boolean:
+        raise TypeError(
+            f"{name} must contain numeric values, not booleans."
+        )
+
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 1:
+        raise ValueError(f"{name} must be one-dimensional.")
+    if np.any(~np.isfinite(array)):
+        raise ValueError(f"{name} must contain finite values.")
+    if non_negative and np.any(array < 0.0):
+        raise ValueError(
+            f"{name} must contain non-negative values."
+        )
+
+    return array
+
+
+def _execution_pair_positions(
+    pairing: InstrumentChannelPairing,
+    *,
+    row_position_by_index: dict[int, int],
+    observational_channels: tuple[str, ...],
+    physical_wavelengths: np.ndarray,
+    times: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    try:
+        reference_positions = np.asarray(
+            [
+                row_position_by_index[index]
+                for index in pairing.reference_row_indices
+            ],
+            dtype=int,
+        )
+        channel_positions = np.asarray(
+            [
+                row_position_by_index[index]
+                for index in pairing.channel_row_indices
+            ],
+            dtype=int,
+        )
+    except KeyError as exception:
+        raise ValueError(
+            "Pairing provenance references a source row index that is "
+            "absent from the execution input: "
+            f"{exception.args[0]!r}."
+        ) from exception
+
+    for position in reference_positions:
+        if (
+            observational_channels[position]
+            != pairing.reference_channel
+        ):
+            raise ValueError(
+                "Pairing reference_row_indices do not identify the "
+                "declared reference_channel in the execution input."
+            )
+        if (
+            physical_wavelengths[position]
+            != pairing.wavelength
+        ):
+            raise ValueError(
+                "Pairing reference_row_indices do not identify the "
+                "declared wavelength in the execution input."
+            )
+
+    for position in channel_positions:
+        if observational_channels[position] != pairing.channel:
+            raise ValueError(
+                "Pairing channel_row_indices do not identify the "
+                "declared channel in the execution input."
+            )
+        if physical_wavelengths[position] != pairing.wavelength:
+            raise ValueError(
+                "Pairing channel_row_indices do not identify the "
+                "declared wavelength in the execution input."
+            )
+
+    if not np.array_equal(
+        times[reference_positions],
+        np.asarray(pairing.reference_times, dtype=float),
+    ):
+        raise ValueError(
+            "Pairing reference_times do not match the execution rows "
+            "identified by reference_row_indices."
+        )
+    if not np.array_equal(
+        times[channel_positions],
+        np.asarray(pairing.channel_times, dtype=float),
+    ):
+        raise ValueError(
+            "Pairing channel_times do not match the execution rows "
+            "identified by channel_row_indices."
+        )
+
+    return reference_positions, channel_positions
+
+
+def execute_instrument_channel_calibration_plan(
+    plan: InstrumentChannelCalibrationPlan,
+    times: Any,
+    flux: Any,
+    physical_wavelengths: Any,
+    observational_channel_labels: Any,
+    *,
+    flux_error: Any | None = None,
+    source_row_indices: Any | None = None,
+) -> InstrumentChannelCalibrationExecution:
+    """Execute a caller-authored dataset-level calibration plan.
+
+    Planned entries reuse attached pairing or calibration provenance when
+    present. Otherwise the callable constructs pairs using the explicitly
+    recorded method and tolerance, fits the explicitly recorded affine family,
+    and applies the mapping to every row of the planned target channel at the
+    shared physical wavelength.
+
+    Skipped and unavailable entries are preserved without modification.
+    Reference-channel rows are never transformed. Inputs are copied rather than
+    mutated, observational channels remain distinct, and wavelengths are not
+    reassigned.
+
+    The callable performs no automatic reference-channel, pairing-method,
+    tolerance, or calibration-family selection. It does not propagate
+    uncertainty in fitted affine coefficients or integrate the result into
+    :class:`pgmuvi.lightcurve.Lightcurve`.
+    """
+
+    if not isinstance(
+        plan,
+        InstrumentChannelCalibrationPlan,
+    ):
+        raise TypeError(
+            "plan must be an InstrumentChannelCalibrationPlan "
+            "instance."
+        )
+
+    normalized_times = np.asarray(
+        InstrumentChannelPairing._normalize_times(
+            times,
+            name="times",
+        ),
+        dtype=float,
+    )
+    normalized_flux = _as_finite_execution_vector(
+        flux,
+        name="flux",
+    )
+    normalized_wavelengths = _as_finite_execution_vector(
+        physical_wavelengths,
+        name="physical_wavelengths",
+    )
+
+    labels_array = np.asarray(
+        observational_channel_labels,
+        dtype=object,
+    )
+    if labels_array.ndim != 1:
+        raise ValueError(
+            "observational_channel_labels must be one-dimensional."
+        )
+    normalized_labels = tuple(
+        _normalize_calibration_channel(
+            value,
+            name="observational channel label",
+        )
+        for value in labels_array
+    )
+
+    size = normalized_flux.size
+    for name, array_size in (
+        ("times", normalized_times.size),
+        ("physical_wavelengths", normalized_wavelengths.size),
+        (
+            "observational_channel_labels",
+            len(normalized_labels),
+        ),
+    ):
+        if array_size != size:
+            raise ValueError(
+                f"{name} must have the same length as flux."
+            )
+
+    normalized_error = None
+    if flux_error is not None:
+        normalized_error = _as_finite_execution_vector(
+            flux_error,
+            name="flux_error",
+            non_negative=True,
+        )
+        if normalized_error.size != size:
+            raise ValueError(
+                "flux_error must have the same length as flux."
+            )
+
+    normalized_source_indices = (
+        _normalize_pairing_source_indices(
+            source_row_indices,
+            size=size,
+            name="source_row_indices",
+        )
+    )
+    row_position_by_index = {
+        index: position
+        for position, index in enumerate(
+            normalized_source_indices
+        )
+    }
+
+    observed_assessment = (
+        assess_instrument_channel_calibration_requirement(
+            normalized_wavelengths,
+            normalized_labels,
+        )
+    )
+    if observed_assessment != plan.assessment:
+        raise ValueError(
+            "Execution inputs do not reproduce the calibration "
+            "assessment stored in plan."
+        )
+
+    calibrated_flux = normalized_flux.copy()
+    calibrated_error = (
+        None
+        if normalized_error is None
+        else normalized_error.copy()
+    )
+
+    completed_group_plans = []
+    applied_channels = []
+    applied_observation_mask = np.zeros(size, dtype=bool)
+
+    labels_for_mask = np.asarray(normalized_labels, dtype=object)
+    source_indices_array = np.asarray(
+        normalized_source_indices,
+        dtype=int,
+    )
+
+    for group_plan in plan.group_plans:
+        reference_mask = (
+            (labels_for_mask == group_plan.reference_channel)
+            & (
+                normalized_wavelengths
+                == group_plan.physical_wavelength
+            )
+        )
+        if not np.any(reference_mask):
+            raise ValueError(
+                "Execution input contains no rows for reference channel "
+                f"{group_plan.reference_channel!r} at wavelength "
+                f"{group_plan.physical_wavelength!r}."
+            )
+
+        completed_channel_plans = []
+
+        for channel_plan in group_plan.channel_plans:
+            if channel_plan.disposition is not (
+                InstrumentChannelCalibrationDisposition.PLANNED
+            ):
+                completed_channel_plans.append(channel_plan)
+                continue
+
+            channel_mask = (
+                (labels_for_mask == channel_plan.channel)
+                & (
+                    normalized_wavelengths
+                    == group_plan.physical_wavelength
+                )
+            )
+            if not np.any(channel_mask):
+                raise ValueError(
+                    "Execution input contains no rows for planned channel "
+                    f"{channel_plan.channel!r} at wavelength "
+                    f"{group_plan.physical_wavelength!r}."
+                )
+
+            pairing = channel_plan.pairing
+            if pairing is None:
+                pairing = construct_instrument_channel_pairing(
+                    normalized_times[reference_mask],
+                    normalized_times[channel_mask],
+                    reference_channel=(
+                        group_plan.reference_channel
+                    ),
+                    channel=channel_plan.channel,
+                    wavelength=group_plan.physical_wavelength,
+                    time_unit=channel_plan.time_unit,
+                    method=channel_plan.pairing_method,
+                    maximum_time_separation=(
+                        channel_plan.maximum_time_separation
+                    ),
+                    reference_row_indices=(
+                        source_indices_array[reference_mask]
+                    ),
+                    channel_row_indices=(
+                        source_indices_array[channel_mask]
+                    ),
+                )
+
+            if not pairing.usable_for_affine_calibration:
+                raise ValueError(
+                    "Planned calibration requires at least three paired "
+                    "observations for channel "
+                    f"{channel_plan.channel!r}; pairing contains "
+                    f"{pairing.n_pairs}."
+                )
+
+            (
+                reference_pair_positions,
+                channel_pair_positions,
+            ) = _execution_pair_positions(
+                pairing,
+                row_position_by_index=row_position_by_index,
+                observational_channels=normalized_labels,
+                physical_wavelengths=normalized_wavelengths,
+                times=normalized_times,
+            )
+
+            calibration = channel_plan.calibration
+            if calibration is None:
+                if channel_plan.calibration_family != "affine":
+                    raise ValueError(
+                        "Only the explicit 'affine' calibration family "
+                        "can currently be executed."
+                    )
+
+                calibration = fit_instrument_channel_calibration(
+                    normalized_flux[reference_pair_positions],
+                    normalized_flux[channel_pair_positions],
+                    reference_channel=(
+                        group_plan.reference_channel
+                    ),
+                    channel=channel_plan.channel,
+                    wavelength=group_plan.physical_wavelength,
+                    reference_error=(
+                        None
+                        if normalized_error is None
+                        else normalized_error[
+                            reference_pair_positions
+                        ]
+                    ),
+                    channel_error=(
+                        None
+                        if normalized_error is None
+                        else normalized_error[
+                            channel_pair_positions
+                        ]
+                    ),
+                )
+
+            if calibrated_error is None:
+                calibrated_flux[channel_mask] = (
+                    apply_instrument_channel_calibration(
+                        normalized_flux[channel_mask],
+                        calibration,
+                    )
+                )
+            else:
+                (
+                    transformed_flux,
+                    transformed_error,
+                ) = apply_instrument_channel_calibration(
+                    normalized_flux[channel_mask],
+                    calibration,
+                    flux_error=normalized_error[channel_mask],
+                )
+                calibrated_flux[channel_mask] = transformed_flux
+                calibrated_error[channel_mask] = transformed_error
+
+            completed_channel_plans.append(
+                replace(
+                    channel_plan,
+                    pairing=pairing,
+                    calibration=calibration,
+                )
+            )
+            applied_channels.append(channel_plan.channel)
+            applied_observation_mask[channel_mask] = True
+
+        completed_group_plans.append(
+            replace(
+                group_plan,
+                channel_plans=tuple(completed_channel_plans),
+            )
+        )
+
+    completed_plan = define_instrument_channel_calibration_plan(
+        plan.assessment,
+        tuple(completed_group_plans),
+    )
+
+    return InstrumentChannelCalibrationExecution(
+        schema_version=(
+            INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION
+        ),
+        plan=completed_plan,
+        source_row_indices=normalized_source_indices,
+        calibrated_flux=tuple(calibrated_flux),
+        calibrated_flux_error=(
+            None
+            if calibrated_error is None
+            else tuple(calibrated_error)
+        ),
+        applied_channels=tuple(applied_channels),
+        applied_source_row_indices=tuple(
+            source_indices_array[applied_observation_mask]
+        ),
+        n_applied_observations=int(
+            np.count_nonzero(applied_observation_mask)
+        ),
     )
 
 

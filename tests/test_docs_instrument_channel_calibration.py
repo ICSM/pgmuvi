@@ -65,8 +65,21 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         self.assertIn("planned", text)
         self.assertIn("skipped", text)
         self.assertIn("unavailable", text)
-        self.assertIn("dataset-level orchestration", text)
+        self.assertIn("Dataset-level orchestration", text)
         self.assertIn("does not construct pairs", text)
+        self.assertIn(
+            "execute_instrument_channel_calibration_plan",
+            text,
+        )
+        self.assertIn(
+            "InstrumentChannelCalibrationExecution",
+            text,
+        )
+        self.assertIn("does not mutate input arrays", text)
+        self.assertIn(
+            "fitted-coefficient uncertainty",
+            text,
+        )
         self.assertIn("O(n_reference * n_channel)", text)
         self.assertIn("time and memory cost", text)
         self.assertIn("affine", text.lower())
