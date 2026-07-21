@@ -113,14 +113,14 @@ Wavelength-model extensions
 ---------------------------
 
 **TBD[instrument-channel-calibration]**
-    The public pairing record now preserves explicit row/time provenance,
-    while the low-level fitting and application callables accept caller-supplied
-    paired measurements and implement an affine mapping.  This does not close
-    the marker: scientifically validated automatic pair construction,
-    dataset-level orchestration across shared-
-    wavelength observational channels, fitted-coefficient uncertainty
-    propagation, workflow integration, and scientific validation remain future
-    work.
+    The public low-level API now constructs deterministic one-to-one
+    exact-timestamp or nearest-within-caller-tolerance pairs, preserves
+    row/time and construction provenance, and fits and applies an affine
+    mapping.  This does not close the marker: scientifically validated
+    instrument-specific tolerance guidance, dataset-level orchestration across
+    shared-wavelength observational channels, fitted-coefficient uncertainty
+    propagation, workflow integration, and representative calibration
+    validation remain future work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

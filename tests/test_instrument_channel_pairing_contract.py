@@ -14,6 +14,12 @@ from pgmuvi.instrument_channel_calibration import (
 
 
 class TestInstrumentChannelPairing(unittest.TestCase):
+    def test_current_schema_version_is_v2(self):
+        self.assertEqual(
+            INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION,
+            "pgmuvi-instrument-channel-pairing-v2",
+        )
+
     @staticmethod
     def _pairing(**overrides):
         values = {
@@ -80,6 +86,15 @@ class TestInstrumentChannelPairing(unittest.TestCase):
             pairing.reference_row_indices,
             (1, 4, 8),
         )
+
+    def test_previous_schema_version_is_rejected(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "Unsupported instrument-channel pairing schema version",
+        ):
+            self._pairing(
+                schema_version="pgmuvi-instrument-channel-pairing-v1",
+            )
 
     def test_mismatched_pairing_lengths_are_rejected(self):
         with self.assertRaisesRegex(
