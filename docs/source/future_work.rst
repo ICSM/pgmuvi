@@ -113,10 +113,11 @@ Wavelength-model extensions
 ---------------------------
 
 **TBD[instrument-channel-calibration]**
-    The public low-level fitting and application callables now accept
-    caller-supplied paired measurements from distinct observational channels
-    and implement an explicit affine mapping.  This does not close the marker:
-    automatic pair construction, dataset-level orchestration across shared-
+    The public pairing record now preserves explicit row/time provenance,
+    while the low-level fitting and application callables accept caller-supplied
+    paired measurements and implement an affine mapping.  This does not close
+    the marker: scientifically validated automatic pair construction,
+    dataset-level orchestration across shared-
     wavelength observational channels, fitted-coefficient uncertainty
     propagation, workflow integration, and scientific validation remain future
     work.

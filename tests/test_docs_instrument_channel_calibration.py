@@ -31,6 +31,10 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             instrument_channel_calibration.__all__,
         )
         self.assertIn(
+            "InstrumentChannelPairing",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
             "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
             instrument_channel_calibration.__all__,
         )
@@ -51,6 +55,9 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         text = PAGE.read_text(encoding="utf-8")
         self.assertIn("caller-supplied paired", text)
         self.assertIn("does not construct time pairs", text)
+        self.assertIn("row indices", text)
+        self.assertIn("time-separation", text)
+        self.assertIn("nearest-neighbour matching", text)
         self.assertIn("affine", text.lower())
         self.assertIn(
             "does not propagate uncertainty in the fitted offset or scale",
@@ -61,7 +68,8 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         text = " ".join(FUTURE.read_text(encoding="utf-8").split())
 
         self.assertIn("TBD[instrument-channel-calibration]", text)
-        self.assertIn("caller-supplied paired measurements", text)
+        self.assertIn("pairing record", text)
+        self.assertIn("caller-supplied", text)
         self.assertIn("does not close", text)
         self.assertIn("scientific validation", text)
 
@@ -84,7 +92,10 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             multiband,
         )
         normalized_multiband = " ".join(multiband.split())
-        self.assertIn("caller-supplied paired", normalized_multiband)
+        self.assertIn(
+            "caller-supplied pair provenance",
+            normalized_multiband,
+        )
         self.assertIn(
             "do not construct time pairs",
             normalized_multiband,

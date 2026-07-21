@@ -20,8 +20,10 @@ summaries and distinct physical wavelengths are reported separately.
 **TBD[instrument-channel-calibration]:** No instrument-channel calibration is
 performed by this wavelength-estimation workflow.  The low-level API in
 :mod:`pgmuvi.instrument_channel_calibration` can fit and apply an affine mapping
-from caller-supplied paired measurements, but this workflow does not construct
-such pairs or receive a fitted mapping.  When multiple usable observational
+from caller-supplied paired measurements, and its pairing record can preserve
+explicit row/time provenance.  This workflow does not construct or receive
+pairing records and does not receive a fitted mapping.  When multiple usable
+observational
 channels share one physical wavelength, their channel-level diagnostics are
 preserved while that wavelength is excluded from cross-wavelength trend
 summaries and wavelength-mean fits.  No flux summaries are silently combined,
