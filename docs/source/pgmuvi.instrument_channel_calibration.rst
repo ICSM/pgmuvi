@@ -1,29 +1,56 @@
-Instrument-channel calibration contract
-=======================================
+Instrument-channel calibration
+==============================
 
 .. automodule:: pgmuvi.instrument_channel_calibration
    :members:
    :undoc-members:
    :show-inheritance:
 
+Assessment and explicit paired calibration
+------------------------------------------
+
+The assessment API preserves the distinction between an observational channel
+and its physical wavelength coordinate.  It deterministically reports groups
+in which multiple observational channels share one physical wavelength, but it
+does not alter wavelengths, merge channels, average their measurements, or
+apply a correction.
+
+The fitting API accepts **caller-supplied paired** flux measurements for one
+observational channel and an explicitly named reference channel.  It fits the
+affine mapping
+
+.. math::
+
+   f_{\mathrm{reference}}
+   =
+   b + a f_{\mathrm{channel}},
+
+where ``b`` is the stored offset and ``a`` is the strictly positive stored
+scale.  Optional measurement uncertainties contribute to weighted least
+squares, and iterative MAD clipping can reject discrepant pairs.
+
+PGMUVI does not construct time pairs from asynchronous light curves.  It also
+does not select between additive, multiplicative, affine, or other calibration
+families.  Pair construction and the decision to use this explicit affine
+model remain the caller's scientific responsibility.
+
+Applying a fitted calibration maps fluxes onto the reference-channel scale.
+Flux uncertainties are multiplied by the absolute fitted scale.  The current
+application function does not propagate uncertainty in the fitted offset or
+scale themselves.
+
 ``TBD[instrument-channel-calibration]`` remains open
 ----------------------------------------------------
 
-This module does **not** implement an instrumental calibration model.  It
-provides a deterministic assessment of whether multiple observational channels
-share one physical wavelength and therefore require a future calibration
-model.
+The low-level paired affine fit and application primitives do not complete the
+instrument-channel calibration work.  The marker remains open because PGMUVI
+still lacks:
 
-The assessment preserves observational-channel identities, reports the shared
-physical-wavelength groups, records that no correction was applied, and is
-JSON-safe.  It does not inspect flux differences as evidence for an offset or
-scale and does not alter wavelengths or fluxes.
+* scientifically validated rules for constructing calibration pairs;
+* dataset-level orchestration across shared-wavelength channel groups;
+* propagation of fitted-coefficient uncertainty;
+* integration into the normal light-curve fitting workflow; and
+* validation across representative instruments, filters, and LPV sources.
 
-The public callables
-:func:`~pgmuvi.instrument_channel_calibration.fit_instrument_channel_calibration`
-and
-:func:`~pgmuvi.instrument_channel_calibration.apply_instrument_channel_calibration`
-raise :class:`NotImplementedError`.  This explicit failure is part of the
-contract: PGMUVI must not silently infer, approximate, or apply an
-instrument-channel correction before a scientifically validated implementation
-exists.
+No automatic calibration, channel merging, wavelength reassignment, or model
+selection is performed.

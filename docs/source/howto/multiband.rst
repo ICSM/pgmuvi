@@ -113,14 +113,11 @@ using the existing compatibility method::
 
 .. warning::
 
-   **TBD[instrument-channel-calibration]:** PGMUVI does not currently estimate
-   additive offsets, multiplicative scales, or other instrument-channel
-   calibration corrections when multiple observational channels share one
-   physical wavelength.  Preserve the separate channel labels.  No silent
-   calibration or wavelength reassignment is performed; an explicit calibration
-   model is future work.  The public fit and apply callables in
-   :mod:`pgmuvi.instrument_channel_calibration` raise ``NotImplementedError``
-   until that model exists.
+   **TBD[instrument-channel-calibration]:** The low-level callables in
+   :mod:`pgmuvi.instrument_channel_calibration` can fit and apply an explicit
+   affine mapping from caller-supplied paired measurements.  They do not
+   construct time pairs, choose a calibration family, merge observational
+   channels, or integrate calibration automatically into a light-curve fit.
 
 Visualising 2D Results
 -----------------------

@@ -19,9 +19,11 @@ wavelength.  D3 preserves those channel identities and does not average,
 merge, calibrate, correct, or reassign their measurements or wavelength
 coordinates.
 
-Instrument-specific calibration is not implemented.  That work remains
-``TBD[instrument-channel-calibration]``.  No calibration correction is
-silently approximated.
+Automatic instrument-specific calibration is not integrated into this
+workflow.  The low-level paired affine API requires explicit caller-supplied
+pairs and is not applied by representative-LPV validation.  This limitation
+remains tracked by ``TBD[instrument-channel-calibration]``; no calibration
+correction is silently approximated.
 
 Maintained candidate set
 ------------------------
@@ -261,7 +263,7 @@ The workflow therefore leaves ``selected_model`` unset.
 Residual wavelength evidence is available for all five candidates
 and is aggregated by physical wavelength.  Observational channels
 sharing one physical wavelength remain grouped because
-instrument-specific channel calibration has not been implemented.
+instrument-specific channel calibration is not applied by this workflow.
 That separate limitation remains tracked by
 ``TBD[instrument-channel-calibration]``.
 

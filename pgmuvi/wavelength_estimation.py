@@ -452,11 +452,10 @@ def build_wavelength_estimation_context(
     )
     shared_wavelengths = set(shared_wavelength_channels)
 
-    # TBD[instrument-channel-calibration]: An explicit calibration model is
-    # required before flux summaries from multiple observational channels at
-    # one physical wavelength can be combined. Until then, omit those physical
+    # TBD[instrument-channel-calibration]: This workflow does not construct
+    # calibration pairs or apply a caller-fitted mapping. Omit shared physical
     # wavelengths from cross-wavelength trend summaries rather than silently
-    # calibrating or double-counting them.
+    # calibrating, merging, or double-counting their observational channels.
     usable_for_trends = [
         item
         for item in usable
@@ -663,10 +662,9 @@ def _wavelength_mean_observational_channel_points(
     )
     shared_wavelengths = set(shared_wavelength_channels)
 
-    # TBD[instrument-channel-calibration]: Separate observational channels at
-    # one physical wavelength cannot contribute independent mean-fit points
-    # until an explicit calibration model exists. Excluding the wavelength is
-    # safer than silently combining channel medians or double-counting it.
+    # TBD[instrument-channel-calibration]: This workflow receives no explicit
+    # caller-fitted channel mapping. Excluding the shared physical wavelength
+    # is safer than silently combining channel medians or double-counting it.
     retained_rows = [
         item for item in rows if item[0] not in shared_wavelengths
     ]
@@ -1106,9 +1104,9 @@ def build_wavelength_mean_estimation_context(
     ]
     if channel_metadata["multiple_observational_channels_per_wavelength"]:
         warnings.append(
-            "Instrument-channel calibration is not implemented; physical "
-            "wavelengths shared by multiple observational channels were "
-            "excluded from wavelength-mean estimation."
+            "Instrument-channel calibration is not applied in this workflow; "
+            "physical wavelengths shared by multiple observational channels "
+            "were excluded from wavelength-mean estimation."
         )
 
     return WavelengthMeanEstimationDiagnostics(
