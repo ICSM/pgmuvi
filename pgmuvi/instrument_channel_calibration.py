@@ -1754,9 +1754,17 @@ class InstrumentChannelCalibrationPlan:
         }
 
         if observed_groups != expected_groups:
+            expected_group_summary = tuple(
+                sorted(expected_groups.items())
+            )
+            observed_group_summary = tuple(
+                sorted(observed_groups.items())
+            )
             raise ValueError(
                 "group_plans must cover exactly the shared-wavelength "
-                "groups and observational channels in assessment."
+                "groups and observational channels in assessment. "
+                f"expected_groups={expected_group_summary!r}; "
+                f"observed_groups={observed_group_summary!r}."
             )
 
         object.__setattr__(

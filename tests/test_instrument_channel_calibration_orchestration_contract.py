@@ -119,11 +119,29 @@ class TestInstrumentChannelCalibrationOrchestrationContract(
         with self.assertRaisesRegex(
             ValueError,
             "cover exactly",
-        ):
+        ) as context:
             define_instrument_channel_calibration_plan(
                 self._assessment(),
                 self._groups()[:1],
             )
+
+        message = str(context.exception)
+        self.assertIn(
+            "expected_groups=",
+            message,
+        )
+        self.assertIn(
+            "observed_groups=",
+            message,
+        )
+        self.assertIn(
+            "(2.0, ('C', 'D', 'E'))",
+            message,
+        )
+        self.assertIn(
+            "observed_groups=((1.0, ('A', 'B')),)",
+            message,
+        )
 
     def test_reference_channel_must_belong_to_assessment_group(self):
         invalid = InstrumentChannelCalibrationGroupPlan(
