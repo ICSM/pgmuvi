@@ -119,10 +119,11 @@ Wavelength-model extensions
     defines an inert JSON-safe dataset-level orchestration plan contract, and
     executes caller-authored plans across shared-wavelength observational channels
     into copied calibrated arrays with completed pairing and fit
-    provenance. This does not close the marker: scientifically
-    validated instrument-specific tolerance guidance, fitted-coefficient
-    uncertainty estimation and propagation, workflow integration, and
-    representative
+    provenance, including local covariance estimation for unweighted and
+    reference-error weighted final affine solves. This does not close the
+    marker: scientifically validated instrument-specific tolerance guidance,
+    fitted-coefficient uncertainty estimation for scale-dependent channel-axis
+    errors, predictive propagation, workflow integration, and representative
     calibration validation remain future work.
 
 **TBD[multi-periodic-wavelength-models]**

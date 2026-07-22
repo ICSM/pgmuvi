@@ -208,8 +208,131 @@ class TestInstrumentChannelCalibrationCoefficientUncertainty(unittest.TestCase):
                 coefficient_uncertainty=object(),
             )
 
-    def test_current_fitter_records_uncertainty_as_unavailable(self):
-        channel_flux = np.linspace(0.0, 1.0, 20)
+    def test_unweighted_fit_estimates_scaled_normal_matrix_covariance(self):
+        channel_flux = np.linspace(-1.0, 2.0, 24)
+        perturbation = 0.01 * np.sin(np.arange(channel_flux.size))
+        reference_flux = 0.25 + 1.5 * channel_flux + perturbation
+
+        calibration = fit_instrument_channel_calibration(
+            reference_flux,
+            channel_flux,
+            reference_channel="reference",
+            channel="target",
+            wavelength=1.0,
+            sigma_clip=100.0,
+        )
+
+        uncertainty = calibration.coefficient_uncertainty
+        self.assertEqual(
+            uncertainty.status,
+            InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
+        )
+        self.assertEqual(
+            uncertainty.uncertainty_source,
+            "pgmuvi_affine_fit_final_inliers",
+        )
+        self.assertEqual(
+            uncertainty.estimation_method,
+            "ordinary_least_squares_residual_variance_scaled_"
+            "normal_matrix_inverse",
+        )
+        self.assertEqual(uncertainty.degrees_of_freedom, 22)
+
+        design = np.column_stack((np.ones(24), channel_flux))
+        residual = reference_flux - (
+            calibration.offset + calibration.scale * channel_flux
+        )
+        expected_residual_variance = float(
+            np.dot(residual, residual) / 22
+        )
+        expected_covariance = (
+            np.linalg.inv(design.T @ design)
+            * expected_residual_variance
+        )
+
+        self.assertAlmostEqual(
+            uncertainty.residual_variance,
+            expected_residual_variance,
+        )
+        np.testing.assert_allclose(
+            uncertainty.coefficient_covariance,
+            expected_covariance,
+            rtol=1.0e-12,
+            atol=1.0e-15,
+        )
+        self.assertGreater(uncertainty.offset_standard_error, 0.0)
+        self.assertGreater(uncertainty.scale_standard_error, 0.0)
+        json.dumps(calibration.to_dict(), allow_nan=False)
+
+    def test_reference_error_fit_uses_known_variance_covariance(self):
+        channel_flux = np.linspace(0.0, 2.0, 20)
+        reference_flux = 0.25 + 1.5 * channel_flux
+        reference_error = np.linspace(0.02, 0.05, channel_flux.size)
+
+        calibration = fit_instrument_channel_calibration(
+            reference_flux,
+            channel_flux,
+            reference_channel="reference",
+            channel="target",
+            wavelength=1.0,
+            reference_error=reference_error,
+        )
+
+        uncertainty = calibration.coefficient_uncertainty
+        self.assertEqual(
+            uncertainty.status,
+            InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
+        )
+        self.assertEqual(
+            uncertainty.estimation_method,
+            "known_variance_weighted_normal_matrix_inverse",
+        )
+        self.assertEqual(uncertainty.degrees_of_freedom, 18)
+        self.assertIsNone(uncertainty.residual_variance)
+
+        design = np.column_stack((np.ones(20), channel_flux))
+        weights = 1.0 / reference_error**2
+        expected_covariance = np.linalg.inv(
+            design.T @ (weights[:, None] * design)
+        )
+        np.testing.assert_allclose(
+            uncertainty.coefficient_covariance,
+            expected_covariance,
+            rtol=1.0e-12,
+            atol=1.0e-15,
+        )
+
+    def test_channel_error_fit_records_uncertainty_as_unavailable(self):
+        channel_flux = np.linspace(0.0, 2.0, 20)
+        reference_flux = 0.25 + 1.5 * channel_flux
+
+        calibration = fit_instrument_channel_calibration(
+            reference_flux,
+            channel_flux,
+            reference_channel="reference",
+            channel="target",
+            wavelength=1.0,
+            reference_error=np.full(20, 0.03),
+            channel_error=np.linspace(0.01, 0.02, 20),
+        )
+
+        uncertainty = calibration.coefficient_uncertainty
+        self.assertEqual(
+            uncertainty.status,
+            InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE,
+        )
+        self.assertIsNone(uncertainty.coefficient_covariance)
+        self.assertEqual(
+            uncertainty.reason,
+            "Coefficient covariance is unavailable when channel-axis "
+            "measurement errors contribute scale-dependent effective "
+            "variances; the current affine fitter does not expose a "
+            "covariance estimator for the full iterative weighting procedure.",
+        )
+        json.dumps(calibration.to_dict(), allow_nan=False)
+
+    def test_numerically_rank_deficient_fit_has_explicit_unavailable_reason(self):
+        channel_flux = 1.0 + 1.0e-12 * np.arange(20, dtype=float)
         reference_flux = 0.25 + 1.5 * channel_flux
 
         calibration = fit_instrument_channel_calibration(
@@ -225,8 +348,13 @@ class TestInstrumentChannelCalibrationCoefficientUncertainty(unittest.TestCase):
             uncertainty.status,
             InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE,
         )
-        self.assertEqual(uncertainty.uncertainty_source, "pgmuvi_affine_fit")
-        self.assertIn("not implemented", uncertainty.reason)
+        self.assertIsNone(uncertainty.coefficient_covariance)
+        self.assertEqual(
+            uncertainty.reason,
+            "Final weighted affine design is numerically rank-deficient; "
+            "coefficient covariance is unavailable.",
+        )
+        json.dumps(calibration.to_dict(), allow_nan=False)
 
 
 if __name__ == "__main__":

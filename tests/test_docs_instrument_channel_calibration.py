@@ -102,7 +102,20 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         self.assertIn("explicit uncertainty source", normalized)
         self.assertIn("unavailable", normalized)
         self.assertIn(
-            "does not estimate covariance",
+            "ordinary-least-squares normal-matrix inverse",
+            normalized,
+        )
+        self.assertIn(
+            "Coefficient covariance is unavailable when channel-axis errors "
+            "are supplied",
+            normalized,
+        )
+        self.assertIn(
+            "does not expose a full-objective Hessian",
+            normalized,
+        )
+        self.assertIn(
+            "local and conditional",
             normalized,
         )
         self.assertIn(
@@ -122,6 +135,14 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             text,
         )
         self.assertIn(
+            "scale-dependent channel-axis errors",
+            text,
+        )
+        self.assertIn(
+            "predictive propagation",
+            text,
+        )
+        self.assertNotIn(
             "uncertainty estimation and propagation",
             text,
         )

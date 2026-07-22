@@ -73,13 +73,32 @@ standard errors are derived from the covariance diagonal rather than stored as
 independent values.  The record also preserves an explicit uncertainty source,
 estimation method, and optional degrees of freedom and residual variance.
 
-When coefficient uncertainty has not been estimated, the nested record uses the
-explicit ``unavailable`` status and a required reason.  It cannot contain
-placeholder covariance or estimation metadata.  This applies equally to
-caller-supplied calibration provenance and calibrations produced by PGMUVI.
-The current affine fitter records coefficient uncertainty as unavailable; it
-does not estimate covariance, and application still propagates only measurement
-uncertainty through the fitted scale.
+The affine fitter estimates covariance for its final fixed-weight least-squares
+subproblem, conditional on the final MAD-clipped inlier set, when either no
+measurement errors or only reference-channel errors are supplied.  With no
+supplied errors it uses the ordinary-least-squares normal-matrix inverse scaled
+by the residual variance
+``sum(residual**2) / (n_inliers - 2)``.  Reference-channel errors use a
+known-variance weighted normal-matrix inverse without residual-variance
+rescaling.
+
+Coefficient covariance is unavailable when channel-axis errors are supplied.
+Those errors produce effective residual variances that depend on the fitted
+scale, while the current iterative weighting procedure does not expose a
+full-objective Hessian or estimating-equation covariance for that dependence.
+PGMUVI therefore records an explicit unavailable reason rather than presenting
+a frozen-weight normal-matrix inverse as uncertainty for the complete
+estimator.
+
+Covariance also remains unavailable, with a deterministic reason, when the
+final weighted design has zero residual degrees of freedom, invalid numerical
+inputs, a failed singular-value decomposition, or numerical rank deficiency.
+Available covariance is local and conditional: it does not include uncertainty
+from pair construction, MAD-clipping selection, calibration-family choice, or
+caller choices about observational-channel pairing.  Its fixed coefficient
+order is ``offset, scale``.  Application still propagates only measurement
+uncertainty through the fitted scale; it does not propagate the estimated
+coefficient covariance into calibrated predictions.
 
 Executing an explicit plan
 --------------------------
@@ -140,7 +159,8 @@ still lacks:
 
 * scientifically validated instrument-specific rules for choosing
   pairing methods and tolerances;
-* estimation and propagation of fitted-coefficient uncertainty;
+* coefficient-uncertainty estimation for scale-dependent channel-axis errors;
+* propagation of fitted-coefficient uncertainty into calibrated predictions;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.
 

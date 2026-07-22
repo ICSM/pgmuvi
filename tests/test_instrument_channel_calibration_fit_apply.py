@@ -73,6 +73,10 @@ class TestInstrumentChannelCalibrationFit(unittest.TestCase):
         self.assertLess(calibration.n_inliers, calibration.n_pairs)
         self.assertAlmostEqual(calibration.offset, 0.125, delta=0.002)
         self.assertAlmostEqual(calibration.scale, 1.35, delta=0.002)
+        self.assertEqual(
+            calibration.coefficient_uncertainty.degrees_of_freedom,
+            calibration.n_inliers - 2,
+        )
 
     def test_zero_mad_outliers_are_clipped(self):
         channel_flux = np.linspace(0.0, 1.0, 61)
@@ -115,6 +119,33 @@ class TestInstrumentChannelCalibrationFit(unittest.TestCase):
 
         self.assertGreater(calibration.scale, 0.0)
         self.assertEqual(calibration.n_pairs, 60)
+
+    def test_too_few_finite_pairs_are_rejected(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "Insufficient finite paired measurements",
+        ):
+            fit_instrument_channel_calibration(
+                np.array([1.0, 2.0, np.nan]),
+                np.array([0.0, 1.0, 2.0]),
+                reference_channel="reference",
+                channel="target",
+                wavelength=0.656,
+            )
+
+    def test_invalid_measurement_errors_can_leave_too_few_pairs(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "Insufficient finite paired measurements",
+        ):
+            fit_instrument_channel_calibration(
+                np.array([1.0, 2.0, 3.0, 4.0]),
+                np.array([0.0, 1.0, 2.0, 3.0]),
+                reference_channel="reference",
+                channel="target",
+                wavelength=0.656,
+                reference_error=np.array([0.1, 0.0, np.nan, 0.1]),
+            )
 
     def test_nonfinite_pairs_are_removed_before_fitting(self):
         reference_flux = self.reference_flux.copy()
@@ -285,6 +316,42 @@ class TestInstrumentChannelCalibrationApply(unittest.TestCase):
         np.testing.assert_allclose(
             error,
             np.array([0.15, 0.30]),
+        )
+
+    def test_available_coefficient_uncertainty_is_not_propagated(self):
+        channel_flux = np.linspace(0.0, 2.0, 20)
+        reference_flux = (
+            0.25
+            + 1.5 * channel_flux
+            + 0.01 * np.sin(np.arange(channel_flux.size))
+        )
+        calibration = fit_instrument_channel_calibration(
+            reference_flux,
+            channel_flux,
+            reference_channel="reference",
+            channel="target",
+            wavelength=0.656,
+            sigma_clip=100.0,
+        )
+
+        self.assertEqual(
+            calibration.coefficient_uncertainty.status,
+            InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
+        )
+        _, error = apply_instrument_channel_calibration(
+            np.array([1.0, 2.0]),
+            calibration,
+            flux_error=np.array([0.1, 0.2]),
+        )
+
+        np.testing.assert_allclose(
+            error,
+            np.abs(calibration.scale) * np.array([0.1, 0.2]),
+        )
+        self.assertFalse(
+            calibration.coefficient_uncertainty.to_dict()[
+                "predictive_uncertainty_propagated"
+            ]
         )
 
     def test_calibration_type_is_checked(self):
