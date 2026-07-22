@@ -47,6 +47,18 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             instrument_channel_calibration.__all__,
         )
         self.assertIn(
+            "INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "InstrumentChannelCalibrationScaleDependentUncertaintyEstimate",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
             "InstrumentChannelCalibrationPredictiveUncertainty",
             instrument_channel_calibration.__all__,
         )
@@ -131,6 +143,35 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             normalized,
         )
         self.assertIn(
+            "Scale-dependent channel-axis uncertainty contract",
+            text,
+        )
+        self.assertIn(
+            "InstrumentChannelCalibrationScaleDependentUncertaintyEstimate",
+            text,
+        )
+        self.assertIn(
+            "estimate_scale_dependent_instrument_channel_calibration_"
+            "coefficient_uncertainty",
+            text,
+        )
+        self.assertIn(
+            "raises ``NotImplementedError`` in this contract-only tranche",
+            normalized,
+        )
+        self.assertIn(
+            "inverse observed Hessian of this full objective",
+            normalized,
+        )
+        self.assertIn(
+            "not a frozen-weight normal-matrix inverse",
+            normalized,
+        )
+        self.assertIn(
+            "v_i=\\sigma_{y,i}^2+a^2\\sigma_{x,i}^2",
+            normalized,
+        )
+        self.assertIn(
             "does not propagate uncertainty in the fitted offset or scale",
             normalized,
         )
@@ -147,7 +188,14 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "record",
             normalized,
         )
-        self.assertNotIn("raises ``NotImplementedError``", normalized)
+        predictive_section = text.split(
+            "Predictive-uncertainty propagation",
+            maxsplit=1,
+        )[1].split(
+            "``TBD[instrument-channel-calibration]`` remains open",
+            maxsplit=1,
+        )[0]
+        self.assertNotIn("NotImplementedError", predictive_section)
         self.assertIn("J_i=[1, x_i]", normalized)
         self.assertIn("offset-scale covariance cross-term", normalized)
         self.assertIn("full_covariance", text)
@@ -174,7 +222,11 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "scale-dependent channel-axis errors",
+            "full-objective observed-Hessian contract",
+            text,
+        )
+        self.assertIn(
+            "implementation of the scale-dependent estimator",
             text,
         )
         self.assertNotIn(
