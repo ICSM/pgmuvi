@@ -115,10 +115,11 @@ the shared wavelength. ``skipped`` and ``unavailable`` entries remain unchanged.
 Execution returns an immutable
 :class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibrationExecution`
 containing copied calibrated arrays, the exact source-row indices transformed,
-and a completed plan with pairing and fitted calibration provenance. It
-does not mutate input arrays, merge channels, alter wavelengths, choose
-scientific configuration automatically, propagate fitted-
-coefficient uncertainty, or integrate calibration into ``Lightcurve.fit()``.
+and a completed plan with pairing and fitted calibration provenance.
+It does not mutate input arrays, merge channels, alter wavelengths, or choose
+scientific configuration automatically.  It does not propagate
+fitted-coefficient uncertainty or integrate calibration into
+``Lightcurve.fit()``.
 
 The fitting API accepts **caller-supplied paired** flux measurements for one
 observational channel and an explicitly named reference channel.  It fits the
@@ -150,15 +151,14 @@ Flux uncertainties are multiplied by the absolute fitted scale.  The current
 application function does not propagate uncertainty in the fitted offset or
 scale themselves.
 
-Predictive-uncertainty propagation contract
--------------------------------------------
+Predictive-uncertainty propagation
+----------------------------------
 
-``InstrumentChannelCalibrationPredictiveUncertainty`` defines an immutable,
-JSON-safe result for a future dedicated
-``apply_instrument_channel_calibration_with_predictive_uncertainty`` callable.
-The existing ``apply_instrument_channel_calibration`` return signature remains
-unchanged.  The dedicated callable raises ``NotImplementedError`` in this
-contract-only tranche and performs no predictive propagation.
+``apply_instrument_channel_calibration_with_predictive_uncertainty`` applies
+the same affine mapping as ``apply_instrument_channel_calibration`` and returns
+an ``InstrumentChannelCalibrationPredictiveUncertainty`` record alongside the
+calibrated flux.  The existing application callable and its return signature
+remain unchanged.
 
 For input :math:`x_i`, the coefficient Jacobian is :math:`J_i=[1, x_i]` in
 fixed coefficient order ``offset, scale``.  With coefficient covariance
@@ -166,23 +166,23 @@ fixed coefficient order ``offset, scale``.  With coefficient covariance
 :math:`J_i C J_j^T`.  Marginal coefficient variance is split into offset
 variance, scale variance, and the offset-scale covariance cross-term.
 Independent input measurement errors contribute
-:math:`a^2 \sigma_i^2` only on the diagonal.  Omitting input errors means a
-zero measurement-variance contribution, and the contract assumes measurement
-errors are independent of fitted coefficients.
+:math:`a^2 \sigma_i^2` only on the diagonal.  Omitting input errors produces
+an explicit zero measurement-variance contribution, and the propagation
+assumes measurement errors are independent of fitted coefficients.
 
-``marginal_variance`` records marginal variance and derived standard
-deviation.  ``full_covariance`` also records correlations between predictions
-that share fitted coefficients.  Scalar input uses ``input_shape=()``; array
-results preserve their shape while uncertainty vectors use flattened row-major
-order.
+``marginal_variance`` records flattened row-major marginal variance components
+and derived standard deviation.  ``full_covariance`` additionally records
+correlations between predictions that share fitted coefficients.  Scalar input
+uses ``input_shape=()``; array results preserve their original shape.
 
 Unavailable coefficient covariance, including current fits with
 scale-dependent channel-axis errors, produces an explicit ``unavailable``
 result with no numerical predictive uncertainty.  There is no silent fallback
-to measurement-only uncertainty.  Future orchestration uses the dispositions
-``not_requested``, ``available``, ``skipped``, and ``unavailable``.  Current
-orchestration continues to record that predictive propagation was not
-performed.
+to measurement-only uncertainty.  Predictive propagation is implemented only
+in the dedicated application callable; current dataset orchestration continues
+to record that propagation was not requested or performed.  The stable future
+orchestration dispositions remain ``not_requested``, ``available``,
+``skipped``, and ``unavailable``.
 
 ``TBD[instrument-channel-calibration]`` remains open
 ----------------------------------------------------
@@ -194,7 +194,6 @@ still lacks:
 * scientifically validated instrument-specific rules for choosing
   pairing methods and tolerances;
 * coefficient-uncertainty estimation for scale-dependent channel-axis errors;
-* propagation of fitted-coefficient uncertainty into calibrated predictions;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.
 

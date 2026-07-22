@@ -142,7 +142,12 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "apply_instrument_channel_calibration_with_predictive_uncertainty",
             text,
         )
-        self.assertIn("raises ``NotImplementedError``", normalized)
+        self.assertIn(
+            "returns an ``InstrumentChannelCalibrationPredictiveUncertainty`` "
+            "record",
+            normalized,
+        )
+        self.assertNotIn("raises ``NotImplementedError``", normalized)
         self.assertIn("J_i=[1, x_i]", normalized)
         self.assertIn("offset-scale covariance cross-term", normalized)
         self.assertIn("full_covariance", text)
@@ -172,11 +177,15 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "scale-dependent channel-axis errors",
             text,
         )
-        self.assertIn(
+        self.assertNotIn(
             "predictive-propagation implementation",
             text,
         )
-        self.assertIn("without activating propagation", text)
+        self.assertIn(
+            "implements dedicated marginal or full-covariance predictive "
+            "propagation without orchestration activation",
+            text,
+        )
         self.assertNotIn(
             "uncertainty estimation and propagation",
             text,

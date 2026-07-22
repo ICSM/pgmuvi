@@ -3918,25 +3918,159 @@ def apply_instrument_channel_calibration_with_predictive_uncertainty(
     np.ndarray,
     InstrumentChannelCalibrationPredictiveUncertainty,
 ]:
-    """Apply calibration with predictive propagation in a future tranche.
+    """Apply affine calibration and propagate predictive uncertainty.
 
-    This dedicated callable preserves the return contract of
-    :func:`apply_instrument_channel_calibration`. A future implementation will
-    use ``J_i = [1, x_i]`` and shared coefficient covariance
-    ``J_i C J_j.T``. Independent input measurement errors will contribute
-    ``scale**2 * flux_error_i**2`` only on the diagonal. Omitting
-    ``flux_error`` will mean a zero measurement-variance contribution.
+    The calibrated flux is identical to
+    :func:`apply_instrument_channel_calibration`. Independent input
+    measurement errors contribute ``scale**2 * flux_error_i**2`` only on the
+    predictive-covariance diagonal. Fitted coefficient covariance contributes
+    ``J_i C J_j.T`` with ``J_i = [1, x_i]`` in fixed coefficient order
+    ``offset, scale``.
 
-    ``marginal_variance`` will expose only marginal uncertainty;
-    ``full_covariance`` will retain correlations induced by shared fitted
-    coefficients. Unavailable coefficient covariance will remain explicitly
-    unavailable rather than falling back silently to measurement-only errors.
-
-    Predictive propagation is not implemented in this contract-only tranche.
+    ``marginal_variance`` returns only flattened row-major variance
+    components. ``full_covariance`` additionally returns the complete
+    covariance between calibrated predictions sharing the fitted
+    coefficients. When coefficient covariance is unavailable, the result is
+    explicitly unavailable and contains no numerical variance components;
+    measurement-only fallback is not performed.
     """
 
-    del flux, calibration, flux_error, covariance_mode
-    raise NotImplementedError(
-        "Predictive instrument-channel calibration uncertainty propagation "
-        "is not implemented."
+    if isinstance(
+        covariance_mode,
+        InstrumentChannelCalibrationPredictiveCovarianceMode,
+    ):
+        normalized_mode = covariance_mode
+    else:
+        try:
+            normalized_mode = (
+                InstrumentChannelCalibrationPredictiveCovarianceMode(
+                    str(covariance_mode)
+                )
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "Unsupported predictive covariance mode: "
+                f"{covariance_mode!r}."
+            ) from exc
+
+    applied = apply_instrument_channel_calibration(
+        flux,
+        calibration,
+        flux_error=flux_error,
+    )
+    input_flux = np.asarray(flux, dtype=float)
+
+    if flux_error is None:
+        calibrated_flux = np.asarray(applied, dtype=float)
+        measurement_variance = np.zeros(
+            calibrated_flux.size,
+            dtype=float,
+        )
+    else:
+        calibrated_flux_value, calibrated_error = applied
+        calibrated_flux = np.asarray(calibrated_flux_value, dtype=float)
+        measurement_variance = np.square(
+            np.asarray(calibrated_error, dtype=float).reshape(
+                -1,
+                order="C",
+            )
+        )
+
+    input_shape = tuple(int(item) for item in calibrated_flux.shape)
+    flattened_flux = input_flux.reshape(-1, order="C")
+    coefficient_uncertainty = calibration.coefficient_uncertainty
+
+    if coefficient_uncertainty.status is (
+        InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+    ):
+        return (
+            calibrated_flux,
+            InstrumentChannelCalibrationPredictiveUncertainty(
+                schema_version=(
+                    INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION
+                ),
+                status=(
+                    InstrumentChannelCalibrationPredictiveUncertaintyStatus.UNAVAILABLE
+                ),
+                covariance_mode=normalized_mode,
+                input_shape=input_shape,
+                input_measurement_uncertainty_supplied=(
+                    flux_error is not None
+                ),
+                coefficient_uncertainty_status=(
+                    coefficient_uncertainty.status
+                ),
+                coefficient_uncertainty_source=(
+                    coefficient_uncertainty.uncertainty_source
+                ),
+                measurement_variance=None,
+                offset_variance=None,
+                scale_variance=None,
+                offset_scale_covariance_term=None,
+                predictive_covariance=None,
+                reason=coefficient_uncertainty.reason,
+            ),
+        )
+
+    coefficient_covariance = np.asarray(
+        coefficient_uncertainty.coefficient_covariance,
+        dtype=float,
+    )
+    offset_variance = np.full(
+        flattened_flux.size,
+        coefficient_covariance[0, 0],
+        dtype=float,
+    )
+    scale_variance = (
+        np.square(flattened_flux) * coefficient_covariance[1, 1]
+    )
+    offset_scale_covariance_term = (
+        2.0 * flattened_flux * coefficient_covariance[0, 1]
+    )
+
+    predictive_covariance = None
+    if normalized_mode is (
+        InstrumentChannelCalibrationPredictiveCovarianceMode.FULL_COVARIANCE
+    ):
+        design = np.column_stack(
+            (
+                np.ones(flattened_flux.size, dtype=float),
+                flattened_flux,
+            )
+        )
+        predictive_covariance_array = (
+            design @ coefficient_covariance @ design.T
+        )
+        predictive_covariance_array = 0.5 * (
+            predictive_covariance_array
+            + predictive_covariance_array.T
+        )
+        diagonal = np.diag_indices_from(predictive_covariance_array)
+        predictive_covariance_array[diagonal] += measurement_variance
+        predictive_covariance = predictive_covariance_array
+
+    return (
+        calibrated_flux,
+        InstrumentChannelCalibrationPredictiveUncertainty(
+            schema_version=(
+                INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION
+            ),
+            status=(
+                InstrumentChannelCalibrationPredictiveUncertaintyStatus.AVAILABLE
+            ),
+            covariance_mode=normalized_mode,
+            input_shape=input_shape,
+            input_measurement_uncertainty_supplied=(flux_error is not None),
+            coefficient_uncertainty_status=coefficient_uncertainty.status,
+            coefficient_uncertainty_source=(
+                coefficient_uncertainty.uncertainty_source
+            ),
+            measurement_variance=measurement_variance,
+            offset_variance=offset_variance,
+            scale_variance=scale_variance,
+            offset_scale_covariance_term=(
+                offset_scale_covariance_term
+            ),
+            predictive_covariance=predictive_covariance,
+        ),
     )

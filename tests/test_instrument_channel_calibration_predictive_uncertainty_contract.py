@@ -14,6 +14,7 @@ from pgmuvi.instrument_channel_calibration import (
     InstrumentChannelCalibrationPredictiveCovarianceMode,
     InstrumentChannelCalibrationPredictiveUncertainty,
     InstrumentChannelCalibrationPredictiveUncertaintyDisposition,
+    InstrumentChannelCalibrationPredictiveUncertaintyStatus,
     InstrumentChannelCalibrationUncertaintyStatus,
     apply_instrument_channel_calibration,
     apply_instrument_channel_calibration_with_predictive_uncertainty,
@@ -191,16 +192,35 @@ class TestPredictiveUncertaintyContract(unittest.TestCase):
 
 class TestPredictiveApplicationBoundary(unittest.TestCase):
     @staticmethod
-    def _calibration():
-        uncertainty = InstrumentChannelCalibrationCoefficientUncertainty(
-            schema_version=(
-                INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
-            ),
-            status=InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
-            uncertainty_source="caller_supplied_bootstrap",
-            coefficient_covariance=((0.04, -0.006), (-0.006, 0.01)),
-            estimation_method="paired_bootstrap",
-        )
+    def _calibration(*, coefficient_uncertainty_available=True):
+        if coefficient_uncertainty_available:
+            uncertainty = InstrumentChannelCalibrationCoefficientUncertainty(
+                schema_version=(
+                    INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+                ),
+                status=(
+                    InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE
+                ),
+                uncertainty_source="caller_supplied_bootstrap",
+                coefficient_covariance=(
+                    (0.04, -0.006),
+                    (-0.006, 0.01),
+                ),
+                estimation_method="paired_bootstrap",
+            )
+        else:
+            uncertainty = InstrumentChannelCalibrationCoefficientUncertainty(
+                schema_version=(
+                    INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+                ),
+                status=(
+                    InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+                ),
+                uncertainty_source="pgmuvi_affine_fit",
+                coefficient_covariance=None,
+                reason="Coefficient uncertainty was not estimated.",
+            )
+
         return InstrumentChannelCalibration(
             schema_version=INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION,
             reference_channel="reference",
@@ -229,13 +249,132 @@ class TestPredictiveApplicationBoundary(unittest.TestCase):
             ]
         )
 
-    def test_dedicated_predictive_callable_raises(self):
-        with self.assertRaisesRegex(NotImplementedError, "not implemented"):
+    def test_full_covariance_propagates_measurement_and_coefficients(self):
+        calibrated, result = (
             apply_instrument_channel_calibration_with_predictive_uncertainty(
                 np.array([1.0, 2.0]),
                 self._calibration(),
                 flux_error=np.array([0.1, 0.2]),
                 covariance_mode="full_covariance",
+            )
+        )
+
+        np.testing.assert_allclose(calibrated, [1.75, 3.25])
+        self.assertEqual(
+            result.status,
+            InstrumentChannelCalibrationPredictiveUncertaintyStatus.AVAILABLE,
+        )
+        self.assertEqual(result.input_shape, (2,))
+        np.testing.assert_allclose(
+            result.measurement_variance,
+            (0.0225, 0.09),
+        )
+        np.testing.assert_allclose(
+            result.offset_variance,
+            (0.04, 0.04),
+        )
+        np.testing.assert_allclose(
+            result.scale_variance,
+            (0.01, 0.04),
+        )
+        np.testing.assert_allclose(
+            result.offset_scale_covariance_term,
+            (-0.012, -0.024),
+        )
+        np.testing.assert_allclose(
+            result.predictive_variance,
+            (0.0605, 0.146),
+        )
+        np.testing.assert_allclose(
+            result.predictive_covariance,
+            ((0.0605, 0.042), (0.042, 0.146)),
+        )
+        self.assertTrue(
+            result.to_dict()["predictive_uncertainty_propagated"]
+        )
+
+    def test_marginal_scalar_omits_measurement_variance_explicitly(self):
+        calibrated, result = (
+            apply_instrument_channel_calibration_with_predictive_uncertainty(
+                2.0,
+                self._calibration(),
+                covariance_mode="marginal_variance",
+            )
+        )
+
+        self.assertEqual(calibrated.shape, ())
+        self.assertAlmostEqual(float(calibrated), 3.25)
+        self.assertEqual(result.input_shape, ())
+        self.assertFalse(result.input_measurement_uncertainty_supplied)
+        np.testing.assert_allclose(result.measurement_variance, (0.0,))
+        np.testing.assert_allclose(result.predictive_variance, (0.056,))
+        self.assertIsNone(result.predictive_covariance)
+
+    def test_multidimensional_components_use_row_major_order(self):
+        calibrated, result = (
+            apply_instrument_channel_calibration_with_predictive_uncertainty(
+                np.array([[1.0, 2.0], [3.0, 4.0]]),
+                self._calibration(),
+                covariance_mode=(
+                    InstrumentChannelCalibrationPredictiveCovarianceMode.FULL_COVARIANCE
+                ),
+            )
+        )
+
+        np.testing.assert_allclose(
+            calibrated,
+            [[1.75, 3.25], [4.75, 6.25]],
+        )
+        self.assertEqual(result.input_shape, (2, 2))
+        np.testing.assert_allclose(
+            result.scale_variance,
+            (0.01, 0.04, 0.09, 0.16),
+        )
+        np.testing.assert_allclose(
+            result.offset_scale_covariance_term,
+            (-0.012, -0.024, -0.036, -0.048),
+        )
+        self.assertEqual(np.asarray(result.predictive_covariance).shape, (4, 4))
+
+    def test_unavailable_coefficients_do_not_fall_back_to_measurement_only(self):
+        calibrated, result = (
+            apply_instrument_channel_calibration_with_predictive_uncertainty(
+                np.array([1.0, 2.0]),
+                self._calibration(
+                    coefficient_uncertainty_available=False
+                ),
+                flux_error=np.array([0.1, 0.2]),
+                covariance_mode="full_covariance",
+            )
+        )
+
+        np.testing.assert_allclose(calibrated, [1.75, 3.25])
+        self.assertEqual(
+            result.status,
+            InstrumentChannelCalibrationPredictiveUncertaintyStatus.UNAVAILABLE,
+        )
+        self.assertIsNone(result.measurement_variance)
+        self.assertIsNone(result.predictive_variance)
+        self.assertIsNone(result.predictive_covariance)
+        self.assertEqual(
+            result.reason,
+            "Coefficient uncertainty was not estimated.",
+        )
+
+    def test_predictive_application_reuses_input_validation(self):
+        with self.assertRaisesRegex(ValueError, "predictive covariance mode"):
+            apply_instrument_channel_calibration_with_predictive_uncertainty(
+                np.array([1.0]),
+                self._calibration(),
+                covariance_mode="unknown",
+            )
+
+        with self.assertRaisesRegex(ValueError, "same shape"):
+            apply_instrument_channel_calibration_with_predictive_uncertainty(
+                np.array([1.0, 2.0]),
+                self._calibration(),
+                flux_error=np.array([0.1]),
+                covariance_mode="marginal_variance",
             )
 
 
