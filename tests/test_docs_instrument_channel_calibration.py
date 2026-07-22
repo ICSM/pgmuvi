@@ -156,7 +156,11 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "raises ``NotImplementedError`` in this contract-only tranche",
+            "estimator is implemented with analytic objective derivatives",
+            normalized,
+        )
+        self.assertIn(
+            "log-scale parameterization",
             normalized,
         )
         self.assertIn(
@@ -222,11 +226,11 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "full-objective observed-Hessian contract",
+            "implements the dedicated full-objective",
             text,
         )
         self.assertIn(
-            "implementation of the scale-dependent estimator",
+            "without activating it in the fitter or orchestration layer",
             text,
         )
         self.assertNotIn(
