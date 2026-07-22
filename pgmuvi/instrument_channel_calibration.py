@@ -42,6 +42,9 @@ INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-uncertainty-v1"
 )
+INSTRUMENT_CHANNEL_CALIBRATION_FIT_PROVENANCE_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-calibration-fit-provenance-v1"
+)
 INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-scale-dependent-uncertainty-v1"
 )
@@ -52,6 +55,7 @@ INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION = (
 
 __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_CALIBRATION_FIT_PROVENANCE_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION",
@@ -66,6 +70,7 @@ __all__ = [
     "InstrumentChannelCalibrationCoefficientUncertainty",
     "InstrumentChannelCalibrationDisposition",
     "InstrumentChannelCalibrationExecution",
+    "InstrumentChannelCalibrationFitProvenance",
     "InstrumentChannelCalibrationGroupPlan",
     "InstrumentChannelCalibrationPlan",
     "InstrumentChannelCalibrationPredictiveCovarianceMode",
@@ -74,6 +79,8 @@ __all__ = [
     "InstrumentChannelCalibrationPredictiveUncertaintyStatus",
     "InstrumentChannelCalibrationScaleDependentUncertaintyEstimate",
     "InstrumentChannelCalibrationStatus",
+    "InstrumentChannelCalibrationUncertaintyEstimator",
+    "InstrumentChannelCalibrationUncertaintyIntegrationStatus",
     "InstrumentChannelCalibrationUncertaintyStatus",
     "InstrumentChannelPairing",
     "InstrumentChannelPairingMethod",
@@ -86,6 +93,7 @@ __all__ = [
     "estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty",
     "execute_instrument_channel_calibration_plan",
     "fit_instrument_channel_calibration",
+    "select_instrument_channel_calibration_uncertainty_estimator",
 ]
 
 
@@ -123,6 +131,23 @@ class InstrumentChannelCalibrationUncertaintyStatus(_StringEnum):
 
     AVAILABLE = "available"
     UNAVAILABLE = "unavailable"
+
+
+class InstrumentChannelCalibrationUncertaintyEstimator(_StringEnum):
+    """Selected affine coefficient-uncertainty estimator family."""
+
+    FIXED_WEIGHT_NORMAL_MATRIX = "fixed_weight_normal_matrix"
+    SCALE_DEPENDENT_FULL_OBJECTIVE = "scale_dependent_full_objective"
+
+
+class InstrumentChannelCalibrationUncertaintyIntegrationStatus(_StringEnum):
+    """Integration state for the selected uncertainty estimator."""
+
+    ACTIVE = "active"
+    DEFINED_NOT_ACTIVATED = "defined_not_activated"
+    ATTEMPTED_UNAVAILABLE_FALLBACK = (
+        "attempted_unavailable_fallback"
+    )
 
 
 class InstrumentChannelCalibrationPredictiveUncertaintyStatus(
@@ -1191,6 +1216,352 @@ def construct_instrument_channel_pairing(
         allow_channel_reuse=False,
         interpolation_used=False,
     )
+
+
+def select_instrument_channel_calibration_uncertainty_estimator(
+    *,
+    reference_error_supplied: bool,
+    channel_error_supplied: bool,
+) -> InstrumentChannelCalibrationUncertaintyEstimator:
+    """Select the deterministic coefficient-uncertainty estimator family.
+
+    Reference-axis errors alone retain the existing fixed-weight covariance
+    path. Any observational-channel-axis error selects the scale-dependent
+    full-objective path, whether or not reference-axis errors are also present.
+    This selector defines integration routing only; it does not activate the
+    scale-dependent estimator in the affine fitter.
+    """
+
+    for name, value in (
+        ("reference_error_supplied", reference_error_supplied),
+        ("channel_error_supplied", channel_error_supplied),
+    ):
+        if not isinstance(value, (bool, np.bool_)):
+            raise TypeError(f"{name} must be boolean.")
+
+    if bool(channel_error_supplied):
+        return (
+            InstrumentChannelCalibrationUncertaintyEstimator
+            .SCALE_DEPENDENT_FULL_OBJECTIVE
+        )
+
+    return (
+        InstrumentChannelCalibrationUncertaintyEstimator
+        .FIXED_WEIGHT_NORMAL_MATRIX
+    )
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationFitProvenance:
+    """Point-estimate and uncertainty-integration provenance.
+
+    Pair positions refer to the caller-supplied paired arrays before finite
+    filtering. The selected estimator is deterministic from error-axis
+    participation. A scale-dependent available covariance must share the same
+    full-objective optimum and final-inlier set as the reported coefficients.
+    If that estimator fails after future activation, a fallback point estimate
+    must be represented explicitly rather than paired with its covariance.
+    """
+
+    schema_version: str
+    selected_uncertainty_estimator: (
+        InstrumentChannelCalibrationUncertaintyEstimator | str
+    )
+    integration_status: (
+        InstrumentChannelCalibrationUncertaintyIntegrationStatus | str
+    )
+    reference_error_supplied: bool
+    channel_error_supplied: bool
+    n_input_pairs: int
+    finite_pair_indices: tuple[int, ...]
+    final_inlier_indices: tuple[int, ...]
+    point_estimate_source: str
+    point_estimate_objective: str
+    point_estimate_matches_uncertainty_objective: bool
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_FIT_PROVENANCE_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel calibration fit provenance "
+                f"schema version: {self.schema_version!r}."
+            )
+
+        estimator = self.selected_uncertainty_estimator
+        if not isinstance(
+            estimator,
+            InstrumentChannelCalibrationUncertaintyEstimator,
+        ):
+            try:
+                estimator = (
+                    InstrumentChannelCalibrationUncertaintyEstimator(
+                        str(estimator)
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported instrument-channel calibration uncertainty "
+                    f"estimator: {self.selected_uncertainty_estimator!r}."
+                ) from exc
+
+        integration_status = self.integration_status
+        if not isinstance(
+            integration_status,
+            InstrumentChannelCalibrationUncertaintyIntegrationStatus,
+        ):
+            try:
+                integration_status = (
+                    InstrumentChannelCalibrationUncertaintyIntegrationStatus(
+                        str(integration_status)
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported instrument-channel calibration uncertainty "
+                    f"integration status: {self.integration_status!r}."
+                ) from exc
+
+        normalized_booleans = {}
+        for name in (
+            "reference_error_supplied",
+            "channel_error_supplied",
+            "point_estimate_matches_uncertainty_objective",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, (bool, np.bool_)):
+                raise TypeError(f"{name} must be boolean.")
+            normalized_booleans[name] = bool(value)
+
+        if isinstance(self.n_input_pairs, (bool, np.bool_)) or not isinstance(
+            self.n_input_pairs,
+            (int, np.integer),
+        ):
+            raise TypeError("n_input_pairs must be an integer.")
+        n_input_pairs = int(self.n_input_pairs)
+        if n_input_pairs < 3:
+            raise ValueError("n_input_pairs must be at least 3.")
+
+        finite_pair_indices = InstrumentChannelPairing._normalize_indices(
+            self.finite_pair_indices,
+            name="finite_pair_indices",
+        )
+        final_inlier_indices = InstrumentChannelPairing._normalize_indices(
+            self.final_inlier_indices,
+            name="final_inlier_indices",
+        )
+
+        for name, indices in (
+            ("finite_pair_indices", finite_pair_indices),
+            ("final_inlier_indices", final_inlier_indices),
+        ):
+            if len(indices) < 3:
+                raise ValueError(f"{name} must contain at least 3 positions.")
+            if tuple(sorted(set(indices))) != indices:
+                raise ValueError(
+                    f"{name} must contain unique positions in increasing "
+                    "order."
+                )
+            if indices[-1] >= n_input_pairs:
+                raise ValueError(
+                    f"{name} positions must be smaller than n_input_pairs."
+                )
+
+        if not set(final_inlier_indices).issubset(finite_pair_indices):
+            raise ValueError(
+                "final_inlier_indices must be a subset of "
+                "finite_pair_indices."
+            )
+
+        point_estimate_source = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_required_text(
+                self.point_estimate_source,
+                name="point_estimate_source",
+            )
+        )
+        point_estimate_objective = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_required_text(
+                self.point_estimate_objective,
+                name="point_estimate_objective",
+            )
+        )
+        reason = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_optional_text(
+                self.reason,
+                name="reason",
+            )
+        )
+
+        selected = select_instrument_channel_calibration_uncertainty_estimator(
+            reference_error_supplied=normalized_booleans[
+                "reference_error_supplied"
+            ],
+            channel_error_supplied=normalized_booleans[
+                "channel_error_supplied"
+            ],
+        )
+        if estimator is not selected:
+            raise ValueError(
+                "selected_uncertainty_estimator is inconsistent with the "
+                "supplied error axes."
+            )
+
+        matches_objective = normalized_booleans[
+            "point_estimate_matches_uncertainty_objective"
+        ]
+        if integration_status is (
+            InstrumentChannelCalibrationUncertaintyIntegrationStatus.ACTIVE
+        ):
+            if reason is not None:
+                raise ValueError(
+                    "Active uncertainty integration must not carry a reason."
+                )
+            if not matches_objective:
+                raise ValueError(
+                    "Active uncertainty integration requires the point "
+                    "estimate to match the uncertainty objective."
+                )
+        else:
+            if reason is None:
+                raise ValueError(
+                    "Inactive or fallback uncertainty integration requires "
+                    "an explicit reason."
+                )
+            if matches_objective:
+                raise ValueError(
+                    "Inactive or fallback uncertainty integration cannot "
+                    "claim a shared point-estimate objective."
+                )
+
+        fixed_estimator = (
+            InstrumentChannelCalibrationUncertaintyEstimator
+            .FIXED_WEIGHT_NORMAL_MATRIX
+        )
+        if estimator is fixed_estimator:
+            if integration_status is not (
+                InstrumentChannelCalibrationUncertaintyIntegrationStatus
+                .ACTIVE
+            ):
+                raise ValueError(
+                    "The implemented fixed-weight uncertainty path must be "
+                    "active."
+                )
+            expected_source = "pgmuvi_affine_fit_final_inliers"
+            expected_objective = "fixed_weight_least_squares"
+        elif integration_status is (
+            InstrumentChannelCalibrationUncertaintyIntegrationStatus.ACTIVE
+        ):
+            expected_source = (
+                "pgmuvi_scale_dependent_full_objective_final_inliers"
+            )
+            expected_objective = (
+                "gaussian_negative_log_likelihood_"
+                "scale_dependent_effective_variance"
+            )
+        else:
+            expected_source = (
+                "pgmuvi_iterative_mad_clipped_affine_fallback_"
+                "final_inliers"
+            )
+            expected_objective = (
+                "iterative_scale_frozen_weighted_least_squares"
+            )
+
+        if point_estimate_source != expected_source:
+            raise ValueError(
+                "point_estimate_source is inconsistent with the selected "
+                "uncertainty integration path."
+            )
+        if point_estimate_objective != expected_objective:
+            raise ValueError(
+                "point_estimate_objective is inconsistent with the selected "
+                "uncertainty integration path."
+            )
+
+        object.__setattr__(
+            self,
+            "selected_uncertainty_estimator",
+            estimator,
+        )
+        object.__setattr__(
+            self,
+            "integration_status",
+            integration_status,
+        )
+        for name, value in normalized_booleans.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "n_input_pairs", n_input_pairs)
+        object.__setattr__(
+            self,
+            "finite_pair_indices",
+            finite_pair_indices,
+        )
+        object.__setattr__(
+            self,
+            "final_inlier_indices",
+            final_inlier_indices,
+        )
+        object.__setattr__(
+            self,
+            "point_estimate_source",
+            point_estimate_source,
+        )
+        object.__setattr__(
+            self,
+            "point_estimate_objective",
+            point_estimate_objective,
+        )
+        object.__setattr__(self, "reason", reason)
+
+    @property
+    def n_finite_pairs(self) -> int:
+        """Return the number of pairs retained by finite-value filtering."""
+
+        return len(self.finite_pair_indices)
+
+    @property
+    def n_final_inliers(self) -> int:
+        """Return the caller-selected final-inlier count."""
+
+        return len(self.final_inlier_indices)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return strict JSON-safe fit and integration provenance."""
+
+        return {
+            "schema_version": self.schema_version,
+            "selected_uncertainty_estimator": (
+                self.selected_uncertainty_estimator.value
+            ),
+            "integration_status": self.integration_status.value,
+            "reference_error_supplied": self.reference_error_supplied,
+            "channel_error_supplied": self.channel_error_supplied,
+            "error_axes": [
+                name
+                for name, supplied in (
+                    ("reference", self.reference_error_supplied),
+                    ("observational_channel", self.channel_error_supplied),
+                )
+                if supplied
+            ],
+            "coefficient_order": ["offset", "scale"],
+            "n_input_pairs": self.n_input_pairs,
+            "n_finite_pairs": self.n_finite_pairs,
+            "n_final_inliers": self.n_final_inliers,
+            "finite_pair_indices": list(self.finite_pair_indices),
+            "final_inlier_indices": list(self.final_inlier_indices),
+            "point_estimate_source": self.point_estimate_source,
+            "point_estimate_objective": self.point_estimate_objective,
+            "point_estimate_matches_uncertainty_objective": (
+                self.point_estimate_matches_uncertainty_objective
+            ),
+            "uncertainty_conditioned_on_final_inlier_set": True,
+            "reason": self.reason,
+        }
 
 
 @dataclass(frozen=True)
@@ -2375,6 +2746,7 @@ class InstrumentChannelCalibration:
         InstrumentChannelCalibrationCoefficientUncertainty
     )
     fit_method: str = "iterative_mad_clipped_affine"
+    fit_provenance: InstrumentChannelCalibrationFitProvenance | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != (
@@ -2450,6 +2822,27 @@ class InstrumentChannelCalibration:
                 "instance."
             )
 
+        fit_provenance = self.fit_provenance
+        if fit_provenance is not None:
+            if not isinstance(
+                fit_provenance,
+                InstrumentChannelCalibrationFitProvenance,
+            ):
+                raise TypeError(
+                    "fit_provenance must be an "
+                    "InstrumentChannelCalibrationFitProvenance instance "
+                    "when supplied."
+                )
+            if fit_provenance.n_finite_pairs != self.n_pairs:
+                raise ValueError(
+                    "fit_provenance finite-pair count must equal n_pairs."
+                )
+            if fit_provenance.n_final_inliers != self.n_inliers:
+                raise ValueError(
+                    "fit_provenance final-inlier count must equal "
+                    "n_inliers."
+                )
+
     def to_dict(self) -> dict[str, Any]:
         """Return a strict JSON-safe representation."""
 
@@ -2468,6 +2861,11 @@ class InstrumentChannelCalibration:
                 else float(self.residual_mad_sigma)
             ),
             "fit_method": self.fit_method,
+            "fit_provenance": (
+                None
+                if self.fit_provenance is None
+                else self.fit_provenance.to_dict()
+            ),
             "coefficient_uncertainty": (
                 self.coefficient_uncertainty.to_dict()
             ),
@@ -4506,6 +4904,8 @@ def fit_instrument_channel_calibration(
             "reference_flux and channel_flux must have the same shape."
         )
 
+    n_input_pairs = int(reference.size)
+
     reference_sigma = _validate_optional_calibration_error(
         reference_error,
         name="reference_error",
@@ -4524,6 +4924,7 @@ def fit_instrument_channel_calibration(
             continue
         finite &= np.isfinite(error) & (error > 0.0)
 
+    finite_pair_indices_array = np.flatnonzero(finite)
     reference = reference[finite]
     target = target[finite]
 
@@ -4718,6 +5119,61 @@ def fit_instrument_channel_calibration(
         channel_errors_supplied=channel_sigma is not None,
     )
 
+    selected_uncertainty_estimator = (
+        select_instrument_channel_calibration_uncertainty_estimator(
+            reference_error_supplied=reference_sigma is not None,
+            channel_error_supplied=channel_sigma is not None,
+        )
+    )
+    if channel_sigma is None:
+        integration_status = (
+            InstrumentChannelCalibrationUncertaintyIntegrationStatus.ACTIVE
+        )
+        point_estimate_source = "pgmuvi_affine_fit_final_inliers"
+        point_estimate_objective = "fixed_weight_least_squares"
+        point_estimate_matches_uncertainty_objective = True
+        integration_reason = None
+    else:
+        integration_status = (
+            InstrumentChannelCalibrationUncertaintyIntegrationStatus
+            .DEFINED_NOT_ACTIVATED
+        )
+        point_estimate_source = (
+            "pgmuvi_iterative_mad_clipped_affine_fallback_final_inliers"
+        )
+        point_estimate_objective = (
+            "iterative_scale_frozen_weighted_least_squares"
+        )
+        point_estimate_matches_uncertainty_objective = False
+        integration_reason = (
+            "Scale-dependent full-objective fitter integration is defined "
+            "but not activated; the reported coefficients remain the "
+            "iterative scale-frozen weighted affine point estimate."
+        )
+
+    fit_provenance = InstrumentChannelCalibrationFitProvenance(
+        schema_version=(
+            INSTRUMENT_CHANNEL_CALIBRATION_FIT_PROVENANCE_SCHEMA_VERSION
+        ),
+        selected_uncertainty_estimator=selected_uncertainty_estimator,
+        integration_status=integration_status,
+        reference_error_supplied=reference_sigma is not None,
+        channel_error_supplied=channel_sigma is not None,
+        n_input_pairs=n_input_pairs,
+        finite_pair_indices=tuple(
+            int(index) for index in finite_pair_indices_array
+        ),
+        final_inlier_indices=tuple(
+            int(index) for index in finite_pair_indices_array[keep]
+        ),
+        point_estimate_source=point_estimate_source,
+        point_estimate_objective=point_estimate_objective,
+        point_estimate_matches_uncertainty_objective=(
+            point_estimate_matches_uncertainty_objective
+        ),
+        reason=integration_reason,
+    )
+
     return InstrumentChannelCalibration(
         schema_version=(
             INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION
@@ -4733,6 +5189,7 @@ def fit_instrument_channel_calibration(
             final_residual
         ),
         coefficient_uncertainty=coefficient_uncertainty,
+        fit_provenance=fit_provenance,
     )
 
 

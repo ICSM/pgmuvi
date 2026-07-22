@@ -132,6 +132,45 @@ order is ``offset, scale``.  Application still propagates only measurement
 uncertainty through the fitted scale; it does not propagate the estimated
 coefficient covariance into calibrated predictions.
 
+Scale-dependent fitter and orchestration integration contract
+---------------------------------------------------------------
+
+:func:`~pgmuvi.instrument_channel_calibration.select_instrument_channel_calibration_uncertainty_estimator`
+defines deterministic routing after the fitter has validated optional error
+arrays.  No errors and reference-axis errors alone select the existing
+``fixed_weight_normal_matrix`` path.  Any observational-channel-axis errors
+select ``scale_dependent_full_objective``, whether or not reference-axis errors
+are also present.  Neither error axis is silently reinterpreted, frozen, or
+ignored by this selection contract.
+
+Each fitter-produced
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibration`
+now carries an immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibrationFitProvenance`
+record.  Pair positions refer to the original caller-supplied paired arrays and
+identify both the finite-value subset and exact final MAD-clipped inlier set.
+The record also identifies participating error axes, selected uncertainty
+estimator, integration status, reported point-estimate source and objective,
+and whether the point estimate and covariance share one objective optimum.
+The nested ``coefficient_uncertainty`` field remains the sole source of
+coefficient covariance in fixed order ``offset, scale``.
+
+Scale-dependent activation remains deliberately disabled in the affine fitter.
+For current fits with observational-channel-axis errors, provenance reports
+``defined_not_activated`` and identifies the reported coefficients as the
+iterative scale-frozen weighted affine fallback.  Coefficient covariance stays
+explicitly unavailable.  Future successful activation must report the offset,
+scale, objective, covariance, and final-inlier conditioning from the same
+full-objective optimum.  If future optimization fails, a retained affine point
+estimate must use the explicit ``attempted_unavailable_fallback`` status rather
+than being paired with covariance from a different optimum.
+
+Dataset orchestration already preserves complete per-observational-channel
+calibration records, so this provenance remains separate for channels that
+share one physical wavelength.  Orchestration does not aggregate coefficient
+covariance by physical wavelength and does not yet request predictive
+propagation.
+
 Executing an explicit plan
 --------------------------
 
@@ -225,7 +264,8 @@ still lacks:
 
 * scientifically validated instrument-specific rules for choosing
   pairing methods and tolerances;
-* coefficient-uncertainty estimation for scale-dependent channel-axis errors;
+* fitter and orchestration activation of scale-dependent channel-axis
+  coefficient uncertainty;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.
 

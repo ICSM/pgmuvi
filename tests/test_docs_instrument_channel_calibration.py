@@ -43,6 +43,18 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             instrument_channel_calibration.__all__,
         )
         self.assertIn(
+            "InstrumentChannelCalibrationFitProvenance",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "INSTRUMENT_CHANNEL_CALIBRATION_FIT_PROVENANCE_SCHEMA_VERSION",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "select_instrument_channel_calibration_uncertainty_estimator",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
             "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
             instrument_channel_calibration.__all__,
         )
@@ -172,6 +184,28 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             normalized,
         )
         self.assertIn(
+            "Scale-dependent fitter and orchestration integration contract",
+            text,
+        )
+        self.assertIn(
+            "select_instrument_channel_calibration_uncertainty_estimator",
+            text,
+        )
+        self.assertIn(
+            "InstrumentChannelCalibrationFitProvenance",
+            text,
+        )
+        self.assertIn("defined_not_activated", text)
+        self.assertIn("attempted_unavailable_fallback", text)
+        self.assertIn(
+            "sole source of coefficient covariance",
+            normalized,
+        )
+        self.assertIn(
+            "channels that share one physical wavelength",
+            normalized,
+        )
+        self.assertIn(
             "v_i=\\sigma_{y,i}^2+a^2\\sigma_{x,i}^2",
             normalized,
         )
@@ -230,9 +264,13 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "without activating it in the fitter or orchestration layer",
+            "without activating the estimator in the fitter or orchestration "
+            "layer",
             text,
         )
+        self.assertIn("deterministic fitter routing", text)
+        self.assertIn("exact final-inlier provenance", text)
+        self.assertIn("fitter and orchestration activation", text)
         self.assertNotIn(
             "predictive-propagation implementation",
             text,
