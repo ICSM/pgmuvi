@@ -150,6 +150,40 @@ Flux uncertainties are multiplied by the absolute fitted scale.  The current
 application function does not propagate uncertainty in the fitted offset or
 scale themselves.
 
+Predictive-uncertainty propagation contract
+-------------------------------------------
+
+``InstrumentChannelCalibrationPredictiveUncertainty`` defines an immutable,
+JSON-safe result for a future dedicated
+``apply_instrument_channel_calibration_with_predictive_uncertainty`` callable.
+The existing ``apply_instrument_channel_calibration`` return signature remains
+unchanged.  The dedicated callable raises ``NotImplementedError`` in this
+contract-only tranche and performs no predictive propagation.
+
+For input :math:`x_i`, the coefficient Jacobian is :math:`J_i=[1, x_i]` in
+fixed coefficient order ``offset, scale``.  With coefficient covariance
+:math:`C`, shared coefficient covariance is
+:math:`J_i C J_j^T`.  Marginal coefficient variance is split into offset
+variance, scale variance, and the offset-scale covariance cross-term.
+Independent input measurement errors contribute
+:math:`a^2 \sigma_i^2` only on the diagonal.  Omitting input errors means a
+zero measurement-variance contribution, and the contract assumes measurement
+errors are independent of fitted coefficients.
+
+``marginal_variance`` records marginal variance and derived standard
+deviation.  ``full_covariance`` also records correlations between predictions
+that share fitted coefficients.  Scalar input uses ``input_shape=()``; array
+results preserve their shape while uncertainty vectors use flattened row-major
+order.
+
+Unavailable coefficient covariance, including current fits with
+scale-dependent channel-axis errors, produces an explicit ``unavailable``
+result with no numerical predictive uncertainty.  There is no silent fallback
+to measurement-only uncertainty.  Future orchestration uses the dispositions
+``not_requested``, ``available``, ``skipped``, and ``unavailable``.  Current
+orchestration continues to record that predictive propagation was not
+performed.
+
 ``TBD[instrument-channel-calibration]`` remains open
 ----------------------------------------------------
 

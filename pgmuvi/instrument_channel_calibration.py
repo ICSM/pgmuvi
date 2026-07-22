@@ -41,12 +41,16 @@ INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-uncertainty-v1"
 )
+INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-calibration-predictive-uncertainty-v1"
+)
 
 
 __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER",
     "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
@@ -59,12 +63,17 @@ __all__ = [
     "InstrumentChannelCalibrationExecution",
     "InstrumentChannelCalibrationGroupPlan",
     "InstrumentChannelCalibrationPlan",
+    "InstrumentChannelCalibrationPredictiveCovarianceMode",
+    "InstrumentChannelCalibrationPredictiveUncertainty",
+    "InstrumentChannelCalibrationPredictiveUncertaintyDisposition",
+    "InstrumentChannelCalibrationPredictiveUncertaintyStatus",
     "InstrumentChannelCalibrationStatus",
     "InstrumentChannelCalibrationUncertaintyStatus",
     "InstrumentChannelPairing",
     "InstrumentChannelPairingMethod",
     "SharedWavelengthChannelGroup",
     "apply_instrument_channel_calibration",
+    "apply_instrument_channel_calibration_with_predictive_uncertainty",
     "assess_instrument_channel_calibration_requirement",
     "construct_instrument_channel_pairing",
     "define_instrument_channel_calibration_plan",
@@ -107,6 +116,33 @@ class InstrumentChannelCalibrationUncertaintyStatus(_StringEnum):
 
     AVAILABLE = "available"
     UNAVAILABLE = "unavailable"
+
+
+class InstrumentChannelCalibrationPredictiveUncertaintyStatus(
+    _StringEnum
+):
+    """Availability of one requested predictive-uncertainty result."""
+
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
+class InstrumentChannelCalibrationPredictiveUncertaintyDisposition(
+    _StringEnum
+):
+    """Dataset-orchestration disposition for predictive propagation."""
+
+    NOT_REQUESTED = "not_requested"
+    AVAILABLE = "available"
+    SKIPPED = "skipped"
+    UNAVAILABLE = "unavailable"
+
+
+class InstrumentChannelCalibrationPredictiveCovarianceMode(_StringEnum):
+    """Requested predictive-covariance representation."""
+
+    MARGINAL_VARIANCE = "marginal_variance"
+    FULL_COVARIANCE = "full_covariance"
 
 
 @dataclass(frozen=True)
@@ -1453,6 +1489,452 @@ class InstrumentChannelCalibrationCoefficientUncertainty:
             "residual_variance": self.residual_variance,
             "reason": self.reason,
             "predictive_uncertainty_propagated": False,
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationPredictiveUncertainty:
+    """Immutable contract for affine predictive-uncertainty propagation.
+
+    Component vectors use flattened row-major order. ``input_shape`` preserves
+    the calibrated flux shape. The fixed coefficient Jacobian is ``[1, x]``
+    in coefficient order ``offset, scale``. This record validates supplied
+    results but does not calculate them.
+    """
+
+    schema_version: str
+    status: InstrumentChannelCalibrationPredictiveUncertaintyStatus | str
+    covariance_mode: InstrumentChannelCalibrationPredictiveCovarianceMode | str
+    input_shape: tuple[int, ...]
+    input_measurement_uncertainty_supplied: bool
+    coefficient_uncertainty_status: (
+        InstrumentChannelCalibrationUncertaintyStatus | str
+    )
+    coefficient_uncertainty_source: str
+    measurement_variance: tuple[float, ...] | None
+    offset_variance: tuple[float, ...] | None
+    scale_variance: tuple[float, ...] | None
+    offset_scale_covariance_term: tuple[float, ...] | None
+    predictive_covariance: tuple[tuple[float, ...], ...] | None
+    input_coefficient_independence_assumed: bool = True
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel calibration predictive "
+                f"uncertainty schema version: {self.schema_version!r}."
+            )
+
+        status = self._coerce_enum(
+            self.status,
+            InstrumentChannelCalibrationPredictiveUncertaintyStatus,
+            "predictive uncertainty status",
+        )
+        covariance_mode = self._coerce_enum(
+            self.covariance_mode,
+            InstrumentChannelCalibrationPredictiveCovarianceMode,
+            "predictive covariance mode",
+        )
+        coefficient_status = self._coerce_enum(
+            self.coefficient_uncertainty_status,
+            InstrumentChannelCalibrationUncertaintyStatus,
+            "coefficient uncertainty status",
+        )
+        input_shape = self._normalize_shape(self.input_shape)
+        size = math.prod(input_shape) if input_shape else 1
+        measurement_supplied = self._normalize_boolean(
+            self.input_measurement_uncertainty_supplied,
+            name="input_measurement_uncertainty_supplied",
+        )
+        independence_assumed = self._normalize_boolean(
+            self.input_coefficient_independence_assumed,
+            name="input_coefficient_independence_assumed",
+        )
+        if not independence_assumed:
+            raise ValueError(
+                "Input measurement errors must be independent of fitted "
+                "calibration coefficients."
+            )
+
+        source = self._normalize_text(
+            self.coefficient_uncertainty_source,
+            name="coefficient_uncertainty_source",
+        )
+        reason = (
+            None
+            if self.reason is None
+            else self._normalize_text(self.reason, name="reason")
+        )
+        component_names = (
+            "measurement_variance",
+            "offset_variance",
+            "scale_variance",
+            "offset_scale_covariance_term",
+        )
+
+        if status is (
+            InstrumentChannelCalibrationPredictiveUncertaintyStatus.AVAILABLE
+        ):
+            if coefficient_status is not (
+                InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE
+            ):
+                raise ValueError(
+                    "Available predictive uncertainty requires available "
+                    "coefficient uncertainty."
+                )
+            if reason is not None:
+                raise ValueError(
+                    "Available predictive uncertainty must not carry a reason."
+                )
+            components = {
+                name: self._normalize_vector(
+                    getattr(self, name),
+                    name=name,
+                    size=size,
+                    non_negative=(
+                        name != "offset_scale_covariance_term"
+                    ),
+                )
+                for name in component_names
+            }
+            if not measurement_supplied and any(
+                components["measurement_variance"]
+            ):
+                raise ValueError(
+                    "measurement_variance must be zero when input "
+                    "measurement uncertainty was not supplied."
+                )
+            predictive_variance = tuple(
+                measurement + offset + scale + cross
+                for measurement, offset, scale, cross in zip(
+                    components["measurement_variance"],
+                    components["offset_variance"],
+                    components["scale_variance"],
+                    components["offset_scale_covariance_term"],
+                    strict=True,
+                )
+            )
+            if any(value < 0.0 for value in predictive_variance):
+                raise ValueError(
+                    "Derived predictive variance must be non-negative."
+                )
+            predictive_covariance = self._normalize_covariance(
+                self.predictive_covariance,
+                size=size,
+            )
+            if covariance_mode is (
+                InstrumentChannelCalibrationPredictiveCovarianceMode.FULL_COVARIANCE
+            ):
+                if predictive_covariance is None:
+                    raise ValueError(
+                        "full_covariance mode requires predictive_covariance."
+                    )
+                if not np.allclose(
+                    np.diag(predictive_covariance),
+                    predictive_variance,
+                    rtol=0.0,
+                    atol=self._tolerance(predictive_variance),
+                ):
+                    raise ValueError(
+                        "predictive_covariance diagonal must equal the "
+                        "derived predictive variance."
+                    )
+            elif predictive_covariance is not None:
+                raise ValueError(
+                    "marginal_variance mode must not carry "
+                    "predictive_covariance."
+                )
+        else:
+            if coefficient_status is not (
+                InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+            ):
+                raise ValueError(
+                    "Unavailable predictive uncertainty requires unavailable "
+                    "coefficient uncertainty."
+                )
+            if reason is None:
+                raise ValueError(
+                    "Unavailable predictive uncertainty requires a reason."
+                )
+            if any(getattr(self, name) is not None for name in component_names):
+                raise ValueError(
+                    "Unavailable predictive uncertainty cannot carry "
+                    "variance components."
+                )
+            if self.predictive_covariance is not None:
+                raise ValueError(
+                    "Unavailable predictive uncertainty cannot carry a "
+                    "predictive covariance."
+                )
+            components = {name: None for name in component_names}
+            predictive_variance = None
+            predictive_covariance = None
+
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "covariance_mode", covariance_mode)
+        object.__setattr__(
+            self,
+            "coefficient_uncertainty_status",
+            coefficient_status,
+        )
+        object.__setattr__(self, "input_shape", input_shape)
+        object.__setattr__(
+            self,
+            "input_measurement_uncertainty_supplied",
+            measurement_supplied,
+        )
+        object.__setattr__(
+            self,
+            "input_coefficient_independence_assumed",
+            independence_assumed,
+        )
+        object.__setattr__(self, "coefficient_uncertainty_source", source)
+        object.__setattr__(self, "reason", reason)
+        for name, value in components.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(
+            self,
+            "predictive_covariance",
+            predictive_covariance,
+        )
+    @staticmethod
+    def _coerce_enum(value: Any, enum_type: type[_StringEnum], name: str):
+        if isinstance(value, enum_type):
+            return value
+        try:
+            return enum_type(str(value))
+        except ValueError as exc:
+            raise ValueError(f"Unsupported {name}: {value!r}.") from exc
+
+    @staticmethod
+    def _normalize_shape(value: Any) -> tuple[int, ...]:
+        if not isinstance(value, (tuple, list)):
+            raise TypeError("input_shape must be a tuple or list of integers.")
+        shape = []
+        for dimension in value:
+            if isinstance(dimension, (bool, np.bool_)) or not isinstance(
+                dimension,
+                (int, np.integer),
+            ):
+                raise TypeError(
+                    "input_shape dimensions must be integers, not booleans."
+                )
+            if int(dimension) < 1:
+                raise ValueError(
+                    "input_shape dimensions must be strictly positive."
+                )
+            shape.append(int(dimension))
+        return tuple(shape)
+
+    @staticmethod
+    def _normalize_boolean(value: Any, *, name: str) -> bool:
+        if not isinstance(value, (bool, np.bool_)):
+            raise TypeError(f"{name} must be boolean.")
+        return bool(value)
+
+    @staticmethod
+    def _normalize_text(value: Any, *, name: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{name} must be a string.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"{name} must be non-empty.")
+        return normalized
+
+    @staticmethod
+    def _contains_boolean(value: Any) -> bool:
+        if isinstance(value, (bool, np.bool_)):
+            return True
+        if isinstance(value, np.ndarray):
+            return any(
+                InstrumentChannelCalibrationPredictiveUncertainty._contains_boolean(
+                    item
+                )
+                for item in value.flat
+            )
+        if isinstance(value, (list, tuple)):
+            return any(
+                InstrumentChannelCalibrationPredictiveUncertainty._contains_boolean(
+                    item
+                )
+                for item in value
+            )
+        return False
+
+    @classmethod
+    def _normalize_vector(
+        cls,
+        value: Any,
+        *,
+        name: str,
+        size: int,
+        non_negative: bool,
+    ) -> tuple[float, ...]:
+        if value is None:
+            raise ValueError(
+                f"Available predictive uncertainty requires {name}."
+            )
+        if cls._contains_boolean(value):
+            raise TypeError(
+                f"{name} must contain numeric values, not booleans."
+            )
+        array = np.asarray(value, dtype=float)
+        if array.shape != (size,):
+            raise ValueError(f"{name} must have shape ({size},).")
+        if np.any(~np.isfinite(array)):
+            raise ValueError(f"{name} must contain finite values.")
+        if non_negative and np.any(array < 0.0):
+            raise ValueError(f"{name} must be non-negative.")
+        return tuple(float(item) for item in array)
+
+    @classmethod
+    def _normalize_covariance(
+        cls,
+        value: Any,
+        *,
+        size: int,
+    ) -> tuple[tuple[float, ...], ...] | None:
+        if value is None:
+            return None
+        if cls._contains_boolean(value):
+            raise TypeError(
+                "predictive_covariance must contain numeric values, not "
+                "booleans."
+            )
+        covariance = np.asarray(value, dtype=float)
+        if covariance.shape != (size, size):
+            raise ValueError(
+                f"predictive_covariance must have shape ({size}, {size})."
+            )
+        if np.any(~np.isfinite(covariance)):
+            raise ValueError(
+                "predictive_covariance must contain finite values."
+            )
+        if not np.allclose(
+            covariance,
+            covariance.T,
+            rtol=0.0,
+            atol=cls._tolerance(covariance),
+        ):
+            raise ValueError("predictive_covariance must be symmetric.")
+        covariance = 0.5 * (covariance + covariance.T)
+        if float(np.min(np.linalg.eigvalsh(covariance))) < -cls._tolerance(
+            covariance
+        ):
+            raise ValueError(
+                "predictive_covariance must be positive semidefinite."
+            )
+        return tuple(
+            tuple(float(item) for item in row)
+            for row in covariance
+        )
+
+    @staticmethod
+    def _tolerance(value: Any) -> float:
+        array = np.asarray(value, dtype=float)
+        scale = max(1.0, float(np.max(np.abs(array))))
+        return 256.0 * np.finfo(float).eps * scale
+
+    @property
+    def coefficient_variance(self) -> tuple[float, ...] | None:
+        """Return marginal variance from shared fitted coefficients."""
+
+        if self.offset_variance is None:
+            return None
+        return tuple(
+            offset + scale + cross
+            for offset, scale, cross in zip(
+                self.offset_variance,
+                self.scale_variance,
+                self.offset_scale_covariance_term,
+                strict=True,
+            )
+        )
+
+    @property
+    def predictive_variance(self) -> tuple[float, ...] | None:
+        """Return total marginal predictive variance when available."""
+
+        if self.measurement_variance is None:
+            return None
+        return tuple(
+            measurement + coefficient
+            for measurement, coefficient in zip(
+                self.measurement_variance,
+                self.coefficient_variance,
+                strict=True,
+            )
+        )
+
+    @property
+    def predictive_standard_deviation(self) -> tuple[float, ...] | None:
+        """Return total marginal predictive standard deviation."""
+
+        if self.predictive_variance is None:
+            return None
+        return tuple(math.sqrt(value) for value in self.predictive_variance)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe representation."""
+
+        def vector(value: tuple[float, ...] | None) -> list[float] | None:
+            return None if value is None else list(value)
+
+        return {
+            "schema_version": self.schema_version,
+            "status": self.status.value,
+            "covariance_mode": self.covariance_mode.value,
+            "input_shape": list(self.input_shape),
+            "input_measurement_uncertainty_supplied": (
+                self.input_measurement_uncertainty_supplied
+            ),
+            "coefficient_uncertainty_status": (
+                self.coefficient_uncertainty_status.value
+            ),
+            "coefficient_uncertainty_source": (
+                self.coefficient_uncertainty_source
+            ),
+            "coefficient_order": ["offset", "scale"],
+            "coefficient_jacobian": "[1, x]",
+            "measurement_variance_equation": (
+                "scale**2 * flux_error**2"
+            ),
+            "coefficient_covariance_equation": (
+                "[1, x_i] C [1, x_j]^T"
+            ),
+            "measurement_variance": vector(self.measurement_variance),
+            "offset_variance": vector(self.offset_variance),
+            "scale_variance": vector(self.scale_variance),
+            "offset_scale_covariance_term": vector(
+                self.offset_scale_covariance_term
+            ),
+            "coefficient_variance": vector(self.coefficient_variance),
+            "predictive_variance": vector(self.predictive_variance),
+            "predictive_standard_deviation": vector(
+                self.predictive_standard_deviation
+            ),
+            "predictive_covariance": (
+                None
+                if self.predictive_covariance is None
+                else [list(row) for row in self.predictive_covariance]
+            ),
+            "input_coefficient_independence_assumed": (
+                self.input_coefficient_independence_assumed
+            ),
+            "shared_coefficient_correlation_represented": (
+                self.status
+                is InstrumentChannelCalibrationPredictiveUncertaintyStatus.AVAILABLE
+                and self.covariance_mode
+                is InstrumentChannelCalibrationPredictiveCovarianceMode.FULL_COVARIANCE
+            ),
+            "predictive_uncertainty_propagated": (
+                self.status
+                is InstrumentChannelCalibrationPredictiveUncertaintyStatus.AVAILABLE
+            ),
+            "reason": self.reason,
         }
 
 
@@ -3421,3 +3903,40 @@ def apply_instrument_channel_calibration(
 
     calibrated_error = abs(calibration.scale) * errors
     return calibrated_flux, calibrated_error
+
+
+
+def apply_instrument_channel_calibration_with_predictive_uncertainty(
+    flux: Any,
+    calibration: InstrumentChannelCalibration,
+    *,
+    flux_error: Any | None = None,
+    covariance_mode: (
+        InstrumentChannelCalibrationPredictiveCovarianceMode | str
+    ),
+) -> tuple[
+    np.ndarray,
+    InstrumentChannelCalibrationPredictiveUncertainty,
+]:
+    """Apply calibration with predictive propagation in a future tranche.
+
+    This dedicated callable preserves the return contract of
+    :func:`apply_instrument_channel_calibration`. A future implementation will
+    use ``J_i = [1, x_i]`` and shared coefficient covariance
+    ``J_i C J_j.T``. Independent input measurement errors will contribute
+    ``scale**2 * flux_error_i**2`` only on the diagonal. Omitting
+    ``flux_error`` will mean a zero measurement-variance contribution.
+
+    ``marginal_variance`` will expose only marginal uncertainty;
+    ``full_covariance`` will retain correlations induced by shared fitted
+    coefficients. Unavailable coefficient covariance will remain explicitly
+    unavailable rather than falling back silently to measurement-only errors.
+
+    Predictive propagation is not implemented in this contract-only tranche.
+    """
+
+    del flux, calibration, flux_error, covariance_mode
+    raise NotImplementedError(
+        "Predictive instrument-channel calibration uncertainty propagation "
+        "is not implemented."
+    )
