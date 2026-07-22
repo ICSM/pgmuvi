@@ -121,7 +121,8 @@ Wavelength-model extensions
     into copied calibrated arrays with completed pairing and fit
     provenance. This does not close the marker: scientifically
     validated instrument-specific tolerance guidance, fitted-coefficient
-    uncertainty propagation, workflow integration, and representative
+    uncertainty estimation and propagation, workflow integration, and
+    representative
     calibration validation remain future work.
 
 **TBD[multi-periodic-wavelength-models]**

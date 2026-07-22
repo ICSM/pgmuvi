@@ -60,6 +60,27 @@ records can be attached to preserve pairing and fitted-coefficient provenance.
 The plan itself does not construct pairs, fit or apply mappings, merge channels,
 alter wavelengths, mutate a light curve, or integrate calibration into fitting.
 
+Coefficient-uncertainty provenance contract
+-------------------------------------------
+
+The version-2
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibration`
+record requires an explicit
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibrationCoefficientUncertainty`
+record.  Available uncertainty stores the complete symmetric 2-by-2 covariance
+matrix in the fixed coefficient order ``offset, scale``.  Offset and scale
+standard errors are derived from the covariance diagonal rather than stored as
+independent values.  The record also preserves an explicit uncertainty source,
+estimation method, and optional degrees of freedom and residual variance.
+
+When coefficient uncertainty has not been estimated, the nested record uses the
+explicit ``unavailable`` status and a required reason.  It cannot contain
+placeholder covariance or estimation metadata.  This applies equally to
+caller-supplied calibration provenance and calibrations produced by PGMUVI.
+The current affine fitter records coefficient uncertainty as unavailable; it
+does not estimate covariance, and application still propagates only measurement
+uncertainty through the fitted scale.
+
 Executing an explicit plan
 --------------------------
 
@@ -119,7 +140,7 @@ still lacks:
 
 * scientifically validated instrument-specific rules for choosing
   pairing methods and tolerances;
-* propagation of fitted-coefficient uncertainty;
+* estimation and propagation of fitted-coefficient uncertainty;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.
 

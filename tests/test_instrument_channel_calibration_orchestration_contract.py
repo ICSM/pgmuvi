@@ -3,9 +3,12 @@ import unittest
 
 from pgmuvi.instrument_channel_calibration import (
     INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION,
+    INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION,
     INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION,
     INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION,
     InstrumentChannelCalibration,
+    InstrumentChannelCalibrationCoefficientUncertainty,
+    InstrumentChannelCalibrationUncertaintyStatus,
     InstrumentChannelCalibrationChannelPlan,
     InstrumentChannelCalibrationDisposition,
     InstrumentChannelCalibrationGroupPlan,
@@ -15,6 +18,20 @@ from pgmuvi.instrument_channel_calibration import (
     assess_instrument_channel_calibration_requirement,
     define_instrument_channel_calibration_plan,
 )
+
+
+def _unavailable_coefficient_uncertainty():
+    return InstrumentChannelCalibrationCoefficientUncertainty(
+        schema_version=(
+            INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+        ),
+        status=(
+            InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+        ),
+        uncertainty_source="test_fixture",
+        coefficient_covariance=None,
+        reason="Coefficient uncertainty is unavailable in this fixture.",
+    )
 
 
 class TestInstrumentChannelCalibrationOrchestrationContract(
@@ -299,6 +316,9 @@ class TestInstrumentChannelCalibrationOrchestrationContract(
             n_pairs=3,
             n_inliers=3,
             residual_mad_sigma=0.01,
+            coefficient_uncertainty=(
+                _unavailable_coefficient_uncertainty()
+            ),
         )
         channel_plan = self._planned(
             "B",
@@ -343,6 +363,9 @@ class TestInstrumentChannelCalibrationOrchestrationContract(
             n_pairs=3,
             n_inliers=3,
             residual_mad_sigma=0.0,
+            coefficient_uncertainty=(
+                _unavailable_coefficient_uncertainty()
+            ),
         )
         with self.assertRaisesRegex(
             ValueError,

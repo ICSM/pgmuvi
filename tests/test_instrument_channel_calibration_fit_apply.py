@@ -7,10 +7,27 @@ import numpy as np
 
 from pgmuvi.instrument_channel_calibration import (
     INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION,
+    INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION,
     InstrumentChannelCalibration,
+    InstrumentChannelCalibrationCoefficientUncertainty,
+    InstrumentChannelCalibrationUncertaintyStatus,
     apply_instrument_channel_calibration,
     fit_instrument_channel_calibration,
 )
+
+
+def _unavailable_coefficient_uncertainty():
+    return InstrumentChannelCalibrationCoefficientUncertainty(
+        schema_version=(
+            INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+        ),
+        status=(
+            InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+        ),
+        uncertainty_source="test_fixture",
+        coefficient_covariance=None,
+        reason="Coefficient uncertainty is unavailable in this fixture.",
+    )
 
 
 class TestInstrumentChannelCalibrationFit(unittest.TestCase):
@@ -198,6 +215,9 @@ class TestInstrumentChannelCalibrationFit(unittest.TestCase):
             "n_pairs": 20,
             "n_inliers": 18,
             "residual_mad_sigma": 0.01,
+            "coefficient_uncertainty": (
+                _unavailable_coefficient_uncertainty()
+            ),
         }
 
         calibration = InstrumentChannelCalibration(
@@ -235,6 +255,9 @@ class TestInstrumentChannelCalibrationApply(unittest.TestCase):
             n_pairs=20,
             n_inliers=18,
             residual_mad_sigma=0.01,
+            coefficient_uncertainty=(
+                _unavailable_coefficient_uncertainty()
+            ),
         )
 
     def test_flux_is_mapped_to_reference_scale(self):

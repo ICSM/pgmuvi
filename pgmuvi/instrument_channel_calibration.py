@@ -38,6 +38,9 @@ INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-execution-v1"
 )
+INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-calibration-uncertainty-v1"
+)
 
 
 __all__ = [
@@ -46,15 +49,18 @@ __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER",
+    "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION",
     "InstrumentChannelCalibration",
     "InstrumentChannelCalibrationAssessment",
     "InstrumentChannelCalibrationChannelPlan",
+    "InstrumentChannelCalibrationCoefficientUncertainty",
     "InstrumentChannelCalibrationDisposition",
     "InstrumentChannelCalibrationExecution",
     "InstrumentChannelCalibrationGroupPlan",
     "InstrumentChannelCalibrationPlan",
     "InstrumentChannelCalibrationStatus",
+    "InstrumentChannelCalibrationUncertaintyStatus",
     "InstrumentChannelPairing",
     "InstrumentChannelPairingMethod",
     "SharedWavelengthChannelGroup",
@@ -93,6 +99,13 @@ class InstrumentChannelCalibrationDisposition(_StringEnum):
 
     PLANNED = "planned"
     SKIPPED = "skipped"
+    UNAVAILABLE = "unavailable"
+
+
+class InstrumentChannelCalibrationUncertaintyStatus(_StringEnum):
+    """Availability of affine coefficient-uncertainty provenance."""
+
+    AVAILABLE = "available"
     UNAVAILABLE = "unavailable"
 
 
@@ -1137,7 +1150,313 @@ def construct_instrument_channel_pairing(
     )
 
 
-INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION = "1.0"
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationCoefficientUncertainty:
+    """Uncertainty provenance for affine offset and scale coefficients.
+
+    Available uncertainty uses the fixed coefficient order ``offset, scale``
+    and stores the complete symmetric 2-by-2 covariance matrix. Standard
+    errors are derived from its diagonal rather than stored independently.
+    Unavailable uncertainty instead requires an explicit reason and cannot
+    carry placeholder numerical values.
+    """
+
+    schema_version: str
+    status: InstrumentChannelCalibrationUncertaintyStatus | str
+    uncertainty_source: str
+    coefficient_covariance: (
+        tuple[tuple[float, float], tuple[float, float]] | None
+    )
+    estimation_method: str | None = None
+    degrees_of_freedom: int | None = None
+    residual_variance: float | None = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel calibration uncertainty "
+                f"schema version: {self.schema_version!r}."
+            )
+
+        status = self.status
+        if not isinstance(
+            status,
+            InstrumentChannelCalibrationUncertaintyStatus,
+        ):
+            try:
+                status = InstrumentChannelCalibrationUncertaintyStatus(
+                    str(status)
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported instrument-channel calibration uncertainty "
+                    f"status: {self.status!r}."
+                ) from exc
+
+        uncertainty_source = self._normalize_required_text(
+            self.uncertainty_source,
+            name="uncertainty_source",
+        )
+        estimation_method = self._normalize_optional_text(
+            self.estimation_method,
+            name="estimation_method",
+        )
+        reason = self._normalize_optional_text(
+            self.reason,
+            name="reason",
+        )
+
+        covariance = self._normalize_covariance(
+            self.coefficient_covariance
+        )
+        degrees_of_freedom = self._normalize_degrees_of_freedom(
+            self.degrees_of_freedom
+        )
+        residual_variance = self._normalize_residual_variance(
+            self.residual_variance
+        )
+
+        if (
+            status
+            is InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE
+        ):
+            if covariance is None:
+                raise ValueError(
+                    "Available coefficient uncertainty requires a complete "
+                    "coefficient_covariance matrix."
+                )
+            if estimation_method is None:
+                raise ValueError(
+                    "Available coefficient uncertainty requires an explicit "
+                    "estimation_method."
+                )
+            if reason is not None:
+                raise ValueError(
+                    "Available coefficient uncertainty must not carry an "
+                    "unavailable reason."
+                )
+        else:
+            if reason is None:
+                raise ValueError(
+                    "Unavailable coefficient uncertainty requires a reason."
+                )
+            if any(
+                value is not None
+                for value in (
+                    covariance,
+                    estimation_method,
+                    degrees_of_freedom,
+                    residual_variance,
+                )
+            ):
+                raise ValueError(
+                    "Unavailable coefficient uncertainty cannot contain "
+                    "covariance or estimation metadata."
+                )
+
+        object.__setattr__(self, "status", status)
+        object.__setattr__(
+            self,
+            "uncertainty_source",
+            uncertainty_source,
+        )
+        object.__setattr__(
+            self,
+            "coefficient_covariance",
+            covariance,
+        )
+        object.__setattr__(
+            self,
+            "estimation_method",
+            estimation_method,
+        )
+        object.__setattr__(
+            self,
+            "degrees_of_freedom",
+            degrees_of_freedom,
+        )
+        object.__setattr__(
+            self,
+            "residual_variance",
+            residual_variance,
+        )
+        object.__setattr__(self, "reason", reason)
+
+    @staticmethod
+    def _normalize_required_text(value: Any, *, name: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{name} must be a string.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"{name} must be non-empty.")
+        return normalized
+
+    @classmethod
+    def _normalize_optional_text(
+        cls,
+        value: Any,
+        *,
+        name: str,
+    ) -> str | None:
+        if value is None:
+            return None
+        return cls._normalize_required_text(value, name=name)
+
+    @staticmethod
+    def _normalize_covariance(
+        value: Any,
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        if value is None:
+            return None
+
+        def contains_boolean(item: Any) -> bool:
+            if isinstance(item, (bool, np.bool_)):
+                return True
+            if isinstance(item, np.ndarray):
+                return any(
+                    contains_boolean(element)
+                    for element in item.flat
+                )
+            if isinstance(item, (list, tuple)):
+                return any(
+                    contains_boolean(element)
+                    for element in item
+                )
+            return False
+
+        if contains_boolean(value):
+            raise TypeError(
+                "coefficient_covariance must contain numeric values, "
+                "not booleans."
+            )
+
+        covariance = np.asarray(value, dtype=float)
+        if covariance.shape != (2, 2):
+            raise ValueError(
+                "coefficient_covariance must have shape (2, 2)."
+            )
+        if np.any(~np.isfinite(covariance)):
+            raise ValueError(
+                "coefficient_covariance must contain finite values."
+            )
+        if np.any(np.diag(covariance) < 0.0):
+            raise ValueError(
+                "coefficient_covariance diagonal variances must be "
+                "non-negative."
+            )
+
+        scale = max(1.0, float(np.max(np.abs(covariance))))
+        tolerance = 64.0 * np.finfo(float).eps * scale
+        if not np.allclose(
+            covariance,
+            covariance.T,
+            rtol=0.0,
+            atol=tolerance,
+        ):
+            raise ValueError(
+                "coefficient_covariance must be symmetric."
+            )
+
+        covariance = 0.5 * (covariance + covariance.T)
+        eigenvalues = np.linalg.eigvalsh(covariance)
+        eigenvalue_scale = max(
+            1.0,
+            float(np.max(np.abs(covariance))),
+            float(np.max(np.abs(eigenvalues))),
+        )
+        eigenvalue_tolerance = (
+            64.0 * np.finfo(float).eps * eigenvalue_scale
+        )
+        if float(np.min(eigenvalues)) < -eigenvalue_tolerance:
+            raise ValueError(
+                "coefficient_covariance must be positive semidefinite."
+            )
+
+        return (
+            (float(covariance[0, 0]), float(covariance[0, 1])),
+            (float(covariance[1, 0]), float(covariance[1, 1])),
+        )
+
+    @staticmethod
+    def _normalize_degrees_of_freedom(value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value,
+            (int, np.integer),
+        ):
+            raise TypeError(
+                "degrees_of_freedom must be an integer when supplied."
+            )
+        normalized = int(value)
+        if normalized < 1:
+            raise ValueError(
+                "degrees_of_freedom must be at least 1 when supplied."
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_residual_variance(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (bool, np.bool_)):
+            raise TypeError(
+                "residual_variance must be numeric, not boolean."
+            )
+        normalized = float(value)
+        if not math.isfinite(normalized) or normalized < 0.0:
+            raise ValueError(
+                "residual_variance must be finite and non-negative when "
+                "supplied."
+            )
+        return normalized
+
+    @property
+    def offset_standard_error(self) -> float | None:
+        """Return the derived offset standard error when available."""
+
+        if self.coefficient_covariance is None:
+            return None
+        return math.sqrt(self.coefficient_covariance[0][0])
+
+    @property
+    def scale_standard_error(self) -> float | None:
+        """Return the derived scale standard error when available."""
+
+        if self.coefficient_covariance is None:
+            return None
+        return math.sqrt(self.coefficient_covariance[1][1])
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe uncertainty representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "status": self.status.value,
+            "uncertainty_source": self.uncertainty_source,
+            "coefficient_order": ["offset", "scale"],
+            "coefficient_covariance": (
+                None
+                if self.coefficient_covariance is None
+                else [
+                    list(row)
+                    for row in self.coefficient_covariance
+                ]
+            ),
+            "offset_standard_error": self.offset_standard_error,
+            "scale_standard_error": self.scale_standard_error,
+            "estimation_method": self.estimation_method,
+            "degrees_of_freedom": self.degrees_of_freedom,
+            "residual_variance": self.residual_variance,
+            "reason": self.reason,
+            "predictive_uncertainty_propagated": False,
+        }
+
+
+INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION = "2.0"
 
 
 @dataclass(frozen=True)
@@ -1161,6 +1480,9 @@ class InstrumentChannelCalibration:
     n_pairs: int
     n_inliers: int
     residual_mad_sigma: float | None
+    coefficient_uncertainty: (
+        InstrumentChannelCalibrationCoefficientUncertainty
+    )
     fit_method: str = "iterative_mad_clipped_affine"
 
     def __post_init__(self) -> None:
@@ -1227,6 +1549,16 @@ class InstrumentChannelCalibration:
                     "when supplied."
                 )
 
+        if not isinstance(
+            self.coefficient_uncertainty,
+            InstrumentChannelCalibrationCoefficientUncertainty,
+        ):
+            raise TypeError(
+                "coefficient_uncertainty must be an "
+                "InstrumentChannelCalibrationCoefficientUncertainty "
+                "instance."
+            )
+
     def to_dict(self) -> dict[str, Any]:
         """Return a strict JSON-safe representation."""
 
@@ -1245,6 +1577,9 @@ class InstrumentChannelCalibration:
                 else float(self.residual_mad_sigma)
             ),
             "fit_method": self.fit_method,
+            "coefficient_uncertainty": (
+                self.coefficient_uncertainty.to_dict()
+            ),
             "application_equation": (
                 "reference_flux = offset + scale * channel_flux"
             ),
@@ -2859,6 +3194,22 @@ def fit_instrument_channel_calibration(
         n_inliers=n_inliers,
         residual_mad_sigma=_calibration_mad_sigma(
             final_residual
+        ),
+        coefficient_uncertainty=(
+            InstrumentChannelCalibrationCoefficientUncertainty(
+                schema_version=(
+                    INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+                ),
+                status=(
+                    InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+                ),
+                uncertainty_source="pgmuvi_affine_fit",
+                coefficient_covariance=None,
+                reason=(
+                    "Coefficient-uncertainty estimation is not implemented "
+                    "for the current affine fitter."
+                ),
+            )
         ),
     )
 
