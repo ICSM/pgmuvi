@@ -168,6 +168,14 @@ class TestInstrumentChannelCalibrationOrchestrationExecution(
             completed.pairing.channel_row_indices,
             (40, 50, 60),
         )
+        self.assertEqual(
+            completed.calibration.coefficient_uncertainty.status.value,
+            "unavailable",
+        )
+        self.assertIn(
+            "scale-dependent effective variances",
+            completed.calibration.coefficient_uncertainty.reason,
+        )
         self.assertEqual(result.applied_channels, ("B",))
         self.assertEqual(
             result.applied_source_row_indices,

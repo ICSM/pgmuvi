@@ -2886,6 +2886,167 @@ def _weighted_affine_solution(
     return float(offset), float(scale)
 
 
+def _estimate_affine_coefficient_uncertainty(
+    channel_flux: np.ndarray,
+    residual: np.ndarray,
+    weights: np.ndarray,
+    *,
+    measurement_errors_supplied: bool,
+    channel_errors_supplied: bool,
+) -> InstrumentChannelCalibrationCoefficientUncertainty:
+    """Estimate covariance for the final fixed-weight affine solve.
+
+    The covariance is conditional on the final clipped inlier set.
+    Unweighted solves estimate residual variance, while reference-channel
+    measurement variances are treated as known. Channel-axis measurement
+    errors make the effective variances depend on the fitted scale, so this
+    helper returns an explicit unavailable record rather than freezing those
+    weights.
+    """
+
+    uncertainty_source = "pgmuvi_affine_fit_final_inliers"
+
+    def unavailable(
+        reason: str,
+    ) -> InstrumentChannelCalibrationCoefficientUncertainty:
+        return InstrumentChannelCalibrationCoefficientUncertainty(
+            schema_version=(
+                INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+            ),
+            status=(
+                InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+            ),
+            uncertainty_source=uncertainty_source,
+            coefficient_covariance=None,
+            reason=reason,
+        )
+
+    degrees_of_freedom = int(channel_flux.size - 2)
+    if degrees_of_freedom < 1:
+        return unavailable(
+            "Final affine inlier set has zero residual degrees of freedom; "
+            "coefficient covariance is unavailable."
+        )
+
+    if (
+        residual.shape != channel_flux.shape
+        or weights.shape != channel_flux.shape
+    ):
+        return unavailable(
+            "Final affine covariance inputs have inconsistent shapes."
+        )
+    if np.any(~np.isfinite(weights) | (weights <= 0.0)):
+        return unavailable(
+            "Final affine weights are not finite and strictly positive; "
+            "coefficient covariance is unavailable."
+        )
+    if np.any(~np.isfinite(channel_flux)) or np.any(~np.isfinite(residual)):
+        return unavailable(
+            "Final affine covariance inputs contain non-finite values."
+        )
+
+    if channel_errors_supplied:
+        return unavailable(
+            "Coefficient covariance is unavailable when channel-axis "
+            "measurement errors contribute scale-dependent effective "
+            "variances; the current affine fitter does not expose a "
+            "covariance estimator for the full iterative weighting procedure."
+        )
+
+    design = np.column_stack(
+        (
+            np.ones(channel_flux.size, dtype=float),
+            channel_flux,
+        )
+    )
+    weighted_design = design * np.sqrt(weights)[:, None]
+
+    try:
+        _, singular_values, right_singular_vectors = np.linalg.svd(
+            weighted_design,
+            full_matrices=False,
+        )
+    except np.linalg.LinAlgError:
+        return unavailable(
+            "Final weighted affine design decomposition failed; "
+            "coefficient covariance is unavailable."
+        )
+
+    if singular_values.shape != (2,) or np.any(
+        ~np.isfinite(singular_values)
+    ):
+        return unavailable(
+            "Final weighted affine design has invalid singular values; "
+            "coefficient covariance is unavailable."
+        )
+
+    largest_singular_value = float(singular_values[0])
+    smallest_singular_value = float(singular_values[-1])
+    if largest_singular_value <= 0.0:
+        return unavailable(
+            "Final weighted affine design is rank-deficient; coefficient "
+            "covariance is unavailable."
+        )
+
+    minimum_relative_singular_value = math.sqrt(np.finfo(float).eps)
+    if (
+        smallest_singular_value / largest_singular_value
+        <= minimum_relative_singular_value
+    ):
+        return unavailable(
+            "Final weighted affine design is numerically rank-deficient; "
+            "coefficient covariance is unavailable."
+        )
+
+    inverse_squared_singular_values = 1.0 / singular_values**2
+    covariance = (
+        right_singular_vectors.T * inverse_squared_singular_values
+    ) @ right_singular_vectors
+
+    residual_variance = None
+    if not measurement_errors_supplied:
+        residual_variance = float(
+            np.dot(residual, residual) / degrees_of_freedom
+        )
+        covariance = covariance * residual_variance
+        estimation_method = (
+            "ordinary_least_squares_residual_variance_scaled_"
+            "normal_matrix_inverse"
+        )
+    else:
+        estimation_method = (
+            "known_variance_weighted_normal_matrix_inverse"
+        )
+
+    covariance = 0.5 * (covariance + covariance.T)
+    if np.any(~np.isfinite(covariance)):
+        return unavailable(
+            "Final affine coefficient covariance contains non-finite values."
+        )
+    if residual_variance is not None and (
+        not np.isfinite(residual_variance) or residual_variance < 0.0
+    ):
+        return unavailable(
+            "Estimated affine residual variance is invalid; coefficient "
+            "covariance is unavailable."
+        )
+
+    return InstrumentChannelCalibrationCoefficientUncertainty(
+        schema_version=(
+            INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+        ),
+        status=InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
+        uncertainty_source=uncertainty_source,
+        coefficient_covariance=(
+            (float(covariance[0, 0]), float(covariance[0, 1])),
+            (float(covariance[1, 0]), float(covariance[1, 1])),
+        ),
+        estimation_method=estimation_method,
+        degrees_of_freedom=degrees_of_freedom,
+        residual_variance=residual_variance,
+    )
+
+
 def _calibration_mad_sigma(values: np.ndarray) -> float:
     if values.size == 0:
         return 0.0
@@ -2948,6 +3109,15 @@ def fit_instrument_channel_calibration(
     InstrumentChannelCalibration
         An immutable affine mapping satisfying
         ``reference_flux = offset + scale * channel_flux``.
+
+    Notes
+    -----
+    Coefficient covariance is estimated for the final fixed-weight solve,
+    conditional on the final MAD-clipped inlier set. Reference-channel
+    measurement variances are treated as known. When channel-axis errors are
+    supplied, their effective variances depend on the fitted scale, so
+    coefficient covariance is recorded as unavailable rather than using a
+    frozen-weight approximation.
     """
 
     if isinstance(min_pairs, bool) or not isinstance(min_pairs, int):
@@ -3180,6 +3350,15 @@ def fit_instrument_channel_calibration(
         reference[keep]
         - (offset + scale * target[keep])
     )
+    coefficient_uncertainty = _estimate_affine_coefficient_uncertainty(
+        target[keep],
+        final_residual,
+        final_weights,
+        measurement_errors_supplied=(
+            reference_sigma is not None or channel_sigma is not None
+        ),
+        channel_errors_supplied=channel_sigma is not None,
+    )
 
     return InstrumentChannelCalibration(
         schema_version=(
@@ -3195,22 +3374,7 @@ def fit_instrument_channel_calibration(
         residual_mad_sigma=_calibration_mad_sigma(
             final_residual
         ),
-        coefficient_uncertainty=(
-            InstrumentChannelCalibrationCoefficientUncertainty(
-                schema_version=(
-                    INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
-                ),
-                status=(
-                    InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
-                ),
-                uncertainty_source="pgmuvi_affine_fit",
-                coefficient_covariance=None,
-                reason=(
-                    "Coefficient-uncertainty estimation is not implemented "
-                    "for the current affine fitter."
-                ),
-            )
-        ),
+        coefficient_uncertainty=coefficient_uncertainty,
     )
 
 
