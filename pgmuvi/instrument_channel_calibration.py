@@ -41,6 +41,9 @@ INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-uncertainty-v1"
 )
+INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-calibration-scale-dependent-uncertainty-v1"
+)
 INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-predictive-uncertainty-v1"
 )
@@ -51,6 +54,7 @@ __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER",
     "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
@@ -67,6 +71,7 @@ __all__ = [
     "InstrumentChannelCalibrationPredictiveUncertainty",
     "InstrumentChannelCalibrationPredictiveUncertaintyDisposition",
     "InstrumentChannelCalibrationPredictiveUncertaintyStatus",
+    "InstrumentChannelCalibrationScaleDependentUncertaintyEstimate",
     "InstrumentChannelCalibrationStatus",
     "InstrumentChannelCalibrationUncertaintyStatus",
     "InstrumentChannelPairing",
@@ -77,6 +82,7 @@ __all__ = [
     "assess_instrument_channel_calibration_requirement",
     "construct_instrument_channel_pairing",
     "define_instrument_channel_calibration_plan",
+    "estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty",
     "execute_instrument_channel_calibration_plan",
     "fit_instrument_channel_calibration",
 ]
@@ -1489,6 +1495,408 @@ class InstrumentChannelCalibrationCoefficientUncertainty:
             "residual_variance": self.residual_variance,
             "reason": self.reason,
             "predictive_uncertainty_propagated": False,
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationScaleDependentUncertaintyEstimate:
+    """Contract for a future full-objective channel-axis error estimator.
+
+    The estimator is conditioned on a caller-selected final inlier set and
+    minimizes the Gaussian negative log likelihood
+
+    ``0.5 * sum(log(v_i) + residual_i**2 / v_i)``,
+
+    where ``v_i = reference_error_i**2 + scale**2 * channel_error_i**2``.
+    Coefficient order is fixed as ``offset, scale``. Available covariance is
+    the inverse observed Hessian of that full objective at a converged optimum
+    in the strictly positive-scale domain.
+    """
+
+    schema_version: str
+    status: InstrumentChannelCalibrationUncertaintyStatus | str
+    uncertainty_source: str
+    n_inliers: int
+    coefficient_covariance: (
+        tuple[tuple[float, float], tuple[float, float]] | None
+    ) = None
+    offset: float | None = None
+    scale: float | None = None
+    objective_value: float | None = None
+    optimizer: str | None = None
+    optimizer_converged: bool | None = None
+    gradient_method: str | None = None
+    gradient_norm: float | None = None
+    hessian_method: str | None = None
+    hessian_eigenvalues: tuple[float, float] | None = None
+    reason: str | None = None
+    conditioned_on_final_inlier_set: bool = True
+    positive_scale_domain_enforced: bool = True
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported scale-dependent calibration uncertainty schema "
+                f"version: {self.schema_version!r}."
+            )
+
+        status = self.status
+        if not isinstance(
+            status,
+            InstrumentChannelCalibrationUncertaintyStatus,
+        ):
+            try:
+                status = InstrumentChannelCalibrationUncertaintyStatus(
+                    str(status)
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported scale-dependent calibration uncertainty "
+                    f"status: {self.status!r}."
+                ) from exc
+
+        uncertainty_source = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_required_text(
+                self.uncertainty_source,
+                name="uncertainty_source",
+            )
+        )
+        optimizer = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_optional_text(
+                self.optimizer,
+                name="optimizer",
+            )
+        )
+        gradient_method = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_optional_text(
+                self.gradient_method,
+                name="gradient_method",
+            )
+        )
+        hessian_method = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_optional_text(
+                self.hessian_method,
+                name="hessian_method",
+            )
+        )
+        reason = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_optional_text(
+                self.reason,
+                name="reason",
+            )
+        )
+
+        if isinstance(self.n_inliers, (bool, np.bool_)) or not isinstance(
+            self.n_inliers,
+            (int, np.integer),
+        ):
+            raise TypeError("n_inliers must be an integer.")
+        n_inliers = int(self.n_inliers)
+        if n_inliers < 3:
+            raise ValueError("n_inliers must be at least 3.")
+
+        for name in (
+            "conditioned_on_final_inlier_set",
+            "positive_scale_domain_enforced",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, (bool, np.bool_)):
+                raise TypeError(f"{name} must be boolean.")
+            if not bool(value):
+                raise ValueError(f"{name} must be true for this contract.")
+
+        optimizer_converged = self.optimizer_converged
+        if optimizer_converged is not None and not isinstance(
+            optimizer_converged,
+            (bool, np.bool_),
+        ):
+            raise TypeError("optimizer_converged must be boolean when supplied.")
+        if optimizer_converged is not None:
+            optimizer_converged = bool(optimizer_converged)
+
+        covariance = (
+            InstrumentChannelCalibrationCoefficientUncertainty
+            ._normalize_covariance(self.coefficient_covariance)
+        )
+
+        def finite_optional(
+            value: Any,
+            *,
+            name: str,
+            non_negative: bool = False,
+            strictly_positive: bool = False,
+        ) -> float | None:
+            if value is None:
+                return None
+            if isinstance(value, (bool, np.bool_)):
+                raise TypeError(f"{name} must be numeric, not boolean.")
+            normalized = float(value)
+            if not math.isfinite(normalized):
+                raise ValueError(f"{name} must be finite when supplied.")
+            if non_negative and normalized < 0.0:
+                raise ValueError(
+                    f"{name} must be non-negative when supplied."
+                )
+            if strictly_positive and normalized <= 0.0:
+                raise ValueError(
+                    f"{name} must be strictly positive when supplied."
+                )
+            return normalized
+
+        offset = finite_optional(self.offset, name="offset")
+        scale = finite_optional(
+            self.scale,
+            name="scale",
+            strictly_positive=True,
+        )
+        objective_value = finite_optional(
+            self.objective_value,
+            name="objective_value",
+        )
+        gradient_norm = finite_optional(
+            self.gradient_norm,
+            name="gradient_norm",
+            non_negative=True,
+        )
+
+        hessian_eigenvalues = self._normalize_hessian_eigenvalues(
+            self.hessian_eigenvalues
+        )
+
+        if (
+            status
+            is InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE
+        ):
+            required = {
+                "coefficient_covariance": covariance,
+                "offset": offset,
+                "scale": scale,
+                "objective_value": objective_value,
+                "optimizer": optimizer,
+                "optimizer_converged": optimizer_converged,
+                "gradient_method": gradient_method,
+                "gradient_norm": gradient_norm,
+                "hessian_method": hessian_method,
+                "hessian_eigenvalues": hessian_eigenvalues,
+            }
+            missing = [
+                name for name, value in required.items() if value is None
+            ]
+            if missing:
+                raise ValueError(
+                    "Available scale-dependent uncertainty requires complete "
+                    "estimation provenance; missing "
+                    + ", ".join(missing)
+                    + "."
+                )
+            if optimizer_converged is not True:
+                raise ValueError(
+                    "Available scale-dependent uncertainty requires a "
+                    "converged optimizer."
+                )
+            if reason is not None:
+                raise ValueError(
+                    "Available scale-dependent uncertainty must not carry "
+                    "an unavailable reason."
+                )
+        else:
+            if reason is None:
+                raise ValueError(
+                    "Unavailable scale-dependent uncertainty requires a "
+                    "reason."
+                )
+            if covariance is not None:
+                raise ValueError(
+                    "Unavailable scale-dependent uncertainty cannot carry "
+                    "coefficient covariance."
+                )
+            if any(
+                value is not None
+                for value in (
+                    offset,
+                    scale,
+                    objective_value,
+                    gradient_norm,
+                    hessian_eigenvalues,
+                )
+            ):
+                raise ValueError(
+                    "Unavailable scale-dependent uncertainty cannot carry "
+                    "numerical estimation results."
+                )
+            if optimizer_converged is True:
+                raise ValueError(
+                    "Unavailable scale-dependent uncertainty cannot report "
+                    "a converged optimizer."
+                )
+
+        object.__setattr__(self, "status", status)
+        object.__setattr__(
+            self,
+            "uncertainty_source",
+            uncertainty_source,
+        )
+        object.__setattr__(self, "n_inliers", n_inliers)
+        object.__setattr__(
+            self,
+            "coefficient_covariance",
+            covariance,
+        )
+        object.__setattr__(self, "offset", offset)
+        object.__setattr__(self, "scale", scale)
+        object.__setattr__(
+            self,
+            "objective_value",
+            objective_value,
+        )
+        object.__setattr__(self, "optimizer", optimizer)
+        object.__setattr__(
+            self,
+            "optimizer_converged",
+            optimizer_converged,
+        )
+        object.__setattr__(
+            self,
+            "gradient_method",
+            gradient_method,
+        )
+        object.__setattr__(
+            self,
+            "gradient_norm",
+            gradient_norm,
+        )
+        object.__setattr__(
+            self,
+            "hessian_method",
+            hessian_method,
+        )
+        object.__setattr__(
+            self,
+            "hessian_eigenvalues",
+            hessian_eigenvalues,
+        )
+        object.__setattr__(self, "reason", reason)
+        object.__setattr__(
+            self,
+            "conditioned_on_final_inlier_set",
+            True,
+        )
+        object.__setattr__(
+            self,
+            "positive_scale_domain_enforced",
+            True,
+        )
+
+    @staticmethod
+    def _normalize_hessian_eigenvalues(
+        value: Any,
+    ) -> tuple[float, float] | None:
+        if value is None:
+            return None
+
+        if isinstance(value, np.ndarray):
+            raw = value.tolist()
+        else:
+            raw = value
+
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            raise ValueError(
+                "hessian_eigenvalues must contain exactly two values."
+            )
+
+        normalized = []
+        for item in raw:
+            if isinstance(item, (bool, np.bool_)):
+                raise TypeError(
+                    "hessian_eigenvalues must be numeric, not boolean."
+                )
+            numeric = float(item)
+            if not math.isfinite(numeric) or numeric <= 0.0:
+                raise ValueError(
+                    "hessian_eigenvalues must be finite and strictly "
+                    "positive."
+                )
+            normalized.append(numeric)
+
+        return (normalized[0], normalized[1])
+
+    @property
+    def offset_standard_error(self) -> float | None:
+        """Return the derived offset standard error when available."""
+
+        if self.coefficient_covariance is None:
+            return None
+        return math.sqrt(self.coefficient_covariance[0][0])
+
+    @property
+    def scale_standard_error(self) -> float | None:
+        """Return the derived scale standard error when available."""
+
+        if self.coefficient_covariance is None:
+            return None
+        return math.sqrt(self.coefficient_covariance[1][1])
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the strict JSON-safe estimator contract."""
+
+        return {
+            "schema_version": self.schema_version,
+            "status": self.status.value,
+            "uncertainty_source": self.uncertainty_source,
+            "coefficient_order": ["offset", "scale"],
+            "objective": (
+                "gaussian_negative_log_likelihood_"
+                "scale_dependent_effective_variance"
+            ),
+            "objective_equation": (
+                "0.5 * sum(log(v_i) + residual_i**2 / v_i)"
+            ),
+            "effective_variance_equation": (
+                "reference_error_i**2 + "
+                "scale**2 * channel_error_i**2"
+            ),
+            "covariance_estimator": (
+                "inverse_observed_hessian_at_converged_optimum"
+            ),
+            "conditioned_on_final_inlier_set": (
+                self.conditioned_on_final_inlier_set
+            ),
+            "positive_scale_domain_enforced": (
+                self.positive_scale_domain_enforced
+            ),
+            "n_inliers": self.n_inliers,
+            "offset": self.offset,
+            "scale": self.scale,
+            "coefficient_covariance": (
+                None
+                if self.coefficient_covariance is None
+                else [
+                    list(row)
+                    for row in self.coefficient_covariance
+                ]
+            ),
+            "offset_standard_error": self.offset_standard_error,
+            "scale_standard_error": self.scale_standard_error,
+            "objective_value": self.objective_value,
+            "optimizer": self.optimizer,
+            "optimizer_converged": self.optimizer_converged,
+            "gradient_method": self.gradient_method,
+            "gradient_norm": self.gradient_norm,
+            "hessian_method": self.hessian_method,
+            "hessian_eigenvalues": (
+                None
+                if self.hessian_eigenvalues is None
+                else list(self.hessian_eigenvalues)
+            ),
+            "reason": self.reason,
+            "implemented": False,
         }
 
 
@@ -3550,6 +3958,43 @@ def _normalize_calibration_channel(
         raise ValueError(f"{name} must be non-empty.")
 
     return channel_name
+
+
+def estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty(
+    reference_flux: Any,
+    channel_flux: Any,
+    *,
+    reference_error: Any | None,
+    channel_error: Any,
+    initial_offset: float,
+    initial_scale: float,
+) -> InstrumentChannelCalibrationScaleDependentUncertaintyEstimate:
+    """Estimate channel-axis-error covariance in a future implementation.
+
+    Inputs represent the caller-selected final inlier set. The future
+    implementation will minimize the complete Gaussian negative log
+    likelihood whose residual variance is
+
+    ``reference_error**2 + scale**2 * channel_error**2``
+
+    over ``offset`` and strictly positive ``scale``. Available coefficient
+    covariance will be the inverse observed Hessian of that full objective at
+    a converged optimum. A frozen-weight normal-matrix inverse is explicitly
+    outside this contract.
+    """
+
+    del (
+        reference_flux,
+        channel_flux,
+        reference_error,
+        channel_error,
+        initial_offset,
+        initial_scale,
+    )
+    raise NotImplementedError(
+        "Scale-dependent channel-axis calibration coefficient uncertainty "
+        "estimation is not implemented."
+    )
 
 
 def fit_instrument_channel_calibration(

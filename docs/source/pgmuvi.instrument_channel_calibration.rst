@@ -90,6 +90,37 @@ PGMUVI therefore records an explicit unavailable reason rather than presenting
 a frozen-weight normal-matrix inverse as uncertainty for the complete
 estimator.
 
+Scale-dependent channel-axis uncertainty contract
+--------------------------------------------------
+
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibrationScaleDependentUncertaintyEstimate`
+defines the immutable JSON-safe result contract for a future dedicated
+:func:`~pgmuvi.instrument_channel_calibration.estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty`
+callable.  The callable raises ``NotImplementedError`` in this contract-only
+tranche, and the current affine fitter continues to report coefficient
+uncertainty as unavailable whenever channel-axis errors are supplied.
+
+For final-inlier paired values, the future estimator minimizes the Gaussian
+negative log likelihood
+
+.. math::
+
+   \frac{1}{2}\sum_i\left[
+   \log(v_i) + \frac{r_i^2}{v_i}
+   \right],
+
+where :math:`r_i=y_i-(b+a x_i)` and
+:math:`v_i=\sigma_{y,i}^2+a^2\sigma_{x,i}^2`.  Coefficient order remains
+``offset, scale`` and the scale domain is strictly positive.  Available
+coefficient covariance is defined as the inverse observed Hessian of this full
+objective at a converged optimum, not a frozen-weight normal-matrix inverse.
+
+The result records the optimum, objective value, optimizer and convergence
+state, gradient method and norm, Hessian method and eigenvalues, final-inlier
+conditioning, and deterministic unavailable reason.  It does not include
+uncertainty from pair construction, MAD-clipping selection, calibration-family
+choice, or caller choices about observational-channel pairing.
+
 Covariance also remains unavailable, with a deterministic reason, when the
 final weighted design has zero residual degrees of freedom, invalid numerical
 inputs, a failed singular-value decomposition, or numerical rank deficiency.
