@@ -38,6 +38,14 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
             instrument_channel_calibration.__all__,
         )
+        self.assertIn(
+            "InstrumentChannelCalibrationCoefficientUncertainty",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
+            instrument_channel_calibration.__all__,
+        )
 
         api_text = API.read_text(encoding="utf-8")
         page_text = PAGE.read_text(encoding="utf-8")
@@ -83,9 +91,23 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         self.assertIn("O(n_reference * n_channel)", text)
         self.assertIn("time and memory cost", text)
         self.assertIn("affine", text.lower())
+        normalized = " ".join(text.split())
+        self.assertIn(
+            "InstrumentChannelCalibrationCoefficientUncertainty",
+            text,
+        )
+        self.assertIn("fixed coefficient order", normalized)
+        self.assertIn("offset, scale", normalized)
+        self.assertIn("complete symmetric 2-by-2 covariance", normalized)
+        self.assertIn("explicit uncertainty source", normalized)
+        self.assertIn("unavailable", normalized)
+        self.assertIn(
+            "does not estimate covariance",
+            normalized,
+        )
         self.assertIn(
             "does not propagate uncertainty in the fitted offset or scale",
-            " ".join(text.split()),
+            normalized,
         )
 
     def test_future_work_marker_remains_open(self):
@@ -97,6 +119,10 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         self.assertIn("does not close", text)
         self.assertIn(
             "representative calibration validation",
+            text,
+        )
+        self.assertIn(
+            "uncertainty estimation and propagation",
             text,
         )
 
