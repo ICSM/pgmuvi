@@ -46,6 +46,18 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
             instrument_channel_calibration.__all__,
         )
+        self.assertIn(
+            "InstrumentChannelCalibrationPredictiveUncertainty",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "apply_instrument_channel_calibration_with_predictive_uncertainty",
+            instrument_channel_calibration.__all__,
+        )
 
         api_text = API.read_text(encoding="utf-8")
         page_text = PAGE.read_text(encoding="utf-8")
@@ -122,6 +134,28 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "does not propagate uncertainty in the fitted offset or scale",
             normalized,
         )
+        self.assertIn(
+            "InstrumentChannelCalibrationPredictiveUncertainty",
+            text,
+        )
+        self.assertIn(
+            "apply_instrument_channel_calibration_with_predictive_uncertainty",
+            text,
+        )
+        self.assertIn("raises ``NotImplementedError``", normalized)
+        self.assertIn("J_i=[1, x_i]", normalized)
+        self.assertIn("offset-scale covariance cross-term", normalized)
+        self.assertIn("full_covariance", text)
+        self.assertIn("marginal_variance", text)
+        self.assertIn(
+            "``not_requested``, ``available``, ``skipped``, and "
+            "``unavailable``",
+            normalized,
+        )
+        self.assertIn(
+            "no silent fallback to measurement-only uncertainty",
+            normalized.lower(),
+        )
 
     def test_future_work_marker_remains_open(self):
         text = " ".join(FUTURE.read_text(encoding="utf-8").split())
@@ -139,9 +173,10 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "predictive propagation",
+            "predictive-propagation implementation",
             text,
         )
+        self.assertIn("without activating propagation", text)
         self.assertNotIn(
             "uncertainty estimation and propagation",
             text,

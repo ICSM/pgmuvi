@@ -120,11 +120,13 @@ Wavelength-model extensions
     executes caller-authored plans across shared-wavelength observational channels
     into copied calibrated arrays with completed pairing and fit
     provenance, including local covariance estimation for unweighted and
-    reference-error weighted final affine solves. This does not close the
-    marker: scientifically validated instrument-specific tolerance guidance,
+    reference-error weighted final affine solves, and defines predictive-
+    propagation result, covariance-mode, and orchestration-disposition
+    contracts without activating propagation. This does not close the marker:
+    scientifically validated instrument-specific tolerance guidance,
     fitted-coefficient uncertainty estimation for scale-dependent channel-axis
-    errors, predictive propagation, workflow integration, and representative
-    calibration validation remain future work.
+    errors, predictive-propagation implementation, workflow integration, and
+    representative calibration validation remain future work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current
