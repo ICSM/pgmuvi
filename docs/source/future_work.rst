@@ -122,12 +122,12 @@ Wavelength-model extensions
     provenance, including local covariance estimation for unweighted and
     reference-error weighted final affine solves, and implements dedicated
     marginal or full-covariance predictive propagation without orchestration
-    activation, and defines the full-objective observed-Hessian contract for
-    future scale-dependent channel-axis coefficient uncertainty estimation.
+    activation, and implements the dedicated full-objective
+    observed-Hessian estimator for scale-dependent channel-axis coefficient
+    uncertainty without activating it in the fitter or orchestration layer.
     This does not close the marker: scientifically validated instrument-specific
-    tolerance guidance, implementation of the scale-dependent estimator,
-    workflow integration, and representative calibration validation remain
-    future work.
+    tolerance guidance, workflow integration, and representative calibration
+    validation remain future work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

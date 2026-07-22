@@ -21,6 +21,7 @@ import math
 from typing import Any
 
 import numpy as np
+from scipy import optimize
 
 
 INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION = (
@@ -1500,7 +1501,7 @@ class InstrumentChannelCalibrationCoefficientUncertainty:
 
 @dataclass(frozen=True)
 class InstrumentChannelCalibrationScaleDependentUncertaintyEstimate:
-    """Contract for a future full-objective channel-axis error estimator.
+    """Result of full-objective channel-axis error estimation.
 
     The estimator is conditioned on a caller-selected final inlier set and
     minimizes the Gaussian negative log likelihood
@@ -1896,7 +1897,7 @@ class InstrumentChannelCalibrationScaleDependentUncertaintyEstimate:
                 else list(self.hessian_eigenvalues)
             ),
             "reason": self.reason,
-            "implemented": False,
+            "implemented": True,
         }
 
 
@@ -3969,31 +3970,461 @@ def estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertai
     initial_offset: float,
     initial_scale: float,
 ) -> InstrumentChannelCalibrationScaleDependentUncertaintyEstimate:
-    """Estimate channel-axis-error covariance in a future implementation.
+    """Estimate affine covariance with scale-dependent channel-axis errors.
 
-    Inputs represent the caller-selected final inlier set. The future
-    implementation will minimize the complete Gaussian negative log
-    likelihood whose residual variance is
+    Inputs are the caller-selected final inlier set. The estimator minimizes
 
-    ``reference_error**2 + scale**2 * channel_error**2``
+    ``0.5 * sum(log(v_i) + residual_i**2 / v_i)``
 
-    over ``offset`` and strictly positive ``scale``. Available coefficient
-    covariance will be the inverse observed Hessian of that full objective at
-    a converged optimum. A frozen-weight normal-matrix inverse is explicitly
-    outside this contract.
+    with
+
+    ``v_i = reference_error_i**2 + scale**2 * channel_error_i**2``.
+
+    Optimization uses an analytic gradient and a log-scale parameterization
+    that enforces a strictly positive scale. Available coefficient covariance
+    is the inverse analytic observed Hessian of the full objective in fixed
+    coefficient order ``offset, scale``.
     """
 
-    del (
-        reference_flux,
-        channel_flux,
-        reference_error,
-        channel_error,
-        initial_offset,
-        initial_scale,
+    uncertainty_source = (
+        "pgmuvi_scale_dependent_full_objective_final_inliers"
     )
-    raise NotImplementedError(
-        "Scale-dependent channel-axis calibration coefficient uncertainty "
-        "estimation is not implemented."
+    optimizer_name = (
+        "scipy.optimize.minimize:"
+        "L-BFGS-B_log_scale_parameterization"
+    )
+    gradient_method = "analytic_full_objective_gradient"
+    hessian_method = "analytic_observed_hessian"
+
+    reference = _as_calibration_vector(
+        reference_flux,
+        name="reference_flux",
+    )
+    target = _as_calibration_vector(
+        channel_flux,
+        name="channel_flux",
+    )
+
+    if reference.shape != target.shape:
+        raise ValueError(
+            "reference_flux and channel_flux must have the same shape."
+        )
+
+    n_inliers = int(reference.size)
+    if n_inliers < 3:
+        raise ValueError(
+            "Scale-dependent calibration uncertainty estimation requires "
+            "at least 3 paired final inliers."
+        )
+
+    reference_sigma = _validate_optional_calibration_error(
+        reference_error,
+        name="reference_error",
+        expected_shape=reference.shape,
+    )
+    channel_sigma = _validate_optional_calibration_error(
+        channel_error,
+        name="channel_error",
+        expected_shape=reference.shape,
+    )
+
+    if channel_sigma is None:
+        raise ValueError(
+            "channel_error is required for scale-dependent calibration "
+            "uncertainty estimation."
+        )
+
+    arrays = [reference, target, channel_sigma]
+    if reference_sigma is not None:
+        arrays.append(reference_sigma)
+
+    if any(np.any(~np.isfinite(array)) for array in arrays):
+        raise ValueError(
+            "Scale-dependent calibration uncertainty inputs must contain "
+            "only finite values."
+        )
+
+    if np.any(channel_sigma <= 0.0):
+        raise ValueError(
+            "channel_error must contain finite, strictly positive values."
+        )
+    if reference_sigma is not None and np.any(reference_sigma <= 0.0):
+        raise ValueError(
+            "reference_error must contain finite, strictly positive values "
+            "when supplied."
+        )
+
+    if float(np.ptp(target)) <= 0.0:
+        raise ValueError(
+            "channel_flux must span more than one finite value."
+        )
+
+    for name, value in (
+        ("initial_offset", initial_offset),
+        ("initial_scale", initial_scale),
+    ):
+        if isinstance(value, (bool, np.bool_)):
+            raise TypeError(f"{name} must be numeric, not boolean.")
+
+    normalized_initial_offset = float(initial_offset)
+    normalized_initial_scale = float(initial_scale)
+
+    if not math.isfinite(normalized_initial_offset):
+        raise ValueError("initial_offset must be finite.")
+    if (
+        not math.isfinite(normalized_initial_scale)
+        or normalized_initial_scale <= 0.0
+    ):
+        raise ValueError(
+            "initial_scale must be finite and strictly positive."
+        )
+
+    reference_variance = (
+        np.zeros(n_inliers, dtype=float)
+        if reference_sigma is None
+        else reference_sigma**2
+    )
+    channel_variance = channel_sigma**2
+
+    minimum_channel_error = float(np.min(channel_sigma))
+    maximum_channel_error = float(np.max(channel_sigma))
+    maximum_target_magnitude = max(
+        1.0,
+        float(np.max(np.abs(target))),
+    )
+
+    log_scale_lower = (
+        0.5 * math.log(np.finfo(float).tiny)
+        - math.log(minimum_channel_error)
+    )
+    log_scale_upper = min(
+        (
+            0.5 * math.log(np.finfo(float).max / 4.0)
+            - math.log(maximum_channel_error)
+        ),
+        (
+            math.log(np.finfo(float).max / 4.0)
+            - math.log(maximum_target_magnitude)
+        ),
+    )
+
+    initial_log_scale = math.log(normalized_initial_scale)
+    if not log_scale_lower < log_scale_upper:
+        raise ValueError(
+            "Input scales do not admit a numerically safe positive-scale "
+            "optimization domain."
+        )
+
+    initial_log_scale = min(
+        max(initial_log_scale, log_scale_lower),
+        log_scale_upper,
+    )
+
+    def unavailable(
+        reason: str,
+    ) -> InstrumentChannelCalibrationScaleDependentUncertaintyEstimate:
+        return InstrumentChannelCalibrationScaleDependentUncertaintyEstimate(
+            schema_version=(
+                INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION
+            ),
+            status=(
+                InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+            ),
+            uncertainty_source=uncertainty_source,
+            n_inliers=n_inliers,
+            optimizer=optimizer_name,
+            optimizer_converged=False,
+            gradient_method=gradient_method,
+            hessian_method=hessian_method,
+            reason=reason,
+        )
+
+    def objective_and_gradient(
+        parameters: np.ndarray,
+    ) -> tuple[float, np.ndarray]:
+        offset = float(parameters[0])
+        scale = math.exp(float(parameters[1]))
+        residual = reference - (offset + scale * target)
+        variance = reference_variance + scale**2 * channel_variance
+
+        with np.errstate(
+            divide="ignore",
+            invalid="ignore",
+            over="ignore",
+        ):
+            objective_value = 0.5 * float(
+                np.sum(
+                    np.log(variance)
+                    + residual**2 / variance
+                )
+            )
+            gradient_offset = float(
+                np.sum(-residual / variance)
+            )
+            gradient_scale = float(
+                np.sum(
+                    -residual * target / variance
+                    + scale
+                    * channel_variance
+                    * (
+                        1.0 / variance
+                        - residual**2 / variance**2
+                    )
+                )
+            )
+
+        transformed_gradient = np.asarray(
+            [
+                gradient_offset,
+                gradient_scale * scale,
+            ],
+            dtype=float,
+        )
+
+        if (
+            not math.isfinite(objective_value)
+            or np.any(~np.isfinite(transformed_gradient))
+        ):
+            return (
+                float(np.finfo(float).max),
+                np.zeros(2, dtype=float),
+            )
+
+        return objective_value, transformed_gradient
+
+    try:
+        result = optimize.minimize(
+            objective_and_gradient,
+            np.asarray(
+                [
+                    normalized_initial_offset,
+                    initial_log_scale,
+                ],
+                dtype=float,
+            ),
+            method="L-BFGS-B",
+            jac=True,
+            bounds=(
+                (None, None),
+                (log_scale_lower, log_scale_upper),
+            ),
+            options={
+                "ftol": 1.0e-12,
+                "gtol": 1.0e-8,
+                "maxiter": 1000,
+                "maxls": 50,
+            },
+        )
+    except Exception as exc:
+        return unavailable(
+            "Scale-dependent calibration optimization raised "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    if (
+        not bool(result.success)
+        or np.asarray(result.x).shape != (2,)
+        or np.any(~np.isfinite(result.x))
+    ):
+        message = str(getattr(result, "message", "")).strip()
+        if not message:
+            message = "no optimizer diagnostic was supplied"
+        return unavailable(
+            "Scale-dependent calibration optimization did not converge: "
+            f"{message}."
+        )
+
+    offset = float(result.x[0])
+    log_scale = float(result.x[1])
+    scale = math.exp(log_scale)
+
+    boundary_tolerance = 64.0 * np.finfo(float).eps * max(
+        1.0,
+        abs(log_scale),
+        abs(log_scale_lower),
+        abs(log_scale_upper),
+    )
+    if (
+        log_scale <= log_scale_lower + boundary_tolerance
+        or log_scale >= log_scale_upper - boundary_tolerance
+    ):
+        return unavailable(
+            "Scale-dependent calibration optimization converged on a "
+            "numerical log-scale boundary."
+        )
+
+    residual = reference - (offset + scale * target)
+    variance = reference_variance + scale**2 * channel_variance
+
+    if (
+        not math.isfinite(offset)
+        or not math.isfinite(scale)
+        or scale <= 0.0
+        or np.any(~np.isfinite(residual))
+        or np.any(~np.isfinite(variance) | (variance <= 0.0))
+    ):
+        return unavailable(
+            "Scale-dependent calibration optimization produced invalid "
+            "coefficients, residuals, or effective variances."
+        )
+
+    with np.errstate(
+        divide="ignore",
+        invalid="ignore",
+        over="ignore",
+    ):
+        objective_value = 0.5 * float(
+            np.sum(
+                np.log(variance)
+                + residual**2 / variance
+            )
+        )
+
+        gradient_offset = float(
+            np.sum(-residual / variance)
+        )
+        gradient_scale = float(
+            np.sum(
+                -residual * target / variance
+                + scale
+                * channel_variance
+                * (
+                    1.0 / variance
+                    - residual**2 / variance**2
+                )
+            )
+        )
+        gradient = np.asarray(
+            [gradient_offset, gradient_scale],
+            dtype=float,
+        )
+
+        hessian_offset_offset = float(
+            np.sum(1.0 / variance)
+        )
+        hessian_offset_scale = float(
+            np.sum(
+                target / variance
+                + 2.0
+                * scale
+                * channel_variance
+                * residual
+                / variance**2
+            )
+        )
+        hessian_scale_scale = float(
+            np.sum(
+                target**2 / variance
+                + channel_variance / variance
+                - 2.0
+                * scale**2
+                * channel_variance**2
+                / variance**2
+                - channel_variance
+                * residual**2
+                / variance**2
+                + 4.0
+                * scale
+                * channel_variance
+                * residual
+                * target
+                / variance**2
+                + 4.0
+                * scale**2
+                * channel_variance**2
+                * residual**2
+                / variance**3
+            )
+        )
+
+    hessian = np.asarray(
+        [
+            [hessian_offset_offset, hessian_offset_scale],
+            [hessian_offset_scale, hessian_scale_scale],
+        ],
+        dtype=float,
+    )
+    hessian = 0.5 * (hessian + hessian.T)
+    gradient_norm = float(np.linalg.norm(gradient, ord=2))
+
+    if (
+        not math.isfinite(objective_value)
+        or not math.isfinite(gradient_norm)
+        or np.any(~np.isfinite(hessian))
+    ):
+        return unavailable(
+            "Scale-dependent calibration objective, gradient, or observed "
+            "Hessian contains non-finite values."
+        )
+
+    try:
+        hessian_eigenvalues = np.linalg.eigvalsh(hessian)
+    except np.linalg.LinAlgError:
+        return unavailable(
+            "Observed Hessian eigendecomposition failed."
+        )
+
+    if (
+        hessian_eigenvalues.shape != (2,)
+        or np.any(~np.isfinite(hessian_eigenvalues))
+        or float(hessian_eigenvalues[0]) <= 0.0
+    ):
+        return unavailable(
+            "Observed Hessian is not finite and positive definite."
+        )
+
+    largest_eigenvalue = float(hessian_eigenvalues[-1])
+    smallest_eigenvalue = float(hessian_eigenvalues[0])
+    if (
+        smallest_eigenvalue / largest_eigenvalue
+        <= math.sqrt(np.finfo(float).eps)
+    ):
+        return unavailable(
+            "Observed Hessian is numerically singular."
+        )
+
+    try:
+        covariance = np.linalg.inv(hessian)
+    except np.linalg.LinAlgError:
+        return unavailable(
+            "Observed Hessian inversion failed."
+        )
+
+    covariance = 0.5 * (covariance + covariance.T)
+    if np.any(~np.isfinite(covariance)):
+        return unavailable(
+            "Inverse observed-Hessian covariance contains non-finite values."
+        )
+
+    return InstrumentChannelCalibrationScaleDependentUncertaintyEstimate(
+        schema_version=(
+            INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION
+        ),
+        status=InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
+        uncertainty_source=uncertainty_source,
+        n_inliers=n_inliers,
+        coefficient_covariance=(
+            (
+                float(covariance[0, 0]),
+                float(covariance[0, 1]),
+            ),
+            (
+                float(covariance[1, 0]),
+                float(covariance[1, 1]),
+            ),
+        ),
+        offset=offset,
+        scale=scale,
+        objective_value=objective_value,
+        optimizer=optimizer_name,
+        optimizer_converged=True,
+        gradient_method=gradient_method,
+        gradient_norm=gradient_norm,
+        hessian_method=hessian_method,
+        hessian_eigenvalues=(
+            smallest_eigenvalue,
+            largest_eigenvalue,
+        ),
     )
 
 

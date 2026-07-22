@@ -94,13 +94,14 @@ Scale-dependent channel-axis uncertainty contract
 --------------------------------------------------
 
 :class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelCalibrationScaleDependentUncertaintyEstimate`
-defines the immutable JSON-safe result contract for a future dedicated
+defines the immutable JSON-safe result of the dedicated
 :func:`~pgmuvi.instrument_channel_calibration.estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty`
-callable.  The callable raises ``NotImplementedError`` in this contract-only
-tranche, and the current affine fitter continues to report coefficient
-uncertainty as unavailable whenever channel-axis errors are supplied.
+low-level callable.  The estimator is implemented with analytic objective
+derivatives and a log-scale parameterization, while the current affine fitter
+continues to report coefficient uncertainty as unavailable whenever
+channel-axis errors are supplied.
 
-For final-inlier paired values, the future estimator minimizes the Gaussian
+For final-inlier paired values, the estimator minimizes the Gaussian
 negative log likelihood
 
 .. math::

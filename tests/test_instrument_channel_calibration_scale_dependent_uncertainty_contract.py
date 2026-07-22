@@ -89,7 +89,7 @@ class TestScaleDependentUncertaintyEstimateContract(unittest.TestCase):
         )
         self.assertTrue(payload["conditioned_on_final_inlier_set"])
         self.assertTrue(payload["positive_scale_domain_enforced"])
-        self.assertFalse(payload["implemented"])
+        self.assertTrue(payload["implemented"])
         self.assertAlmostEqual(result.offset_standard_error, 0.2)
         self.assertAlmostEqual(result.scale_standard_error, 0.1)
 
@@ -174,16 +174,31 @@ class TestScaleDependentUncertaintyEstimateContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 3"):
             self._available(n_inliers=2)
 
-    def test_dedicated_estimator_callable_is_contract_only(self):
-        with self.assertRaisesRegex(NotImplementedError, "not implemented"):
+    def test_dedicated_estimator_callable_is_implemented(self):
+        channel_flux = np.linspace(-1.0, 2.0, 40)
+        reference_flux = (
+            0.25
+            + 1.5 * channel_flux
+            + 0.02 * np.sin(np.arange(channel_flux.size))
+        )
+
+        result = (
             estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty(
-                np.array([1.0, 2.0, 3.0]),
-                np.array([0.5, 1.0, 1.5]),
-                reference_error=np.full(3, 0.03),
-                channel_error=np.full(3, 0.02),
-                initial_offset=0.25,
-                initial_scale=1.5,
+                reference_flux,
+                channel_flux,
+                reference_error=np.linspace(0.02, 0.04, channel_flux.size),
+                channel_error=np.linspace(0.01, 0.03, channel_flux.size),
+                initial_offset=0.2,
+                initial_scale=1.4,
             )
+        )
+
+        self.assertEqual(
+            result.status,
+            InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
+        )
+        self.assertTrue(result.optimizer_converged)
+        self.assertTrue(result.to_dict()["implemented"])
 
     def test_current_fitter_boundary_remains_unavailable(self):
         channel_flux = np.linspace(0.0, 2.0, 20)
