@@ -128,7 +128,10 @@ Wavelength-model extensions
     provenance, consistent point-estimate/covariance semantics and fallback
     status, and activates the scale-dependent full-objective estimator in the
     affine fitter and dataset orchestration while preserving separate
-    observational-channel records.  This does not close the marker:
+    observational-channel records, and defines the explicit request,
+    per-observational-channel block, row-identity, disposition, and
+    dataset-summary contract for ordinary predictive propagation without
+    activating that execution path.  This does not close the marker:
     scientifically validated instrument-specific tolerance guidance, workflow
     integration, and representative calibration validation remain future work.
 
