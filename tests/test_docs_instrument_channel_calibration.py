@@ -269,8 +269,8 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "coefficient covariance availability alone never activates it",
             normalized,
         )
-        self.assertIn("defined but not activated", normalized)
-        self.assertIn("raises ``NotImplementedError``", normalized)
+        self.assertIn("executes predictive propagation", normalized)
+        self.assertNotIn("raises ``NotImplementedError``", normalized)
         self.assertIn("no global dense dataset covariance", normalized)
         self.assertIn(
             "physical wavelength is never a covariance identity",
@@ -325,7 +325,11 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "row-identity, disposition, and dataset-summary contract",
             text,
         )
-        self.assertIn("without activating that execution path", text)
+        self.assertIn(
+            "activates dataset-level predictive propagation through explicit "
+            "requests",
+            text,
+        )
         self.assertNotIn(
             "uncertainty estimation and propagation",
             text,

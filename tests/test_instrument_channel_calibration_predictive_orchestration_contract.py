@@ -490,21 +490,29 @@ class TestPredictiveOrchestrationExecutionBoundary(unittest.TestCase):
         self.assertFalse(payload["fitted_coefficient_uncertainty_propagated"])
         self.assertNotIn("predictive_uncertainty", payload)
 
-    def test_opt_in_request_is_defined_but_not_activated(self):
+    def test_opt_in_request_returns_predictive_orchestration(self):
         plan, times, flux, wavelengths, channels, error = self._data_and_plan()
         request = InstrumentChannelCalibrationPredictiveUncertaintyRequest(
             covariance_mode="marginal_variance"
         )
-        with self.assertRaisesRegex(NotImplementedError, "not yet activated"):
-            execute_instrument_channel_calibration_plan(
-                plan,
-                times,
-                flux,
-                wavelengths,
-                channels,
-                flux_error=error,
-                predictive_uncertainty_request=request,
-            )
+        result = execute_instrument_channel_calibration_plan(
+            plan,
+            times,
+            flux,
+            wavelengths,
+            channels,
+            flux_error=error,
+            predictive_uncertainty_request=request,
+        )
+        payload = result.to_dict()
+
+        self.assertIsNotNone(result.predictive_uncertainty)
+        self.assertTrue(payload["fitted_coefficient_uncertainty_propagated"])
+        self.assertTrue(payload["predictive_uncertainty"]["requested"])
+        self.assertEqual(
+            payload["predictive_uncertainty"]["n_available_channels"],
+            1,
+        )
 
     def test_execution_request_input_is_strict(self):
         plan, times, flux, wavelengths, channels, error = self._data_and_plan()

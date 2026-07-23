@@ -4150,7 +4150,7 @@ class InstrumentChannelCalibrationExecution:
 
     This record does not claim that the caller-selected reference channels,
     pairing methods, tolerances, or affine family are scientifically optimal.
-    Fitted-coefficient uncertainty is not propagated.
+    Predictive uncertainty is present only when explicitly requested.
     """
 
     schema_version: str
@@ -4161,6 +4161,9 @@ class InstrumentChannelCalibrationExecution:
     applied_channels: tuple[str, ...]
     applied_source_row_indices: tuple[int, ...]
     n_applied_observations: int
+    predictive_uncertainty: (
+        InstrumentChannelCalibrationPredictiveUncertaintyOrchestration | None
+    ) = None
 
     def __post_init__(self) -> None:
         if self.schema_version != (
@@ -4296,6 +4299,37 @@ class InstrumentChannelCalibrationExecution:
                 "applied_source_row_indices."
             )
 
+        predictive_uncertainty = self.predictive_uncertainty
+        if predictive_uncertainty is not None:
+            if not isinstance(
+                predictive_uncertainty,
+                InstrumentChannelCalibrationPredictiveUncertaintyOrchestration,
+            ):
+                raise TypeError(
+                    "predictive_uncertainty must be an "
+                    "InstrumentChannelCalibrationPredictiveUncertaintyOrchestration "
+                    "instance when supplied."
+                )
+            if not predictive_uncertainty.requested:
+                raise ValueError(
+                    "Execution predictive_uncertainty must represent an "
+                    "explicitly requested propagation."
+                )
+            if predictive_uncertainty.source_row_indices != source_row_indices:
+                raise ValueError(
+                    "Execution and predictive orchestration source_row_indices "
+                    "must match exactly."
+                )
+            if (
+                predictive_uncertainty
+                .ordinary_calibrated_flux_error_available
+                != (calibrated_flux_error is not None)
+            ):
+                raise ValueError(
+                    "Predictive orchestration ordinary error availability must "
+                    "match calibrated_flux_error."
+                )
+
         object.__setattr__(
             self,
             "source_row_indices",
@@ -4326,11 +4360,16 @@ class InstrumentChannelCalibrationExecution:
             "n_applied_observations",
             n_applied_observations,
         )
+        object.__setattr__(
+            self,
+            "predictive_uncertainty",
+            predictive_uncertainty,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a strict JSON-safe execution representation."""
 
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "plan": self.plan.to_dict(),
             "source_row_indices": list(self.source_row_indices),
@@ -4356,11 +4395,22 @@ class InstrumentChannelCalibrationExecution:
             "automatic_pairing_method_selection": False,
             "automatic_time_tolerance_selection": False,
             "automatic_calibration_family_selection": False,
-            "fitted_coefficient_uncertainty_propagated": False,
+            "fitted_coefficient_uncertainty_propagated": (
+                False
+                if self.predictive_uncertainty is None
+                else (
+                    self.predictive_uncertainty
+                    .fitted_coefficient_uncertainty_propagated
+                )
+            ),
             "scientific_pairing_validation_performed": False,
             "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
         }
-
+        if self.predictive_uncertainty is not None:
+            payload["predictive_uncertainty"] = (
+                self.predictive_uncertainty.to_dict()
+            )
+        return payload
 
 def _as_finite_execution_vector(
     values: Any,
@@ -4503,11 +4553,12 @@ def execute_instrument_channel_calibration_plan(
     mutated, observational channels remain distinct, and wavelengths are not
     reassigned.
 
-    The callable performs no automatic reference-channel, pairing-method,
-    tolerance, or calibration-family selection. Dataset predictive propagation
-    is an explicit opt-in request. Its contract is defined, but execution is not
-    activated here; a supplied request raises :class:`NotImplementedError`.
-    Calibration is not integrated into :class:`pgmuvi.lightcurve.Lightcurve`.
+    Dataset predictive propagation is performed only when the caller supplies
+    an explicit :class:`InstrumentChannelCalibrationPredictiveUncertaintyRequest`.
+    Marginal or full covariance remains in per-observational-channel blocks.
+    Ordinary execution without a request preserves the existing execution-v1
+    serialization. Calibration is not integrated into
+    :class:`pgmuvi.lightcurve.Lightcurve`.
     """
 
     if predictive_uncertainty_request is not None:
@@ -4526,10 +4577,6 @@ def execute_instrument_channel_calibration_plan(
                 "InstrumentChannelCalibrationPredictiveUncertaintyRequest "
                 "when supplied."
             )
-        raise NotImplementedError(
-            "Dataset calibration predictive-uncertainty propagation is "
-            "defined but not yet activated."
-        )
 
     if not isinstance(
         plan,
@@ -4635,6 +4682,9 @@ def execute_instrument_channel_calibration_plan(
     applied_channels = []
     applied_observation_mask = np.zeros(size, dtype=bool)
 
+    predictive_group_results = []
+    predictive_represented_mask = np.zeros(size, dtype=bool)
+
     labels_for_mask = np.asarray(normalized_labels, dtype=object)
     source_indices_array = np.asarray(
         normalized_source_indices,
@@ -4656,15 +4706,13 @@ def execute_instrument_channel_calibration_plan(
                 f"{group_plan.physical_wavelength!r}."
             )
 
+        if predictive_uncertainty_request is not None:
+            predictive_represented_mask[reference_mask] = True
+
         completed_channel_plans = []
+        predictive_channel_results = []
 
         for channel_plan in group_plan.channel_plans:
-            if channel_plan.disposition is not (
-                InstrumentChannelCalibrationDisposition.PLANNED
-            ):
-                completed_channel_plans.append(channel_plan)
-                continue
-
             channel_mask = (
                 (labels_for_mask == channel_plan.channel)
                 & (
@@ -4674,10 +4722,97 @@ def execute_instrument_channel_calibration_plan(
             )
             if not np.any(channel_mask):
                 raise ValueError(
-                    "Execution input contains no rows for planned channel "
+                    "Execution input contains no rows for channel "
                     f"{channel_plan.channel!r} at wavelength "
                     f"{group_plan.physical_wavelength!r}."
                 )
+
+            channel_source_indices = tuple(
+                source_indices_array[channel_mask]
+            )
+
+            if predictive_uncertainty_request is not None:
+                predictive_represented_mask[channel_mask] = True
+
+            if channel_plan.disposition is not (
+                InstrumentChannelCalibrationDisposition.PLANNED
+            ):
+                completed_channel_plans.append(channel_plan)
+
+                if predictive_uncertainty_request is not None:
+                    if channel_plan.disposition is (
+                        InstrumentChannelCalibrationDisposition.SKIPPED
+                    ):
+                        predictive_channel_results.append(
+                            InstrumentChannelCalibrationPredictiveUncertaintyChannelResult(
+                                physical_wavelength=(
+                                    group_plan.physical_wavelength
+                                ),
+                                reference_channel=(
+                                    group_plan.reference_channel
+                                ),
+                                channel=channel_plan.channel,
+                                disposition=(
+                                    InstrumentChannelCalibrationPredictiveUncertaintyDisposition
+                                    .SKIPPED
+                                ),
+                                source_row_indices=channel_source_indices,
+                                reason=channel_plan.reason,
+                            )
+                        )
+                    else:
+                        reason = channel_plan.reason
+                        unavailable = (
+                            InstrumentChannelCalibrationPredictiveUncertainty(
+                                schema_version=(
+                                    INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION
+                                ),
+                                status=(
+                                    InstrumentChannelCalibrationPredictiveUncertaintyStatus
+                                    .UNAVAILABLE
+                                ),
+                                covariance_mode=(
+                                    predictive_uncertainty_request
+                                    .covariance_mode
+                                ),
+                                input_shape=(len(channel_source_indices),),
+                                input_measurement_uncertainty_supplied=(
+                                    normalized_error is not None
+                                ),
+                                coefficient_uncertainty_status=(
+                                    InstrumentChannelCalibrationUncertaintyStatus
+                                    .UNAVAILABLE
+                                ),
+                                coefficient_uncertainty_source=(
+                                    "dataset_orchestration_channel_unavailable"
+                                ),
+                                measurement_variance=None,
+                                offset_variance=None,
+                                scale_variance=None,
+                                offset_scale_covariance_term=None,
+                                predictive_covariance=None,
+                                reason=reason,
+                            )
+                        )
+                        predictive_channel_results.append(
+                            InstrumentChannelCalibrationPredictiveUncertaintyChannelResult(
+                                physical_wavelength=(
+                                    group_plan.physical_wavelength
+                                ),
+                                reference_channel=(
+                                    group_plan.reference_channel
+                                ),
+                                channel=channel_plan.channel,
+                                disposition=(
+                                    InstrumentChannelCalibrationPredictiveUncertaintyDisposition
+                                    .UNAVAILABLE
+                                ),
+                                source_row_indices=channel_source_indices,
+                                predictive_uncertainty=unavailable,
+                                reason=reason,
+                            )
+                        )
+                continue
 
             pairing = channel_plan.pairing
             if pairing is None:
@@ -4772,6 +4907,53 @@ def execute_instrument_channel_calibration_plan(
                 calibrated_flux[channel_mask] = transformed_flux
                 calibrated_error[channel_mask] = transformed_error
 
+            if predictive_uncertainty_request is not None:
+                _, predictive = (
+                    apply_instrument_channel_calibration_with_predictive_uncertainty(
+                        normalized_flux[channel_mask],
+                        calibration,
+                        flux_error=(
+                            None
+                            if normalized_error is None
+                            else normalized_error[channel_mask]
+                        ),
+                        covariance_mode=(
+                            predictive_uncertainty_request.covariance_mode
+                        ),
+                    )
+                )
+                if predictive.status is (
+                    InstrumentChannelCalibrationPredictiveUncertaintyStatus
+                    .AVAILABLE
+                ):
+                    predictive_disposition = (
+                        InstrumentChannelCalibrationPredictiveUncertaintyDisposition
+                        .AVAILABLE
+                    )
+                    predictive_reason = None
+                else:
+                    predictive_disposition = (
+                        InstrumentChannelCalibrationPredictiveUncertaintyDisposition
+                        .UNAVAILABLE
+                    )
+                    predictive_reason = predictive.reason
+
+                predictive_channel_results.append(
+                    InstrumentChannelCalibrationPredictiveUncertaintyChannelResult(
+                        physical_wavelength=(
+                            group_plan.physical_wavelength
+                        ),
+                        reference_channel=(
+                            group_plan.reference_channel
+                        ),
+                        channel=channel_plan.channel,
+                        disposition=predictive_disposition,
+                        source_row_indices=channel_source_indices,
+                        predictive_uncertainty=predictive,
+                        reason=predictive_reason,
+                    )
+                )
+
             completed_channel_plans.append(
                 replace(
                     channel_plan,
@@ -4789,10 +4971,45 @@ def execute_instrument_channel_calibration_plan(
             )
         )
 
+        if predictive_uncertainty_request is not None:
+            predictive_group_results.append(
+                InstrumentChannelCalibrationPredictiveUncertaintyGroupResult(
+                    physical_wavelength=(
+                        group_plan.physical_wavelength
+                    ),
+                    reference_channel=group_plan.reference_channel,
+                    reference_source_row_indices=tuple(
+                        source_indices_array[reference_mask]
+                    ),
+                    channel_results=tuple(predictive_channel_results),
+                )
+            )
+
     completed_plan = define_instrument_channel_calibration_plan(
         plan.assessment,
         tuple(completed_group_plans),
     )
+
+    predictive_uncertainty = None
+    if predictive_uncertainty_request is not None:
+        predictive_uncertainty = (
+            InstrumentChannelCalibrationPredictiveUncertaintyOrchestration(
+                schema_version=(
+                    INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_ORCHESTRATION_SCHEMA_VERSION
+                ),
+                covariance_mode=(
+                    predictive_uncertainty_request.covariance_mode
+                ),
+                source_row_indices=normalized_source_indices,
+                group_results=tuple(predictive_group_results),
+                unaffected_source_row_indices=tuple(
+                    source_indices_array[~predictive_represented_mask]
+                ),
+                ordinary_calibrated_flux_error_available=(
+                    calibrated_error is not None
+                ),
+            )
+        )
 
     return InstrumentChannelCalibrationExecution(
         schema_version=(
@@ -4813,8 +5030,8 @@ def execute_instrument_channel_calibration_plan(
         n_applied_observations=int(
             np.count_nonzero(applied_observation_mask)
         ),
+        predictive_uncertainty=predictive_uncertainty,
     )
-
 
 def _as_calibration_vector(
     values: Any,
