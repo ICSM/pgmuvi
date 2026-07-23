@@ -2,8 +2,12 @@
 
 import json
 import unittest
+from unittest.mock import patch
 
 import numpy as np
+from scipy.optimize import OptimizeResult
+
+from pgmuvi import instrument_channel_calibration
 
 from pgmuvi.instrument_channel_calibration import (
     INSTRUMENT_CHANNEL_CALIBRATION_FIT_PROVENANCE_SCHEMA_VERSION,
@@ -22,6 +26,7 @@ from pgmuvi.instrument_channel_calibration import (
     apply_instrument_channel_calibration_with_predictive_uncertainty,
     assess_instrument_channel_calibration_requirement,
     define_instrument_channel_calibration_plan,
+    estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty,
     execute_instrument_channel_calibration_plan,
     fit_instrument_channel_calibration,
     select_instrument_channel_calibration_uncertainty_estimator,
@@ -247,15 +252,24 @@ class TestCalibrationUncertaintyIntegrationContract(unittest.TestCase):
                     InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
                 )
 
-    def test_channel_errors_select_but_do_not_activate_full_objective(self):
+    def test_channel_errors_activate_full_objective(self):
         channel_flux = np.linspace(0.0, 2.0, 20)
-        reference_flux = 0.25 + 1.5 * channel_flux
+        reference_flux = (
+            0.25
+            + 1.5 * channel_flux
+            + 0.01 * np.sin(np.arange(channel_flux.size))
+        )
 
         for reference_error in (
             None,
             np.full(channel_flux.size, 0.03),
         ):
             with self.subTest(reference_error=reference_error is not None):
+                channel_error = np.linspace(
+                    0.01,
+                    0.02,
+                    channel_flux.size,
+                )
                 calibration = fit_instrument_channel_calibration(
                     reference_flux,
                     channel_flux,
@@ -263,11 +277,7 @@ class TestCalibrationUncertaintyIntegrationContract(unittest.TestCase):
                     channel="target",
                     wavelength=1.0,
                     reference_error=reference_error,
-                    channel_error=np.linspace(
-                        0.01,
-                        0.02,
-                        channel_flux.size,
-                    ),
+                    channel_error=channel_error,
                 )
                 provenance = calibration.fit_provenance
                 uncertainty = calibration.coefficient_uncertainty
@@ -280,17 +290,102 @@ class TestCalibrationUncertaintyIntegrationContract(unittest.TestCase):
                 self.assertIs(
                     provenance.integration_status,
                     InstrumentChannelCalibrationUncertaintyIntegrationStatus
-                    .DEFINED_NOT_ACTIVATED,
+                    .ACTIVE,
                 )
-                self.assertFalse(
+                self.assertTrue(
                     provenance.point_estimate_matches_uncertainty_objective
                 )
-                self.assertIn("defined but not activated", provenance.reason)
+                self.assertEqual(
+                    provenance.point_estimate_source,
+                    "pgmuvi_scale_dependent_full_objective_final_inliers",
+                )
+                self.assertEqual(
+                    provenance.point_estimate_objective,
+                    "gaussian_negative_log_likelihood_"
+                    "scale_dependent_effective_variance",
+                )
+                self.assertIsNone(provenance.reason)
                 self.assertIs(
                     uncertainty.status,
-                    InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE,
+                    InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
                 )
-                self.assertIsNone(uncertainty.coefficient_covariance)
+                self.assertIsNotNone(uncertainty.coefficient_covariance)
+
+                direct = (
+                    estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty(
+                        reference_flux,
+                        channel_flux,
+                        reference_error=reference_error,
+                        channel_error=channel_error,
+                        initial_offset=0.25,
+                        initial_scale=1.5,
+                    )
+                )
+                self.assertIs(
+                    direct.status,
+                    InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
+                )
+                np.testing.assert_allclose(
+                    (calibration.offset, calibration.scale),
+                    (direct.offset, direct.scale),
+                    rtol=1.0e-8,
+                    atol=1.0e-10,
+                )
+                np.testing.assert_allclose(
+                    uncertainty.coefficient_covariance,
+                    direct.coefficient_covariance,
+                    rtol=1.0e-7,
+                    atol=1.0e-12,
+                )
+
+    def test_optimizer_failure_retains_explicit_affine_fallback(self):
+        channel_flux = np.linspace(0.0, 2.0, 20)
+        reference_flux = 0.25 + 1.5 * channel_flux
+        failure = OptimizeResult(
+            success=False,
+            message="forced integration failure",
+            x=np.asarray([0.25, 0.0]),
+        )
+
+        with patch.object(
+            instrument_channel_calibration.optimize,
+            "minimize",
+            return_value=failure,
+        ):
+            calibration = fit_instrument_channel_calibration(
+                reference_flux,
+                channel_flux,
+                reference_channel="reference",
+                channel="target",
+                wavelength=1.0,
+                reference_error=np.full(channel_flux.size, 0.03),
+                channel_error=np.linspace(
+                    0.01,
+                    0.02,
+                    channel_flux.size,
+                ),
+            )
+
+        provenance = calibration.fit_provenance
+        uncertainty = calibration.coefficient_uncertainty
+        self.assertIs(
+            provenance.integration_status,
+            InstrumentChannelCalibrationUncertaintyIntegrationStatus
+            .ATTEMPTED_UNAVAILABLE_FALLBACK,
+        )
+        self.assertFalse(
+            provenance.point_estimate_matches_uncertainty_objective
+        )
+        self.assertIn("forced integration failure", provenance.reason)
+        self.assertIs(
+            uncertainty.status,
+            InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE,
+        )
+        self.assertIsNone(uncertainty.coefficient_covariance)
+        self.assertIn("forced integration failure", uncertainty.reason)
+        self.assertAlmostEqual(calibration.offset, 0.25, places=12)
+        self.assertAlmostEqual(calibration.scale, 1.5, places=12)
+        json.dumps(calibration.to_dict(), allow_nan=False)
 
     def test_model_count_consistency_is_enforced(self):
         fitted = fit_instrument_channel_calibration(
@@ -347,11 +442,14 @@ class TestCalibrationUncertaintyIntegrationContract(unittest.TestCase):
 
     def test_orchestration_preserves_separate_same_wavelength_provenance(self):
         times = np.tile(np.arange(4, dtype=float), 3)
-        channels = np.repeat(np.asarray(["A", "B", "C"], dtype=object), 4)
+        channels = np.repeat(
+            np.asarray(["A", "B", "C"], dtype=object),
+            4,
+        )
         wavelengths = np.ones(12, dtype=float)
         flux = np.concatenate(
             (
-                np.asarray([1.0, 3.0, 5.0, 7.0]),
+                np.asarray([1.0, 3.01, 4.99, 7.0]),
                 np.asarray([0.0, 1.0, 2.0, 3.0]),
                 np.asarray([0.5, 1.5, 2.5, 3.5]),
             )
@@ -395,13 +493,25 @@ class TestCalibrationUncertaintyIntegrationContract(unittest.TestCase):
         )
         completed = execution.plan.group_plans[0].channel_plans
 
-        self.assertEqual(tuple(item.channel for item in completed), ("B", "C"))
-        self.assertTrue(all(item.calibration is not None for item in completed))
+        self.assertEqual(
+            tuple(item.channel for item in completed),
+            ("B", "C"),
+        )
+        self.assertTrue(
+            all(item.calibration is not None for item in completed)
+        )
         self.assertTrue(
             all(
                 item.calibration.fit_provenance.integration_status
                 is InstrumentChannelCalibrationUncertaintyIntegrationStatus
-                .DEFINED_NOT_ACTIVATED
+                .ACTIVE
+                for item in completed
+            )
+        )
+        self.assertTrue(
+            all(
+                item.calibration.coefficient_uncertainty.status
+                is InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE
                 for item in completed
             )
         )
@@ -414,19 +524,30 @@ class TestCalibrationUncertaintyIntegrationContract(unittest.TestCase):
             ["B", "C"],
         )
         self.assertTrue(
-            all(item["calibration"]["fit_provenance"] for item in serialized_channels)
+            all(
+                item["calibration"]["fit_provenance"]
+                for item in serialized_channels
+            )
         )
         json.dumps(payload, allow_nan=False)
 
-    def test_predictive_boundary_remains_explicitly_unavailable(self):
+    def test_predictive_boundary_uses_activated_covariance(self):
         channel_flux = np.linspace(0.0, 2.0, 20)
         calibration = fit_instrument_channel_calibration(
-            0.25 + 1.5 * channel_flux,
+            (
+                0.25
+                + 1.5 * channel_flux
+                + 0.01 * np.sin(np.arange(channel_flux.size))
+            ),
             channel_flux,
             reference_channel="reference",
             channel="target",
             wavelength=1.0,
-            channel_error=np.linspace(0.01, 0.02, channel_flux.size),
+            channel_error=np.linspace(
+                0.01,
+                0.02,
+                channel_flux.size,
+            ),
         )
 
         _, predictive = (
@@ -443,9 +564,10 @@ class TestCalibrationUncertaintyIntegrationContract(unittest.TestCase):
 
         self.assertIs(
             predictive.status,
-            InstrumentChannelCalibrationPredictiveUncertaintyStatus.UNAVAILABLE,
+            InstrumentChannelCalibrationPredictiveUncertaintyStatus.AVAILABLE,
         )
-        self.assertIsNone(predictive.measurement_variance)
+        self.assertIsNotNone(predictive.measurement_variance)
+        self.assertIsNotNone(predictive.predictive_variance)
         self.assertEqual(
             predictive.coefficient_uncertainty_source,
             calibration.coefficient_uncertainty.uncertainty_source,

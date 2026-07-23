@@ -1228,8 +1228,8 @@ def select_instrument_channel_calibration_uncertainty_estimator(
     Reference-axis errors alone retain the existing fixed-weight covariance
     path. Any observational-channel-axis error selects the scale-dependent
     full-objective path, whether or not reference-axis errors are also present.
-    This selector defines integration routing only; it does not activate the
-    scale-dependent estimator in the affine fitter.
+    The affine fitter applies this routing and activates the selected
+    estimator after finite filtering and final-inlier selection.
     """
 
     for name, value in (
@@ -1259,8 +1259,8 @@ class InstrumentChannelCalibrationFitProvenance:
     filtering. The selected estimator is deterministic from error-axis
     participation. A scale-dependent available covariance must share the same
     full-objective optimum and final-inlier set as the reported coefficients.
-    If that estimator fails after future activation, a fallback point estimate
-    must be represented explicitly rather than paired with its covariance.
+    If that estimator fails after activation, a fallback point estimate must
+    be represented explicitly rather than paired with its covariance.
     """
 
     schema_version: str
@@ -4868,12 +4868,13 @@ def fit_instrument_channel_calibration(
 
     Notes
     -----
-    Coefficient covariance is estimated for the final fixed-weight solve,
-    conditional on the final MAD-clipped inlier set. Reference-channel
-    measurement variances are treated as known. When channel-axis errors are
-    supplied, their effective variances depend on the fitted scale, so
-    coefficient covariance is recorded as unavailable rather than using a
-    frozen-weight approximation.
+    Coefficient covariance is conditioned on the final MAD-clipped inlier set.
+    No-error and reference-error-only fits use the final fixed-weight affine
+    solve. Fits with channel-axis errors activate the scale-dependent Gaussian
+    full objective so the reported offset, scale, and inverse observed-Hessian
+    covariance share one optimum. If that optimization is unavailable, the
+    iterative scale-frozen affine estimate is retained with explicit fallback
+    provenance and unavailable coefficient covariance.
     """
 
     if isinstance(min_pairs, bool) or not isinstance(min_pairs, int):
@@ -5109,23 +5110,23 @@ def fit_instrument_channel_calibration(
         reference[keep]
         - (offset + scale * target[keep])
     )
-    coefficient_uncertainty = _estimate_affine_coefficient_uncertainty(
-        target[keep],
-        final_residual,
-        final_weights,
-        measurement_errors_supplied=(
-            reference_sigma is not None or channel_sigma is not None
-        ),
-        channel_errors_supplied=channel_sigma is not None,
-    )
-
     selected_uncertainty_estimator = (
         select_instrument_channel_calibration_uncertainty_estimator(
             reference_error_supplied=reference_sigma is not None,
             channel_error_supplied=channel_sigma is not None,
         )
     )
+
     if channel_sigma is None:
+        coefficient_uncertainty = _estimate_affine_coefficient_uncertainty(
+            target[keep],
+            final_residual,
+            final_weights,
+            measurement_errors_supplied=(
+                reference_sigma is not None
+            ),
+            channel_errors_supplied=False,
+        )
         integration_status = (
             InstrumentChannelCalibrationUncertaintyIntegrationStatus.ACTIVE
         )
@@ -5134,22 +5135,96 @@ def fit_instrument_channel_calibration(
         point_estimate_matches_uncertainty_objective = True
         integration_reason = None
     else:
-        integration_status = (
-            InstrumentChannelCalibrationUncertaintyIntegrationStatus
-            .DEFINED_NOT_ACTIVATED
+        scale_dependent_estimate = (
+            estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty(
+                reference[keep],
+                target[keep],
+                reference_error=(
+                    None
+                    if reference_sigma is None
+                    else reference_sigma[keep]
+                ),
+                channel_error=channel_sigma[keep],
+                initial_offset=offset,
+                initial_scale=scale,
+            )
         )
-        point_estimate_source = (
-            "pgmuvi_iterative_mad_clipped_affine_fallback_final_inliers"
-        )
-        point_estimate_objective = (
-            "iterative_scale_frozen_weighted_least_squares"
-        )
-        point_estimate_matches_uncertainty_objective = False
-        integration_reason = (
-            "Scale-dependent full-objective fitter integration is defined "
-            "but not activated; the reported coefficients remain the "
-            "iterative scale-frozen weighted affine point estimate."
-        )
+
+        if (
+            scale_dependent_estimate.status
+            is InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE
+        ):
+            offset = float(scale_dependent_estimate.offset)
+            scale = float(scale_dependent_estimate.scale)
+            final_residual = (
+                reference[keep]
+                - (offset + scale * target[keep])
+            )
+            coefficient_uncertainty = (
+                InstrumentChannelCalibrationCoefficientUncertainty(
+                    schema_version=(
+                        INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+                    ),
+                    status=(
+                        InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE
+                    ),
+                    uncertainty_source=(
+                        scale_dependent_estimate.uncertainty_source
+                    ),
+                    coefficient_covariance=(
+                        scale_dependent_estimate.coefficient_covariance
+                    ),
+                    estimation_method=(
+                        "inverse_observed_hessian_"
+                        "scale_dependent_full_objective"
+                    ),
+                )
+            )
+            integration_status = (
+                InstrumentChannelCalibrationUncertaintyIntegrationStatus.ACTIVE
+            )
+            point_estimate_source = (
+                "pgmuvi_scale_dependent_full_objective_final_inliers"
+            )
+            point_estimate_objective = (
+                "gaussian_negative_log_likelihood_"
+                "scale_dependent_effective_variance"
+            )
+            point_estimate_matches_uncertainty_objective = True
+            integration_reason = None
+        else:
+            estimator_reason = scale_dependent_estimate.reason
+            integration_reason = (
+                "Scale-dependent full-objective optimization was attempted "
+                "on the final inlier set but coefficient uncertainty is "
+                f"unavailable: {estimator_reason}"
+            )
+            coefficient_uncertainty = (
+                InstrumentChannelCalibrationCoefficientUncertainty(
+                    schema_version=(
+                        INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION
+                    ),
+                    status=(
+                        InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE
+                    ),
+                    uncertainty_source=(
+                        scale_dependent_estimate.uncertainty_source
+                    ),
+                    coefficient_covariance=None,
+                    reason=integration_reason,
+                )
+            )
+            integration_status = (
+                InstrumentChannelCalibrationUncertaintyIntegrationStatus
+                .ATTEMPTED_UNAVAILABLE_FALLBACK
+            )
+            point_estimate_source = (
+                "pgmuvi_iterative_mad_clipped_affine_fallback_final_inliers"
+            )
+            point_estimate_objective = (
+                "iterative_scale_frozen_weighted_least_squares"
+            )
+            point_estimate_matches_uncertainty_objective = False
 
     fit_provenance = InstrumentChannelCalibrationFitProvenance(
         schema_version=(
