@@ -146,20 +146,31 @@ class TestInstrumentChannelCalibrationOrchestrationExecution(
             result.schema_version,
             INSTRUMENT_CHANNEL_CALIBRATION_EXECUTION_SCHEMA_VERSION,
         )
+        completed = result.plan.group_plans[0].channel_plans[0]
+        self.assertIsNotNone(completed.pairing)
+        self.assertIsNotNone(completed.calibration)
+        calibration = completed.calibration
+
+        expected_flux = original_flux.copy()
+        expected_flux[3:] = (
+            calibration.offset
+            + calibration.scale * original_flux[3:]
+        )
+        expected_error = original_error.copy()
+        expected_error[3:] = (
+            abs(calibration.scale) * original_error[3:]
+        )
         np.testing.assert_allclose(
             result.calibrated_flux,
-            [3.0, 5.0, 7.0, 3.0, 5.0, 7.0],
+            expected_flux,
         )
         np.testing.assert_allclose(
             result.calibrated_flux_error,
-            [0.3, 0.3, 0.3, 0.2, 0.2, 0.2],
+            expected_error,
         )
         np.testing.assert_array_equal(flux, original_flux)
         np.testing.assert_array_equal(error, original_error)
 
-        completed = result.plan.group_plans[0].channel_plans[0]
-        self.assertIsNotNone(completed.pairing)
-        self.assertIsNotNone(completed.calibration)
         self.assertEqual(
             completed.pairing.reference_row_indices,
             (10, 20, 30),
@@ -169,12 +180,16 @@ class TestInstrumentChannelCalibrationOrchestrationExecution(
             (40, 50, 60),
         )
         self.assertEqual(
-            completed.calibration.coefficient_uncertainty.status.value,
-            "unavailable",
+            calibration.coefficient_uncertainty.status.value,
+            "available",
         )
-        self.assertIn(
-            "scale-dependent effective variances",
-            completed.calibration.coefficient_uncertainty.reason,
+        self.assertEqual(
+            calibration.coefficient_uncertainty.estimation_method,
+            "inverse_observed_hessian_scale_dependent_full_objective",
+        )
+        self.assertEqual(
+            calibration.fit_provenance.integration_status.value,
+            "active",
         )
         self.assertEqual(result.applied_channels, ("B",))
         self.assertEqual(

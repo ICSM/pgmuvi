@@ -82,12 +82,11 @@ by the residual variance
 known-variance weighted normal-matrix inverse without residual-variance
 rescaling.
 
-Coefficient covariance is unavailable when channel-axis errors are supplied.
-Those errors produce effective residual variances that depend on the fitted
-scale, while the current iterative weighting procedure does not expose a
-full-objective Hessian or estimating-equation covariance for that dependence.
-PGMUVI therefore records an explicit unavailable reason rather than presenting
-a frozen-weight normal-matrix inverse as uncertainty for the complete
+When channel-axis errors are supplied, the fitter activates the dedicated
+scale-dependent full objective after selecting its final MAD-clipped inlier set.
+The reported offset, scale, and coefficient covariance then come from the same
+converged optimum, and covariance is the inverse observed Hessian of that
+objective.  A frozen-weight normal-matrix inverse is not substituted for this
 estimator.
 
 Scale-dependent channel-axis uncertainty contract
@@ -97,9 +96,8 @@ Scale-dependent channel-axis uncertainty contract
 defines the immutable JSON-safe result of the dedicated
 :func:`~pgmuvi.instrument_channel_calibration.estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty`
 low-level callable.  The estimator is implemented with analytic objective
-derivatives and a log-scale parameterization, while the current affine fitter
-continues to report coefficient uncertainty as unavailable whenever
-channel-axis errors are supplied.
+derivatives and a log-scale parameterization and is activated by the affine
+fitter whenever channel-axis errors participate in the final fit.
 
 For final-inlier paired values, the estimator minimizes the Gaussian
 negative log likelihood
@@ -155,15 +153,18 @@ and whether the point estimate and covariance share one objective optimum.
 The nested ``coefficient_uncertainty`` field remains the sole source of
 coefficient covariance in fixed order ``offset, scale``.
 
-Scale-dependent activation remains deliberately disabled in the affine fitter.
-For current fits with observational-channel-axis errors, provenance reports
-``defined_not_activated`` and identifies the reported coefficients as the
-iterative scale-frozen weighted affine fallback.  Coefficient covariance stays
-explicitly unavailable.  Future successful activation must report the offset,
-scale, objective, covariance, and final-inlier conditioning from the same
-full-objective optimum.  If future optimization fails, a retained affine point
-estimate must use the explicit ``attempted_unavailable_fallback`` status rather
-than being paired with covariance from a different optimum.
+Scale-dependent activation is now implemented in the affine fitter.  For
+successful fits with observational-channel-axis errors, provenance reports
+``active`` and identifies the full-objective optimum as the common source of the
+reported offset, scale, and covariance.  The covariance remains conditioned on
+the exact final MAD-clipped inlier set.
+
+``defined_not_activated`` remains a stable contract value for records produced
+before activation or by external callers.  If full-objective optimization is
+attempted but unavailable, the fitter retains its iterative scale-frozen affine
+point estimate, records ``attempted_unavailable_fallback``, and leaves
+coefficient covariance explicitly unavailable rather than pairing fallback
+coefficients with covariance from a different optimum.
 
 Dataset orchestration already preserves complete per-observational-channel
 calibration records, so this provenance remains separate for channels that
@@ -246,9 +247,10 @@ and derived standard deviation.  ``full_covariance`` additionally records
 correlations between predictions that share fitted coefficients.  Scalar input
 uses ``input_shape=()``; array results preserve their original shape.
 
-Unavailable coefficient covariance, including current fits with
-scale-dependent channel-axis errors, produces an explicit ``unavailable``
-result with no numerical predictive uncertainty.  There is no silent fallback
+Unavailable coefficient covariance, including an attempted scale-dependent
+optimization that falls back to the iterative affine estimate, produces an
+explicit ``unavailable`` result with no numerical predictive uncertainty.
+There is no silent fallback
 to measurement-only uncertainty.  Predictive propagation is implemented only
 in the dedicated application callable; current dataset orchestration continues
 to record that propagation was not requested or performed.  The stable future
@@ -264,8 +266,6 @@ still lacks:
 
 * scientifically validated instrument-specific rules for choosing
   pairing methods and tolerances;
-* fitter and orchestration activation of scale-dependent channel-axis
-  coefficient uncertainty;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.
 

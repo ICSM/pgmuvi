@@ -124,13 +124,13 @@ Wavelength-model extensions
     marginal or full-covariance predictive propagation without orchestration
     activation, and implements the dedicated full-objective
     observed-Hessian estimator for scale-dependent channel-axis coefficient
-    uncertainty, and defines deterministic fitter routing, exact final-inlier
-    provenance, consistent point-estimate/covariance semantics, fallback status,
-    and orchestration preservation without activating the estimator in the
-    fitter or orchestration layer.  This does not close the marker:
-    scientifically validated instrument-specific tolerance guidance, fitter and
-    orchestration activation, workflow integration, and representative
-    calibration validation remain future work.
+    uncertainty, defines deterministic fitter routing, exact final-inlier
+    provenance, consistent point-estimate/covariance semantics and fallback
+    status, and activates the scale-dependent full-objective estimator in the
+    affine fitter and dataset orchestration while preserving separate
+    observational-channel records.  This does not close the marker:
+    scientifically validated instrument-specific tolerance guidance, workflow
+    integration, and representative calibration validation remain future work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

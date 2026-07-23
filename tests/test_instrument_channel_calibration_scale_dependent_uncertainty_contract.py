@@ -200,9 +200,13 @@ class TestScaleDependentUncertaintyEstimateContract(unittest.TestCase):
         self.assertTrue(result.optimizer_converged)
         self.assertTrue(result.to_dict()["implemented"])
 
-    def test_current_fitter_boundary_remains_unavailable(self):
+    def test_fitter_activates_scale_dependent_full_objective(self):
         channel_flux = np.linspace(0.0, 2.0, 20)
-        reference_flux = 0.25 + 1.5 * channel_flux
+        reference_flux = (
+            0.25
+            + 1.5 * channel_flux
+            + 0.01 * np.sin(np.arange(channel_flux.size))
+        )
 
         calibration = fit_instrument_channel_calibration(
             reference_flux,
@@ -217,12 +221,20 @@ class TestScaleDependentUncertaintyEstimateContract(unittest.TestCase):
         uncertainty = calibration.coefficient_uncertainty
         self.assertEqual(
             uncertainty.status,
-            InstrumentChannelCalibrationUncertaintyStatus.UNAVAILABLE,
+            InstrumentChannelCalibrationUncertaintyStatus.AVAILABLE,
         )
-        self.assertIsNone(uncertainty.coefficient_covariance)
-        self.assertIn(
-            "current affine fitter does not expose a covariance estimator",
-            uncertainty.reason,
+        self.assertIsNotNone(uncertainty.coefficient_covariance)
+        self.assertEqual(
+            uncertainty.estimation_method,
+            "inverse_observed_hessian_scale_dependent_full_objective",
+        )
+        self.assertEqual(
+            calibration.fit_provenance.integration_status.value,
+            "active",
+        )
+        self.assertTrue(
+            calibration.fit_provenance
+            .point_estimate_matches_uncertainty_objective
         )
 
 

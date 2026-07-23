@@ -142,12 +142,13 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             normalized,
         )
         self.assertIn(
-            "Coefficient covariance is unavailable when channel-axis errors "
-            "are supplied",
+            "When channel-axis errors are supplied, the fitter activates the "
+            "dedicated scale-dependent full objective",
             normalized,
         )
         self.assertIn(
-            "does not expose a full-objective Hessian",
+            "reported offset, scale, and coefficient covariance then come "
+            "from the same converged optimum",
             normalized,
         )
         self.assertIn(
@@ -197,6 +198,10 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         )
         self.assertIn("defined_not_activated", text)
         self.assertIn("attempted_unavailable_fallback", text)
+        self.assertIn(
+            "Scale-dependent activation is now implemented",
+            normalized,
+        )
         self.assertIn(
             "sole source of coefficient covariance",
             normalized,
@@ -264,13 +269,13 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "without activating the estimator in the fitter or orchestration "
-            "layer",
+            "activates the scale-dependent full-objective estimator in the "
+            "affine fitter and dataset orchestration",
             text,
         )
         self.assertIn("deterministic fitter routing", text)
         self.assertIn("exact final-inlier provenance", text)
-        self.assertIn("fitter and orchestration activation", text)
+        self.assertNotIn("fitter and orchestration activation", text)
         self.assertNotIn(
             "predictive-propagation implementation",
             text,
