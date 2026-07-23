@@ -51,6 +51,9 @@ INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-predictive-uncertainty-v1"
 )
+INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_ORCHESTRATION_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-calibration-predictive-orchestration-v1"
+)
 
 
 __all__ = [
@@ -58,6 +61,7 @@ __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_FIT_PROVENANCE_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_ORCHESTRATION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_UNCERTAINTY_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_SCALE_DEPENDENT_UNCERTAINTY_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
@@ -75,7 +79,11 @@ __all__ = [
     "InstrumentChannelCalibrationPlan",
     "InstrumentChannelCalibrationPredictiveCovarianceMode",
     "InstrumentChannelCalibrationPredictiveUncertainty",
+    "InstrumentChannelCalibrationPredictiveUncertaintyChannelResult",
     "InstrumentChannelCalibrationPredictiveUncertaintyDisposition",
+    "InstrumentChannelCalibrationPredictiveUncertaintyGroupResult",
+    "InstrumentChannelCalibrationPredictiveUncertaintyOrchestration",
+    "InstrumentChannelCalibrationPredictiveUncertaintyRequest",
     "InstrumentChannelCalibrationPredictiveUncertaintyStatus",
     "InstrumentChannelCalibrationScaleDependentUncertaintyEstimate",
     "InstrumentChannelCalibrationStatus",
@@ -2718,6 +2726,670 @@ class InstrumentChannelCalibrationPredictiveUncertainty:
         }
 
 
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationPredictiveUncertaintyRequest:
+    """Explicit opt-in request for dataset predictive propagation.
+
+    Absence of this object means propagation was not requested.  Supplying a
+    request selects either marginal variance or per-observational-channel full
+    covariance.  Full covariance is never represented as one global dense
+    dataset matrix.
+    """
+
+    covariance_mode: InstrumentChannelCalibrationPredictiveCovarianceMode | str
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_ORCHESTRATION_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_ORCHESTRATION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel calibration predictive "
+                f"orchestration schema version: {self.schema_version!r}."
+            )
+        if isinstance(self.covariance_mode, (bool, np.bool_)):
+            raise TypeError(
+                "covariance_mode must be a predictive covariance mode, "
+                "not boolean."
+            )
+        mode = self.covariance_mode
+        if not isinstance(
+            mode,
+            InstrumentChannelCalibrationPredictiveCovarianceMode,
+        ):
+            try:
+                mode = InstrumentChannelCalibrationPredictiveCovarianceMode(
+                    str(mode)
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported predictive covariance mode: "
+                    f"{self.covariance_mode!r}."
+                ) from exc
+        object.__setattr__(self, "covariance_mode", mode)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe request representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "requested": True,
+            "covariance_mode": self.covariance_mode.value,
+            "full_covariance_scope": (
+                "per_observational_channel"
+                if self.covariance_mode
+                is InstrumentChannelCalibrationPredictiveCovarianceMode
+                .FULL_COVARIANCE
+                else None
+            ),
+            "global_dense_covariance_requested": False,
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationPredictiveUncertaintyChannelResult:
+    """Predictive-propagation disposition for one non-reference channel."""
+
+    physical_wavelength: float
+    reference_channel: str
+    channel: str
+    disposition: (
+        InstrumentChannelCalibrationPredictiveUncertaintyDisposition | str
+    )
+    source_row_indices: tuple[int, ...]
+    predictive_uncertainty: (
+        InstrumentChannelCalibrationPredictiveUncertainty | None
+    ) = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        wavelength = float(self.physical_wavelength)
+        if not math.isfinite(wavelength):
+            raise ValueError("physical_wavelength must be finite.")
+        reference_channel = _normalize_calibration_channel(
+            self.reference_channel,
+            name="reference_channel",
+        )
+        channel = _normalize_calibration_channel(
+            self.channel,
+            name="channel",
+        )
+        if channel == reference_channel:
+            raise ValueError(
+                "channel and reference_channel must identify different "
+                "observational channels."
+            )
+        if isinstance(self.disposition, (bool, np.bool_)):
+            raise TypeError(
+                "disposition must be a predictive uncertainty disposition, "
+                "not boolean."
+            )
+        disposition = self.disposition
+        if not isinstance(
+            disposition,
+            InstrumentChannelCalibrationPredictiveUncertaintyDisposition,
+        ):
+            try:
+                disposition = (
+                    InstrumentChannelCalibrationPredictiveUncertaintyDisposition(
+                        str(disposition)
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported predictive uncertainty disposition: "
+                    f"{self.disposition!r}."
+                ) from exc
+        indices = InstrumentChannelPairing._normalize_indices(
+            self.source_row_indices,
+            name="source_row_indices",
+        )
+        if len(set(indices)) != len(indices):
+            raise ValueError(
+                "source_row_indices must not identify the same source row "
+                "more than once."
+            )
+        if not indices:
+            raise ValueError(
+                "A channel predictive result requires at least one source row."
+            )
+        reason = self.reason
+        if reason is not None:
+            if not isinstance(reason, str):
+                raise TypeError("reason must be a string when supplied.")
+            reason = reason.strip()
+            if not reason:
+                raise ValueError("reason must be non-empty when supplied.")
+        predictive = self.predictive_uncertainty
+
+        if disposition is (
+            InstrumentChannelCalibrationPredictiveUncertaintyDisposition.AVAILABLE
+        ):
+            if not isinstance(
+                predictive,
+                InstrumentChannelCalibrationPredictiveUncertainty,
+            ):
+                raise ValueError(
+                    "An available channel result requires predictive_uncertainty."
+                )
+            if predictive.status is not (
+                InstrumentChannelCalibrationPredictiveUncertaintyStatus.AVAILABLE
+            ):
+                raise ValueError(
+                    "An available channel result requires available predictive "
+                    "uncertainty."
+                )
+            if predictive.input_shape != (len(indices),):
+                raise ValueError(
+                    "predictive_uncertainty input_shape must match the channel "
+                    "source-row count."
+                )
+            if reason is not None:
+                raise ValueError(
+                    "An available channel result must not carry a reason."
+                )
+        elif disposition is (
+            InstrumentChannelCalibrationPredictiveUncertaintyDisposition.UNAVAILABLE
+        ):
+            if not isinstance(
+                predictive,
+                InstrumentChannelCalibrationPredictiveUncertainty,
+            ):
+                raise ValueError(
+                    "An unavailable channel result requires an explicit "
+                    "predictive_uncertainty record."
+                )
+            if predictive.status is not (
+                InstrumentChannelCalibrationPredictiveUncertaintyStatus.UNAVAILABLE
+            ):
+                raise ValueError(
+                    "An unavailable channel result requires unavailable "
+                    "predictive uncertainty."
+                )
+            if predictive.input_shape != (len(indices),):
+                raise ValueError(
+                    "predictive_uncertainty input_shape must match the channel "
+                    "source-row count."
+                )
+            if reason is None or predictive.reason != reason:
+                raise ValueError(
+                    "Unavailable channel reason must match the nested predictive "
+                    "uncertainty reason."
+                )
+        else:
+            if predictive is not None:
+                raise ValueError(
+                    "not_requested and skipped channel results must not carry "
+                    "predictive_uncertainty."
+                )
+            if disposition is (
+                InstrumentChannelCalibrationPredictiveUncertaintyDisposition.SKIPPED
+            ):
+                if reason is None:
+                    raise ValueError(
+                        "A skipped channel result requires a reason."
+                    )
+            elif reason is not None:
+                raise ValueError(
+                    "A not_requested channel result must not carry a reason."
+                )
+
+        object.__setattr__(self, "physical_wavelength", wavelength)
+        object.__setattr__(self, "reference_channel", reference_channel)
+        object.__setattr__(self, "channel", channel)
+        object.__setattr__(self, "disposition", disposition)
+        object.__setattr__(self, "source_row_indices", indices)
+        object.__setattr__(self, "reason", reason)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe per-channel representation."""
+
+        return {
+            "physical_wavelength": self.physical_wavelength,
+            "reference_channel": self.reference_channel,
+            "channel": self.channel,
+            "disposition": self.disposition.value,
+            "source_row_indices": list(self.source_row_indices),
+            "predictive_uncertainty": (
+                None
+                if self.predictive_uncertainty is None
+                else self.predictive_uncertainty.to_dict()
+            ),
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationPredictiveUncertaintyGroupResult:
+    """Predictive results for distinct channels at one physical wavelength."""
+
+    physical_wavelength: float
+    reference_channel: str
+    reference_source_row_indices: tuple[int, ...]
+    channel_results: tuple[
+        InstrumentChannelCalibrationPredictiveUncertaintyChannelResult,
+        ...,
+    ]
+
+    def __post_init__(self) -> None:
+        wavelength = float(self.physical_wavelength)
+        if not math.isfinite(wavelength):
+            raise ValueError("physical_wavelength must be finite.")
+        reference_channel = _normalize_calibration_channel(
+            self.reference_channel,
+            name="reference_channel",
+        )
+        reference_indices = InstrumentChannelPairing._normalize_indices(
+            self.reference_source_row_indices,
+            name="reference_source_row_indices",
+        )
+        if not reference_indices:
+            raise ValueError(
+                "A predictive group requires at least one reference source row."
+            )
+        if len(set(reference_indices)) != len(reference_indices):
+            raise ValueError(
+                "reference_source_row_indices must not contain duplicates."
+            )
+        channel_results = tuple(self.channel_results)
+        if not channel_results:
+            raise ValueError(
+                "A predictive group requires at least one non-reference "
+                "channel result."
+            )
+        if any(
+            not isinstance(
+                result,
+                InstrumentChannelCalibrationPredictiveUncertaintyChannelResult,
+            )
+            for result in channel_results
+        ):
+            raise TypeError(
+                "channel_results must contain only predictive channel results."
+            )
+        channels = tuple(result.channel for result in channel_results)
+        if len(set(channels)) != len(channels):
+            raise ValueError(
+                "Each observational channel may appear only once in a "
+                "predictive group."
+            )
+        for result in channel_results:
+            if result.physical_wavelength != wavelength:
+                raise ValueError(
+                    "Channel-result physical wavelength must match the group."
+                )
+            if result.reference_channel != reference_channel:
+                raise ValueError(
+                    "Channel-result reference channel must match the group."
+                )
+        all_indices = [*reference_indices]
+        for result in channel_results:
+            all_indices.extend(result.source_row_indices)
+        if len(set(all_indices)) != len(all_indices):
+            raise ValueError(
+                "Reference and non-reference channel results must describe "
+                "disjoint source rows."
+            )
+
+        object.__setattr__(self, "physical_wavelength", wavelength)
+        object.__setattr__(self, "reference_channel", reference_channel)
+        object.__setattr__(
+            self,
+            "reference_source_row_indices",
+            reference_indices,
+        )
+        object.__setattr__(
+            self,
+            "channel_results",
+            tuple(sorted(channel_results, key=lambda item: item.channel)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe group representation."""
+
+        return {
+            "physical_wavelength": self.physical_wavelength,
+            "reference_channel": self.reference_channel,
+            "reference_source_row_indices": list(
+                self.reference_source_row_indices
+            ),
+            "reference_channel_fitted_coefficient_uncertainty_disposition": (
+                "not_applicable"
+            ),
+            "channel_results": [
+                result.to_dict() for result in self.channel_results
+            ],
+            "channel_merging_performed": False,
+            "physical_wavelength_used_as_covariance_identity": False,
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationPredictiveUncertaintyOrchestration:
+    """Dataset-level contract for predictive propagation results.
+
+    Dataset rows are partitioned among reference rows, non-reference channel
+    results, and unaffected rows.  Numerical predictive uncertainty remains
+    channel-local; missing values are represented structurally rather than by
+    NaN-filled dataset arrays.
+    """
+
+    schema_version: str
+    covariance_mode: (
+        InstrumentChannelCalibrationPredictiveCovarianceMode | str | None
+    )
+    source_row_indices: tuple[int, ...]
+    group_results: tuple[
+        InstrumentChannelCalibrationPredictiveUncertaintyGroupResult,
+        ...,
+    ]
+    unaffected_source_row_indices: tuple[int, ...]
+    ordinary_calibrated_flux_error_available: bool
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_ORCHESTRATION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel calibration predictive "
+                f"orchestration schema version: {self.schema_version!r}."
+            )
+        mode = self.covariance_mode
+        if isinstance(mode, (bool, np.bool_)):
+            raise TypeError(
+                "covariance_mode must be a predictive covariance mode or None, "
+                "not boolean."
+            )
+        if mode is not None and not isinstance(
+            mode,
+            InstrumentChannelCalibrationPredictiveCovarianceMode,
+        ):
+            try:
+                mode = InstrumentChannelCalibrationPredictiveCovarianceMode(
+                    str(mode)
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported predictive covariance mode: "
+                    f"{self.covariance_mode!r}."
+                ) from exc
+        raw_source_indices = tuple(self.source_row_indices)
+        source_indices = _normalize_pairing_source_indices(
+            raw_source_indices,
+            size=len(raw_source_indices),
+            name="source_row_indices",
+        )
+        unaffected_indices = InstrumentChannelPairing._normalize_indices(
+            self.unaffected_source_row_indices,
+            name="unaffected_source_row_indices",
+        )
+        if len(set(unaffected_indices)) != len(unaffected_indices):
+            raise ValueError(
+                "unaffected_source_row_indices must not contain duplicates."
+            )
+        if not isinstance(
+            self.ordinary_calibrated_flux_error_available,
+            (bool, np.bool_),
+        ):
+            raise TypeError(
+                "ordinary_calibrated_flux_error_available must be boolean."
+            )
+        group_results = tuple(self.group_results)
+        if any(
+            not isinstance(
+                group,
+                InstrumentChannelCalibrationPredictiveUncertaintyGroupResult,
+            )
+            for group in group_results
+        ):
+            raise TypeError(
+                "group_results must contain only predictive group results."
+            )
+        wavelengths = tuple(
+            group.physical_wavelength for group in group_results
+        )
+        if len(set(wavelengths)) != len(wavelengths):
+            raise ValueError(
+                "Each physical wavelength may appear only once in group_results."
+            )
+        all_group_channels = tuple(
+            channel
+            for group in group_results
+            for channel in (
+                group.reference_channel,
+                *(result.channel for result in group.channel_results),
+            )
+        )
+        if len(set(all_group_channels)) != len(all_group_channels):
+            raise ValueError(
+                "Each observational channel may appear in only one predictive "
+                "orchestration group."
+            )
+        channel_results = tuple(
+            result
+            for group in group_results
+            for result in group.channel_results
+        )
+        if mode is None:
+            invalid = tuple(
+                result.disposition
+                for result in channel_results
+                if result.disposition
+                not in (
+                    InstrumentChannelCalibrationPredictiveUncertaintyDisposition
+                    .NOT_REQUESTED,
+                    InstrumentChannelCalibrationPredictiveUncertaintyDisposition
+                    .SKIPPED,
+                )
+            )
+            if invalid:
+                raise ValueError(
+                    "A not-requested orchestration result may contain only "
+                    "not_requested or skipped channel dispositions."
+                )
+        else:
+            if any(
+                result.disposition is (
+                    InstrumentChannelCalibrationPredictiveUncertaintyDisposition
+                    .NOT_REQUESTED
+                )
+                for result in channel_results
+            ):
+                raise ValueError(
+                    "A requested orchestration result cannot contain a "
+                    "not_requested channel disposition."
+                )
+            for result in channel_results:
+                predictive = result.predictive_uncertainty
+                if predictive is not None and predictive.covariance_mode is not mode:
+                    raise ValueError(
+                        "Per-channel predictive covariance mode must match the "
+                        "dataset request."
+                    )
+        represented_indices = [*unaffected_indices]
+        for group in group_results:
+            represented_indices.extend(group.reference_source_row_indices)
+            for result in group.channel_results:
+                represented_indices.extend(result.source_row_indices)
+        if len(set(represented_indices)) != len(represented_indices):
+            raise ValueError(
+                "Predictive orchestration row partitions must be disjoint."
+            )
+        if set(represented_indices) != set(source_indices):
+            raise ValueError(
+                "Reference, channel, and unaffected source rows must partition "
+                "source_row_indices exactly."
+            )
+        source_position = {
+            source_index: position
+            for position, source_index in enumerate(source_indices)
+        }
+        ordered_partitions = [
+            ("unaffected_source_row_indices", unaffected_indices),
+        ]
+        for group in group_results:
+            ordered_partitions.append(
+                (
+                    "reference_source_row_indices",
+                    group.reference_source_row_indices,
+                )
+            )
+            ordered_partitions.extend(
+                ("channel source_row_indices", result.source_row_indices)
+                for result in group.channel_results
+            )
+        for name, partition in ordered_partitions:
+            positions = tuple(source_position[index] for index in partition)
+            if positions != tuple(sorted(positions)):
+                raise ValueError(
+                    f"{name} must preserve original dataset row order."
+                )
+
+        object.__setattr__(self, "covariance_mode", mode)
+        object.__setattr__(self, "source_row_indices", source_indices)
+        object.__setattr__(
+            self,
+            "group_results",
+            tuple(
+                sorted(
+                    group_results,
+                    key=lambda item: item.physical_wavelength,
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "unaffected_source_row_indices",
+            unaffected_indices,
+        )
+        object.__setattr__(
+            self,
+            "ordinary_calibrated_flux_error_available",
+            bool(self.ordinary_calibrated_flux_error_available),
+        )
+
+    @property
+    def requested(self) -> bool:
+        """Return whether fitted-coefficient propagation was requested."""
+
+        return self.covariance_mode is not None
+
+    @property
+    def channel_results(
+        self,
+    ) -> tuple[
+        InstrumentChannelCalibrationPredictiveUncertaintyChannelResult,
+        ...,
+    ]:
+        """Return all non-reference channel results."""
+
+        return tuple(
+            result
+            for group in self.group_results
+            for result in group.channel_results
+        )
+
+    def _count(
+        self,
+        disposition: InstrumentChannelCalibrationPredictiveUncertaintyDisposition,
+    ) -> int:
+        return sum(
+            result.disposition is disposition
+            for result in self.channel_results
+        )
+
+    @property
+    def n_available_channels(self) -> int:
+        return self._count(
+            InstrumentChannelCalibrationPredictiveUncertaintyDisposition.AVAILABLE
+        )
+
+    @property
+    def n_unavailable_channels(self) -> int:
+        return self._count(
+            InstrumentChannelCalibrationPredictiveUncertaintyDisposition.UNAVAILABLE
+        )
+
+    @property
+    def n_skipped_channels(self) -> int:
+        return self._count(
+            InstrumentChannelCalibrationPredictiveUncertaintyDisposition.SKIPPED
+        )
+
+    @property
+    def n_not_requested_channels(self) -> int:
+        return self._count(
+            InstrumentChannelCalibrationPredictiveUncertaintyDisposition
+            .NOT_REQUESTED
+        )
+
+    @property
+    def all_eligible_channels_available(self) -> bool:
+        eligible = self.n_available_channels + self.n_unavailable_channels
+        return self.requested and eligible > 0 and self.n_unavailable_channels == 0
+
+    @property
+    def fitted_coefficient_uncertainty_propagated(self) -> bool:
+        """Return true when at least one channel has an available result."""
+
+        return self.n_available_channels > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe dataset-level representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "requested": self.requested,
+            "covariance_mode": (
+                None
+                if self.covariance_mode is None
+                else self.covariance_mode.value
+            ),
+            "source_row_indices": list(self.source_row_indices),
+            "group_results": [
+                group.to_dict() for group in self.group_results
+            ],
+            "unaffected_source_row_indices": list(
+                self.unaffected_source_row_indices
+            ),
+            "n_available_channels": self.n_available_channels,
+            "n_unavailable_channels": self.n_unavailable_channels,
+            "n_skipped_channels": self.n_skipped_channels,
+            "n_not_requested_channels": self.n_not_requested_channels,
+            "any_predictive_uncertainty_available": (
+                self.n_available_channels > 0
+            ),
+            "all_eligible_channels_available": (
+                self.all_eligible_channels_available
+            ),
+            "ordinary_calibrated_flux_error_available": (
+                self.ordinary_calibrated_flux_error_available
+            ),
+            "predictive_standard_deviation_blocks_available": (
+                self.n_available_channels > 0
+            ),
+            "predictive_covariance_blocks_available": (
+                self.covariance_mode
+                is InstrumentChannelCalibrationPredictiveCovarianceMode
+                .FULL_COVARIANCE
+                and self.n_available_channels > 0
+            ),
+            "global_predictive_standard_deviation_emitted": False,
+            "global_dense_predictive_covariance_emitted": False,
+            "cross_observational_channel_covariance_emitted": False,
+            "cross_observational_channel_covariance_assumed_zero": False,
+            "fitted_coefficient_uncertainty_propagated": (
+                self.fitted_coefficient_uncertainty_propagated
+            ),
+            "measurement_coefficient_independence_assumed": True,
+            "coefficient_order": ["offset", "scale"],
+            "row_alignment": "original_dataset_source_row_indices",
+            "missing_values_represented_by_nan": False,
+        }
+
+
 INSTRUMENT_CHANNEL_CALIBRATION_MODEL_SCHEMA_VERSION = "2.0"
 
 
@@ -3814,6 +4486,9 @@ def execute_instrument_channel_calibration_plan(
     *,
     flux_error: Any | None = None,
     source_row_indices: Any | None = None,
+    predictive_uncertainty_request: (
+        InstrumentChannelCalibrationPredictiveUncertaintyRequest | None
+    ) = None,
 ) -> InstrumentChannelCalibrationExecution:
     """Execute a caller-authored dataset-level calibration plan.
 
@@ -3829,10 +4504,32 @@ def execute_instrument_channel_calibration_plan(
     reassigned.
 
     The callable performs no automatic reference-channel, pairing-method,
-    tolerance, or calibration-family selection. It does not propagate
-    uncertainty in fitted affine coefficients or integrate the result into
-    :class:`pgmuvi.lightcurve.Lightcurve`.
+    tolerance, or calibration-family selection. Dataset predictive propagation
+    is an explicit opt-in request. Its contract is defined, but execution is not
+    activated here; a supplied request raises :class:`NotImplementedError`.
+    Calibration is not integrated into :class:`pgmuvi.lightcurve.Lightcurve`.
     """
+
+    if predictive_uncertainty_request is not None:
+        if isinstance(predictive_uncertainty_request, (bool, np.bool_)):
+            raise TypeError(
+                "predictive_uncertainty_request must be an "
+                "InstrumentChannelCalibrationPredictiveUncertaintyRequest, "
+                "not boolean."
+            )
+        if not isinstance(
+            predictive_uncertainty_request,
+            InstrumentChannelCalibrationPredictiveUncertaintyRequest,
+        ):
+            raise TypeError(
+                "predictive_uncertainty_request must be an "
+                "InstrumentChannelCalibrationPredictiveUncertaintyRequest "
+                "when supplied."
+            )
+        raise NotImplementedError(
+            "Dataset calibration predictive-uncertainty propagation is "
+            "defined but not yet activated."
+        )
 
     if not isinstance(
         plan,

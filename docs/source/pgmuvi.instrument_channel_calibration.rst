@@ -257,6 +257,48 @@ to record that propagation was not requested or performed.  The stable future
 orchestration dispositions remain ``not_requested``, ``available``,
 ``skipped``, and ``unavailable``.
 
+Dataset predictive-orchestration contract
+-----------------------------------------
+
+Dataset propagation is an explicit opt-in represented by
+``InstrumentChannelCalibrationPredictiveUncertaintyRequest``.  Absence of a
+request means fitted-coefficient propagation was not requested; coefficient
+covariance availability alone never activates it.  A request selects
+``marginal_variance`` or ``full_covariance``.  The execution callable accepts
+the request boundary, but PR152 deliberately leaves it defined but not
+activated and raises ``NotImplementedError`` when a request is supplied.
+Ordinary execution without a request keeps its existing return type and
+continues to serialize ``fitted_coefficient_uncertainty_propagated`` as false.
+
+The immutable orchestration result contract partitions original dataset source
+rows among reference rows, non-reference observational-channel results, and
+unaffected rows.  Reference-channel rows are explicitly ``not_applicable`` for
+fitted calibration-coefficient uncertainty.  ``available`` channel results
+carry the existing
+``InstrumentChannelCalibrationPredictiveUncertainty`` record; ``unavailable``
+results carry the existing explicit non-numeric unavailable record, with no
+measurement-only fallback.  ``skipped`` and ``not_requested`` results carry no
+numerical predictive values.  Missing results are represented structurally,
+not with NaN-filled dataset arrays.
+
+Marginal variances and derived predictive standard deviations remain
+per-observational-channel blocks aligned to explicit original
+``source_row_indices``.  Full covariance is also channel-local: its row and
+column order follows that channel's source-row order, and no global dense
+dataset covariance is emitted.  Rows calibrated with one shared pair of
+``offset, scale`` coefficients may therefore be correlated within their block.
+Distinct observational channels retain separate blocks, coefficients,
+covariance, and dispositions even when they share one physical wavelength;
+physical wavelength is never a covariance identity.  Cross-channel covariance
+is not emitted and is not silently asserted to be zero.
+
+The existing ``calibrated_flux_error`` array remains the ordinary transformed
+measurement-error array.  Combined predictive standard deviation is exposed
+only through available predictive blocks, so callers cannot confuse it with
+the compatibility field.  A manually constructed calibration may participate
+when it carries valid available coefficient covariance; fit provenance is not
+required merely because the coefficients were supplied manually.
+
 ``TBD[instrument-channel-calibration]`` remains open
 ----------------------------------------------------
 

@@ -82,6 +82,18 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "apply_instrument_channel_calibration_with_predictive_uncertainty",
             instrument_channel_calibration.__all__,
         )
+        self.assertIn(
+            "InstrumentChannelCalibrationPredictiveUncertaintyRequest",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "InstrumentChannelCalibrationPredictiveUncertaintyOrchestration",
+            instrument_channel_calibration.__all__,
+        )
+        self.assertIn(
+            "INSTRUMENT_CHANNEL_CALIBRATION_PREDICTIVE_ORCHESTRATION_SCHEMA_VERSION",
+            instrument_channel_calibration.__all__,
+        )
 
         api_text = API.read_text(encoding="utf-8")
         page_text = PAGE.read_text(encoding="utf-8")
@@ -235,7 +247,7 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "Predictive-uncertainty propagation",
             maxsplit=1,
         )[1].split(
-            "``TBD[instrument-channel-calibration]`` remains open",
+            "Dataset predictive-orchestration contract",
             maxsplit=1,
         )[0]
         self.assertNotIn("NotImplementedError", predictive_section)
@@ -252,6 +264,29 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "no silent fallback to measurement-only uncertainty",
             normalized.lower(),
         )
+        self.assertIn("Dataset predictive-orchestration contract", text)
+        self.assertIn(
+            "coefficient covariance availability alone never activates it",
+            normalized,
+        )
+        self.assertIn("defined but not activated", normalized)
+        self.assertIn("raises ``NotImplementedError``", normalized)
+        self.assertIn("no global dense dataset covariance", normalized)
+        self.assertIn(
+            "physical wavelength is never a covariance identity",
+            normalized,
+        )
+        self.assertIn(
+            "Cross-channel covariance is not emitted and is not silently "
+            "asserted to be zero",
+            normalized,
+        )
+        self.assertIn(
+            "calibrated_flux_error`` array remains the ordinary transformed "
+            "measurement-error array",
+            normalized,
+        )
+        self.assertIn("fit provenance is not required", normalized)
 
     def test_future_work_marker_remains_open(self):
         text = " ".join(FUTURE.read_text(encoding="utf-8").split())
@@ -285,6 +320,12 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "propagation without orchestration activation",
             text,
         )
+        self.assertIn(
+            "defines the explicit request, per-observational-channel block, "
+            "row-identity, disposition, and dataset-summary contract",
+            text,
+        )
+        self.assertIn("without activating that execution path", text)
         self.assertNotIn(
             "uncertainty estimation and propagation",
             text,
