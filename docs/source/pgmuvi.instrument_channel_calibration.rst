@@ -250,12 +250,11 @@ uses ``input_shape=()``; array results preserve their original shape.
 Unavailable coefficient covariance, including an attempted scale-dependent
 optimization that falls back to the iterative affine estimate, produces an
 explicit ``unavailable`` result with no numerical predictive uncertainty.
-There is no silent fallback
-to measurement-only uncertainty.  Predictive propagation is implemented only
-in the dedicated application callable; current dataset orchestration continues
-to record that propagation was not requested or performed.  The stable future
-orchestration dispositions remain ``not_requested``, ``available``,
-``skipped``, and ``unavailable``.
+There is no silent fallback to measurement-only uncertainty.  Dataset
+orchestration performs propagation only for an explicit request and otherwise
+retains the ordinary execution-v1 behavior.  The stable orchestration
+dispositions remain ``not_requested``, ``available``, ``skipped``, and
+``unavailable``.
 
 Dataset predictive-orchestration contract
 -----------------------------------------
@@ -264,10 +263,10 @@ Dataset propagation is an explicit opt-in represented by
 ``InstrumentChannelCalibrationPredictiveUncertaintyRequest``.  Absence of a
 request means fitted-coefficient propagation was not requested; coefficient
 covariance availability alone never activates it.  A request selects
-``marginal_variance`` or ``full_covariance``.  The execution callable accepts
-the request boundary, but PR152 deliberately leaves it defined but not
-activated and raises ``NotImplementedError`` when a request is supplied.
-Ordinary execution without a request keeps its existing return type and
+``marginal_variance`` or ``full_covariance`` and the execution callable
+executes predictive propagation after completing the caller-authored
+calibration plan.  Ordinary execution without a request keeps its existing
+return type and serialization, omits the ``predictive_uncertainty`` key, and
 continues to serialize ``fitted_coefficient_uncertainty_propagated`` as false.
 
 The immutable orchestration result contract partitions original dataset source

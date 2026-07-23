@@ -130,8 +130,9 @@ Wavelength-model extensions
     affine fitter and dataset orchestration while preserving separate
     observational-channel records, and defines the explicit request,
     per-observational-channel block, row-identity, disposition, and
-    dataset-summary contract for ordinary predictive propagation without
-    activating that execution path.  This does not close the marker:
+    dataset-summary contract for ordinary predictive propagation, and
+    activates dataset-level predictive propagation through explicit requests.
+    This does not close the marker:
     scientifically validated instrument-specific tolerance guidance, workflow
     integration, and representative calibration validation remain future work.
 
