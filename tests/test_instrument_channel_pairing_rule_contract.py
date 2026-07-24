@@ -88,9 +88,13 @@ class TestInstrumentChannelPairingRuleContract(unittest.TestCase):
         self.assertFalse(
             payload["automatic_rule_selection_permitted"]
         )
+        self.assertTrue(
+            payload["explicit_rule_resolution_implemented"]
+        )
+        self.assertFalse(payload["workflow_integration_implemented"])
         self.assertEqual(
             payload["activation_status"],
-            "defined_not_activated",
+            "explicit_resolution_available",
         )
 
         with self.assertRaises(FrozenInstanceError):
@@ -242,11 +246,15 @@ class TestInstrumentChannelPairingRuleContract(unittest.TestCase):
         self.assertFalse(
             payload["automatic_rule_selection_implemented"]
         )
+        self.assertTrue(
+            payload["explicit_rule_resolution_implemented"]
+        )
+        self.assertFalse(payload["workflow_integration_implemented"])
 
         with self.assertRaises(FrozenInstanceError):
             request.channel = "replacement"
 
-    def test_resolver_validates_inputs_then_remains_inactive(self):
+    def test_resolver_returns_exact_scientifically_validated_match(self):
         request = InstrumentChannelPairingRuleRequest(
             reference_instrument="Survey A",
             reference_channel="SurveyA/V",
@@ -254,12 +262,20 @@ class TestInstrumentChannelPairingRuleContract(unittest.TestCase):
             channel="SurveyB/V",
             physical_wavelength=0.55,
         )
-        rule = self._nearest_rule()
+        matching_rule = self._nearest_rule()
+        same_wavelength_other_channel = self._nearest_rule(
+            rule_id="same-wavelength-other-channel",
+            channel="SurveyB/I",
+        )
+        same_channels_other_wavelength = self._nearest_rule(
+            rule_id="same-channels-other-wavelength",
+            physical_wavelength=0.551,
+        )
 
         with self.assertRaisesRegex(TypeError, "request must be"):
             resolve_instrument_channel_pairing_rule(
                 object(),
-                (rule,),
+                (matching_rule,),
             )
 
         with self.assertRaisesRegex(ValueError, "at least one"):
@@ -269,8 +285,76 @@ class TestInstrumentChannelPairingRuleContract(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(
-            NotImplementedError,
-            "defined but not implemented",
+            TypeError,
+            "only InstrumentChannelPairingRule",
+        ):
+            resolve_instrument_channel_pairing_rule(
+                request,
+                (matching_rule, object()),
+            )
+
+        resolved = resolve_instrument_channel_pairing_rule(
+            request,
+            (
+                same_wavelength_other_channel,
+                same_channels_other_wavelength,
+                matching_rule,
+            ),
+        )
+
+        self.assertIs(resolved, matching_rule)
+        self.assertTrue(resolved.scientifically_validated)
+        self.assertEqual(
+            resolved.evidence_reference,
+            "validation:representative-lpv-v1",
+        )
+
+    def test_resolver_rejects_absent_exact_identity_without_fallback(self):
+        rule = self._nearest_rule()
+        requests = (
+            InstrumentChannelPairingRuleRequest(
+                reference_instrument="Survey A",
+                reference_channel="SurveyA/V",
+                channel_instrument="Survey B",
+                channel="SurveyB/I",
+                physical_wavelength=0.55,
+            ),
+            InstrumentChannelPairingRuleRequest(
+                reference_instrument="Survey A",
+                reference_channel="SurveyA/V",
+                channel_instrument="Survey B",
+                channel="SurveyB/V",
+                physical_wavelength=0.5500000000000002,
+            ),
+        )
+
+        for request in requests:
+            with self.subTest(identity=request.identity_key):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "No pairing rule matches the exact requested",
+                ):
+                    resolve_instrument_channel_pairing_rule(
+                        request,
+                        (rule,),
+                    )
+
+    def test_resolver_rejects_matching_unvalidated_rule(self):
+        request = InstrumentChannelPairingRuleRequest(
+            reference_instrument="Survey A",
+            reference_channel="SurveyA/V",
+            channel_instrument="Survey B",
+            channel="SurveyB/V",
+            physical_wavelength=0.55,
+        )
+        rule = self._nearest_rule(
+            validation_status="defined_not_validated",
+            evidence_reference=None,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "not scientifically validated",
         ):
             resolve_instrument_channel_pairing_rule(
                 request,
@@ -320,9 +404,11 @@ class TestInstrumentChannelPairingRuleContract(unittest.TestCase):
             "InstrumentChannelPairingRule",
             "InstrumentChannelPairingRuleRequest",
             "resolve_instrument_channel_pairing_rule",
-            "defined but not activated",
+            "deterministic exact-identity lookup",
             "physical wavelength",
             "observational channel",
+            "scientifically validated",
+            "without fallback",
         ):
             self.assertIn(token, api_text)
 
@@ -331,7 +417,11 @@ class TestInstrumentChannelPairingRuleContract(unittest.TestCase):
             future_text,
         )
         self.assertIn(
-            "automatic rule resolution remains unimplemented",
+            "deterministic exact-identity rule resolution",
+            future_text,
+        )
+        self.assertIn(
+            "populated scientifically validated rule catalogue",
             future_text,
         )
         self.assertIn(

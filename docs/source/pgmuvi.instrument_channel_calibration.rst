@@ -38,13 +38,13 @@ Both construction methods currently use a dynamic-programming grid with
 channels should restrict the input observations to the time range relevant to
 the calibration before constructing pairs.
 
-Instrument-specific pairing and tolerance contract
---------------------------------------------------
+Instrument-specific pairing and tolerance resolution
+----------------------------------------------------
 
 The immutable
 :class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRule`
-record defines a JSON-safe contract for instrument-specific pairing guidance.
-It records explicit reference and target instrument identities, explicit
+record provides JSON-safe instrument-specific pairing guidance.  It records
+explicit reference and target instrument identities, explicit
 observational-channel identities, physical wavelength, pairing method, time
 unit, maximum separation, tolerance provenance, scientific-validation status,
 and an evidence reference when validation is claimed.  Physical wavelength is
@@ -53,17 +53,21 @@ identity.
 
 :class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleRequest`
 records the exact instrument, observational-channel, and physical-wavelength
-identity for a future lookup.  The
+identity requested by the caller.  The
 :func:`~pgmuvi.instrument_channel_calibration.resolve_instrument_channel_pairing_rule`
-callable validates requests and candidate-rule collections, including duplicate
-identifier and ambiguous-identity rejection.
+callable performs deterministic exact-identity lookup over an
+explicitly supplied rule catalogue.  It rejects duplicate identifiers,
+duplicate explicit
+identities, absent exact matches, and matching rules that are not
+scientifically validated.  A successful lookup returns the single
+evidence-backed rule without fallback.
 
-This contract is **defined but not activated**.  Valid resolution requests raise
-``NotImplementedError``.  No rule is selected automatically, and a validated
-rule record does not by itself authorize automatic reference-channel,
-pairing-method, or time-tolerance selection.  Populating rules with
-instrument-specific evidence and activating rule resolution require separate
-implementation and validation work.
+This explicit resolver does not select a reference observational channel,
+pairing method, or time tolerance automatically.  It does not perform
+approximate physical-wavelength matching, infer tolerance from cadence, provide
+a built-in instrument catalogue, or integrate the result into calibration
+planning or normal light-curve fitting.  Those activation and validation steps
+remain separate future work.
 
 Dataset-level orchestration contract
 ------------------------------------
