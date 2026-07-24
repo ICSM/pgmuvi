@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
 import json
-from pathlib import Path
 import unittest
+from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import numpy as np
 
@@ -15,10 +15,54 @@ from pgmuvi.instrument_channel_calibration import (
     InstrumentChannelPairingMethod,
     InstrumentChannelPairingRule,
     InstrumentChannelPairingRuleRequest,
+    InstrumentChannelPairingRuleScientificValidationDisposition,
+    InstrumentChannelPairingRuleValidationEvidence,
     InstrumentChannelPairingRuleValidationStatus,
     InstrumentChannelPairingToleranceProvenance,
     resolve_instrument_channel_pairing_rule,
 )
+
+
+def _rule_validation_evidence(values):
+    return InstrumentChannelPairingRuleValidationEvidence(
+        validation_id=f"validation:{values['rule_id']}",
+        validation_version="1",
+        rule_id=values["rule_id"],
+        reference_instrument=values["reference_instrument"],
+        reference_channel=values["reference_channel"],
+        channel_instrument=values["channel_instrument"],
+        channel=values["channel"],
+        physical_wavelength=values["physical_wavelength"],
+        pairing_method=values["pairing_method"],
+        time_unit=values["time_unit"],
+        maximum_time_separation=values["maximum_time_separation"],
+        tolerance_provenance=values["tolerance_provenance"],
+        validation_dataset_reference="dataset:synthetic-contract-fixture",
+        validation_dataset_sha256="a" * 64,
+        validation_protocol_reference="protocol:pairing-validation-v1",
+        validation_result_reference=values["evidence_reference"],
+        reference_channel_justification=(
+            "Reference-channel choice is explicitly justified."
+        ),
+        pairing_method_justification=(
+            "Pairing method is explicitly justified."
+        ),
+        time_tolerance_justification=(
+            "Maximum time separation is explicitly justified."
+        ),
+        applicability_boundaries=(
+            "Applies only to the exact named observational-channel pair.",
+        ),
+        acceptance_criteria=(
+            "All declared deterministic acceptance criteria pass.",
+        ),
+        n_validation_sources=3,
+        n_matched_pairs=30,
+        disposition=(
+            InstrumentChannelPairingRuleScientificValidationDisposition
+            .PASSED
+        ),
+    )
 
 
 class TestInstrumentChannelPairingRuleContract(unittest.TestCase):
@@ -48,6 +92,17 @@ class TestInstrumentChannelPairingRuleContract(unittest.TestCase):
             "evidence_reference": "validation:representative-lpv-v1",
         }
         values.update(overrides)
+        if "validation_evidence" not in overrides:
+            if (
+                str(values["validation_status"])
+                == "scientifically_validated"
+                and values["evidence_reference"] is not None
+            ):
+                values["validation_evidence"] = (
+                    _rule_validation_evidence(values)
+                )
+            else:
+                values["validation_evidence"] = None
         return InstrumentChannelPairingRule(**values)
 
     def test_exact_rule_is_immutable_and_json_safe(self):

@@ -15,14 +15,13 @@ a light-curve fit.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from enum import Enum
-import math
 from typing import Any
 
 import numpy as np
 from scipy import optimize
-
 
 INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-v1"
@@ -34,10 +33,10 @@ INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-v2"
 )
 INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION = (
-    "pgmuvi-instrument-channel-pairing-rule-v1"
+    "pgmuvi-instrument-channel-pairing-rule-v2"
 )
 INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION = (
-    "pgmuvi-instrument-channel-pairing-rule-catalogue-v1"
+    "pgmuvi-instrument-channel-pairing-rule-catalogue-v2"
 )
 INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_DISCOVERY_REQUEST_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-rule-catalogue-discovery-request-v1"
@@ -53,6 +52,18 @@ INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_LOADED_SNAPSHOT_SCHEMA_VERSION = (
 )
 INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_ACTIVATION_SNAPSHOT_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-rule-catalogue-activation-snapshot-v1"
+)
+INSTRUMENT_CHANNEL_PAIRING_RULE_VALIDATION_EVIDENCE_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-validation-evidence-v1"
+)
+INSTRUMENT_CHANNEL_PAIRING_RULE_SCIENTIFIC_VALIDATION_REPORT_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-scientific-validation-report-v1"
+)
+INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_VALIDATION_EVIDENCE_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-catalogue-validation-evidence-v1"
+)
+INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCIENTIFIC_VALIDATION_REPORT_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-catalogue-scientific-validation-report-v1"
 )
 INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-rule-request-v1"
@@ -97,8 +108,12 @@ __all__ = [
     "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_DISCOVERY_REQUEST_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_LOADED_SNAPSHOT_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCIENTIFIC_VALIDATION_REPORT_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_VALIDATION_EVIDENCE_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_SCIENTIFIC_VALIDATION_REPORT_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_VALIDATION_EVIDENCE_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION",
     "InstrumentChannelCalibration",
     "InstrumentChannelCalibrationAssessment",
@@ -134,10 +149,15 @@ __all__ = [
     "InstrumentChannelPairingRuleCatalogueError",
     "InstrumentChannelPairingRuleCatalogueLoadedSnapshot",
     "InstrumentChannelPairingRuleCatalogueParseError",
+    "InstrumentChannelPairingRuleCatalogueScientificValidationReport",
     "InstrumentChannelPairingRuleCatalogueSource",
     "InstrumentChannelPairingRuleCatalogueSourceAccessError",
     "InstrumentChannelPairingRuleCatalogueValidationError",
+    "InstrumentChannelPairingRuleCatalogueValidationEvidence",
     "InstrumentChannelPairingRuleRequest",
+    "InstrumentChannelPairingRuleScientificValidationDisposition",
+    "InstrumentChannelPairingRuleScientificValidationReport",
+    "InstrumentChannelPairingRuleValidationEvidence",
     "InstrumentChannelPairingRuleValidationStatus",
     "InstrumentChannelPairingToleranceProvenance",
     "SharedWavelengthChannelGroup",
@@ -146,6 +166,8 @@ __all__ = [
     "apply_instrument_channel_calibration_with_predictive_uncertainty",
     "assess_instrument_channel_calibration_requirement",
     "assess_instrument_channel_pairing_rule_catalogue_compatibility",
+    "assess_instrument_channel_pairing_rule_catalogue_scientific_validation",
+    "assess_instrument_channel_pairing_rule_scientific_validation",
     "construct_instrument_channel_pairing",
     "define_instrument_channel_calibration_plan",
     "discover_instrument_channel_pairing_rule_catalogue",
@@ -183,6 +205,15 @@ class InstrumentChannelPairingRuleValidationStatus(_StringEnum):
 
     DEFINED_NOT_VALIDATED = "defined_not_validated"
     SCIENTIFICALLY_VALIDATED = "scientifically_validated"
+
+
+class InstrumentChannelPairingRuleScientificValidationDisposition(
+    _StringEnum
+):
+    """Disposition recorded by caller-supplied scientific-validation evidence."""
+
+    PASSED = "passed"
+    FAILED = "failed"
 
 
 class InstrumentChannelPairingRuleCatalogueSource(_StringEnum):
@@ -235,6 +266,746 @@ class InstrumentChannelPairingToleranceProvenance(_StringEnum):
     CALLER_SUPPLIED = "caller_supplied"
     INSTRUMENT_DOCUMENTATION = "instrument_documentation"
     EMPIRICAL_VALIDATION = "empirical_validation"
+
+
+
+def _normalize_scientific_validation_text(
+    value: Any,
+    *,
+    name: str,
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string.")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{name} must be non-empty.")
+    return normalized
+
+
+def _normalize_scientific_validation_text_sequence(
+    values: Any,
+    *,
+    name: str,
+) -> tuple[str, ...]:
+    try:
+        sequence = tuple(values)
+    except TypeError as exc:
+        raise TypeError(
+            f"{name} must be an iterable of non-empty strings."
+        ) from exc
+
+    normalized = tuple(
+        _normalize_scientific_validation_text(
+            value,
+            name=f"{name} entry",
+        )
+        for value in sequence
+    )
+    if not normalized:
+        raise ValueError(f"{name} must contain at least one entry.")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{name} entries must be unique.")
+    return normalized
+
+
+def _normalize_scientific_validation_count(
+    value: Any,
+    *,
+    name: str,
+) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value,
+        (int, np.integer),
+    ):
+        raise TypeError(f"{name} must be an integer.")
+    normalized = int(value)
+    if normalized < 1:
+        raise ValueError(f"{name} must be at least 1.")
+    return normalized
+
+
+def _normalize_scientific_validation_sha256(
+    value: Any,
+    *,
+    name: str,
+) -> str:
+    normalized = _normalize_scientific_validation_text(
+        value,
+        name=name,
+    )
+    if (
+        len(normalized) != 64
+        or normalized != normalized.lower()
+        or any(
+            character not in "0123456789abcdef"
+            for character in normalized
+        )
+    ):
+        raise ValueError(
+            f"{name} must be a lowercase 64-character hexadecimal SHA-256 "
+            "digest."
+        )
+    return normalized
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairingRuleValidationEvidence:
+    """Immutable caller-supplied scientific evidence for one exact rule.
+
+    The record binds a validation claim to the complete rule identifier,
+    explicit instrument and observational-channel identities, contextual
+    physical wavelength, pairing configuration, immutable dataset identity,
+    protocol, result, justifications, applicability boundaries, acceptance
+    criteria, and disposition.
+
+    Construction validates evidence structure only. It does not execute a
+    scientific validation and does not independently establish that the claim
+    is correct.
+    """
+
+    validation_id: str
+    validation_version: str
+    rule_id: str
+    reference_instrument: str
+    reference_channel: str
+    channel_instrument: str
+    channel: str
+    physical_wavelength: float
+    pairing_method: InstrumentChannelPairingMethod | str
+    time_unit: str
+    maximum_time_separation: float | None
+    tolerance_provenance: (
+        InstrumentChannelPairingToleranceProvenance | str
+    )
+    validation_dataset_reference: str
+    validation_dataset_sha256: str
+    validation_protocol_reference: str
+    validation_result_reference: str
+    reference_channel_justification: str
+    pairing_method_justification: str
+    time_tolerance_justification: str
+    applicability_boundaries: tuple[str, ...]
+    acceptance_criteria: tuple[str, ...]
+    n_validation_sources: int
+    n_matched_pairs: int
+    disposition: (
+        InstrumentChannelPairingRuleScientificValidationDisposition | str
+    )
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_PAIRING_RULE_VALIDATION_EVIDENCE_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_VALIDATION_EVIDENCE_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported pairing-rule validation-evidence schema "
+                f"version: {self.schema_version!r}."
+            )
+
+        for name in (
+            "validation_id",
+            "validation_version",
+            "rule_id",
+            "reference_instrument",
+            "reference_channel",
+            "channel_instrument",
+            "channel",
+            "time_unit",
+            "validation_dataset_reference",
+            "validation_protocol_reference",
+            "validation_result_reference",
+            "reference_channel_justification",
+            "pairing_method_justification",
+            "time_tolerance_justification",
+        ):
+            object.__setattr__(
+                self,
+                name,
+                _normalize_scientific_validation_text(
+                    getattr(self, name),
+                    name=name,
+                ),
+            )
+
+        if self.reference_channel == self.channel:
+            raise ValueError(
+                "reference_channel and channel must identify different "
+                "observational channels."
+            )
+
+        if isinstance(self.physical_wavelength, (bool, np.bool_)):
+            raise TypeError(
+                "physical_wavelength must be numeric, not boolean."
+            )
+        physical_wavelength = float(self.physical_wavelength)
+        if (
+            not math.isfinite(physical_wavelength)
+            or physical_wavelength <= 0.0
+        ):
+            raise ValueError(
+                "physical_wavelength must be finite and positive."
+            )
+
+        pairing_method = self.pairing_method
+        if not isinstance(pairing_method, InstrumentChannelPairingMethod):
+            try:
+                pairing_method = InstrumentChannelPairingMethod(
+                    str(pairing_method)
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported validation-evidence pairing method: "
+                    f"{self.pairing_method!r}."
+                ) from exc
+
+        tolerance_provenance = self.tolerance_provenance
+        if not isinstance(
+            tolerance_provenance,
+            InstrumentChannelPairingToleranceProvenance,
+        ):
+            try:
+                tolerance_provenance = (
+                    InstrumentChannelPairingToleranceProvenance(
+                        str(tolerance_provenance)
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported validation-evidence tolerance provenance: "
+                    f"{self.tolerance_provenance!r}."
+                ) from exc
+
+        maximum_time_separation = self.maximum_time_separation
+        if maximum_time_separation is not None:
+            if isinstance(
+                maximum_time_separation,
+                (bool, np.bool_),
+            ):
+                raise TypeError(
+                    "maximum_time_separation must be numeric, not boolean."
+                )
+            maximum_time_separation = float(maximum_time_separation)
+            if (
+                not math.isfinite(maximum_time_separation)
+                or maximum_time_separation < 0.0
+            ):
+                raise ValueError(
+                    "maximum_time_separation must be finite and "
+                    "non-negative when supplied."
+                )
+
+        if pairing_method is InstrumentChannelPairingMethod.EXACT_TIMESTAMP:
+            if maximum_time_separation not in (None, 0.0):
+                raise ValueError(
+                    "Exact-timestamp validation evidence permits no non-zero "
+                    "maximum_time_separation."
+                )
+            if tolerance_provenance is not (
+                InstrumentChannelPairingToleranceProvenance.EXACT_TIMESTAMP
+            ):
+                raise ValueError(
+                    "Exact-timestamp validation evidence requires exact "
+                    "timestamp tolerance provenance."
+                )
+        else:
+            if (
+                maximum_time_separation is None
+                or maximum_time_separation <= 0.0
+            ):
+                raise ValueError(
+                    "Nearest-within-tolerance validation evidence requires a "
+                    "finite positive maximum_time_separation."
+                )
+            if tolerance_provenance is (
+                InstrumentChannelPairingToleranceProvenance.EXACT_TIMESTAMP
+            ):
+                raise ValueError(
+                    "Nearest-within-tolerance validation evidence cannot use "
+                    "exact-timestamp tolerance provenance."
+                )
+
+        disposition = self.disposition
+        if not isinstance(
+            disposition,
+            InstrumentChannelPairingRuleScientificValidationDisposition,
+        ):
+            try:
+                disposition = (
+                    InstrumentChannelPairingRuleScientificValidationDisposition(
+                        str(disposition)
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported scientific-validation disposition: "
+                    f"{self.disposition!r}."
+                ) from exc
+
+        object.__setattr__(
+            self,
+            "physical_wavelength",
+            physical_wavelength,
+        )
+        object.__setattr__(self, "pairing_method", pairing_method)
+        object.__setattr__(
+            self,
+            "maximum_time_separation",
+            maximum_time_separation,
+        )
+        object.__setattr__(
+            self,
+            "tolerance_provenance",
+            tolerance_provenance,
+        )
+        object.__setattr__(
+            self,
+            "validation_dataset_sha256",
+            _normalize_scientific_validation_sha256(
+                self.validation_dataset_sha256,
+                name="validation_dataset_sha256",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "applicability_boundaries",
+            _normalize_scientific_validation_text_sequence(
+                self.applicability_boundaries,
+                name="applicability_boundaries",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "acceptance_criteria",
+            _normalize_scientific_validation_text_sequence(
+                self.acceptance_criteria,
+                name="acceptance_criteria",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "n_validation_sources",
+            _normalize_scientific_validation_count(
+                self.n_validation_sources,
+                name="n_validation_sources",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "n_matched_pairs",
+            _normalize_scientific_validation_count(
+                self.n_matched_pairs,
+                name="n_matched_pairs",
+            ),
+        )
+        object.__setattr__(self, "disposition", disposition)
+
+    @property
+    def identity_key(
+        self,
+    ) -> tuple[str, str, str, str, str, float]:
+        """Return the complete rule and observational-channel identity."""
+
+        return (
+            self.rule_id,
+            self.reference_instrument,
+            self.reference_channel,
+            self.channel_instrument,
+            self.channel,
+            self.physical_wavelength,
+        )
+
+    @property
+    def configuration_key(
+        self,
+    ) -> tuple[
+        InstrumentChannelPairingMethod,
+        str,
+        float | None,
+        InstrumentChannelPairingToleranceProvenance,
+    ]:
+        """Return the exact pairing configuration validated by the evidence."""
+
+        return (
+            self.pairing_method,
+            self.time_unit,
+            self.maximum_time_separation,
+            self.tolerance_provenance,
+        )
+
+    @property
+    def passed(self) -> bool:
+        """Whether the caller-supplied validation evidence records a pass."""
+
+        return self.disposition is (
+            InstrumentChannelPairingRuleScientificValidationDisposition.PASSED
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe validation-evidence representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "validation_id": self.validation_id,
+            "validation_version": self.validation_version,
+            "rule_id": self.rule_id,
+            "reference_instrument": self.reference_instrument,
+            "reference_channel": self.reference_channel,
+            "channel_instrument": self.channel_instrument,
+            "channel": self.channel,
+            "physical_wavelength": self.physical_wavelength,
+            "pairing_method": self.pairing_method.value,
+            "time_unit": self.time_unit,
+            "maximum_time_separation": self.maximum_time_separation,
+            "tolerance_provenance": self.tolerance_provenance.value,
+            "validation_dataset_reference": (
+                self.validation_dataset_reference
+            ),
+            "validation_dataset_sha256": self.validation_dataset_sha256,
+            "validation_protocol_reference": (
+                self.validation_protocol_reference
+            ),
+            "validation_result_reference": (
+                self.validation_result_reference
+            ),
+            "reference_channel_justification": (
+                self.reference_channel_justification
+            ),
+            "pairing_method_justification": (
+                self.pairing_method_justification
+            ),
+            "time_tolerance_justification": (
+                self.time_tolerance_justification
+            ),
+            "applicability_boundaries": list(
+                self.applicability_boundaries
+            ),
+            "acceptance_criteria": list(self.acceptance_criteria),
+            "n_validation_sources": self.n_validation_sources,
+            "n_matched_pairs": self.n_matched_pairs,
+            "disposition": self.disposition.value,
+            "passed": self.passed,
+            "scientific_validation_execution_performed_by_pgmuvi": False,
+            "populated_builtin_evidence": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+    ) -> InstrumentChannelPairingRuleValidationEvidence:
+        """Construct evidence from its strict serialized representation."""
+
+        if not isinstance(payload, dict):
+            raise TypeError(
+                "Pairing-rule validation evidence must be a dictionary."
+            )
+
+        expected_keys = {
+            "schema_version",
+            "validation_id",
+            "validation_version",
+            "rule_id",
+            "reference_instrument",
+            "reference_channel",
+            "channel_instrument",
+            "channel",
+            "physical_wavelength",
+            "pairing_method",
+            "time_unit",
+            "maximum_time_separation",
+            "tolerance_provenance",
+            "validation_dataset_reference",
+            "validation_dataset_sha256",
+            "validation_protocol_reference",
+            "validation_result_reference",
+            "reference_channel_justification",
+            "pairing_method_justification",
+            "time_tolerance_justification",
+            "applicability_boundaries",
+            "acceptance_criteria",
+            "n_validation_sources",
+            "n_matched_pairs",
+            "disposition",
+            "passed",
+            "scientific_validation_execution_performed_by_pgmuvi",
+            "populated_builtin_evidence",
+            "marker",
+        }
+        if set(payload) != expected_keys:
+            raise ValueError(
+                "Pairing-rule validation-evidence payload must contain "
+                "exactly the contract fields."
+            )
+
+        evidence = cls(
+            schema_version=payload["schema_version"],
+            validation_id=payload["validation_id"],
+            validation_version=payload["validation_version"],
+            rule_id=payload["rule_id"],
+            reference_instrument=payload["reference_instrument"],
+            reference_channel=payload["reference_channel"],
+            channel_instrument=payload["channel_instrument"],
+            channel=payload["channel"],
+            physical_wavelength=payload["physical_wavelength"],
+            pairing_method=payload["pairing_method"],
+            time_unit=payload["time_unit"],
+            maximum_time_separation=(
+                payload["maximum_time_separation"]
+            ),
+            tolerance_provenance=payload["tolerance_provenance"],
+            validation_dataset_reference=(
+                payload["validation_dataset_reference"]
+            ),
+            validation_dataset_sha256=(
+                payload["validation_dataset_sha256"]
+            ),
+            validation_protocol_reference=(
+                payload["validation_protocol_reference"]
+            ),
+            validation_result_reference=(
+                payload["validation_result_reference"]
+            ),
+            reference_channel_justification=(
+                payload["reference_channel_justification"]
+            ),
+            pairing_method_justification=(
+                payload["pairing_method_justification"]
+            ),
+            time_tolerance_justification=(
+                payload["time_tolerance_justification"]
+            ),
+            applicability_boundaries=tuple(
+                payload["applicability_boundaries"]
+            ),
+            acceptance_criteria=tuple(payload["acceptance_criteria"]),
+            n_validation_sources=payload["n_validation_sources"],
+            n_matched_pairs=payload["n_matched_pairs"],
+            disposition=payload["disposition"],
+        )
+        if evidence.to_dict() != payload:
+            raise ValueError(
+                "Pairing-rule validation-evidence payload does not match "
+                "the strict contract representation."
+            )
+        return evidence
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairingRuleCatalogueValidationEvidence:
+    """Immutable aggregate validation evidence for one exact catalogue."""
+
+    validation_id: str
+    validation_version: str
+    catalogue_id: str
+    catalogue_version: str
+    catalogue_schema_version: str
+    member_rule_ids: tuple[str, ...]
+    member_validation_ids: tuple[str, ...]
+    validation_protocol_reference: str
+    validation_result_reference: str
+    applicability_boundaries: tuple[str, ...]
+    acceptance_criteria: tuple[str, ...]
+    disposition: (
+        InstrumentChannelPairingRuleScientificValidationDisposition | str
+    )
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_VALIDATION_EVIDENCE_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_VALIDATION_EVIDENCE_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported catalogue validation-evidence schema version: "
+                f"{self.schema_version!r}."
+            )
+
+        for name in (
+            "validation_id",
+            "validation_version",
+            "catalogue_id",
+            "catalogue_version",
+            "catalogue_schema_version",
+            "validation_protocol_reference",
+            "validation_result_reference",
+        ):
+            object.__setattr__(
+                self,
+                name,
+                _normalize_scientific_validation_text(
+                    getattr(self, name),
+                    name=name,
+                ),
+            )
+
+        member_rule_ids = _normalize_scientific_validation_text_sequence(
+            self.member_rule_ids,
+            name="member_rule_ids",
+        )
+        member_validation_ids = (
+            _normalize_scientific_validation_text_sequence(
+                self.member_validation_ids,
+                name="member_validation_ids",
+            )
+        )
+        if len(member_rule_ids) != len(member_validation_ids):
+            raise ValueError(
+                "member_rule_ids and member_validation_ids must have the "
+                "same length."
+            )
+
+        disposition = self.disposition
+        if not isinstance(
+            disposition,
+            InstrumentChannelPairingRuleScientificValidationDisposition,
+        ):
+            try:
+                disposition = (
+                    InstrumentChannelPairingRuleScientificValidationDisposition(
+                        str(disposition)
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported catalogue scientific-validation "
+                    f"disposition: {self.disposition!r}."
+                ) from exc
+
+        object.__setattr__(self, "member_rule_ids", member_rule_ids)
+        object.__setattr__(
+            self,
+            "member_validation_ids",
+            member_validation_ids,
+        )
+        object.__setattr__(
+            self,
+            "applicability_boundaries",
+            _normalize_scientific_validation_text_sequence(
+                self.applicability_boundaries,
+                name="applicability_boundaries",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "acceptance_criteria",
+            _normalize_scientific_validation_text_sequence(
+                self.acceptance_criteria,
+                name="acceptance_criteria",
+            ),
+        )
+        object.__setattr__(self, "disposition", disposition)
+
+    @property
+    def passed(self) -> bool:
+        """Whether aggregate catalogue validation records a passing result."""
+
+        return self.disposition is (
+            InstrumentChannelPairingRuleScientificValidationDisposition.PASSED
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe aggregate-evidence representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "validation_id": self.validation_id,
+            "validation_version": self.validation_version,
+            "catalogue_id": self.catalogue_id,
+            "catalogue_version": self.catalogue_version,
+            "catalogue_schema_version": self.catalogue_schema_version,
+            "member_rule_ids": list(self.member_rule_ids),
+            "member_validation_ids": list(
+                self.member_validation_ids
+            ),
+            "validation_protocol_reference": (
+                self.validation_protocol_reference
+            ),
+            "validation_result_reference": (
+                self.validation_result_reference
+            ),
+            "applicability_boundaries": list(
+                self.applicability_boundaries
+            ),
+            "acceptance_criteria": list(self.acceptance_criteria),
+            "disposition": self.disposition.value,
+            "passed": self.passed,
+            "scientific_validation_execution_performed_by_pgmuvi": False,
+            "populated_builtin_evidence": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+    ) -> InstrumentChannelPairingRuleCatalogueValidationEvidence:
+        """Construct aggregate evidence from a strict representation."""
+
+        if not isinstance(payload, dict):
+            raise TypeError(
+                "Catalogue validation evidence must be a dictionary."
+            )
+
+        expected_keys = {
+            "schema_version",
+            "validation_id",
+            "validation_version",
+            "catalogue_id",
+            "catalogue_version",
+            "catalogue_schema_version",
+            "member_rule_ids",
+            "member_validation_ids",
+            "validation_protocol_reference",
+            "validation_result_reference",
+            "applicability_boundaries",
+            "acceptance_criteria",
+            "disposition",
+            "passed",
+            "scientific_validation_execution_performed_by_pgmuvi",
+            "populated_builtin_evidence",
+            "marker",
+        }
+        if set(payload) != expected_keys:
+            raise ValueError(
+                "Catalogue validation-evidence payload must contain exactly "
+                "the contract fields."
+            )
+
+        evidence = cls(
+            schema_version=payload["schema_version"],
+            validation_id=payload["validation_id"],
+            validation_version=payload["validation_version"],
+            catalogue_id=payload["catalogue_id"],
+            catalogue_version=payload["catalogue_version"],
+            catalogue_schema_version=(
+                payload["catalogue_schema_version"]
+            ),
+            member_rule_ids=tuple(payload["member_rule_ids"]),
+            member_validation_ids=tuple(
+                payload["member_validation_ids"]
+            ),
+            validation_protocol_reference=(
+                payload["validation_protocol_reference"]
+            ),
+            validation_result_reference=(
+                payload["validation_result_reference"]
+            ),
+            applicability_boundaries=tuple(
+                payload["applicability_boundaries"]
+            ),
+            acceptance_criteria=tuple(payload["acceptance_criteria"]),
+            disposition=payload["disposition"],
+        )
+        if evidence.to_dict() != payload:
+            raise ValueError(
+                "Catalogue validation-evidence payload does not match the "
+                "strict contract representation."
+            )
+        return evidence
 
 
 class InstrumentChannelCalibrationDisposition(_StringEnum):
@@ -1015,6 +1786,9 @@ class InstrumentChannelPairingRule:
         InstrumentChannelPairingRuleValidationStatus | str
     )
     evidence_reference: str | None = None
+    validation_evidence: (
+        InstrumentChannelPairingRuleValidationEvidence | None
+    ) = None
     notes: str | None = None
     schema_version: str = INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION
 
@@ -1168,6 +1942,19 @@ class InstrumentChannelPairingRule:
                     "exact_timestamp tolerance provenance."
                 )
 
+        validation_evidence = self.validation_evidence
+        if (
+            validation_evidence is not None
+            and not isinstance(
+                validation_evidence,
+                InstrumentChannelPairingRuleValidationEvidence,
+            )
+        ):
+            raise TypeError(
+                "validation_evidence must be an "
+                "InstrumentChannelPairingRuleValidationEvidence or None."
+            )
+
         if validation_status is (
             InstrumentChannelPairingRuleValidationStatus
             .SCIENTIFICALLY_VALIDATED
@@ -1175,7 +1962,7 @@ class InstrumentChannelPairingRule:
             if evidence_reference is None:
                 raise ValueError(
                     "Scientifically validated pairing rules require an "
-                    "evidence_reference."
+                    "evidence_reference and typed validation_evidence."
                 )
             if provenance is (
                 InstrumentChannelPairingToleranceProvenance.CALLER_SUPPLIED
@@ -1233,7 +2020,29 @@ class InstrumentChannelPairingRule:
             "evidence_reference",
             evidence_reference,
         )
+        object.__setattr__(
+            self,
+            "validation_evidence",
+            validation_evidence,
+        )
         object.__setattr__(self, "notes", notes)
+
+        validation_report = (
+            assess_instrument_channel_pairing_rule_scientific_validation(
+                self
+            )
+        )
+        if (
+            validation_status
+            is InstrumentChannelPairingRuleValidationStatus
+            .SCIENTIFICALLY_VALIDATED
+            and not validation_report.scientifically_validated
+        ):
+            raise ValueError(
+                "Scientifically validated pairing rules require complete, "
+                "identity-bound, configuration-bound, passing validation "
+                f"evidence; reasons={validation_report.reasons!r}."
+            )
 
     @staticmethod
     def _normalize_required_text(
@@ -1261,11 +2070,12 @@ class InstrumentChannelPairingRule:
 
     @property
     def scientifically_validated(self) -> bool:
-        """Whether the rule records scientific validation and evidence."""
+        """Whether the rule has complete matching passed typed evidence."""
 
-        return self.validation_status is (
-            InstrumentChannelPairingRuleValidationStatus
-            .SCIENTIFICALLY_VALIDATED
+        return (
+            assess_instrument_channel_pairing_rule_scientific_validation(
+                self
+            ).scientifically_validated
         )
 
     @property
@@ -1299,6 +2109,11 @@ class InstrumentChannelPairingRule:
             "tolerance_provenance": self.tolerance_provenance.value,
             "validation_status": self.validation_status.value,
             "evidence_reference": self.evidence_reference,
+            "validation_evidence": (
+                None
+                if self.validation_evidence is None
+                else self.validation_evidence.to_dict()
+            ),
             "notes": self.notes,
             "scientifically_validated": self.scientifically_validated,
             "observational_channel_identity_explicit": True,
@@ -1338,6 +2153,9 @@ class InstrumentChannelPairingRuleCatalogue:
         InstrumentChannelPairingRuleValidationStatus | str
     )
     evidence_reference: str | None = None
+    validation_evidence: (
+        InstrumentChannelPairingRuleCatalogueValidationEvidence | None
+    ) = None
     notes: str | None = None
     schema_version: str = (
         INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION
@@ -1426,6 +2244,20 @@ class InstrumentChannelPairingRuleCatalogue:
                     f"validation status: {self.validation_status!r}."
                 ) from exc
 
+        validation_evidence = self.validation_evidence
+        if (
+            validation_evidence is not None
+            and not isinstance(
+                validation_evidence,
+                InstrumentChannelPairingRuleCatalogueValidationEvidence,
+            )
+        ):
+            raise TypeError(
+                "validation_evidence must be an "
+                "InstrumentChannelPairingRuleCatalogueValidationEvidence "
+                "or None."
+            )
+
         if validation_status is (
             InstrumentChannelPairingRuleValidationStatus
             .SCIENTIFICALLY_VALIDATED
@@ -1433,7 +2265,8 @@ class InstrumentChannelPairingRuleCatalogue:
             if evidence_reference is None:
                 raise ValueError(
                     "A scientifically validated pairing-rule catalogue "
-                    "requires an evidence_reference."
+                    "requires an evidence_reference and typed "
+                    "validation_evidence."
                 )
             unvalidated_rule_ids = tuple(
                 rule.rule_id
@@ -1469,15 +2302,38 @@ class InstrumentChannelPairingRuleCatalogue:
             "evidence_reference",
             evidence_reference,
         )
+        object.__setattr__(
+            self,
+            "validation_evidence",
+            validation_evidence,
+        )
         object.__setattr__(self, "notes", notes)
+
+        validation_report = (
+            assess_instrument_channel_pairing_rule_catalogue_scientific_validation(
+                self
+            )
+        )
+        if (
+            validation_status
+            is InstrumentChannelPairingRuleValidationStatus
+            .SCIENTIFICALLY_VALIDATED
+            and not validation_report.scientifically_validated
+        ):
+            raise ValueError(
+                "Scientifically validated pairing-rule catalogues require "
+                "complete matching passed aggregate validation evidence; "
+                f"reasons={validation_report.reasons!r}."
+            )
 
     @property
     def scientifically_validated(self) -> bool:
-        """Whether the catalogue records scientific validation."""
+        """Whether aggregate and member typed evidence are complete."""
 
-        return self.validation_status is (
-            InstrumentChannelPairingRuleValidationStatus
-            .SCIENTIFICALLY_VALIDATED
+        return (
+            assess_instrument_channel_pairing_rule_catalogue_scientific_validation(
+                self
+            ).scientifically_validated
         )
 
     @property
@@ -1506,6 +2362,11 @@ class InstrumentChannelPairingRuleCatalogue:
             "provenance_reference": self.provenance_reference,
             "validation_status": self.validation_status.value,
             "evidence_reference": self.evidence_reference,
+            "validation_evidence": (
+                None
+                if self.validation_evidence is None
+                else self.validation_evidence.to_dict()
+            ),
             "notes": self.notes,
             "rules": [rule.to_dict() for rule in self.rules],
             "n_rules": len(self.rules),
@@ -1539,6 +2400,7 @@ class InstrumentChannelPairingRuleCatalogue:
             "provenance_reference",
             "validation_status",
             "evidence_reference",
+            "validation_evidence",
             "notes",
             "rules",
             "n_rules",
@@ -1594,6 +2456,13 @@ class InstrumentChannelPairingRuleCatalogue:
                     evidence_reference=(
                         rule_payload["evidence_reference"]
                     ),
+                    validation_evidence=(
+                        None
+                        if rule_payload["validation_evidence"] is None
+                        else InstrumentChannelPairingRuleValidationEvidence.from_dict(
+                            rule_payload["validation_evidence"]
+                        )
+                    ),
                     notes=rule_payload["notes"],
                 )
             except KeyError as exc:
@@ -1617,6 +2486,13 @@ class InstrumentChannelPairingRuleCatalogue:
             rules=tuple(rules),
             validation_status=payload["validation_status"],
             evidence_reference=payload["evidence_reference"],
+            validation_evidence=(
+                None
+                if payload["validation_evidence"] is None
+                else InstrumentChannelPairingRuleCatalogueValidationEvidence.from_dict(
+                    payload["validation_evidence"]
+                )
+            ),
             notes=payload["notes"],
         )
 
@@ -1627,6 +2503,485 @@ class InstrumentChannelPairingRuleCatalogue:
             )
 
         return catalogue
+
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairingRuleScientificValidationReport:
+    """Deterministic structural assessment of one rule's validation claim."""
+
+    rule_id: str
+    validation_status_declared: bool
+    validation_evidence_present: bool
+    evidence_reference_matches: bool
+    evidence_identity_matches: bool
+    evidence_configuration_matches: bool
+    tolerance_provenance_acceptable: bool
+    validation_evidence_passed: bool
+    scientifically_validated: bool
+    reasons: tuple[str, ...]
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_PAIRING_RULE_SCIENTIFIC_VALIDATION_REPORT_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_SCIENTIFIC_VALIDATION_REPORT_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported rule scientific-validation report schema "
+                f"version: {self.schema_version!r}."
+            )
+        object.__setattr__(
+            self,
+            "rule_id",
+            _normalize_scientific_validation_text(
+                self.rule_id,
+                name="rule_id",
+            ),
+        )
+
+        for name in (
+            "validation_status_declared",
+            "validation_evidence_present",
+            "evidence_reference_matches",
+            "evidence_identity_matches",
+            "evidence_configuration_matches",
+            "tolerance_provenance_acceptable",
+            "validation_evidence_passed",
+            "scientifically_validated",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool.")
+
+        expected_reasons: list[str] = []
+        if not self.validation_status_declared:
+            expected_reasons.append(
+                "rule_status_not_scientifically_validated"
+            )
+        if not self.validation_evidence_present:
+            expected_reasons.append("rule_validation_evidence_missing")
+        else:
+            if not self.evidence_reference_matches:
+                expected_reasons.append(
+                    "rule_validation_evidence_reference_mismatch"
+                )
+            if not self.evidence_identity_matches:
+                expected_reasons.append(
+                    "rule_validation_evidence_identity_mismatch"
+                )
+            if not self.evidence_configuration_matches:
+                expected_reasons.append(
+                    "rule_validation_evidence_configuration_mismatch"
+                )
+            if not self.validation_evidence_passed:
+                expected_reasons.append("rule_validation_not_passed")
+        if not self.tolerance_provenance_acceptable:
+            expected_reasons.append(
+                "rule_tolerance_provenance_not_scientifically_validated"
+            )
+
+        reasons = tuple(self.reasons)
+        if reasons != tuple(expected_reasons):
+            raise ValueError(
+                "Rule validation reasons must exactly describe structural "
+                "validation failures in deterministic order."
+            )
+        expected_validated = not expected_reasons
+        if self.scientifically_validated != expected_validated:
+            raise ValueError(
+                "scientifically_validated must agree with the complete "
+                "rule validation assessment."
+            )
+        object.__setattr__(self, "reasons", reasons)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe structural validation report."""
+
+        return {
+            "schema_version": self.schema_version,
+            "rule_id": self.rule_id,
+            "validation_status_declared": (
+                self.validation_status_declared
+            ),
+            "validation_evidence_present": (
+                self.validation_evidence_present
+            ),
+            "evidence_reference_matches": (
+                self.evidence_reference_matches
+            ),
+            "evidence_identity_matches": self.evidence_identity_matches,
+            "evidence_configuration_matches": (
+                self.evidence_configuration_matches
+            ),
+            "tolerance_provenance_acceptable": (
+                self.tolerance_provenance_acceptable
+            ),
+            "validation_evidence_passed": (
+                self.validation_evidence_passed
+            ),
+            "scientifically_validated": self.scientifically_validated,
+            "reasons": list(self.reasons),
+            "assessment_has_side_effects": False,
+            "scientific_validation_executed": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+
+def assess_instrument_channel_pairing_rule_scientific_validation(
+    rule: InstrumentChannelPairingRule,
+) -> InstrumentChannelPairingRuleScientificValidationReport:
+    """Assess typed evidence completeness without executing validation."""
+
+    if not isinstance(rule, InstrumentChannelPairingRule):
+        raise TypeError(
+            "rule must be an InstrumentChannelPairingRule."
+        )
+
+    evidence = rule.validation_evidence
+    evidence_present = evidence is not None
+    status_declared = rule.validation_status is (
+        InstrumentChannelPairingRuleValidationStatus
+        .SCIENTIFICALLY_VALIDATED
+    )
+    reference_matches = bool(
+        evidence_present
+        and rule.evidence_reference
+        == evidence.validation_result_reference
+    )
+    identity_matches = bool(
+        evidence_present
+        and evidence.identity_key
+        == (
+            rule.rule_id,
+            rule.reference_instrument,
+            rule.reference_channel,
+            rule.channel_instrument,
+            rule.channel,
+            rule.physical_wavelength,
+        )
+    )
+    configuration_matches = bool(
+        evidence_present
+        and evidence.configuration_key
+        == (
+            rule.pairing_method,
+            rule.time_unit,
+            rule.maximum_time_separation,
+            rule.tolerance_provenance,
+        )
+    )
+    provenance_acceptable = rule.tolerance_provenance is not (
+        InstrumentChannelPairingToleranceProvenance.CALLER_SUPPLIED
+    )
+    evidence_passed = bool(evidence_present and evidence.passed)
+
+    reasons: list[str] = []
+    if not status_declared:
+        reasons.append("rule_status_not_scientifically_validated")
+    if not evidence_present:
+        reasons.append("rule_validation_evidence_missing")
+    else:
+        if not reference_matches:
+            reasons.append(
+                "rule_validation_evidence_reference_mismatch"
+            )
+        if not identity_matches:
+            reasons.append(
+                "rule_validation_evidence_identity_mismatch"
+            )
+        if not configuration_matches:
+            reasons.append(
+                "rule_validation_evidence_configuration_mismatch"
+            )
+        if not evidence_passed:
+            reasons.append("rule_validation_not_passed")
+    if not provenance_acceptable:
+        reasons.append(
+            "rule_tolerance_provenance_not_scientifically_validated"
+        )
+
+    return InstrumentChannelPairingRuleScientificValidationReport(
+        rule_id=rule.rule_id,
+        validation_status_declared=status_declared,
+        validation_evidence_present=evidence_present,
+        evidence_reference_matches=reference_matches,
+        evidence_identity_matches=identity_matches,
+        evidence_configuration_matches=configuration_matches,
+        tolerance_provenance_acceptable=provenance_acceptable,
+        validation_evidence_passed=evidence_passed,
+        scientifically_validated=not reasons,
+        reasons=tuple(reasons),
+    )
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairingRuleCatalogueScientificValidationReport:
+    """Deterministic aggregate structural validation assessment."""
+
+    catalogue_id: str
+    validation_status_declared: bool
+    validation_evidence_present: bool
+    evidence_reference_matches: bool
+    evidence_identity_matches: bool
+    evidence_member_rule_ids_match: bool
+    evidence_member_validation_ids_match: bool
+    validation_evidence_passed: bool
+    all_rules_scientifically_validated: bool
+    unvalidated_rule_ids: tuple[str, ...]
+    scientifically_validated: bool
+    reasons: tuple[str, ...]
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCIENTIFIC_VALIDATION_REPORT_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCIENTIFIC_VALIDATION_REPORT_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported catalogue scientific-validation report schema "
+                f"version: {self.schema_version!r}."
+            )
+        object.__setattr__(
+            self,
+            "catalogue_id",
+            _normalize_scientific_validation_text(
+                self.catalogue_id,
+                name="catalogue_id",
+            ),
+        )
+        unvalidated_rule_ids = tuple(self.unvalidated_rule_ids)
+        if len(set(unvalidated_rule_ids)) != len(unvalidated_rule_ids):
+            raise ValueError("unvalidated_rule_ids must be unique.")
+
+        for name in (
+            "validation_status_declared",
+            "validation_evidence_present",
+            "evidence_reference_matches",
+            "evidence_identity_matches",
+            "evidence_member_rule_ids_match",
+            "evidence_member_validation_ids_match",
+            "validation_evidence_passed",
+            "all_rules_scientifically_validated",
+            "scientifically_validated",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool.")
+
+        if self.all_rules_scientifically_validated != (
+            not unvalidated_rule_ids
+        ):
+            raise ValueError(
+                "all_rules_scientifically_validated must agree with "
+                "unvalidated_rule_ids."
+            )
+
+        expected_reasons: list[str] = []
+        if not self.validation_status_declared:
+            expected_reasons.append(
+                "catalogue_status_not_scientifically_validated"
+            )
+        if not self.validation_evidence_present:
+            expected_reasons.append(
+                "catalogue_validation_evidence_missing"
+            )
+        else:
+            if not self.evidence_reference_matches:
+                expected_reasons.append(
+                    "catalogue_validation_evidence_reference_mismatch"
+                )
+            if not self.evidence_identity_matches:
+                expected_reasons.append(
+                    "catalogue_validation_evidence_identity_mismatch"
+                )
+            if not self.evidence_member_rule_ids_match:
+                expected_reasons.append(
+                    "catalogue_validation_member_rule_ids_mismatch"
+                )
+            if not self.evidence_member_validation_ids_match:
+                expected_reasons.append(
+                    "catalogue_validation_member_validation_ids_mismatch"
+                )
+            if not self.validation_evidence_passed:
+                expected_reasons.append(
+                    "catalogue_validation_not_passed"
+                )
+        if not self.all_rules_scientifically_validated:
+            expected_reasons.append(
+                "member_rules_not_all_scientifically_validated"
+            )
+
+        reasons = tuple(self.reasons)
+        if reasons != tuple(expected_reasons):
+            raise ValueError(
+                "Catalogue validation reasons must exactly describe "
+                "structural failures in deterministic order."
+            )
+        expected_validated = not expected_reasons
+        if self.scientifically_validated != expected_validated:
+            raise ValueError(
+                "scientifically_validated must agree with the complete "
+                "catalogue validation assessment."
+            )
+
+        object.__setattr__(
+            self,
+            "unvalidated_rule_ids",
+            unvalidated_rule_ids,
+        )
+        object.__setattr__(self, "reasons", reasons)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe aggregate validation report."""
+
+        return {
+            "schema_version": self.schema_version,
+            "catalogue_id": self.catalogue_id,
+            "validation_status_declared": (
+                self.validation_status_declared
+            ),
+            "validation_evidence_present": (
+                self.validation_evidence_present
+            ),
+            "evidence_reference_matches": (
+                self.evidence_reference_matches
+            ),
+            "evidence_identity_matches": self.evidence_identity_matches,
+            "evidence_member_rule_ids_match": (
+                self.evidence_member_rule_ids_match
+            ),
+            "evidence_member_validation_ids_match": (
+                self.evidence_member_validation_ids_match
+            ),
+            "validation_evidence_passed": (
+                self.validation_evidence_passed
+            ),
+            "all_rules_scientifically_validated": (
+                self.all_rules_scientifically_validated
+            ),
+            "unvalidated_rule_ids": list(self.unvalidated_rule_ids),
+            "scientifically_validated": self.scientifically_validated,
+            "reasons": list(self.reasons),
+            "assessment_has_side_effects": False,
+            "scientific_validation_executed": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+
+def assess_instrument_channel_pairing_rule_catalogue_scientific_validation(
+    catalogue: InstrumentChannelPairingRuleCatalogue,
+) -> InstrumentChannelPairingRuleCatalogueScientificValidationReport:
+    """Assess aggregate typed evidence without executing validation."""
+
+    if not isinstance(
+        catalogue,
+        InstrumentChannelPairingRuleCatalogue,
+    ):
+        raise TypeError(
+            "catalogue must be an InstrumentChannelPairingRuleCatalogue."
+        )
+
+    evidence = catalogue.validation_evidence
+    evidence_present = evidence is not None
+    status_declared = catalogue.validation_status is (
+        InstrumentChannelPairingRuleValidationStatus
+        .SCIENTIFICALLY_VALIDATED
+    )
+    reference_matches = bool(
+        evidence_present
+        and catalogue.evidence_reference
+        == evidence.validation_result_reference
+    )
+    identity_matches = bool(
+        evidence_present
+        and (
+            evidence.catalogue_id,
+            evidence.catalogue_version,
+            evidence.catalogue_schema_version,
+        )
+        == (
+            catalogue.catalogue_id,
+            catalogue.catalogue_version,
+            catalogue.schema_version,
+        )
+    )
+
+    member_rule_ids = tuple(rule.rule_id for rule in catalogue.rules)
+    member_validation_ids = tuple(
+        (
+            rule.validation_evidence.validation_id
+            if rule.validation_evidence is not None
+            else ""
+        )
+        for rule in catalogue.rules
+    )
+    member_rule_ids_match = bool(
+        evidence_present
+        and evidence.member_rule_ids == member_rule_ids
+    )
+    member_validation_ids_match = bool(
+        evidence_present
+        and evidence.member_validation_ids == member_validation_ids
+    )
+    evidence_passed = bool(evidence_present and evidence.passed)
+
+    unvalidated_rule_ids = tuple(
+        rule.rule_id
+        for rule in catalogue.rules
+        if not rule.scientifically_validated
+    )
+    all_rules_validated = not unvalidated_rule_ids
+
+    reasons: list[str] = []
+    if not status_declared:
+        reasons.append(
+            "catalogue_status_not_scientifically_validated"
+        )
+    if not evidence_present:
+        reasons.append("catalogue_validation_evidence_missing")
+    else:
+        if not reference_matches:
+            reasons.append(
+                "catalogue_validation_evidence_reference_mismatch"
+            )
+        if not identity_matches:
+            reasons.append(
+                "catalogue_validation_evidence_identity_mismatch"
+            )
+        if not member_rule_ids_match:
+            reasons.append(
+                "catalogue_validation_member_rule_ids_mismatch"
+            )
+        if not member_validation_ids_match:
+            reasons.append(
+                "catalogue_validation_member_validation_ids_mismatch"
+            )
+        if not evidence_passed:
+            reasons.append("catalogue_validation_not_passed")
+    if not all_rules_validated:
+        reasons.append(
+            "member_rules_not_all_scientifically_validated"
+        )
+
+    return (
+        InstrumentChannelPairingRuleCatalogueScientificValidationReport(
+            catalogue_id=catalogue.catalogue_id,
+            validation_status_declared=status_declared,
+            validation_evidence_present=evidence_present,
+            evidence_reference_matches=reference_matches,
+            evidence_identity_matches=identity_matches,
+            evidence_member_rule_ids_match=member_rule_ids_match,
+            evidence_member_validation_ids_match=(
+                member_validation_ids_match
+            ),
+            validation_evidence_passed=evidence_passed,
+            all_rules_scientifically_validated=all_rules_validated,
+            unvalidated_rule_ids=unvalidated_rule_ids,
+            scientifically_validated=not reasons,
+            reasons=tuple(reasons),
+        )
+    )
 
 
 @dataclass(frozen=True)
