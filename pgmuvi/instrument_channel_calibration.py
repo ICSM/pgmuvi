@@ -48,6 +48,12 @@ INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_ACTIVATION_REQUEST_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_COMPATIBILITY_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-rule-catalogue-compatibility-v1"
 )
+INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_LOADED_SNAPSHOT_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-catalogue-loaded-snapshot-v1"
+)
+INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_ACTIVATION_SNAPSHOT_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-catalogue-activation-snapshot-v1"
+)
 INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-rule-request-v1"
 )
@@ -86,8 +92,10 @@ __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER",
     "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_ACTIVATION_REQUEST_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_ACTIVATION_SNAPSHOT_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_COMPATIBILITY_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_DISCOVERY_REQUEST_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_LOADED_SNAPSHOT_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION",
@@ -119,9 +127,16 @@ __all__ = [
     "InstrumentChannelPairingRule",
     "InstrumentChannelPairingRuleCatalogue",
     "InstrumentChannelPairingRuleCatalogueActivationRequest",
+    "InstrumentChannelPairingRuleCatalogueActivationSnapshot",
+    "InstrumentChannelPairingRuleCatalogueCompatibilityError",
     "InstrumentChannelPairingRuleCatalogueCompatibilityReport",
     "InstrumentChannelPairingRuleCatalogueDiscoveryRequest",
+    "InstrumentChannelPairingRuleCatalogueError",
+    "InstrumentChannelPairingRuleCatalogueLoadedSnapshot",
+    "InstrumentChannelPairingRuleCatalogueParseError",
     "InstrumentChannelPairingRuleCatalogueSource",
+    "InstrumentChannelPairingRuleCatalogueSourceAccessError",
+    "InstrumentChannelPairingRuleCatalogueValidationError",
     "InstrumentChannelPairingRuleRequest",
     "InstrumentChannelPairingRuleValidationStatus",
     "InstrumentChannelPairingToleranceProvenance",
@@ -174,6 +189,43 @@ class InstrumentChannelPairingRuleCatalogueSource(_StringEnum):
     """Explicit source kind allowed by the discovery contract."""
 
     EXPLICIT_PATH = "explicit_path"
+
+
+class InstrumentChannelPairingRuleCatalogueError(RuntimeError):
+    """Base error for explicit pairing-rule catalogue loading or activation."""
+
+
+class InstrumentChannelPairingRuleCatalogueSourceAccessError(
+    InstrumentChannelPairingRuleCatalogueError
+):
+    """Raised when the caller-supplied catalogue source cannot be accessed."""
+
+
+class InstrumentChannelPairingRuleCatalogueParseError(
+    InstrumentChannelPairingRuleCatalogueError
+):
+    """Raised when source bytes are not strict UTF-8 JSON."""
+
+
+class InstrumentChannelPairingRuleCatalogueValidationError(
+    InstrumentChannelPairingRuleCatalogueError
+):
+    """Raised when parsed JSON violates the strict catalogue contract."""
+
+
+class InstrumentChannelPairingRuleCatalogueCompatibilityError(
+    InstrumentChannelPairingRuleCatalogueError
+):
+    """Raised when a valid catalogue is not exactly activation-compatible."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reasons: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.reasons = tuple(reasons)
 
 
 class InstrumentChannelPairingToleranceProvenance(_StringEnum):
@@ -1697,7 +1749,7 @@ class InstrumentChannelPairingRuleCatalogueDiscoveryRequest:
             "environment_lookup_permitted": False,
             "working_directory_scan_permitted": False,
             "packaged_catalogue_fallback_permitted": False,
-            "discovery_implemented": False,
+            "discovery_implemented": True,
             "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
         }
 
@@ -1796,7 +1848,7 @@ class InstrumentChannelPairingRuleCatalogueActivationRequest:
                 self.workflow_integration_requested
             ),
             "silent_activation_permitted": False,
-            "activation_implemented": False,
+            "activation_implemented": True,
             "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
         }
 
@@ -2018,10 +2070,296 @@ def assess_instrument_channel_pairing_rule_catalogue_compatibility(
     )
 
 
+@dataclass(frozen=True)
+class InstrumentChannelPairingRuleCatalogueLoadedSnapshot:
+    """Immutable result of loading one explicit catalogue source.
+
+    The snapshot preserves the caller request, strict catalogue object,
+    resolved source identity, byte size, content digest, and exact
+    compatibility report. Loading does not activate the catalogue.
+    """
+
+    discovery_request: InstrumentChannelPairingRuleCatalogueDiscoveryRequest
+    catalogue: InstrumentChannelPairingRuleCatalogue
+    resolved_source_reference: str
+    source_size_bytes: int
+    source_sha256: str
+    compatibility_report: (
+        InstrumentChannelPairingRuleCatalogueCompatibilityReport
+    )
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_LOADED_SNAPSHOT_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_LOADED_SNAPSHOT_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported loaded pairing-rule catalogue snapshot schema "
+                f"version: {self.schema_version!r}."
+            )
+        if not isinstance(
+            self.discovery_request,
+            InstrumentChannelPairingRuleCatalogueDiscoveryRequest,
+        ):
+            raise TypeError(
+                "discovery_request must be an "
+                "InstrumentChannelPairingRuleCatalogueDiscoveryRequest."
+            )
+        if not isinstance(
+            self.catalogue,
+            InstrumentChannelPairingRuleCatalogue,
+        ):
+            raise TypeError(
+                "catalogue must be an InstrumentChannelPairingRuleCatalogue."
+            )
+        if not isinstance(
+            self.compatibility_report,
+            InstrumentChannelPairingRuleCatalogueCompatibilityReport,
+        ):
+            raise TypeError(
+                "compatibility_report must be an "
+                "InstrumentChannelPairingRuleCatalogueCompatibilityReport."
+            )
+
+        resolved_source_reference = (
+            InstrumentChannelPairingRule._normalize_required_text(
+                self.resolved_source_reference,
+                name="resolved_source_reference",
+            )
+        )
+        if isinstance(self.source_size_bytes, (bool, np.bool_)):
+            raise TypeError("source_size_bytes must be an integer.")
+        source_size_bytes = int(self.source_size_bytes)
+        if source_size_bytes < 0:
+            raise ValueError("source_size_bytes must be non-negative.")
+
+        source_sha256 = (
+            InstrumentChannelPairingRule._normalize_required_text(
+                self.source_sha256,
+                name="source_sha256",
+            )
+        )
+        if (
+            len(source_sha256) != 64
+            or source_sha256 != source_sha256.lower()
+            or any(
+                character not in "0123456789abcdef"
+                for character in source_sha256
+            )
+        ):
+            raise ValueError(
+                "source_sha256 must be a lowercase 64-character hexadecimal "
+                "SHA-256 digest."
+            )
+
+        expected_request = (
+            InstrumentChannelPairingRuleCatalogueActivationRequest(
+                catalogue_id=(
+                    self.discovery_request.expected_catalogue_id
+                ),
+                catalogue_version=(
+                    self.discovery_request.expected_catalogue_version
+                ),
+                catalogue_schema_version=(
+                    self.discovery_request.expected_catalogue_schema_version
+                ),
+            )
+        )
+        if self.compatibility_report.request != expected_request:
+            raise ValueError(
+                "compatibility_report request must exactly match the "
+                "discovery request expectations."
+            )
+        if (
+            self.compatibility_report.observed_catalogue_id
+            != self.catalogue.catalogue_id
+            or self.compatibility_report.observed_catalogue_version
+            != self.catalogue.catalogue_version
+            or self.compatibility_report.observed_catalogue_schema_version
+            != self.catalogue.schema_version
+        ):
+            raise ValueError(
+                "compatibility_report observed identity must match catalogue."
+            )
+        if (
+            not self.compatibility_report.compatible
+            or not self.compatibility_report.activation_permitted
+        ):
+            raise ValueError(
+                "A loaded snapshot requires an exactly compatible catalogue."
+            )
+
+        object.__setattr__(
+            self,
+            "resolved_source_reference",
+            resolved_source_reference,
+        )
+        object.__setattr__(
+            self,
+            "source_size_bytes",
+            source_size_bytes,
+        )
+        object.__setattr__(self, "source_sha256", source_sha256)
+
+    @property
+    def source_reference(self) -> str:
+        """Return the caller-supplied explicit source reference."""
+
+        return self.discovery_request.source_reference
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe loaded-snapshot representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "discovery_request": self.discovery_request.to_dict(),
+            "source_reference": self.source_reference,
+            "resolved_source_reference": self.resolved_source_reference,
+            "source_size_bytes": self.source_size_bytes,
+            "source_sha256": self.source_sha256,
+            "catalogue": self.catalogue.to_dict(),
+            "compatibility_report": self.compatibility_report.to_dict(),
+            "catalogue_loaded": True,
+            "catalogue_activated": False,
+            "process_global_state_modified": False,
+            "workflow_integration_active": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairingRuleCatalogueActivationSnapshot:
+    """Immutable local activation result with no ambient state mutation."""
+
+    activation_request: InstrumentChannelPairingRuleCatalogueActivationRequest
+    loaded_snapshot: InstrumentChannelPairingRuleCatalogueLoadedSnapshot
+    compatibility_report: (
+        InstrumentChannelPairingRuleCatalogueCompatibilityReport
+    )
+    local_only: bool = True
+    process_global_state_modified: bool = False
+    workflow_integration_active: bool = False
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_ACTIVATION_SNAPSHOT_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_ACTIVATION_SNAPSHOT_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported pairing-rule catalogue activation-snapshot "
+                f"schema version: {self.schema_version!r}."
+            )
+        if not isinstance(
+            self.activation_request,
+            InstrumentChannelPairingRuleCatalogueActivationRequest,
+        ):
+            raise TypeError(
+                "activation_request must be an "
+                "InstrumentChannelPairingRuleCatalogueActivationRequest."
+            )
+        if not isinstance(
+            self.loaded_snapshot,
+            InstrumentChannelPairingRuleCatalogueLoadedSnapshot,
+        ):
+            raise TypeError(
+                "loaded_snapshot must be an "
+                "InstrumentChannelPairingRuleCatalogueLoadedSnapshot."
+            )
+        if not isinstance(
+            self.compatibility_report,
+            InstrumentChannelPairingRuleCatalogueCompatibilityReport,
+        ):
+            raise TypeError(
+                "compatibility_report must be an "
+                "InstrumentChannelPairingRuleCatalogueCompatibilityReport."
+            )
+
+        for name in (
+            "local_only",
+            "process_global_state_modified",
+            "workflow_integration_active",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool.")
+
+        if not self.local_only:
+            raise ValueError("Catalogue activation must remain local-only.")
+        if self.process_global_state_modified:
+            raise ValueError(
+                "Catalogue activation cannot modify process-global state."
+            )
+        if self.workflow_integration_active:
+            raise ValueError(
+                "Catalogue activation cannot implicitly enable workflow "
+                "integration."
+            )
+        if self.compatibility_report.request != self.activation_request:
+            raise ValueError(
+                "compatibility_report request must match activation_request."
+            )
+        if (
+            self.compatibility_report.observed_catalogue_id
+            != self.catalogue.catalogue_id
+            or self.compatibility_report.observed_catalogue_version
+            != self.catalogue.catalogue_version
+            or self.compatibility_report.observed_catalogue_schema_version
+            != self.catalogue.schema_version
+        ):
+            raise ValueError(
+                "compatibility_report observed identity must match catalogue."
+            )
+        if (
+            not self.compatibility_report.compatible
+            or not self.compatibility_report.activation_permitted
+        ):
+            raise ValueError(
+                "An activation snapshot requires exact compatibility."
+            )
+
+    @property
+    def catalogue(self) -> InstrumentChannelPairingRuleCatalogue:
+        """Return the immutable catalogue carried by the loaded snapshot."""
+
+        return self.loaded_snapshot.catalogue
+
+    @property
+    def source_reference(self) -> str:
+        """Return the caller-supplied explicit source reference."""
+
+        return self.loaded_snapshot.source_reference
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe local-activation representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "activation_request": self.activation_request.to_dict(),
+            "loaded_snapshot": self.loaded_snapshot.to_dict(),
+            "compatibility_report": self.compatibility_report.to_dict(),
+            "catalogue_id": self.catalogue.catalogue_id,
+            "catalogue_version": self.catalogue.catalogue_version,
+            "catalogue_schema_version": self.catalogue.schema_version,
+            "source_reference": self.source_reference,
+            "local_only": self.local_only,
+            "process_global_state_modified": (
+                self.process_global_state_modified
+            ),
+            "workflow_integration_active": (
+                self.workflow_integration_active
+            ),
+            "catalogue_activated": True,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+
 def discover_instrument_channel_pairing_rule_catalogue(
     request: InstrumentChannelPairingRuleCatalogueDiscoveryRequest,
-) -> InstrumentChannelPairingRuleCatalogue:
-    """Fail closed until explicit-source catalogue discovery is implemented."""
+) -> InstrumentChannelPairingRuleCatalogueLoadedSnapshot:
+    """Load one explicit UTF-8 JSON catalogue and enforce compatibility."""
 
     if not isinstance(
         request,
@@ -2031,18 +2369,128 @@ def discover_instrument_channel_pairing_rule_catalogue(
             "request must be an "
             "InstrumentChannelPairingRuleCatalogueDiscoveryRequest."
         )
-    raise NotImplementedError(
-        "Instrument-channel pairing-rule catalogue discovery is contract-only. "
-        "No explicit file loader, ambient search, environment lookup, package "
-        "resource lookup, or built-in populated catalogue is implemented."
+    if (
+        request.source
+        is not InstrumentChannelPairingRuleCatalogueSource.EXPLICIT_PATH
+    ):
+        raise InstrumentChannelPairingRuleCatalogueSourceAccessError(
+            "Only an explicit catalogue path is implemented."
+        )
+
+    import hashlib
+    import json
+    from pathlib import Path
+
+    supplied_path = Path(request.source_reference).expanduser()
+    try:
+        resolved_path = supplied_path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise InstrumentChannelPairingRuleCatalogueSourceAccessError(
+            "Cannot resolve explicit pairing-rule catalogue source "
+            f"{request.source_reference!r}: {exc}"
+        ) from exc
+
+    if not resolved_path.is_file():
+        raise InstrumentChannelPairingRuleCatalogueSourceAccessError(
+            "Explicit pairing-rule catalogue source is not a regular file: "
+            f"{resolved_path!s}."
+        )
+
+    try:
+        source_bytes = resolved_path.read_bytes()
+    except OSError as exc:
+        raise InstrumentChannelPairingRuleCatalogueSourceAccessError(
+            "Cannot read explicit pairing-rule catalogue source "
+            f"{resolved_path!s}: {exc}"
+        ) from exc
+
+    try:
+        source_text = source_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise InstrumentChannelPairingRuleCatalogueParseError(
+            "Explicit pairing-rule catalogue source is not valid UTF-8."
+        ) from exc
+
+    def reject_duplicate_keys(
+        pairs: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(
+                    f"Duplicate JSON object key {key!r} is not permitted."
+                )
+            result[key] = value
+        return result
+
+    def reject_non_finite_constant(value: str) -> None:
+        raise ValueError(
+            f"Non-finite JSON numeric constant {value!r} is not permitted."
+        )
+
+    try:
+        payload = json.loads(
+            source_text,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_non_finite_constant,
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise InstrumentChannelPairingRuleCatalogueParseError(
+            "Explicit pairing-rule catalogue source is not strict JSON: "
+            f"{exc}"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise InstrumentChannelPairingRuleCatalogueValidationError(
+            "Pairing-rule catalogue JSON must contain one top-level object."
+        )
+
+    try:
+        catalogue = InstrumentChannelPairingRuleCatalogue.from_dict(payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise InstrumentChannelPairingRuleCatalogueValidationError(
+            "Parsed pairing-rule catalogue violates the strict semantic "
+            f"contract: {exc}"
+        ) from exc
+
+    compatibility_request = (
+        InstrumentChannelPairingRuleCatalogueActivationRequest(
+            catalogue_id=request.expected_catalogue_id,
+            catalogue_version=request.expected_catalogue_version,
+            catalogue_schema_version=(
+                request.expected_catalogue_schema_version
+            ),
+        )
+    )
+    compatibility_report = (
+        assess_instrument_channel_pairing_rule_catalogue_compatibility(
+            compatibility_request,
+            catalogue,
+        )
+    )
+    if not compatibility_report.compatible:
+        reasons = compatibility_report.reasons
+        raise InstrumentChannelPairingRuleCatalogueCompatibilityError(
+            "Loaded pairing-rule catalogue is not exactly compatible: "
+            + ", ".join(reasons),
+            reasons=reasons,
+        )
+
+    return InstrumentChannelPairingRuleCatalogueLoadedSnapshot(
+        discovery_request=request,
+        catalogue=catalogue,
+        resolved_source_reference=str(resolved_path),
+        source_size_bytes=len(source_bytes),
+        source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        compatibility_report=compatibility_report,
     )
 
 
 def activate_instrument_channel_pairing_rule_catalogue(
     request: InstrumentChannelPairingRuleCatalogueActivationRequest,
-    catalogue: InstrumentChannelPairingRuleCatalogue,
-) -> InstrumentChannelPairingRuleCatalogue:
-    """Fail closed until catalogue activation is implemented."""
+    loaded_snapshot: InstrumentChannelPairingRuleCatalogueLoadedSnapshot,
+) -> InstrumentChannelPairingRuleCatalogueActivationSnapshot:
+    """Return an explicit local activation snapshot without global mutation."""
 
     if not isinstance(
         request,
@@ -2053,16 +2501,33 @@ def activate_instrument_channel_pairing_rule_catalogue(
             "InstrumentChannelPairingRuleCatalogueActivationRequest."
         )
     if not isinstance(
-        catalogue,
-        InstrumentChannelPairingRuleCatalogue,
+        loaded_snapshot,
+        InstrumentChannelPairingRuleCatalogueLoadedSnapshot,
     ):
         raise TypeError(
-            "catalogue must be an InstrumentChannelPairingRuleCatalogue."
+            "loaded_snapshot must be an "
+            "InstrumentChannelPairingRuleCatalogueLoadedSnapshot."
         )
-    raise NotImplementedError(
-        "Instrument-channel pairing-rule catalogue activation is contract-only. "
-        "No catalogue is activated or integrated into calibration planning or "
-        "normal light-curve fitting."
+
+    compatibility_report = (
+        assess_instrument_channel_pairing_rule_catalogue_compatibility(
+            request,
+            loaded_snapshot.catalogue,
+        )
+    )
+    if not compatibility_report.compatible:
+        reasons = compatibility_report.reasons
+        raise InstrumentChannelPairingRuleCatalogueCompatibilityError(
+            "Pairing-rule catalogue cannot be activated because exact "
+            "compatibility failed: "
+            + ", ".join(reasons),
+            reasons=reasons,
+        )
+
+    return InstrumentChannelPairingRuleCatalogueActivationSnapshot(
+        activation_request=request,
+        loaded_snapshot=loaded_snapshot,
+        compatibility_report=compatibility_report,
     )
 
 

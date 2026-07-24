@@ -144,16 +144,19 @@ Wavelength-model extensions
     deserialization.  The caller-supplied catalogue can participate only at the
     existing explicit resolver boundary.
 
-    The discovery and activation contract now defines explicit-source requests,
-    exact compatibility assessment, validated-only activation policy, and
-    fail-closed public callables.  This contract does not close
-    ``TBD[instrument-channel-calibration]``.  The discovery and activation
-    callables intentionally raise ``NotImplementedError`` until explicit-source
-    loading and catalogue activation are implemented.
+    The explicit-source loading and local activation implementation is now
+    available.  The
+    loader requires one caller-supplied path, strict UTF-8 JSON, strict semantic
+    deserialization, exact compatibility, and distinct source-access, parse,
+    semantic-validation, and compatibility failures.  It returns an
+    immutable loaded-catalogue snapshot with resolved-source and content-digest
+    provenance.  Explicit activation returns a separate
+    immutable local activation snapshot without process-global state or
+    implicit workflow integration.
 
-    A populated scientifically validated rule catalogue, normal light-curve
-    workflow integration, and representative calibration validation remain
-    future work.
+    This does not close ``TBD[instrument-channel-calibration]``.  A populated scientifically validated rule catalogue remains future work, together with
+    normal light-curve workflow integration and representative calibration
+    validation.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

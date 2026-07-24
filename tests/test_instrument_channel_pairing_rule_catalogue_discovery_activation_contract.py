@@ -125,7 +125,7 @@ class TestPairingRuleCatalogueDiscoveryActivationContract(
         self.assertFalse(
             payload["packaged_catalogue_fallback_permitted"]
         )
-        self.assertFalse(payload["discovery_implemented"])
+        self.assertTrue(payload["discovery_implemented"])
 
         with self.assertRaises(FrozenInstanceError):
             request.source_reference = "replacement.json"
@@ -160,7 +160,7 @@ class TestPairingRuleCatalogueDiscoveryActivationContract(
         self.assertFalse(payload["allow_catalogue_fallback"])
         self.assertFalse(payload["workflow_integration_requested"])
         self.assertFalse(payload["silent_activation_permitted"])
-        self.assertFalse(payload["activation_implemented"])
+        self.assertTrue(payload["activation_implemented"])
 
         with self.assertRaises(FrozenInstanceError):
             request.catalogue_version = "replacement"
@@ -335,29 +335,17 @@ class TestPairingRuleCatalogueDiscoveryActivationContract(
                 reasons=("catalogue_id_mismatch",),
             )
 
-    def test_discovery_and_activation_callables_fail_closed(self):
-        discovery_request = self._discovery_request()
-        activation_request = self._activation_request()
-        catalogue = self._catalogue()
+    def test_discovery_and_activation_callables_require_typed_inputs(self):
+        with self.assertRaises(TypeError):
+            discover_instrument_channel_pairing_rule_catalogue(object())
 
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            "discovery is contract-only",
-        ):
-            discover_instrument_channel_pairing_rule_catalogue(
-                discovery_request
-            )
-
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            "activation is contract-only",
-        ):
+        with self.assertRaises(TypeError):
             activate_instrument_channel_pairing_rule_catalogue(
-                activation_request,
-                catalogue,
+                object(),
+                object(),
             )
 
-    def test_public_documentation_records_fail_closed_boundary(self):
+    def test_public_documentation_records_implemented_boundary(self):
         repo = Path(__file__).resolve().parents[1]
         api_text = (
             repo
@@ -368,22 +356,21 @@ class TestPairingRuleCatalogueDiscoveryActivationContract(
         ).read_text(encoding="utf-8")
 
         for token in (
-            "InstrumentChannelPairingRuleCatalogueDiscoveryRequest",
-            "InstrumentChannelPairingRuleCatalogueActivationRequest",
-            "assess_instrument_channel_pairing_rule_catalogue_compatibility",
-            "one explicit source reference",
-            "Ambient",
-            "silent activation",
-            "NotImplementedError",
+            "InstrumentChannelPairingRuleCatalogueLoadedSnapshot",
+            "InstrumentChannelPairingRuleCatalogueActivationSnapshot",
+            "strict UTF-8 JSON",
+            "duplicate object keys",
+            "source-access, parse, semantic-validation, and compatibility",
+            "process-global",
             "never falls back",
         ):
             self.assertIn(token, api_text)
 
         for token in (
-            "discovery and activation contract",
-            "exact compatibility assessment",
-            "fail-closed public",
-            "NotImplementedError",
+            "explicit-source loading and local activation",
+            "immutable loaded-catalogue snapshot",
+            "immutable local activation snapshot",
+            "process-global",
             "populated scientifically",
             "TBD[instrument-channel-calibration]",
         ):
