@@ -131,10 +131,14 @@ Wavelength-model extensions
     observational-channel records, and defines the explicit request,
     per-observational-channel block, row-identity, disposition, and
     dataset-summary contract for ordinary predictive propagation, and
-    activates dataset-level predictive propagation through explicit requests.
-    This does not close the marker:
-    scientifically validated instrument-specific tolerance guidance, workflow
-    integration, and representative calibration validation remain future work.
+    activates dataset-level predictive propagation through explicit requests,
+    and defines an immutable instrument-specific pairing-rule contract with
+    explicit instrument/channel identity, tolerance provenance, validation
+    status, evidence references, and a strict resolution request boundary.
+    This does not close the marker: automatic rule resolution remains unimplemented,
+    and a populated scientifically validated rule catalogue,
+    workflow integration, and representative calibration validation remain
+    future work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

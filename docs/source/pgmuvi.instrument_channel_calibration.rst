@@ -38,6 +38,33 @@ Both construction methods currently use a dynamic-programming grid with
 channels should restrict the input observations to the time range relevant to
 the calibration before constructing pairs.
 
+Instrument-specific pairing and tolerance contract
+--------------------------------------------------
+
+The immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRule`
+record defines a JSON-safe contract for instrument-specific pairing guidance.
+It records explicit reference and target instrument identities, explicit
+observational-channel identities, physical wavelength, pairing method, time
+unit, maximum separation, tolerance provenance, scientific-validation status,
+and an evidence reference when validation is claimed.  Physical wavelength is
+contextual metadata and is never used in place of observational-channel
+identity.
+
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleRequest`
+records the exact instrument, observational-channel, and physical-wavelength
+identity for a future lookup.  The
+:func:`~pgmuvi.instrument_channel_calibration.resolve_instrument_channel_pairing_rule`
+callable validates requests and candidate-rule collections, including duplicate
+identifier and ambiguous-identity rejection.
+
+This contract is **defined but not activated**.  Valid resolution requests raise
+``NotImplementedError``.  No rule is selected automatically, and a validated
+rule record does not by itself authorize automatic reference-channel,
+pairing-method, or time-tolerance selection.  Populating rules with
+instrument-specific evidence and activating rule resolution require separate
+implementation and validation work.
+
 Dataset-level orchestration contract
 ------------------------------------
 
@@ -305,8 +332,8 @@ The low-level paired affine fit and application primitives do not complete the
 instrument-channel calibration work.  The marker remains open because PGMUVI
 still lacks:
 
-* scientifically validated instrument-specific rules for choosing
-  pairing methods and tolerances;
+* a populated and validated instrument-specific pairing-rule catalogue
+  plus activation of automatic rule resolution;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.
 
