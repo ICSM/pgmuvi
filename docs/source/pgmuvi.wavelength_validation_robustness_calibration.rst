@@ -44,10 +44,10 @@ These results are advisory evidence only.  They do not perform automatic
 model selection.  Generated run records and reports remain local under
 ``validation_outputs/`` and are intentionally excluded from version
 control.  The maintained
-:doc:`notebooks/tutorial_wavelength_constraints` notebook explains these
-empirical boundaries alongside constraint provenance, initialization, fitted
-values, and distances from bounds without depending on the generated output
-directory.
+:doc:`notebooks/tutorial_wavelength_constraints` notebook applies the maintained
+constraint mechanism in bounded real-data fits.  It reports provenance, initial
+and fitted parameter positions, predictive light curves, uncertainty intervals,
+and residuals without depending on the generated validation-output directory.
 
 .. automodule:: pgmuvi.wavelength_validation_robustness_calibration
    :members:

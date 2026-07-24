@@ -1677,7 +1677,7 @@ class ACFResult:
     lag: torch.Tensor
     acf: torch.Tensor
     method: str
-    counts: torch.Tensor | None = None
+    counts: "torch.Tensor | None" = None
     normalized: bool = True
     band: str | float | None = None
 
@@ -23464,6 +23464,69 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return scale, lim
 
+    def _plot_observational_channel_data(
+        self,
+        ax,
+        row_mask,
+        *,
+        default_label="Observed data",
+    ):
+        """Plot row-aligned observations without merging channel identity."""
+        mask_array = row_mask.detach().cpu().numpy().astype(bool)
+        channel_labels = self.observational_channel_labels
+        yerr = getattr(self, "yerr", None)
+
+        if channel_labels is None or len(channel_labels) != len(mask_array):
+            x_values = self.xdata[row_mask, 0].detach().cpu().numpy()
+            y_values = self.ydata[row_mask].detach().cpu().numpy()
+            if yerr is not None:
+                ax.errorbar(
+                    x_values,
+                    y_values,
+                    yerr=yerr[row_mask].detach().cpu().numpy(),
+                    fmt="o",
+                    linestyle="none",
+                    label=default_label,
+                )
+            else:
+                ax.plot(
+                    x_values,
+                    y_values,
+                    "o",
+                    linestyle="none",
+                    label=default_label,
+                )
+            return
+
+        labels = np.asarray(channel_labels, dtype=str)
+        labels_for_wavelength = labels[mask_array]
+        for label in dict.fromkeys(labels_for_wavelength.tolist()):
+            channel_mask_array = mask_array & (labels == label)
+            channel_mask = torch.as_tensor(
+                channel_mask_array,
+                dtype=torch.bool,
+                device=self.xdata.device,
+            )
+            x_values = self.xdata[channel_mask, 0].detach().cpu().numpy()
+            y_values = self.ydata[channel_mask].detach().cpu().numpy()
+            if yerr is not None:
+                ax.errorbar(
+                    x_values,
+                    y_values,
+                    yerr=yerr[channel_mask].detach().cpu().numpy(),
+                    fmt="o",
+                    linestyle="none",
+                    label=str(label),
+                )
+            else:
+                ax.plot(
+                    x_values,
+                    y_values,
+                    "o",
+                    linestyle="none",
+                    label=str(label),
+                )
+
     def _plot_data_only(self, ylim=None, yscale="auto", show=False):
         """Plot only the data, without any GP predictions.
 
@@ -23486,20 +23549,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 fig = plt.figure()
                 ax = fig.add_subplot(111)
 
-                if hasattr(self, "yerr") and self.yerr is not None:
-                    ax.errorbar(
-                        x_plot,
-                        y_plot,
-                        yerr=self.yerr[mask].cpu().numpy(),
-                        fmt="ko",
-                        label="Observed",
-                    )
-                else:
-                    ax.plot(x_plot, y_plot, "ko", label="Observed")
+                self._plot_observational_channel_data(
+                    ax,
+                    mask,
+                    default_label="Observed data",
+                )
 
-                ax.set_ylabel("y")
-                ax.set_xlabel("x")
-                ax.set_title(f"y vs x for {val}")
+                ax.set_ylabel("Flux")
+                ax.set_xlabel("Time")
+                ax.set_title(
+                    f"Observed data at physical wavelength {float(val):g}"
+                )
 
                 current_yscale, current_ylim = self._yscale_and_ylim(
                     y_plot, yscale, ylim
@@ -23631,43 +23691,36 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             x_fine_tmp = self.transform_x(x_fine_tmp_raw)
 
             observed_pred = self.likelihood(self.model(x_fine_tmp))
-            ax.plot(x_fine_raw.cpu().numpy(), observed_pred.mean.cpu().numpy(),
-                    "b", label = "Mean")
+            ax.plot(
+                x_fine_raw.cpu().numpy(),
+                observed_pred.mean.detach().cpu().numpy(),
+                label="Predictive mean",
+            )
 
             lower, upper = observed_pred.confidence_region()
             ax.fill_between(
                 x_fine_raw.cpu().numpy(),
-                lower.cpu().numpy(),
-                upper.cpu().numpy(),
-                alpha=0.5,
-                label = "Confidence"
+                lower.detach().cpu().numpy(),
+                upper.detach().cpu().numpy(),
+                alpha=0.3,
+                label="95% predictive interval",
             )
 
-            # Plot training data as black filled circles (on top of model predictions)
             mask = self.xdata[:, 1] == val
             x_data_for_val = self.xdata[mask, 0]
             y_data_for_val = self.ydata[mask]
-            if hasattr(self, "yerr") and self.yerr is not None:
-                y_err_for_val = self.yerr[mask]
-                ax.errorbar(
-                    x_data_for_val,
-                    y_data_for_val,
-                    yerr=y_err_for_val,
-                    fmt="ko",
-                    label="Observed Data",
-                )
-            else:
-                ax.plot(
-                    x_data_for_val,
-                    y_data_for_val,
-                    "ko",
-                    label="Observed Data",
-                )
+            self._plot_observational_channel_data(
+                ax,
+                mask,
+                default_label="Observed data",
+            )
             ax.legend()
 
-            ax.set_ylabel("y")
-            ax.set_xlabel("x")
-            ax.set_title(f"y vs x for {val}")
+            ax.set_ylabel("Flux")
+            ax.set_xlabel("Time")
+            ax.set_title(
+                f"GP fit at physical wavelength {float(val):g}"
+            )
 
             # Set x-axis limits to the data range for this wavelength so that
             # the plot is centred on that wavelength's observations, even when
