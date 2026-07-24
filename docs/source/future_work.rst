@@ -145,18 +145,26 @@ Wavelength-model extensions
     existing explicit resolver boundary.
 
     The explicit-source loading and local activation implementation is now
-    available.  The
-    loader requires one caller-supplied path, strict UTF-8 JSON, strict semantic
-    deserialization, exact compatibility, and distinct source-access, parse,
-    semantic-validation, and compatibility failures.  It returns an
-    immutable loaded-catalogue snapshot with resolved-source and content-digest
-    provenance.  Explicit activation returns a separate
+    available.  The loader requires one caller-supplied path, strict UTF-8
+    JSON, strict semantic deserialization, exact compatibility, and distinct
+    source-access, parse, semantic-validation, and compatibility failures.  It
+    returns an immutable loaded-catalogue snapshot with resolved-source and
+    content-digest provenance.  Explicit activation returns a separate
     immutable local activation snapshot without process-global state or
     implicit workflow integration.
 
-    This does not close ``TBD[instrument-channel-calibration]``.  A populated scientifically validated rule catalogue remains future work, together with
-    normal light-curve workflow integration and representative calibration
-    validation.
+    The typed scientific-validation evidence contract now binds every rule
+    claim to exact instrument and observational-channel identity, contextual
+    physical wavelength, pairing configuration, immutable dataset identity,
+    protocol, result, justifications, applicability boundaries, acceptance
+    criteria, sample counts, and disposition.  Aggregate evidence is bound to
+    the exact ordered catalogue membership and member-validation identities.
+    Deterministic structural reports assess completeness and consistency but
+    do not execute or independently establish scientific validation.
+
+    This does not close ``TBD[instrument-channel-calibration]``.  A populated scientifically validated rule catalogue
+    remains future work, together with normal light-curve workflow integration
+    and representative calibration validation.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, replace
 import json
-from pathlib import Path
 import unittest
+from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 
 from pgmuvi.instrument_channel_calibration import (
     INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_ACTIVATION_REQUEST_SCHEMA_VERSION,
@@ -18,12 +18,97 @@ from pgmuvi.instrument_channel_calibration import (
     InstrumentChannelPairingRuleCatalogueActivationRequest,
     InstrumentChannelPairingRuleCatalogueDiscoveryRequest,
     InstrumentChannelPairingRuleCatalogueSource,
+    InstrumentChannelPairingRuleCatalogueValidationEvidence,
+    InstrumentChannelPairingRuleScientificValidationDisposition,
+    InstrumentChannelPairingRuleValidationEvidence,
     InstrumentChannelPairingRuleValidationStatus,
     InstrumentChannelPairingToleranceProvenance,
     activate_instrument_channel_pairing_rule_catalogue,
     assess_instrument_channel_pairing_rule_catalogue_compatibility,
     discover_instrument_channel_pairing_rule_catalogue,
 )
+
+
+def _rule_validation_evidence(values):
+    return InstrumentChannelPairingRuleValidationEvidence(
+        validation_id=f"validation:{values['rule_id']}",
+        validation_version="1",
+        rule_id=values["rule_id"],
+        reference_instrument=values["reference_instrument"],
+        reference_channel=values["reference_channel"],
+        channel_instrument=values["channel_instrument"],
+        channel=values["channel"],
+        physical_wavelength=values["physical_wavelength"],
+        pairing_method=values["pairing_method"],
+        time_unit=values["time_unit"],
+        maximum_time_separation=values["maximum_time_separation"],
+        tolerance_provenance=values["tolerance_provenance"],
+        validation_dataset_reference="dataset:synthetic-contract-fixture",
+        validation_dataset_sha256="a" * 64,
+        validation_protocol_reference="protocol:pairing-validation-v1",
+        validation_result_reference=values["evidence_reference"],
+        reference_channel_justification=(
+            "Reference-channel choice is explicitly justified."
+        ),
+        pairing_method_justification=(
+            "Pairing method is explicitly justified."
+        ),
+        time_tolerance_justification=(
+            "Maximum time separation is explicitly justified."
+        ),
+        applicability_boundaries=(
+            "Applies only to the exact named observational-channel pair.",
+        ),
+        acceptance_criteria=(
+            "All declared deterministic acceptance criteria pass.",
+        ),
+        n_validation_sources=3,
+        n_matched_pairs=30,
+        disposition=(
+            InstrumentChannelPairingRuleScientificValidationDisposition
+            .PASSED
+        ),
+    )
+
+
+
+def _catalogue_validation_evidence(values):
+    rules = tuple(values["rules"])
+    return InstrumentChannelPairingRuleCatalogueValidationEvidence(
+        validation_id=(
+            f"catalogue-validation:{values['catalogue_id']}:"
+            f"{values['catalogue_version']}"
+        ),
+        validation_version="1",
+        catalogue_id=values["catalogue_id"],
+        catalogue_version=values["catalogue_version"],
+        catalogue_schema_version=(
+            INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION
+        ),
+        member_rule_ids=tuple(rule.rule_id for rule in rules),
+        member_validation_ids=tuple(
+            (
+                rule.validation_evidence.validation_id
+                if rule.validation_evidence is not None
+                else f"missing:{rule.rule_id}"
+            )
+            for rule in rules
+        ),
+        validation_protocol_reference=(
+            "protocol:catalogue-validation-v1"
+        ),
+        validation_result_reference=values["evidence_reference"],
+        applicability_boundaries=(
+            "Applies only to the exact ordered catalogue membership.",
+        ),
+        acceptance_criteria=(
+            "Every member rule has complete passed typed evidence.",
+        ),
+        disposition=(
+            InstrumentChannelPairingRuleScientificValidationDisposition
+            .PASSED
+        ),
+    )
 
 
 class TestPairingRuleCatalogueDiscoveryActivationContract(
@@ -55,6 +140,17 @@ class TestPairingRuleCatalogueDiscoveryActivationContract(
             "evidence_reference": "validation:representative-lpv-v1",
         }
         values.update(overrides)
+        if "validation_evidence" not in overrides:
+            if (
+                str(values["validation_status"])
+                == "scientifically_validated"
+                and values["evidence_reference"] is not None
+            ):
+                values["validation_evidence"] = (
+                    _rule_validation_evidence(values)
+                )
+            else:
+                values["validation_evidence"] = None
         return InstrumentChannelPairingRule(**values)
 
     @classmethod
@@ -71,6 +167,34 @@ class TestPairingRuleCatalogueDiscoveryActivationContract(
             "evidence_reference": "catalogue:validation-report-v1",
         }
         values.update(overrides)
+        if "validation_evidence" not in overrides:
+            rules = tuple(values["rules"])
+            rule_ids = tuple(
+                getattr(rule, "rule_id", None)
+                for rule in rules
+            )
+            identity_keys = tuple(
+                getattr(rule, "identity_key", None)
+                for rule in rules
+            )
+            if (
+                str(values["validation_status"])
+                == "scientifically_validated"
+                and values["evidence_reference"] is not None
+                and bool(rules)
+                and len(set(rule_ids)) == len(rule_ids)
+                and len(set(identity_keys)) == len(identity_keys)
+                and all(
+                    getattr(rule, "validation_evidence", None)
+                    is not None
+                    for rule in rules
+                )
+            ):
+                values["validation_evidence"] = (
+                    _catalogue_validation_evidence(values)
+                )
+            else:
+                values["validation_evidence"] = None
         return InstrumentChannelPairingRuleCatalogue(**values)
 
     @staticmethod

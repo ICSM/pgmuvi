@@ -76,6 +76,43 @@ The catalogue can be passed explicitly to the existing resolver because it
 iterates only over its recorded member rules.  Strict serialization and
 deserialization preserve catalogue and rule provenance.
 
+Scientific-validation evidence contract
+---------------------------------------
+
+A ``scientifically_validated`` status is no longer established by a free-form
+reference alone.  The immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleValidationEvidence`
+record binds caller-supplied evidence to the complete rule identifier, both
+instrument identities, both observational-channel identities, contextual
+physical wavelength, pairing method, time unit, maximum separation, and
+tolerance provenance.  It also records an immutable validation-dataset
+reference and SHA-256 digest, protocol and result references, explicit
+justifications, applicability boundaries, acceptance criteria, sample counts,
+and a pass/fail disposition.
+
+The immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogueValidationEvidence`
+record binds aggregate evidence to the exact catalogue identity, version,
+schema, ordered member-rule identifiers, and ordered member-validation
+identifiers.  A catalogue cannot become scientifically validated by upgrading
+an unvalidated member or by reusing aggregate evidence for a different member
+set or order.
+
+The side-effect-free
+:func:`~pgmuvi.instrument_channel_calibration.assess_instrument_channel_pairing_rule_scientific_validation`
+and
+:func:`~pgmuvi.instrument_channel_calibration.assess_instrument_channel_pairing_rule_catalogue_scientific_validation`
+callables return deterministic structural reports with exact reason codes.
+They verify that evidence is present, identity-bound, configuration-bound,
+passing, and internally consistent.  Structural assessment does not execute scientific validation,
+reproduce a study, or establish that a caller-supplied claim is scientifically
+correct.
+
+This contract adds no populated built-in evidence, real observational-channel
+rule, validation dataset, validation result, automatic rule selection, or
+workflow integration.  Real evidence and representative calibration
+validation remain future work.
+
 The discovery and activation API uses immutable
 :class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogueDiscoveryRequest`
 and
