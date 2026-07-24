@@ -36,6 +36,9 @@ INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION = (
 INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-rule-v1"
 )
+INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-catalogue-v1"
+)
 INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-rule-request-v1"
 )
@@ -73,6 +76,7 @@ __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER",
     "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION",
@@ -101,6 +105,7 @@ __all__ = [
     "InstrumentChannelPairing",
     "InstrumentChannelPairingMethod",
     "InstrumentChannelPairingRule",
+    "InstrumentChannelPairingRuleCatalogue",
     "InstrumentChannelPairingRuleRequest",
     "InstrumentChannelPairingRuleValidationStatus",
     "InstrumentChannelPairingToleranceProvenance",
@@ -1231,6 +1236,320 @@ class InstrumentChannelPairingRule:
             "activation_status": "explicit_resolution_available",
             "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
         }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairingRuleCatalogue:
+    """Immutable caller-supplied pairing-rule catalogue contract.
+
+    The catalogue records its own identity, version, provenance, validation
+    status, and an immutable non-empty tuple of instrument-specific rules.
+    Construction validates unique rule identifiers and exact five-field rule
+    identities deterministically.
+
+    This record does not provide a built-in populated catalogue, automatic
+    discovery, automatic activation, cadence inference, or workflow
+    integration. Iteration exposes only the explicitly supplied member rules,
+    allowing use at the existing explicit resolver boundary.
+    """
+
+    catalogue_id: str
+    catalogue_version: str
+    provenance_reference: str
+    rules: tuple[InstrumentChannelPairingRule, ...]
+    validation_status: (
+        InstrumentChannelPairingRuleValidationStatus | str
+    )
+    evidence_reference: str | None = None
+    notes: str | None = None
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_CATALOGUE_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel pairing-rule catalogue "
+                f"schema version: {self.schema_version!r}."
+            )
+
+        catalogue_id = (
+            InstrumentChannelPairingRule._normalize_required_text(
+                self.catalogue_id,
+                name="catalogue_id",
+            )
+        )
+        catalogue_version = (
+            InstrumentChannelPairingRule._normalize_required_text(
+                self.catalogue_version,
+                name="catalogue_version",
+            )
+        )
+        provenance_reference = (
+            InstrumentChannelPairingRule._normalize_required_text(
+                self.provenance_reference,
+                name="provenance_reference",
+            )
+        )
+        evidence_reference = (
+            InstrumentChannelPairingRule._normalize_optional_text(
+                self.evidence_reference,
+                name="evidence_reference",
+            )
+        )
+        notes = InstrumentChannelPairingRule._normalize_optional_text(
+            self.notes,
+            name="notes",
+        )
+
+        rules = tuple(self.rules)
+        if not rules:
+            raise ValueError(
+                "A pairing-rule catalogue must contain at least one rule."
+            )
+        if any(
+            not isinstance(rule, InstrumentChannelPairingRule)
+            for rule in rules
+        ):
+            raise TypeError(
+                "rules must contain only InstrumentChannelPairingRule "
+                "instances."
+            )
+
+        rule_ids = tuple(rule.rule_id for rule in rules)
+        if len(set(rule_ids)) != len(rule_ids):
+            raise ValueError(
+                "Pairing-rule identifiers must be unique within a catalogue."
+            )
+
+        identity_keys = tuple(rule.identity_key for rule in rules)
+        if len(set(identity_keys)) != len(identity_keys):
+            raise ValueError(
+                "Pairing-rule identities must be unique within a catalogue "
+                "across explicit instrument, observational-channel, and "
+                "physical-wavelength coordinates."
+            )
+
+        validation_status = self.validation_status
+        if not isinstance(
+            validation_status,
+            InstrumentChannelPairingRuleValidationStatus,
+        ):
+            try:
+                validation_status = (
+                    InstrumentChannelPairingRuleValidationStatus(
+                        str(validation_status)
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported instrument-channel pairing-rule catalogue "
+                    f"validation status: {self.validation_status!r}."
+                ) from exc
+
+        if validation_status is (
+            InstrumentChannelPairingRuleValidationStatus
+            .SCIENTIFICALLY_VALIDATED
+        ):
+            if evidence_reference is None:
+                raise ValueError(
+                    "A scientifically validated pairing-rule catalogue "
+                    "requires an evidence_reference."
+                )
+            unvalidated_rule_ids = tuple(
+                rule.rule_id
+                for rule in rules
+                if not rule.scientifically_validated
+            )
+            if unvalidated_rule_ids:
+                raise ValueError(
+                    "A scientifically validated pairing-rule catalogue "
+                    "cannot contain rules that are not scientifically "
+                    f"validated: {unvalidated_rule_ids!r}."
+                )
+
+        object.__setattr__(self, "catalogue_id", catalogue_id)
+        object.__setattr__(
+            self,
+            "catalogue_version",
+            catalogue_version,
+        )
+        object.__setattr__(
+            self,
+            "provenance_reference",
+            provenance_reference,
+        )
+        object.__setattr__(self, "rules", rules)
+        object.__setattr__(
+            self,
+            "validation_status",
+            validation_status,
+        )
+        object.__setattr__(
+            self,
+            "evidence_reference",
+            evidence_reference,
+        )
+        object.__setattr__(self, "notes", notes)
+
+    @property
+    def scientifically_validated(self) -> bool:
+        """Whether the catalogue records scientific validation."""
+
+        return self.validation_status is (
+            InstrumentChannelPairingRuleValidationStatus
+            .SCIENTIFICALLY_VALIDATED
+        )
+
+    @property
+    def all_rules_scientifically_validated(self) -> bool:
+        """Whether every member rule is scientifically validated."""
+
+        return all(rule.scientifically_validated for rule in self.rules)
+
+    def __iter__(self) -> Any:
+        """Iterate over the explicitly supplied member rules."""
+
+        return iter(self.rules)
+
+    def __len__(self) -> int:
+        """Return the number of member rules."""
+
+        return len(self.rules)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe catalogue representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "catalogue_id": self.catalogue_id,
+            "catalogue_version": self.catalogue_version,
+            "provenance_reference": self.provenance_reference,
+            "validation_status": self.validation_status.value,
+            "evidence_reference": self.evidence_reference,
+            "notes": self.notes,
+            "rules": [rule.to_dict() for rule in self.rules],
+            "n_rules": len(self.rules),
+            "scientifically_validated": self.scientifically_validated,
+            "all_rules_scientifically_validated": (
+                self.all_rules_scientifically_validated
+            ),
+            "automatic_catalogue_discovery_implemented": False,
+            "automatic_catalogue_activation_implemented": False,
+            "workflow_integration_implemented": False,
+            "populated_builtin_catalogue_available": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+    ) -> InstrumentChannelPairingRuleCatalogue:
+        """Construct a catalogue from its strict serialized representation."""
+
+        if not isinstance(payload, dict):
+            raise TypeError(
+                "Pairing-rule catalogue payload must be a dictionary."
+            )
+
+        expected_keys = {
+            "schema_version",
+            "catalogue_id",
+            "catalogue_version",
+            "provenance_reference",
+            "validation_status",
+            "evidence_reference",
+            "notes",
+            "rules",
+            "n_rules",
+            "scientifically_validated",
+            "all_rules_scientifically_validated",
+            "automatic_catalogue_discovery_implemented",
+            "automatic_catalogue_activation_implemented",
+            "workflow_integration_implemented",
+            "populated_builtin_catalogue_available",
+            "marker",
+        }
+        if set(payload) != expected_keys:
+            raise ValueError(
+                "Pairing-rule catalogue payload must contain exactly the "
+                f"contract fields; observed={tuple(sorted(payload))!r}."
+            )
+
+        raw_rules = payload["rules"]
+        if not isinstance(raw_rules, list):
+            raise TypeError(
+                "Serialized pairing-rule catalogue rules must be a list."
+            )
+
+        rules = []
+        for index, rule_payload in enumerate(raw_rules):
+            if not isinstance(rule_payload, dict):
+                raise TypeError(
+                    "Each serialized pairing rule must be a dictionary; "
+                    f"index={index}."
+                )
+            try:
+                rule = InstrumentChannelPairingRule(
+                    schema_version=rule_payload["schema_version"],
+                    rule_id=rule_payload["rule_id"],
+                    reference_instrument=(
+                        rule_payload["reference_instrument"]
+                    ),
+                    reference_channel=rule_payload["reference_channel"],
+                    channel_instrument=rule_payload["channel_instrument"],
+                    channel=rule_payload["channel"],
+                    physical_wavelength=(
+                        rule_payload["physical_wavelength"]
+                    ),
+                    pairing_method=rule_payload["pairing_method"],
+                    time_unit=rule_payload["time_unit"],
+                    maximum_time_separation=(
+                        rule_payload["maximum_time_separation"]
+                    ),
+                    tolerance_provenance=(
+                        rule_payload["tolerance_provenance"]
+                    ),
+                    validation_status=rule_payload["validation_status"],
+                    evidence_reference=(
+                        rule_payload["evidence_reference"]
+                    ),
+                    notes=rule_payload["notes"],
+                )
+            except KeyError as exc:
+                raise ValueError(
+                    "Serialized pairing-rule payload is missing a required "
+                    f"field at index {index}: {exc.args[0]!r}."
+                ) from exc
+
+            if rule.to_dict() != rule_payload:
+                raise ValueError(
+                    "Serialized pairing-rule payload does not match the "
+                    f"strict contract representation at index {index}."
+                )
+            rules.append(rule)
+
+        catalogue = cls(
+            schema_version=payload["schema_version"],
+            catalogue_id=payload["catalogue_id"],
+            catalogue_version=payload["catalogue_version"],
+            provenance_reference=payload["provenance_reference"],
+            rules=tuple(rules),
+            validation_status=payload["validation_status"],
+            evidence_reference=payload["evidence_reference"],
+            notes=payload["notes"],
+        )
+
+        if catalogue.to_dict() != payload:
+            raise ValueError(
+                "Serialized pairing-rule catalogue payload does not match "
+                "the strict contract representation."
+            )
+
+        return catalogue
 
 
 @dataclass(frozen=True)

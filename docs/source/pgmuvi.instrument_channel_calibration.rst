@@ -62,6 +62,22 @@ identities, absent exact matches, and matching rules that are not
 scientifically validated.  A successful lookup returns the single
 evidence-backed rule without fallback.
 
+The immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogue`
+defines the strict JSON-safe contract for a caller-supplied collection of
+rules.  It records an explicit catalogue identifier, catalogue version,
+provenance reference, catalogue-level validation status, optional validation
+evidence, and a non-empty immutable tuple of member rules.  Construction
+rejects duplicate rule identifiers and duplicate exact identities.  A
+scientifically validated catalogue must carry evidence and cannot silently
+upgrade a member rule that is not itself scientifically validated.
+
+The catalogue can be passed explicitly to the existing resolver because it
+iterates only over its recorded member rules.  Strict serialization and
+deserialization preserve catalogue and rule provenance.  This does not provide
+a populated built-in catalogue, automatic discovery, automatic activation,
+approximate matching, or implicit workflow integration.
+
 This explicit resolver does not select a reference observational channel,
 pairing method, or time tolerance automatically.  It does not perform
 approximate physical-wavelength matching, infer tolerance from cadence, provide
@@ -336,8 +352,8 @@ The low-level paired affine fit and application primitives do not complete the
 instrument-channel calibration work.  The marker remains open because PGMUVI
 still lacks:
 
-* a populated and validated instrument-specific pairing-rule catalogue
-  plus activation of automatic rule resolution;
+* populated scientifically validated pairing-rule catalogue content
+  plus automatic catalogue discovery and activation;
 * integration into the normal light-curve fitting workflow; and
 * validation across representative instruments, filters, and LPV sources.
 
