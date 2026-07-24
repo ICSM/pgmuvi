@@ -74,28 +74,47 @@ upgrade a member rule that is not itself scientifically validated.
 
 The catalogue can be passed explicitly to the existing resolver because it
 iterates only over its recorded member rules.  Strict serialization and
-deserialization preserve catalogue and rule provenance.  The automatic discovery
-and automatic activation mechanisms remain unavailable unless and until the
-explicit fail-closed callables are implemented.
+deserialization preserve catalogue and rule provenance.
 
-The discovery and activation contract adds immutable
+The discovery and activation API uses immutable
 :class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogueDiscoveryRequest`
 and
 :class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogueActivationRequest`
 records.  Discovery requires one explicit source reference and the exact
 expected catalogue identifier, catalogue version, and schema version.  Ambient
 environment lookup, working-directory scans, package-resource fallback, and
-silent activation are prohibited.
+silent activation remain prohibited.
 
-The side-effect-free
-:func:`~pgmuvi.instrument_channel_calibration.assess_instrument_channel_pairing_rule_catalogue_compatibility`
-callable checks exact identity, version, schema, catalogue validation, and
-member-rule validation.  It never activates the catalogue and never falls back
-to another source or version.  The public discovery and activation callables
-fail closed with :exc:`NotImplementedError` until explicit-source loading and
-activation are implemented.
+:func:`~pgmuvi.instrument_channel_calibration.discover_instrument_channel_pairing_rule_catalogue`
+now implements one explicit-path loader.  It reads source bytes directly,
+requires strict UTF-8 JSON, rejects malformed input, duplicate object keys, and
+non-finite JSON constants, and then invokes strict catalogue deserialization.
+Dedicated source-access, parse, semantic-validation, and compatibility error
+types preserve the failure boundary without fallback or repair.
 
-The explicit resolver and the discovery/activation contract do not select a
+Successful loading returns an immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogueLoadedSnapshot`
+containing the caller request, resolved source path, byte size, SHA-256 digest,
+strict catalogue, and exact compatibility report.  Loading does not activate
+the catalogue.
+
+:func:`~pgmuvi.instrument_channel_calibration.activate_instrument_channel_pairing_rule_catalogue`
+accepts only a loaded snapshot and an explicit activation request.  It rechecks
+exact identity, version, schema, catalogue validation, and member-rule
+validation, then returns an immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogueActivationSnapshot`.
+The snapshot is local-only: activation does not mutate process-global state,
+install an ambient registry, or enable workflow integration.  Compatibility
+assessment remains side-effect free and never falls back to another source or
+version.
+
+The automatic discovery of catalogues across ambient or multiple candidate
+sources remains unavailable, and automatic activation remains prohibited.  The
+implementation
+loads only the one caller-supplied explicit path and returns immutable local
+snapshots.  It never installs a catalogue into process-global state.
+
+The explicit resolver and loading/activation implementation do not select a
 reference observational channel, pairing method, or time tolerance
 automatically.  They do not perform approximate physical-wavelength matching,
 infer tolerance from cadence, provide populated built-in catalogue content, or
