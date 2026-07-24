@@ -18,6 +18,7 @@ __all__ = [
     "gps",
     "initialization",
     "instrument_channel_calibration",
+    "instrument_channel_calibration_validation",
     "lightcurve",
     "priors",
     "spectral_mixture_ard",

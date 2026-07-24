@@ -162,9 +162,25 @@ Wavelength-model extensions
     Deterministic structural reports assess completeness and consistency but
     do not execute or independently establish scientific validation.
 
-    This does not close ``TBD[instrument-channel-calibration]``.  A populated scientifically validated rule catalogue
-    remains future work, together with normal light-curve workflow integration
-    and representative calibration validation.
+    The prospective representative calibration-validation protocol contract now
+    fixes exact candidate identity, anchor-dataset digest, source-independence
+    semantics, pairing and affine-fit configuration, temporal holdout construction,
+    metric normalization, quantitative acceptance gates, and their rationale before
+    maintained execution.  Result evidence is preserved at fold-level, and
+    source-level summaries are derived from those immutable fold records.
+
+    Every held-out fold must retain the pre-registered pair count and span at least
+    five median reference error bars.  Insufficient dynamic range, incomplete
+    folds, and protocol violations are inconclusive rather than calibration
+    failures.  Derived datasets do not count as independent sources, and prior
+    exploratory runs are explicitly ineligible as validation evidence.
+
+    This does not close ``TBD[instrument-channel-calibration]``.  The protocol has
+    not been executed, no real rule is claimed as scientifically validated, and no
+    populated scientifically validated rule catalogue exists.  Prospective
+    representative calibration validation on the anchor source and additional
+    independent astrophysical sources remains future work, together with normal
+    light-curve workflow integration.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current
