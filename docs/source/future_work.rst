@@ -138,7 +138,12 @@ Wavelength-model extensions
     and implements deterministic exact-identity rule resolution over explicitly
     supplied catalogues.  Resolution returns only a scientifically validated,
     evidence-backed rule and rejects absent, duplicate, or unvalidated matches
-    without fallback.  This does not close the marker: a
+    without fallback, and defines an immutable strict JSON-safe
+    pairing-rule catalogue contract with explicit catalogue identity, version,
+    aggregate validation semantics, member uniqueness, and strict round-trip
+    deserialization.  The caller-supplied catalogue can participate only at the
+    existing explicit resolver boundary; automatic discovery and automatic
+    activation remain unavailable.  This does not close the marker: a
     populated scientifically validated rule catalogue, workflow integration,
     and representative calibration validation remain future work.
 
