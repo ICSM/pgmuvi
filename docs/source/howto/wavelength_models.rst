@@ -342,10 +342,11 @@ Maintained constraint walkthrough
 ----------------------------------
 
 Use :doc:`../notebooks/tutorial_wavelength_constraints` for an executable,
-deterministic walkthrough of wavelength evidence, coordinate transformations,
-mean and covariance constraints, independent joint-``2D`` ARD bounds, optional
-reduced fits, and the PR133 empirical robustness boundaries.  The walkthrough
-does not select a model and does not treat an upper-bound wavelength scale as
+deterministic real-data fit using the representative LPV CSV.  The notebook
+preserves observational-channel identity, verifies wavelength constraint
+registration and fitted boundary position, calls ``Lightcurve.plot()`` after
+training, and compares light-curve and residual diagnostics with a constant-mean
+control.  It does not select a model or treat one fitted source as population-level
 achromatic evidence.
 
 
