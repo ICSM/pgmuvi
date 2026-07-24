@@ -417,6 +417,34 @@ the compatibility field.  A manually constructed calibration may participate
 when it carries valid available coefficient covariance; fit provenance is not
 required merely because the coefficients were supplied manually.
 
+Prospective representative validation protocol
+----------------------------------------------
+
+The contract in
+:mod:`pgmuvi.instrument_channel_calibration_validation` defines a
+**prospectively frozen** protocol for the KELT ``R3_0``/``R3_1`` candidate
+pair.  It fixes the exact dataset digest, reference-channel justification,
+pairing method and tolerance, affine-fit configuration, five contiguous
+temporal holdout folds, metric normalization, quantitative acceptance
+criteria, and the rationale for those gates before maintained execution.
+
+Validation evidence is recorded at **fold-level**.  Each fold preserves pair
+counts, normalization amplitude, median reference error, held-out residual
+metrics, time separation, fitted coefficients, and failure reasons.  The
+source-level median and worst-fold summaries are derived from those immutable
+records rather than accepted as independent caller claims.
+
+Each held-out fold must retain the pre-registered minimum pair count and span
+at least five median reference error bars.  Inadequate dynamic range,
+incomplete folds, or protocol violations are inconclusive; only complete
+evidence that exceeds a quantitative gate is a calibration failure.
+
+Source independence is keyed to astrophysical source identity; derived
+datasets do not count as independent sources.  Prior exploratory runs are
+ineligible as validation evidence.  The contract does not execute the
+protocol, does not create a scientifically validated rule, and does not
+populate a pairing-rule catalogue.
+
 ``TBD[instrument-channel-calibration]`` remains open
 ----------------------------------------------------
 
