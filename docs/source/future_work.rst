@@ -134,11 +134,13 @@ Wavelength-model extensions
     activates dataset-level predictive propagation through explicit requests,
     and defines an immutable instrument-specific pairing-rule contract with
     explicit instrument/channel identity, tolerance provenance, validation
-    status, evidence references, and a strict resolution request boundary.
-    This does not close the marker: automatic rule resolution remains unimplemented,
-    and a populated scientifically validated rule catalogue,
-    workflow integration, and representative calibration validation remain
-    future work.
+    status, evidence references, and a strict resolution request boundary,
+    and implements deterministic exact-identity rule resolution over explicitly
+    supplied catalogues.  Resolution returns only a scientifically validated,
+    evidence-backed rule and rejects absent, duplicate, or unvalidated matches
+    without fallback.  This does not close the marker: a
+    populated scientifically validated rule catalogue, workflow integration,
+    and representative calibration validation remain future work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

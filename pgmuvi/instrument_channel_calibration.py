@@ -912,9 +912,9 @@ class InstrumentChannelPairingRule:
     observational-channel identity.
 
     A rule can document unvalidated guidance or scientifically validated
-    guidance. It does not authorize automatic reference-channel, pairing-method,
-    or tolerance selection. Automatic rule resolution remains deliberately
-    unimplemented.
+    guidance. Deterministic resolution is available only through an explicit
+    request and an explicitly supplied rule catalogue. A rule does not authorize
+    automatic reference-channel, pairing-method, or tolerance selection.
     """
 
     rule_id: str
@@ -1226,7 +1226,9 @@ class InstrumentChannelPairingRule:
             "automatic_pairing_method_selection": False,
             "automatic_time_tolerance_selection": False,
             "automatic_rule_selection_permitted": False,
-            "activation_status": "defined_not_activated",
+            "explicit_rule_resolution_implemented": True,
+            "workflow_integration_implemented": False,
+            "activation_status": "explicit_resolution_available",
             "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
         }
 
@@ -1341,6 +1343,8 @@ class InstrumentChannelPairingRuleRequest:
             "selection_requested": True,
             "scientifically_validated_rule_required": True,
             "automatic_rule_selection_implemented": False,
+            "explicit_rule_resolution_implemented": True,
+            "workflow_integration_implemented": False,
             "physical_wavelength_used_without_channel_identity": False,
             "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
         }
@@ -1350,13 +1354,15 @@ def resolve_instrument_channel_pairing_rule(
     request: InstrumentChannelPairingRuleRequest,
     rules: Any,
 ) -> InstrumentChannelPairingRule:
-    """Validate a future instrument-specific rule-resolution request.
+    """Resolve one evidence-backed rule by exact explicit identity.
 
-    The contract requires explicit instrument and observational-channel
-    identities and rejects duplicate rule identifiers or ambiguous duplicate
-    identity records. Automatic rule resolution is not activated by this
-    contract PR and therefore raises :class:`NotImplementedError` after input
-    validation.
+    The caller supplies both the request and the candidate catalogue. Resolution
+    requires exact equality of reference instrument, reference observational
+    channel, target instrument, target observational channel, and physical
+    wavelength. Duplicate identifiers and duplicate identities are rejected
+    before lookup. The resolver returns only a scientifically validated rule and
+    never performs fallback, approximate wavelength matching, tolerance
+    inference, or automatic reference-channel selection.
     """
 
     if not isinstance(request, InstrumentChannelPairingRuleRequest):
@@ -1394,10 +1400,25 @@ def resolve_instrument_channel_pairing_rule(
             "coordinates."
         )
 
-    raise NotImplementedError(
-        "Instrument-specific pairing-rule resolution is defined but not "
-        "implemented."
+    matching_rules = tuple(
+        rule
+        for rule in normalized_rules
+        if rule.identity_key == request.identity_key
     )
+    if not matching_rules:
+        raise ValueError(
+            "No pairing rule matches the exact requested instrument, "
+            "observational-channel, and physical-wavelength identity."
+        )
+
+    resolved_rule = matching_rules[0]
+    if not resolved_rule.scientifically_validated:
+        raise ValueError(
+            f"Pairing rule {resolved_rule.rule_id!r} matches the requested "
+            "identity but is not scientifically validated."
+        )
+
+    return resolved_rule
 
 
 def _normalize_pairing_method(
