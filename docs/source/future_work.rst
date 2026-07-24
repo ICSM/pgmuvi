@@ -142,10 +142,18 @@ Wavelength-model extensions
     pairing-rule catalogue contract with explicit catalogue identity, version,
     aggregate validation semantics, member uniqueness, and strict round-trip
     deserialization.  The caller-supplied catalogue can participate only at the
-    existing explicit resolver boundary; automatic discovery and automatic
-    activation remain unavailable.  This does not close the marker: a
-    populated scientifically validated rule catalogue, workflow integration,
-    and representative calibration validation remain future work.
+    existing explicit resolver boundary.
+
+    The discovery and activation contract now defines explicit-source requests,
+    exact compatibility assessment, validated-only activation policy, and
+    fail-closed public callables.  This contract does not close
+    ``TBD[instrument-channel-calibration]``.  The discovery and activation
+    callables intentionally raise ``NotImplementedError`` until explicit-source
+    loading and catalogue activation are implemented.
+
+    A populated scientifically validated rule catalogue, normal light-curve
+    workflow integration, and representative calibration validation remain
+    future work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current
