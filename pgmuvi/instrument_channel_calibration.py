@@ -33,6 +33,12 @@ INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER = (
 INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-pairing-v2"
 )
+INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-v1"
+)
+INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-pairing-rule-request-v1"
+)
 INSTRUMENT_CHANNEL_CALIBRATION_PLAN_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-plan-v1"
 )
@@ -67,6 +73,8 @@ __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER",
     "INSTRUMENT_CHANNEL_CALIBRATION_UNCERTAINTY_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_PAIRING_SCHEMA_VERSION",
     "InstrumentChannelCalibration",
     "InstrumentChannelCalibrationAssessment",
@@ -92,6 +100,10 @@ __all__ = [
     "InstrumentChannelCalibrationUncertaintyStatus",
     "InstrumentChannelPairing",
     "InstrumentChannelPairingMethod",
+    "InstrumentChannelPairingRule",
+    "InstrumentChannelPairingRuleRequest",
+    "InstrumentChannelPairingRuleValidationStatus",
+    "InstrumentChannelPairingToleranceProvenance",
     "SharedWavelengthChannelGroup",
     "apply_instrument_channel_calibration",
     "apply_instrument_channel_calibration_with_predictive_uncertainty",
@@ -101,6 +113,7 @@ __all__ = [
     "estimate_scale_dependent_instrument_channel_calibration_coefficient_uncertainty",
     "execute_instrument_channel_calibration_plan",
     "fit_instrument_channel_calibration",
+    "resolve_instrument_channel_pairing_rule",
     "select_instrument_channel_calibration_uncertainty_estimator",
 ]
 
@@ -124,6 +137,22 @@ class InstrumentChannelPairingMethod(_StringEnum):
 
     EXACT_TIMESTAMP = "exact_timestamp"
     NEAREST_WITHIN_TOLERANCE = "nearest_within_tolerance"
+
+
+class InstrumentChannelPairingRuleValidationStatus(_StringEnum):
+    """Scientific-validation state for an instrument-specific pairing rule."""
+
+    DEFINED_NOT_VALIDATED = "defined_not_validated"
+    SCIENTIFICALLY_VALIDATED = "scientifically_validated"
+
+
+class InstrumentChannelPairingToleranceProvenance(_StringEnum):
+    """Origin of an instrument-specific time-tolerance choice."""
+
+    EXACT_TIMESTAMP = "exact_timestamp"
+    CALLER_SUPPLIED = "caller_supplied"
+    INSTRUMENT_DOCUMENTATION = "instrument_documentation"
+    EMPIRICAL_VALIDATION = "empirical_validation"
 
 
 class InstrumentChannelCalibrationDisposition(_StringEnum):
@@ -870,6 +899,505 @@ class InstrumentChannelPairing:
             "automatic_time_tolerance_selection": False,
             "scientific_pairing_validation_performed": False,
         }
+
+
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairingRule:
+    """Immutable instrument-specific pairing and tolerance guidance.
+
+    The record identifies both instruments and both observational channels
+    explicitly. Physical wavelength is contextual metadata and never replaces
+    observational-channel identity.
+
+    A rule can document unvalidated guidance or scientifically validated
+    guidance. It does not authorize automatic reference-channel, pairing-method,
+    or tolerance selection. Automatic rule resolution remains deliberately
+    unimplemented.
+    """
+
+    rule_id: str
+    reference_instrument: str
+    reference_channel: str
+    channel_instrument: str
+    channel: str
+    physical_wavelength: float
+    pairing_method: InstrumentChannelPairingMethod | str
+    time_unit: str
+    maximum_time_separation: float | None
+    tolerance_provenance: (
+        InstrumentChannelPairingToleranceProvenance | str
+    )
+    validation_status: (
+        InstrumentChannelPairingRuleValidationStatus | str
+    )
+    evidence_reference: str | None = None
+    notes: str | None = None
+    schema_version: str = INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel pairing-rule schema version: "
+                f"{self.schema_version!r}."
+            )
+
+        rule_id = self._normalize_required_text(
+            self.rule_id,
+            name="rule_id",
+        )
+        reference_instrument = self._normalize_required_text(
+            self.reference_instrument,
+            name="reference_instrument",
+        )
+        channel_instrument = self._normalize_required_text(
+            self.channel_instrument,
+            name="channel_instrument",
+        )
+        reference_channel = _normalize_calibration_channel(
+            self.reference_channel,
+            name="reference_channel",
+        )
+        channel = _normalize_calibration_channel(
+            self.channel,
+            name="channel",
+        )
+        if reference_channel == channel:
+            raise ValueError(
+                "reference_channel and channel must identify different "
+                "observational channels."
+            )
+
+        if isinstance(self.physical_wavelength, (bool, np.bool_)):
+            raise TypeError(
+                "physical_wavelength must be numeric, not boolean."
+            )
+        physical_wavelength = float(self.physical_wavelength)
+        if (
+            not math.isfinite(physical_wavelength)
+            or physical_wavelength <= 0.0
+        ):
+            raise ValueError(
+                "physical_wavelength must be finite and positive."
+            )
+
+        pairing_method = _normalize_pairing_method(
+            self.pairing_method
+        )
+
+        time_unit = self._normalize_required_text(
+            self.time_unit,
+            name="time_unit",
+        )
+
+        maximum_time_separation = self.maximum_time_separation
+        if maximum_time_separation is not None:
+            if isinstance(
+                maximum_time_separation,
+                (bool, np.bool_),
+            ):
+                raise TypeError(
+                    "maximum_time_separation must be numeric, not boolean."
+                )
+            maximum_time_separation = float(maximum_time_separation)
+            if (
+                not math.isfinite(maximum_time_separation)
+                or maximum_time_separation < 0.0
+            ):
+                raise ValueError(
+                    "maximum_time_separation must be finite and "
+                    "non-negative when supplied."
+                )
+
+        provenance = self.tolerance_provenance
+        if not isinstance(
+            provenance,
+            InstrumentChannelPairingToleranceProvenance,
+        ):
+            try:
+                provenance = InstrumentChannelPairingToleranceProvenance(
+                    str(provenance)
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported instrument-channel pairing tolerance "
+                    f"provenance: {self.tolerance_provenance!r}."
+                ) from exc
+
+        validation_status = self.validation_status
+        if not isinstance(
+            validation_status,
+            InstrumentChannelPairingRuleValidationStatus,
+        ):
+            try:
+                validation_status = (
+                    InstrumentChannelPairingRuleValidationStatus(
+                        str(validation_status)
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported instrument-channel pairing-rule validation "
+                    f"status: {self.validation_status!r}."
+                ) from exc
+
+        evidence_reference = self._normalize_optional_text(
+            self.evidence_reference,
+            name="evidence_reference",
+        )
+        notes = self._normalize_optional_text(
+            self.notes,
+            name="notes",
+        )
+
+        if pairing_method is InstrumentChannelPairingMethod.EXACT_TIMESTAMP:
+            if (
+                maximum_time_separation is not None
+                and maximum_time_separation != 0.0
+            ):
+                raise ValueError(
+                    "exact_timestamp rules permit no non-zero "
+                    "maximum_time_separation."
+                )
+            if provenance is not (
+                InstrumentChannelPairingToleranceProvenance.EXACT_TIMESTAMP
+            ):
+                raise ValueError(
+                    "exact_timestamp rules require "
+                    "tolerance_provenance='exact_timestamp'."
+                )
+        else:
+            if (
+                maximum_time_separation is None
+                or maximum_time_separation <= 0.0
+            ):
+                raise ValueError(
+                    "nearest_within_tolerance rules require a finite "
+                    "positive maximum_time_separation."
+                )
+            if provenance is (
+                InstrumentChannelPairingToleranceProvenance.EXACT_TIMESTAMP
+            ):
+                raise ValueError(
+                    "nearest_within_tolerance rules cannot use "
+                    "exact_timestamp tolerance provenance."
+                )
+
+        if validation_status is (
+            InstrumentChannelPairingRuleValidationStatus
+            .SCIENTIFICALLY_VALIDATED
+        ):
+            if evidence_reference is None:
+                raise ValueError(
+                    "Scientifically validated pairing rules require an "
+                    "evidence_reference."
+                )
+            if provenance is (
+                InstrumentChannelPairingToleranceProvenance.CALLER_SUPPLIED
+            ):
+                raise ValueError(
+                    "Scientifically validated pairing rules cannot use "
+                    "caller_supplied tolerance provenance."
+                )
+
+        object.__setattr__(self, "rule_id", rule_id)
+        object.__setattr__(
+            self,
+            "reference_instrument",
+            reference_instrument,
+        )
+        object.__setattr__(
+            self,
+            "reference_channel",
+            reference_channel,
+        )
+        object.__setattr__(
+            self,
+            "channel_instrument",
+            channel_instrument,
+        )
+        object.__setattr__(self, "channel", channel)
+        object.__setattr__(
+            self,
+            "physical_wavelength",
+            physical_wavelength,
+        )
+        object.__setattr__(
+            self,
+            "pairing_method",
+            pairing_method,
+        )
+        object.__setattr__(self, "time_unit", time_unit)
+        object.__setattr__(
+            self,
+            "maximum_time_separation",
+            maximum_time_separation,
+        )
+        object.__setattr__(
+            self,
+            "tolerance_provenance",
+            provenance,
+        )
+        object.__setattr__(
+            self,
+            "validation_status",
+            validation_status,
+        )
+        object.__setattr__(
+            self,
+            "evidence_reference",
+            evidence_reference,
+        )
+        object.__setattr__(self, "notes", notes)
+
+    @staticmethod
+    def _normalize_required_text(
+        value: Any,
+        *,
+        name: str,
+    ) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{name} must be a string.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"{name} must be non-empty.")
+        return normalized
+
+    @classmethod
+    def _normalize_optional_text(
+        cls,
+        value: Any,
+        *,
+        name: str,
+    ) -> str | None:
+        if value is None:
+            return None
+        return cls._normalize_required_text(value, name=name)
+
+    @property
+    def scientifically_validated(self) -> bool:
+        """Whether the rule records scientific validation and evidence."""
+
+        return self.validation_status is (
+            InstrumentChannelPairingRuleValidationStatus
+            .SCIENTIFICALLY_VALIDATED
+        )
+
+    @property
+    def identity_key(
+        self,
+    ) -> tuple[str, str, str, str, float]:
+        """Return the explicit instrument/channel/wavelength rule identity."""
+
+        return (
+            self.reference_instrument,
+            self.reference_channel,
+            self.channel_instrument,
+            self.channel,
+            self.physical_wavelength,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "rule_id": self.rule_id,
+            "reference_instrument": self.reference_instrument,
+            "reference_channel": self.reference_channel,
+            "channel_instrument": self.channel_instrument,
+            "channel": self.channel,
+            "physical_wavelength": self.physical_wavelength,
+            "pairing_method": self.pairing_method.value,
+            "time_unit": self.time_unit,
+            "maximum_time_separation": self.maximum_time_separation,
+            "tolerance_provenance": self.tolerance_provenance.value,
+            "validation_status": self.validation_status.value,
+            "evidence_reference": self.evidence_reference,
+            "notes": self.notes,
+            "scientifically_validated": self.scientifically_validated,
+            "observational_channel_identity_explicit": True,
+            "instrument_identity_explicit": True,
+            "physical_wavelength_used_as_rule_identity": False,
+            "automatic_reference_channel_selection": False,
+            "automatic_pairing_method_selection": False,
+            "automatic_time_tolerance_selection": False,
+            "automatic_rule_selection_permitted": False,
+            "activation_status": "defined_not_activated",
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+
+@dataclass(frozen=True)
+class InstrumentChannelPairingRuleRequest:
+    """Explicit request to resolve one instrument-specific pairing rule."""
+
+    reference_instrument: str
+    reference_channel: str
+    channel_instrument: str
+    channel: str
+    physical_wavelength: float
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_PAIRING_RULE_REQUEST_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported instrument-channel pairing-rule request schema "
+                f"version: {self.schema_version!r}."
+            )
+
+        reference_instrument = (
+            InstrumentChannelPairingRule._normalize_required_text(
+                self.reference_instrument,
+                name="reference_instrument",
+            )
+        )
+        channel_instrument = (
+            InstrumentChannelPairingRule._normalize_required_text(
+                self.channel_instrument,
+                name="channel_instrument",
+            )
+        )
+        reference_channel = _normalize_calibration_channel(
+            self.reference_channel,
+            name="reference_channel",
+        )
+        channel = _normalize_calibration_channel(
+            self.channel,
+            name="channel",
+        )
+        if reference_channel == channel:
+            raise ValueError(
+                "reference_channel and channel must identify different "
+                "observational channels."
+            )
+
+        if isinstance(self.physical_wavelength, (bool, np.bool_)):
+            raise TypeError(
+                "physical_wavelength must be numeric, not boolean."
+            )
+        physical_wavelength = float(self.physical_wavelength)
+        if (
+            not math.isfinite(physical_wavelength)
+            or physical_wavelength <= 0.0
+        ):
+            raise ValueError(
+                "physical_wavelength must be finite and positive."
+            )
+
+        object.__setattr__(
+            self,
+            "reference_instrument",
+            reference_instrument,
+        )
+        object.__setattr__(
+            self,
+            "reference_channel",
+            reference_channel,
+        )
+        object.__setattr__(
+            self,
+            "channel_instrument",
+            channel_instrument,
+        )
+        object.__setattr__(self, "channel", channel)
+        object.__setattr__(
+            self,
+            "physical_wavelength",
+            physical_wavelength,
+        )
+
+    @property
+    def identity_key(
+        self,
+    ) -> tuple[str, str, str, str, float]:
+        """Return the exact requested rule identity."""
+
+        return (
+            self.reference_instrument,
+            self.reference_channel,
+            self.channel_instrument,
+            self.channel,
+            self.physical_wavelength,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a strict JSON-safe request representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "reference_instrument": self.reference_instrument,
+            "reference_channel": self.reference_channel,
+            "channel_instrument": self.channel_instrument,
+            "channel": self.channel,
+            "physical_wavelength": self.physical_wavelength,
+            "selection_requested": True,
+            "scientifically_validated_rule_required": True,
+            "automatic_rule_selection_implemented": False,
+            "physical_wavelength_used_without_channel_identity": False,
+            "marker": INSTRUMENT_CHANNEL_CALIBRATION_TBD_MARKER,
+        }
+
+
+def resolve_instrument_channel_pairing_rule(
+    request: InstrumentChannelPairingRuleRequest,
+    rules: Any,
+) -> InstrumentChannelPairingRule:
+    """Validate a future instrument-specific rule-resolution request.
+
+    The contract requires explicit instrument and observational-channel
+    identities and rejects duplicate rule identifiers or ambiguous duplicate
+    identity records. Automatic rule resolution is not activated by this
+    contract PR and therefore raises :class:`NotImplementedError` after input
+    validation.
+    """
+
+    if not isinstance(request, InstrumentChannelPairingRuleRequest):
+        raise TypeError(
+            "request must be an InstrumentChannelPairingRuleRequest instance."
+        )
+
+    try:
+        normalized_rules = tuple(rules)
+    except TypeError as exc:
+        raise TypeError(
+            "rules must be an iterable of InstrumentChannelPairingRule "
+            "instances."
+        ) from exc
+
+    if not normalized_rules:
+        raise ValueError("rules must contain at least one pairing rule.")
+    if any(
+        not isinstance(rule, InstrumentChannelPairingRule)
+        for rule in normalized_rules
+    ):
+        raise TypeError(
+            "rules must contain only InstrumentChannelPairingRule instances."
+        )
+
+    rule_ids = tuple(rule.rule_id for rule in normalized_rules)
+    if len(set(rule_ids)) != len(rule_ids):
+        raise ValueError("Pairing-rule identifiers must be unique.")
+
+    identity_keys = tuple(rule.identity_key for rule in normalized_rules)
+    if len(set(identity_keys)) != len(identity_keys):
+        raise ValueError(
+            "Pairing-rule identities must be unique across explicit "
+            "instrument, observational-channel, and physical-wavelength "
+            "coordinates."
+        )
+
+    raise NotImplementedError(
+        "Instrument-specific pairing-rule resolution is defined but not "
+        "implemented."
+    )
 
 
 def _normalize_pairing_method(
