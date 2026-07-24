@@ -74,16 +74,32 @@ upgrade a member rule that is not itself scientifically validated.
 
 The catalogue can be passed explicitly to the existing resolver because it
 iterates only over its recorded member rules.  Strict serialization and
-deserialization preserve catalogue and rule provenance.  This does not provide
-a populated built-in catalogue, automatic discovery, automatic activation,
-approximate matching, or implicit workflow integration.
+deserialization preserve catalogue and rule provenance.  The automatic discovery
+and automatic activation mechanisms remain unavailable unless and until the
+explicit fail-closed callables are implemented.
 
-This explicit resolver does not select a reference observational channel,
-pairing method, or time tolerance automatically.  It does not perform
-approximate physical-wavelength matching, infer tolerance from cadence, provide
-a built-in instrument catalogue, or integrate the result into calibration
-planning or normal light-curve fitting.  Those activation and validation steps
-remain separate future work.
+The discovery and activation contract adds immutable
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogueDiscoveryRequest`
+and
+:class:`~pgmuvi.instrument_channel_calibration.InstrumentChannelPairingRuleCatalogueActivationRequest`
+records.  Discovery requires one explicit source reference and the exact
+expected catalogue identifier, catalogue version, and schema version.  Ambient
+environment lookup, working-directory scans, package-resource fallback, and
+silent activation are prohibited.
+
+The side-effect-free
+:func:`~pgmuvi.instrument_channel_calibration.assess_instrument_channel_pairing_rule_catalogue_compatibility`
+callable checks exact identity, version, schema, catalogue validation, and
+member-rule validation.  It never activates the catalogue and never falls back
+to another source or version.  The public discovery and activation callables
+fail closed with :exc:`NotImplementedError` until explicit-source loading and
+activation are implemented.
+
+The explicit resolver and the discovery/activation contract do not select a
+reference observational channel, pairing method, or time tolerance
+automatically.  They do not perform approximate physical-wavelength matching,
+infer tolerance from cadence, provide populated built-in catalogue content, or
+integrate a catalogue into calibration planning or normal light-curve fitting.
 
 Dataset-level orchestration contract
 ------------------------------------
