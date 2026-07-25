@@ -135,8 +135,7 @@ The same script also accepts a source-list file:
 .. code-block:: bash
 
    cat > sources.txt <<'EOF'
-   10131+3049=10131+3049.csv
-   07454-7112=07454-7112.csv
+   10131+3049=examples/data/10131+3049.csv
    EOF
 
    PYTHONPATH=. python3 examples/run_wavelength_advisory_batch.py \
@@ -157,8 +156,10 @@ The equivalent Python entry point is:
 
    report = LC.run_period_independent_wavelength_advisory_workflow_batch(
        [
-           {"source_id": "10131+3049", "csv_path": "10131+3049.csv"},
-           {"source_id": "07454-7112", "csv_path": "07454-7112.csv"},
+           {
+               "source_id": "10131+3049",
+               "csv_path": "examples/data/10131+3049.csv",
+           },
        ],
        from_csv_kwargs={
            "check_sampling": True,

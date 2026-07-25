@@ -105,7 +105,7 @@ ruff check -v --output-format=full --show-fixes pgmuvi/
 ```
 
 **Ruff configuration** is in `pyproject.toml` under `[tool.ruff]`:
-- **Excluded from linting**: `tests/` directory and `pgmuvi/test_script.py`
+- **Excluded from linting**: `tests/` directory
 - **Line length**: 88 characters (Black-compatible; E501 is *not* ignored)
 - **Enabled rule sets**: A, B, E, F, ISC, UP, RUF, W
 - **Explicitly ignored**: UP004, B007, ISC001 (ISC001 conflicts with the formatter)
@@ -301,7 +301,7 @@ Core dependencies (from `pyproject.toml`):
 - **setup.py**: Minimal setup.py exists only for backward compatibility with older pip versions
 - **Testing Framework**: Uses stdlib `unittest` with tox — **not pytest**
 - **Documentation**: Built with Sphinx and hosted on ReadTheDocs
-- **Excluding Tests from Lint**: `tests/` and `pgmuvi/test_script.py` are excluded from Ruff
+- **Excluding Tests from Lint**: `tests/` is excluded from Ruff
 - **Notebooks**: Ruff also lints Jupyter notebooks (`*.ipynb`) in addition to `.py` files
 
 ## Validation Steps
