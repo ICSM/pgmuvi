@@ -71,9 +71,11 @@ Maintained execution
 The numerical execution path is implemented separately in
 :mod:`pgmuvi.instrument_channel_calibration_validation_execution`.
 It verifies that every dataset reference resolves within the repository and
-that the exact dataset SHA-256 matches the frozen protocol before pairing or
-fitting begins.  Fold construction, fitting, held-out metrics, and assessment
-remain deterministic for fixed code and data.
+that each exact dataset SHA-256 matches its immutable identity before pairing
+or fitting begins.  The anchor-only runner remains available, and a strict
+protocol-bound dataset manifest can supply additional independent primary
+sources without altering the frozen protocol.  Fold construction, fitting,
+held-out metrics, and assessment remain deterministic for fixed code and data.
 
 Executing a protocol is not catalogue population.  The maintained runner
 records evidence and the assessor derives ``passed``, ``failed``, or

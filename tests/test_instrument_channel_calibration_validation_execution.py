@@ -18,10 +18,13 @@ from pgmuvi.instrument_channel_calibration import (
     fit_instrument_channel_calibration,
 )
 from pgmuvi.instrument_channel_calibration_validation import (
+    InstrumentChannelCalibrationValidationDataset,
+    InstrumentChannelCalibrationValidationDatasetManifest,
     InstrumentChannelCalibrationValidationProtocol,
 )
 from pgmuvi.instrument_channel_calibration_validation_execution import (
     _construct_partitioned_pair_positions,
+    execute_instrument_channel_calibration_validation_dataset_manifest,
     execute_instrument_channel_calibration_validation_protocol,
 )
 
@@ -271,6 +274,260 @@ class TestInstrumentChannelCalibrationValidationExecution(
                     repository_root=root,
                     protocol_reference=protocol_reference,
                     execution_reference="examples/validation/result.json",
+                    package_version="test",
+                    package_commit="1" * 40,
+                    executed_at_utc="2026-08-01T00:00:00Z",
+                )
+
+
+    def _additional_dataset_manifest(
+        self,
+        root: Path,
+        protocol_reference: str,
+        *,
+        astrophysical_source_id: str = "independent-synthetic-source",
+    ) -> tuple[str, Path]:
+        protocol_payload = json.loads(
+            (root / protocol_reference).read_text(encoding="utf-8")
+        )
+        protocol = (
+            InstrumentChannelCalibrationValidationProtocol.from_dict(
+                protocol_payload
+            )
+        )
+
+        data_reference = "examples/data/independent_validation.csv"
+        data_path = root / data_reference
+        channel_flux = np.asarray(
+            [
+                1.2
+                + 0.0025 * index
+                + 0.18 * math.sin(index / 6.0)
+                for index in range(120)
+            ],
+            dtype=float,
+        )
+
+        with data_path.open(
+            "w",
+            newline="",
+            encoding="utf-8",
+        ) as handle:
+            writer = csv.writer(handle)
+            writer.writerow(
+                ["time", "flux", "flux_error", "wavelength", "band"]
+            )
+            for index, target_flux in enumerate(channel_flux):
+                reference_flux = 0.02 + 0.68 * target_flux
+                writer.writerow(
+                    [
+                        float(index) + 0.2,
+                        reference_flux,
+                        0.001,
+                        protocol.physical_wavelength,
+                        protocol.reference_channel,
+                    ]
+                )
+                writer.writerow(
+                    [
+                        float(index) + 0.21,
+                        target_flux,
+                        0.001,
+                        protocol.physical_wavelength,
+                        protocol.channel,
+                    ]
+                )
+
+        dataset = InstrumentChannelCalibrationValidationDataset(
+            dataset_id="independent-synthetic-full-v1",
+            astrophysical_source_id=astrophysical_source_id,
+            dataset_reference=data_reference,
+            dataset_sha256=hashlib.sha256(
+                data_path.read_bytes()
+            ).hexdigest(),
+        )
+        manifest = InstrumentChannelCalibrationValidationDatasetManifest(
+            protocol_id=protocol.protocol_id,
+            protocol_version=protocol.protocol_version,
+            protocol_sha256=protocol.canonical_sha256,
+            datasets=(dataset,),
+        )
+
+        manifest_reference = "examples/validation/dataset_manifest.json"
+        manifest_path = root / manifest_reference
+        manifest_path.write_text(
+            json.dumps(
+                manifest.to_dict(),
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return manifest_reference, data_path
+
+    def test_dataset_manifest_contract_is_strict_and_primary_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protocol_reference, _ = self._repository_fixture(root)
+            manifest_reference, _ = self._additional_dataset_manifest(
+                root,
+                protocol_reference,
+            )
+            payload = json.loads(
+                (root / manifest_reference).read_text(encoding="utf-8")
+            )
+            manifest = (
+                InstrumentChannelCalibrationValidationDatasetManifest.from_dict(
+                    payload
+                )
+            )
+            self.assertEqual(manifest.to_dict(), payload)
+            self.assertEqual(
+                len(manifest.datasets),
+                1,
+            )
+
+            tampered = dict(payload)
+            tampered["unexpected"] = True
+            with self.assertRaisesRegex(ValueError, "exactly"):
+                InstrumentChannelCalibrationValidationDatasetManifest.from_dict(
+                    tampered
+                )
+
+            derived = InstrumentChannelCalibrationValidationDataset(
+                dataset_id="derived-v1",
+                astrophysical_source_id="derived-source",
+                dataset_reference="examples/data/derived.csv",
+                dataset_sha256="a" * 64,
+                derivation_parent_dataset_id="parent-v1",
+            )
+            with self.assertRaisesRegex(ValueError, "primary"):
+                InstrumentChannelCalibrationValidationDatasetManifest(
+                    protocol_id=manifest.protocol_id,
+                    protocol_version=manifest.protocol_version,
+                    protocol_sha256=manifest.protocol_sha256,
+                    datasets=(derived,),
+                )
+
+    def test_manifest_executes_anchor_and_independent_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protocol_reference, _ = self._repository_fixture(root)
+            manifest_reference, _ = self._additional_dataset_manifest(
+                root,
+                protocol_reference,
+            )
+
+            result, report = (
+                execute_instrument_channel_calibration_validation_dataset_manifest(
+                    repository_root=root,
+                    protocol_reference=protocol_reference,
+                    dataset_manifest_reference=manifest_reference,
+                    execution_reference="examples/validation/combined.json",
+                    package_version="test",
+                    package_commit="1" * 40,
+                    executed_at_utc="2026-08-01T00:00:00Z",
+                )
+            )
+
+            self.assertEqual(len(result.source_results), 2)
+            self.assertEqual(
+                tuple(
+                    source.dataset.astrophysical_source_id
+                    for source in result.source_results
+                ),
+                (
+                    "synthetic-source",
+                    "independent-synthetic-source",
+                ),
+            )
+            self.assertEqual(
+                tuple(
+                    source.n_matched_pairs
+                    for source in result.source_results
+                ),
+                (120, 120),
+            )
+            self.assertEqual(report.disposition.value, "passed")
+            self.assertEqual(
+                report.independent_astrophysical_source_count,
+                2,
+            )
+            self.assertFalse(
+                result.to_dict()["catalogue_population_performed"]
+            )
+
+    def test_manifest_rejects_anchor_source_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protocol_reference, _ = self._repository_fixture(root)
+            manifest_reference, _ = self._additional_dataset_manifest(
+                root,
+                protocol_reference,
+                astrophysical_source_id="synthetic-source",
+            )
+
+            with self.assertRaisesRegex(ValueError, "independent"):
+                execute_instrument_channel_calibration_validation_dataset_manifest(
+                    repository_root=root,
+                    protocol_reference=protocol_reference,
+                    dataset_manifest_reference=manifest_reference,
+                    execution_reference="examples/validation/combined.json",
+                    package_version="test",
+                    package_commit="1" * 40,
+                    executed_at_utc="2026-08-01T00:00:00Z",
+                )
+
+    def test_manifest_rejects_protocol_digest_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protocol_reference, _ = self._repository_fixture(root)
+            manifest_reference, _ = self._additional_dataset_manifest(
+                root,
+                protocol_reference,
+            )
+            manifest_path = root / manifest_reference
+            payload = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            )
+            payload["protocol_sha256"] = "0" * 64
+            manifest_path.write_text(
+                json.dumps(payload, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "digest"):
+                execute_instrument_channel_calibration_validation_dataset_manifest(
+                    repository_root=root,
+                    protocol_reference=protocol_reference,
+                    dataset_manifest_reference=manifest_reference,
+                    execution_reference="examples/validation/combined.json",
+                    package_version="test",
+                    package_commit="1" * 40,
+                    executed_at_utc="2026-08-01T00:00:00Z",
+                )
+
+    def test_manifest_dataset_digest_mismatch_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protocol_reference, _ = self._repository_fixture(root)
+            manifest_reference, data_path = self._additional_dataset_manifest(
+                root,
+                protocol_reference,
+            )
+            data_path.write_text(
+                data_path.read_text(encoding="utf-8") + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "SHA-256"):
+                execute_instrument_channel_calibration_validation_dataset_manifest(
+                    repository_root=root,
+                    protocol_reference=protocol_reference,
+                    dataset_manifest_reference=manifest_reference,
+                    execution_reference="examples/validation/combined.json",
                     package_version="test",
                     package_commit="1" * 40,
                     executed_at_utc="2026-08-01T00:00:00Z",
