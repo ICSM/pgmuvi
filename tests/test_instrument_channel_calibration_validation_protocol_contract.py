@@ -560,7 +560,7 @@ class TestInstrumentChannelCalibrationValidationProtocolContract(
                 {**payload, "scientific_validation_claim_embedded": True}
             )
 
-    def test_committed_protocol_is_exact_unexecuted_and_source_bound(self):
+    def test_committed_protocol_and_evidence_are_exact_and_source_bound(self):
         payload = json.loads(PROTOCOL_PATH.read_text(encoding="utf-8"))
         protocol = InstrumentChannelCalibrationValidationProtocol.from_dict(
             payload
@@ -571,13 +571,76 @@ class TestInstrumentChannelCalibrationValidationProtocolContract(
             hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest(),
             protocol.anchor_dataset.dataset_sha256,
         )
+
+        # The frozen protocol remains prospectively unexecuted in its own
+        # payload.  Execution is recorded only in the separate result and
+        # report artifacts committed by the implementation that ran it.
         self.assertFalse(payload["protocol_execution_performed"])
         self.assertFalse(payload["populated_catalogue_created"])
-        self.assertFalse(
+
+        result_path = (
+            PROTOCOL_PATH.parent
+            / "kelt_r3_pairing_validation_result_v1.json"
+        )
+        report_path = (
+            PROTOCOL_PATH.parent
+            / "kelt_r3_pairing_validation_report_v1.json"
+        )
+        self.assertTrue(result_path.is_file())
+        self.assertTrue(report_path.is_file())
+
+        result_payload = json.loads(
+            result_path.read_text(encoding="utf-8")
+        )
+        report_payload = json.loads(
+            report_path.read_text(encoding="utf-8")
+        )
+        result = InstrumentChannelCalibrationValidationResult.from_dict(
+            result_payload
+        )
+
+        self.assertEqual(result.to_dict(), result_payload)
+        self.assertEqual(
+            result.protocol_sha256,
+            protocol.canonical_sha256,
+        )
+        self.assertTrue(result.execution_completed)
+        self.assertEqual(len(result.source_results), 1)
+        self.assertEqual(
+            result.source_results[0].dataset,
+            protocol.anchor_dataset,
+        )
+
+        recomputed_report = (
+            assess_instrument_channel_calibration_validation_result(
+                protocol,
+                result,
+            )
+        )
+        self.assertEqual(recomputed_report.to_dict(), report_payload)
+        self.assertEqual(
+            recomputed_report.disposition,
+            InstrumentChannelCalibrationValidationDisposition.INCONCLUSIVE,
+        )
+        self.assertEqual(
+            recomputed_report.independent_astrophysical_source_count,
+            1,
+        )
+        self.assertEqual(
+            recomputed_report.reasons,
             (
-                PROTOCOL_PATH.parent
-                / "kelt_r3_pairing_validation_result_v1.json"
-            ).exists()
+                "source_results_inconclusive",
+                "insufficient_independent_astrophysical_sources",
+            ),
+        )
+        self.assertFalse(
+            report_payload["catalogue_population_performed"]
+        )
+        self.assertFalse(
+            result_payload["catalogue_population_performed"]
+        )
+        self.assertFalse(
+            result_payload["scientific_validation_claim_embedded"]
         )
 
     def test_docs_preserve_protocol_only_boundary(self):
