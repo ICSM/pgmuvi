@@ -55,11 +55,15 @@ identity, a protocol-digest mismatch, a missing anchor dataset, incomplete
 source or fold evidence, duplicate primary datasets, or too few independent
 astrophysical sources all fail closed as ``inconclusive``.
 
-``TBD[instrument-channel-calibration]`` remains open.  A following PR must
-execute the committed protocol on the anchor source and additional independent
-astrophysical sources.  This contract
-does not populate a pairing-rule catalogue and makes no claim that the KELT
-candidate rule is scientifically validated.
+``TBD[instrument-channel-calibration]`` remains open.  The committed
+protocol has now been executed on the repository-contained anchor dataset.
+The committed report is ``inconclusive`` with reasons
+``source_results_inconclusive`` and
+``insufficient_independent_astrophysical_sources``.  Additional scientifically
+adequate source evidence and validation on independent astrophysical sources
+are still required.  The maintained execution
+does not populate a pairing-rule catalogue, and the KELT candidate rule is
+not claimed as scientifically validated.
 
 Maintained execution
 --------------------

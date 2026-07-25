@@ -417,8 +417,8 @@ the compatibility field.  A manually constructed calibration may participate
 when it carries valid available coefficient covariance; fit provenance is not
 required merely because the coefficients were supplied manually.
 
-Prospective representative validation protocol
-----------------------------------------------
+Representative validation protocol and execution status
+-------------------------------------------------------
 
 The contract in
 :mod:`pgmuvi.instrument_channel_calibration_validation` defines a
@@ -441,9 +441,16 @@ evidence that exceeds a quantitative gate is a calibration failure.
 
 Source independence is keyed to astrophysical source identity; derived
 datasets do not count as independent sources.  Prior exploratory runs are
-ineligible as validation evidence.  The contract does not execute the
-protocol, does not create a scientifically validated rule, and does not
-populate a pairing-rule catalogue.
+ineligible as validation evidence.  The protocol contract itself does not
+execute the protocol, create a scientifically validated rule, or populate a
+pairing-rule catalogue.
+
+The maintained executor has subsequently run the frozen protocol against the
+committed anchor dataset.  The resulting report is ``inconclusive`` with the
+recorded reasons ``source_results_inconclusive`` and
+``insufficient_independent_astrophysical_sources``.  This execution therefore
+does not establish a scientifically validated KELT pairing rule, populate a
+catalogue, or authorize activation in ordinary fitting.
 
 ``TBD[instrument-channel-calibration]`` remains open
 ----------------------------------------------------
