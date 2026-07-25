@@ -19,6 +19,7 @@ __all__ = [
     "initialization",
     "instrument_channel_calibration",
     "instrument_channel_calibration_validation",
+    "instrument_channel_calibration_validation_execution",
     "lightcurve",
     "priors",
     "spectral_mixture_ard",

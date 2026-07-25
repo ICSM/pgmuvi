@@ -1,0 +1,27 @@
+{
+  "all_acceptance_criteria_passed": false,
+  "anchor_dataset_present": true,
+  "catalogue_population_performed": false,
+  "disposition": "inconclusive",
+  "eligible_for_caller_review_as_validation_evidence": false,
+  "evaluated_astrophysical_source_ids": [
+    "10131+3049"
+  ],
+  "failed_astrophysical_source_ids": [],
+  "inconclusive_astrophysical_source_ids": [
+    "10131+3049"
+  ],
+  "independent_astrophysical_source_count": 1,
+  "marker": "TBD[instrument-channel-calibration]",
+  "passed": false,
+  "passed_astrophysical_source_ids": [],
+  "protocol_digest_matches": true,
+  "protocol_identity_matches": true,
+  "reasons": [
+    "source_results_inconclusive",
+    "insufficient_independent_astrophysical_sources"
+  ],
+  "result_id": "kelt-osn-r3-pairing-validation-execution-v1",
+  "schema_version": "pgmuvi-instrument-channel-calibration-validation-report-v1",
+  "scientific_validation_executed_by_assessor": false
+}

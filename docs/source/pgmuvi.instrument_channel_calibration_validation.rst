@@ -60,3 +60,18 @@ execute the committed protocol on the anchor source and additional independent
 astrophysical sources.  This contract
 does not populate a pairing-rule catalogue and makes no claim that the KELT
 candidate rule is scientifically validated.
+
+Maintained execution
+--------------------
+
+The numerical execution path is implemented separately in
+:mod:`pgmuvi.instrument_channel_calibration_validation_execution`.
+It verifies that every dataset reference resolves within the repository and
+that the exact dataset SHA-256 matches the frozen protocol before pairing or
+fitting begins.  Fold construction, fitting, held-out metrics, and assessment
+remain deterministic for fixed code and data.
+
+Executing a protocol is not catalogue population.  The maintained runner
+records evidence and the assessor derives ``passed``, ``failed``, or
+``inconclusive``.  It does not activate calibration in ordinary fitting
+workflows, and ``TBD[instrument-channel-calibration]`` remains open.
