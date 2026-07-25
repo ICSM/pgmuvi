@@ -61,6 +61,7 @@ Data, diagnostics, and validation
    pgmuvi.wavelength_diagnostics
    pgmuvi.instrument_channel_calibration
    pgmuvi.instrument_channel_calibration_validation
+   pgmuvi.instrument_channel_calibration_validation_execution
    pgmuvi.wavelength_estimation
    pgmuvi.spectral_mixture_ard
    pgmuvi.spectral_mixture_ard_diagnostics
