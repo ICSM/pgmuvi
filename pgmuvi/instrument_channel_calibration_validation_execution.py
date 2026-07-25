@@ -24,6 +24,8 @@ from pgmuvi.instrument_channel_calibration import (
     fit_instrument_channel_calibration,
 )
 from pgmuvi.instrument_channel_calibration_validation import (
+    InstrumentChannelCalibrationValidationDataset,
+    InstrumentChannelCalibrationValidationDatasetManifest,
     InstrumentChannelCalibrationValidationFoldResult,
     InstrumentChannelCalibrationValidationProtocol,
     InstrumentChannelCalibrationValidationReport,
@@ -51,6 +53,7 @@ __all__ = [
     "DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_REPORT_REFERENCE",
     "DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_ID",
     "DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_REFERENCE",
+    "execute_instrument_channel_calibration_validation_dataset_manifest",
     "execute_instrument_channel_calibration_validation_protocol",
     "write_instrument_channel_calibration_validation_artifacts",
 ]
@@ -102,20 +105,36 @@ def _load_protocol(
     return InstrumentChannelCalibrationValidationProtocol.from_dict(payload)
 
 
-def _load_anchor_channel_rows(
+def _load_dataset_manifest(
+    repository_root: Path,
+    manifest_reference: str,
+) -> InstrumentChannelCalibrationValidationDatasetManifest:
+    path = _repository_path(
+        repository_root,
+        manifest_reference,
+        name="dataset_manifest_reference",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return InstrumentChannelCalibrationValidationDatasetManifest.from_dict(
+        payload
+    )
+
+
+def _load_dataset_channel_rows(
     repository_root: Path,
     protocol: InstrumentChannelCalibrationValidationProtocol,
+    dataset: InstrumentChannelCalibrationValidationDataset,
 ) -> tuple[np.ndarray, np.ndarray]:
     dataset_path = _repository_path(
         repository_root,
-        protocol.anchor_dataset.dataset_reference,
-        name="anchor_dataset.dataset_reference",
+        dataset.dataset_reference,
+        name="dataset.dataset_reference",
     )
 
     actual_sha256 = _file_sha256(dataset_path)
-    if actual_sha256 != protocol.anchor_dataset.dataset_sha256:
+    if actual_sha256 != dataset.dataset_sha256:
         raise ValueError(
-            "Anchor dataset SHA-256 does not match the frozen protocol."
+            "Validation dataset SHA-256 does not match its manifest identity."
         )
 
     reference_rows: list[tuple[float, float, float]] = []
@@ -135,7 +154,7 @@ def _load_anchor_channel_rows(
         }
         if not required.issubset(reader.fieldnames or ()):
             raise ValueError(
-                "Anchor dataset must contain time, flux, flux_error, "
+                "Validation dataset must contain time, flux, flux_error, "
                 "wavelength, and band columns."
             )
 
@@ -172,16 +191,27 @@ def _load_anchor_channel_rows(
 
     if not reference_rows:
         raise ValueError(
-            "Anchor dataset contains no usable reference-channel rows."
+            "Validation dataset contains no usable reference-channel rows."
         )
     if not channel_rows:
         raise ValueError(
-            "Anchor dataset contains no usable target-channel rows."
+            "Validation dataset contains no usable target-channel rows."
         )
 
     return (
         np.asarray(reference_rows, dtype=float),
         np.asarray(channel_rows, dtype=float),
+    )
+
+
+def _load_anchor_channel_rows(
+    repository_root: Path,
+    protocol: InstrumentChannelCalibrationValidationProtocol,
+) -> tuple[np.ndarray, np.ndarray]:
+    return _load_dataset_channel_rows(
+        repository_root,
+        protocol,
+        protocol.anchor_dataset,
     )
 
 
@@ -361,28 +391,13 @@ def _execute_fold(
         )
 
 
-def execute_instrument_channel_calibration_validation_protocol(
+def _validate_execution_request(
     *,
     repository_root: str | Path,
-    protocol_reference: str = (
-        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_PROTOCOL_REFERENCE
-    ),
-    result_id: str = (
-        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_ID
-    ),
-    result_version: str = "1.0",
-    execution_reference: str = (
-        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_REFERENCE
-    ),
     package_version: str,
     package_commit: str,
     executed_at_utc: str,
-) -> tuple[
-    InstrumentChannelCalibrationValidationResult,
-    InstrumentChannelCalibrationValidationReport,
-]:
-    """Execute one frozen protocol against its repository-contained anchor."""
-
+) -> tuple[Path, str]:
     root = Path(repository_root).resolve()
     if not root.is_dir():
         raise ValueError("repository_root must identify an existing directory.")
@@ -400,11 +415,19 @@ def execute_instrument_channel_calibration_validation_protocol(
         raise ValueError(
             "executed_at_utc must use YYYY-MM-DDTHH:MM:SSZ."
         )
+    return root, package_version.strip()
 
-    protocol = _load_protocol(root, protocol_reference)
-    reference_rows, channel_rows = _load_anchor_channel_rows(
-        root,
+
+def _execute_validation_dataset(
+    *,
+    repository_root: Path,
+    protocol: InstrumentChannelCalibrationValidationProtocol,
+    dataset: InstrumentChannelCalibrationValidationDataset,
+) -> InstrumentChannelCalibrationValidationSourceResult:
+    reference_rows, channel_rows = _load_dataset_channel_rows(
+        repository_root,
         protocol,
+        dataset,
     )
 
     reference_positions, channel_positions = (
@@ -452,12 +475,31 @@ def execute_instrument_channel_calibration_validation_protocol(
             "one_or_more_temporal_folds_unsuccessful",
         )
 
-    source_result = InstrumentChannelCalibrationValidationSourceResult(
-        dataset=protocol.anchor_dataset,
+    return InstrumentChannelCalibrationValidationSourceResult(
+        dataset=dataset,
         n_matched_pairs=n_pairs,
         fold_results=fold_results,
         failure_reasons=source_failure_reasons,
     )
+
+
+def _build_validation_result(
+    *,
+    protocol: InstrumentChannelCalibrationValidationProtocol,
+    source_results: tuple[
+        InstrumentChannelCalibrationValidationSourceResult,
+        ...,
+    ],
+    result_id: str,
+    result_version: str,
+    execution_reference: str,
+    package_version: str,
+    package_commit: str,
+    executed_at_utc: str,
+) -> tuple[
+    InstrumentChannelCalibrationValidationResult,
+    InstrumentChannelCalibrationValidationReport,
+]:
     result = InstrumentChannelCalibrationValidationResult(
         result_id=result_id,
         result_version=result_version,
@@ -466,10 +508,10 @@ def execute_instrument_channel_calibration_validation_protocol(
         protocol_sha256=protocol.canonical_sha256,
         rule_id=protocol.rule_id,
         execution_reference=execution_reference,
-        package_version=package_version.strip(),
+        package_version=package_version,
         package_commit=package_commit,
         executed_at_utc=executed_at_utc,
-        source_results=(source_result,),
+        source_results=source_results,
         execution_completed=True,
     )
 
@@ -480,6 +522,144 @@ def execute_instrument_channel_calibration_validation_protocol(
         result,
     )
     return result, report
+
+
+def execute_instrument_channel_calibration_validation_protocol(
+    *,
+    repository_root: str | Path,
+    protocol_reference: str = (
+        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_PROTOCOL_REFERENCE
+    ),
+    result_id: str = (
+        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_ID
+    ),
+    result_version: str = "1.0",
+    execution_reference: str = (
+        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_REFERENCE
+    ),
+    package_version: str,
+    package_commit: str,
+    executed_at_utc: str,
+) -> tuple[
+    InstrumentChannelCalibrationValidationResult,
+    InstrumentChannelCalibrationValidationReport,
+]:
+    """Execute one frozen protocol against its repository-contained anchor."""
+
+    root, normalized_version = _validate_execution_request(
+        repository_root=repository_root,
+        package_version=package_version,
+        package_commit=package_commit,
+        executed_at_utc=executed_at_utc,
+    )
+    protocol = _load_protocol(root, protocol_reference)
+    source_result = _execute_validation_dataset(
+        repository_root=root,
+        protocol=protocol,
+        dataset=protocol.anchor_dataset,
+    )
+    return _build_validation_result(
+        protocol=protocol,
+        source_results=(source_result,),
+        result_id=result_id,
+        result_version=result_version,
+        execution_reference=execution_reference,
+        package_version=normalized_version,
+        package_commit=package_commit,
+        executed_at_utc=executed_at_utc,
+    )
+
+
+def execute_instrument_channel_calibration_validation_dataset_manifest(
+    *,
+    repository_root: str | Path,
+    dataset_manifest_reference: str,
+    protocol_reference: str = (
+        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_PROTOCOL_REFERENCE
+    ),
+    result_id: str = (
+        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_ID
+    ),
+    result_version: str = "1.0",
+    execution_reference: str = (
+        DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_REFERENCE
+    ),
+    package_version: str,
+    package_commit: str,
+    executed_at_utc: str,
+) -> tuple[
+    InstrumentChannelCalibrationValidationResult,
+    InstrumentChannelCalibrationValidationReport,
+]:
+    """Execute the anchor plus strict additional independent datasets."""
+
+    root, normalized_version = _validate_execution_request(
+        repository_root=repository_root,
+        package_version=package_version,
+        package_commit=package_commit,
+        executed_at_utc=executed_at_utc,
+    )
+    protocol = _load_protocol(root, protocol_reference)
+    manifest = _load_dataset_manifest(
+        root,
+        dataset_manifest_reference,
+    )
+
+    if (
+        manifest.protocol_id != protocol.protocol_id
+        or manifest.protocol_version != protocol.protocol_version
+    ):
+        raise ValueError(
+            "Dataset manifest protocol identity does not match the "
+            "frozen protocol."
+        )
+    if manifest.protocol_sha256 != protocol.canonical_sha256:
+        raise ValueError(
+            "Dataset manifest protocol digest does not match the "
+            "frozen protocol."
+        )
+
+    anchor = protocol.anchor_dataset
+    for dataset in manifest.datasets:
+        if dataset.dataset_id == anchor.dataset_id:
+            raise ValueError(
+                "Additional dataset_id must differ from the anchor dataset."
+            )
+        if (
+            dataset.astrophysical_source_id
+            == anchor.astrophysical_source_id
+        ):
+            raise ValueError(
+                "Additional datasets must represent astrophysical sources "
+                "independent of the anchor source."
+            )
+
+    source_results = (
+        _execute_validation_dataset(
+            repository_root=root,
+            protocol=protocol,
+            dataset=anchor,
+        ),
+        *(
+            _execute_validation_dataset(
+                repository_root=root,
+                protocol=protocol,
+                dataset=dataset,
+            )
+            for dataset in manifest.datasets
+        ),
+    )
+
+    return _build_validation_result(
+        protocol=protocol,
+        source_results=source_results,
+        result_id=result_id,
+        result_version=result_version,
+        execution_reference=execution_reference,
+        package_version=normalized_version,
+        package_commit=package_commit,
+        executed_at_utc=executed_at_utc,
+    )
 
 
 def write_instrument_channel_calibration_validation_artifacts(

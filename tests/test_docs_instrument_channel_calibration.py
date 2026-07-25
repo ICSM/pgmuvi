@@ -373,10 +373,14 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
             "no catalogue population",
             execution.lower(),
         )
+        self.assertIn("dataset manifest", execution.lower())
+        self.assertIn("additional independent", execution.lower())
+        self.assertIn("low-dynamic-range fold", execution)
         self.assertIn(
             "not claimed as scientifically validated",
             validation,
         )
+        self.assertIn("protocol-bound dataset manifest", validation)
         self.assertIn(
             "TBD[instrument-channel-calibration]",
             future,

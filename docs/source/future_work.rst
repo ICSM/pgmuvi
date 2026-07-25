@@ -183,11 +183,16 @@ Wavelength-model extensions
     was inconclusive and only one independent astrophysical source was
     available.
     No real rule is therefore claimed as scientifically validated, and no
-    populated scientifically validated rule catalogue exists.  Obtaining
-    scientifically adequate fold evidence for the anchor source and completing
-    representative calibration validation on additional independent
-    astrophysical sources remain future work, together with normal light-curve
-    workflow integration.
+    populated scientifically validated rule catalogue exists.  A strict,
+    protocol-bound dataset-manifest execution path now supports repository-
+    contained additional independent primary sources while preserving dataset
+    identity, lineage, digest, observational-channel, and frozen-protocol
+    constraints.  No eligible second KELT source is currently distributed, and
+    the anchor still contains one low-dynamic-range fold.  Obtaining
+    scientifically adequate anchor evidence and the remaining representative calibration validation
+    with genuinely independent external scientific data therefore remain future
+    work, together with catalogue population and normal
+    light-curve workflow integration.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

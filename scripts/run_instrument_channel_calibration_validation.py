@@ -13,6 +13,7 @@ from pgmuvi.instrument_channel_calibration_validation_execution import (
     DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_PROTOCOL_REFERENCE,
     DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_REPORT_REFERENCE,
     DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_REFERENCE,
+    execute_instrument_channel_calibration_validation_dataset_manifest,
     execute_instrument_channel_calibration_validation_protocol,
     write_instrument_channel_calibration_validation_artifacts,
 )
@@ -48,6 +49,14 @@ def main() -> int:
         "--protocol",
         default=(
             DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_PROTOCOL_REFERENCE
+        ),
+    )
+    parser.add_argument(
+        "--dataset-manifest",
+        default=None,
+        help=(
+            "Repository-relative strict manifest of additional independent "
+            "validation datasets."
         ),
     )
     parser.add_argument(
@@ -87,16 +96,40 @@ def main() -> int:
         .replace("+00:00", "Z")
     )
 
-    result, report = (
-        execute_instrument_channel_calibration_validation_protocol(
-            repository_root=root,
-            protocol_reference=arguments.protocol,
-            execution_reference=arguments.result_output,
-            package_version=package_version,
-            package_commit=package_commit,
-            executed_at_utc=executed_at,
+    if arguments.dataset_manifest is None:
+        result, report = (
+            execute_instrument_channel_calibration_validation_protocol(
+                repository_root=root,
+                protocol_reference=arguments.protocol,
+                execution_reference=arguments.result_output,
+                package_version=package_version,
+                package_commit=package_commit,
+                executed_at_utc=executed_at,
+            )
         )
-    )
+    else:
+        if (
+            arguments.result_output
+            == DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_RESULT_REFERENCE
+            or arguments.report_output
+            == DEFAULT_INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_REPORT_REFERENCE
+        ):
+            parser.error(
+                "--dataset-manifest requires explicit --result-output and "
+                "--report-output paths so committed representative artifacts "
+                "cannot be overwritten accidentally."
+            )
+        result, report = (
+            execute_instrument_channel_calibration_validation_dataset_manifest(
+                repository_root=root,
+                dataset_manifest_reference=arguments.dataset_manifest,
+                protocol_reference=arguments.protocol,
+                execution_reference=arguments.result_output,
+                package_version=package_version,
+                package_commit=package_commit,
+                executed_at_utc=executed_at,
+            )
+        )
 
     result_path = (root / arguments.result_output).resolve()
     report_path = (root / arguments.report_output).resolve()
@@ -107,16 +140,19 @@ def main() -> int:
         report_path=report_path,
     )
 
-    source = result.source_results[0]
     print(
         f"result={result_path.relative_to(root)} "
         f"report={report_path.relative_to(root)}"
     )
-    print(
-        f"pairs={source.n_matched_pairs} "
-        f"folds={source.n_temporal_folds} "
-        f"successful_folds={source.n_successful_temporal_folds}"
-    )
+    print(f"sources={len(result.source_results)}")
+    for source in result.source_results:
+        print(
+            f"source={source.dataset.astrophysical_source_id} "
+            f"dataset={source.dataset.dataset_id} "
+            f"pairs={source.n_matched_pairs} "
+            f"folds={source.n_temporal_folds} "
+            f"successful_folds={source.n_successful_temporal_folds}"
+        )
     print(
         f"disposition={report.disposition.value} "
         f"independent_sources="

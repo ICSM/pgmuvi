@@ -23,6 +23,9 @@ from pgmuvi.instrument_channel_calibration import (
 INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_DATASET_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-validation-dataset-v1"
 )
+INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_DATASET_MANIFEST_SCHEMA_VERSION = (
+    "pgmuvi-instrument-channel-calibration-validation-dataset-manifest-v1"
+)
 INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_ACCEPTANCE_CRITERIA_SCHEMA_VERSION = (
     "pgmuvi-instrument-channel-calibration-validation-acceptance-criteria-v1"
 )
@@ -44,6 +47,7 @@ INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_REPORT_SCHEMA_VERSION = (
 
 __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_ACCEPTANCE_CRITERIA_SCHEMA_VERSION",
+    "INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_DATASET_MANIFEST_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_DATASET_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_FOLD_RESULT_SCHEMA_VERSION",
     "INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_PROTOCOL_SCHEMA_VERSION",
@@ -52,6 +56,7 @@ __all__ = [
     "INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_SOURCE_RESULT_SCHEMA_VERSION",
     "InstrumentChannelCalibrationValidationAcceptanceCriteria",
     "InstrumentChannelCalibrationValidationDataset",
+    "InstrumentChannelCalibrationValidationDatasetManifest",
     "InstrumentChannelCalibrationValidationDisposition",
     "InstrumentChannelCalibrationValidationFoldResult",
     "InstrumentChannelCalibrationValidationProtocol",
@@ -280,6 +285,143 @@ class InstrumentChannelCalibrationValidationDataset:
                 "strict contract representation."
             )
         return dataset
+
+
+
+@dataclass(frozen=True)
+class InstrumentChannelCalibrationValidationDatasetManifest:
+    """Strict additional-source datasets bound to one frozen protocol."""
+
+    protocol_id: str
+    protocol_version: str
+    protocol_sha256: str
+    datasets: tuple[InstrumentChannelCalibrationValidationDataset, ...]
+    schema_version: str = (
+        INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_DATASET_MANIFEST_SCHEMA_VERSION
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != (
+            INSTRUMENT_CHANNEL_CALIBRATION_VALIDATION_DATASET_MANIFEST_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported calibration-validation dataset-manifest schema "
+                f"version: {self.schema_version!r}."
+            )
+        object.__setattr__(
+            self,
+            "protocol_id",
+            _normalize_text(self.protocol_id, name="protocol_id"),
+        )
+        object.__setattr__(
+            self,
+            "protocol_version",
+            _normalize_text(
+                self.protocol_version,
+                name="protocol_version",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "protocol_sha256",
+            _normalize_sha256(
+                self.protocol_sha256,
+                name="protocol_sha256",
+            ),
+        )
+
+        datasets = self.datasets
+        if isinstance(datasets, (str, bytes)):
+            raise TypeError("datasets must be a sequence of validation datasets.")
+        normalized = tuple(datasets)
+        if not normalized:
+            raise ValueError(
+                "datasets must contain at least one additional dataset."
+            )
+        if any(
+            not isinstance(
+                dataset,
+                InstrumentChannelCalibrationValidationDataset,
+            )
+            for dataset in normalized
+        ):
+            raise TypeError(
+                "datasets must contain only "
+                "InstrumentChannelCalibrationValidationDataset records."
+            )
+        if any(dataset.is_derived for dataset in normalized):
+            raise ValueError(
+                "Additional validation datasets must be primary, not derived."
+            )
+
+        dataset_ids = tuple(dataset.dataset_id for dataset in normalized)
+        if len(set(dataset_ids)) != len(dataset_ids):
+            raise ValueError(
+                "Additional validation datasets must use unique dataset_id values."
+            )
+
+        source_ids = tuple(
+            dataset.astrophysical_source_id for dataset in normalized
+        )
+        if len(set(source_ids)) != len(source_ids):
+            raise ValueError(
+                "Additional validation datasets must represent distinct "
+                "astrophysical sources."
+            )
+
+        object.__setattr__(self, "datasets", normalized)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the strict JSON-safe manifest representation."""
+
+        return {
+            "schema_version": self.schema_version,
+            "protocol_id": self.protocol_id,
+            "protocol_version": self.protocol_version,
+            "protocol_sha256": self.protocol_sha256,
+            "datasets": [dataset.to_dict() for dataset in self.datasets],
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+    ) -> InstrumentChannelCalibrationValidationDatasetManifest:
+        """Construct an additional-source manifest from strict JSON data."""
+
+        if not isinstance(payload, dict):
+            raise TypeError(
+                "Calibration-validation dataset manifest must be a dictionary."
+            )
+        expected_keys = {
+            "schema_version",
+            "protocol_id",
+            "protocol_version",
+            "protocol_sha256",
+            "datasets",
+        }
+        if set(payload) != expected_keys:
+            raise ValueError(
+                "Calibration-validation dataset-manifest payload must contain "
+                "exactly the contract fields."
+            )
+
+        manifest = cls(
+            schema_version=payload["schema_version"],
+            protocol_id=payload["protocol_id"],
+            protocol_version=payload["protocol_version"],
+            protocol_sha256=payload["protocol_sha256"],
+            datasets=tuple(
+                InstrumentChannelCalibrationValidationDataset.from_dict(item)
+                for item in payload["datasets"]
+            ),
+        )
+        if manifest.to_dict() != payload:
+            raise ValueError(
+                "Calibration-validation dataset-manifest payload does not "
+                "match the strict contract representation."
+            )
+        return manifest
 
 
 @dataclass(frozen=True)
