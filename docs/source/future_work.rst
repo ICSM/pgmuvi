@@ -175,12 +175,19 @@ Wavelength-model extensions
     failures.  Derived datasets do not count as independent sources, and prior
     exploratory runs are explicitly ineligible as validation evidence.
 
-    This does not close ``TBD[instrument-channel-calibration]``.  The protocol has
-    not been executed, no real rule is claimed as scientifically validated, and no
-    populated scientifically validated rule catalogue exists.  Prospective
-    representative calibration validation on the anchor source and additional
-    independent astrophysical sources remains future work, together with normal
-    light-curve workflow integration.
+    This does not close ``TBD[instrument-channel-calibration]``.  The frozen
+    protocol has now been executed on the repository-contained anchor dataset.
+    The committed report is ``inconclusive`` with the recorded reasons
+    ``source_results_inconclusive`` and
+    ``insufficient_independent_astrophysical_sources``: source-level evidence
+    was inconclusive and only one independent astrophysical source was
+    available.
+    No real rule is therefore claimed as scientifically validated, and no
+    populated scientifically validated rule catalogue exists.  Obtaining
+    scientifically adequate fold evidence for the anchor source and completing
+    representative calibration validation on additional independent
+    astrophysical sources remain future work, together with normal light-curve
+    workflow integration.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

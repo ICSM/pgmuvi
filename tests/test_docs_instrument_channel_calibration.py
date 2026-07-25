@@ -12,6 +12,11 @@ DOCS = Path("docs/source")
 API = DOCS / "api.rst"
 PAGE = DOCS / "pgmuvi.instrument_channel_calibration.rst"
 FUTURE = DOCS / "future_work.rst"
+VALIDATION = DOCS / "pgmuvi.instrument_channel_calibration_validation.rst"
+EXECUTION = (
+    DOCS
+    / "pgmuvi.instrument_channel_calibration_validation_execution.rst"
+)
 ESTIMATION = DOCS / "pgmuvi.wavelength_estimation.rst"
 MULTIBAND = DOCS / "howto/multiband.rst"
 
@@ -333,6 +338,52 @@ class TestInstrumentChannelCalibrationDocumentation(unittest.TestCase):
         self.assertNotIn(
             "uncertainty estimation and propagation",
             text,
+        )
+
+    def test_representative_validation_status_matches_committed_evidence(
+        self,
+    ):
+        future = " ".join(FUTURE.read_text(encoding="utf-8").split())
+        page = " ".join(PAGE.read_text(encoding="utf-8").split())
+        validation = " ".join(
+            VALIDATION.read_text(encoding="utf-8").split()
+        )
+        execution = " ".join(
+            EXECUTION.read_text(encoding="utf-8").split()
+        )
+
+        for text in (future, page, validation, execution):
+            self.assertIn("inconclusive", text)
+
+        for text in (future, page, validation, execution):
+            self.assertIn("source_results_inconclusive", text)
+            self.assertIn(
+                "insufficient_independent_astrophysical_sources",
+                text,
+            )
+
+        self.assertNotIn("protocol has not been executed", future)
+        self.assertNotIn("A following PR must execute", validation)
+
+        self.assertIn(
+            "kelt_r3_pairing_validation_report_v1.json",
+            execution,
+        )
+        self.assertIn(
+            "no catalogue population",
+            execution.lower(),
+        )
+        self.assertIn(
+            "not claimed as scientifically validated",
+            validation,
+        )
+        self.assertIn(
+            "TBD[instrument-channel-calibration]",
+            future,
+        )
+        self.assertIn(
+            "TBD[instrument-channel-calibration]",
+            validation,
         )
 
     def test_estimation_and_multiband_guides_reference_contract(self):

@@ -18,3 +18,19 @@ and delegates the final disposition to the validation assessor.
 Dataset references must resolve inside the repository.  The executor does not
 search sibling directories, populate the scientifically validated pairing-rule
 catalogue, or activate instrument-channel calibration in normal fitting.
+
+Maintained execution status
+---------------------------
+
+The frozen KELT ``R3_0``/``R3_1`` protocol has been executed against the
+repository-contained anchor dataset.  The maintained artifacts are:
+
+* ``examples/validation/kelt_r3_pairing_validation_protocol_v1.json``;
+* ``examples/validation/kelt_r3_pairing_validation_result_v1.json``; and
+* ``examples/validation/kelt_r3_pairing_validation_report_v1.json``.
+
+The committed report disposition is ``inconclusive``.  Its reasons are
+``source_results_inconclusive`` and
+``insufficient_independent_astrophysical_sources``.  The execution performed
+no catalogue population and does not establish a scientifically validated
+pairing rule or authorize calibration in ordinary light-curve fitting.
