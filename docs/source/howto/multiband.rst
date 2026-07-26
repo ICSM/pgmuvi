@@ -206,7 +206,8 @@ periods, or contact the ``pgmuvi`` developers to discuss extensions.
 -----------
 
 The maintained :doc:`../notebooks/pgmuvi_tutorial_2d` notebook builds a
-deterministic three-band light curve, prepares the baseline ``2D`` consensus
-workflow, handles ``ConsensusFitError``, and records LPV-relevant follow-up
-configurations.  Detailed controls remain documented in
+deterministic three-band light curve and performs a required
+``2DWavelengthDependent`` consensus fit.  It verifies successful training and
+period recovery, then calls ``Lightcurve.plot()`` to render fitted predictions
+before recording LPV-relevant follow-up configurations.  Detailed controls remain documented in
 :doc:`consensus_fitting`.
