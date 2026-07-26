@@ -6,14 +6,19 @@ Instrument-channel calibration validation
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: pgmuvi.instrument_channel_calibration_multisource_validation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Prospective protocol boundary
 -----------------------------
 
 This module defines a **prospectively frozen** validation protocol and a
 fail-closed result-assessment contract for one exact candidate
 observational-channel pairing rule.  It does not execute the protocol, fit a
-calibration, construct a scientifically validated pairing rule, or populate a
-pairing-rule catalogue.
+calibration, or construct a scientifically validated pairing rule.  This module
+does not populate a pairing-rule catalogue.
 
 The committed protocol at
 ``examples/validation/kelt_r3_pairing_validation_protocol_v1.json`` binds the
@@ -56,14 +61,47 @@ source or fold evidence, duplicate primary datasets, or too few independent
 astrophysical sources all fail closed as ``inconclusive``.
 
 ``TBD[instrument-channel-calibration]`` remains open.  The committed
-protocol has now been executed on the repository-contained anchor dataset.
-The committed report is ``inconclusive`` with reasons
+anchor execution is retained as a **public reproducibility smoke test** of
+pairing, fold construction, fitting, and assessment against the one real
+dataset distributed with PGMUVI.  Its ``inconclusive`` disposition records
 ``source_results_inconclusive`` and
-``insufficient_independent_astrophysical_sources``.  Additional scientifically
-adequate source evidence and validation on independent astrophysical sources
-are still required.  The maintained execution
-does not populate a pairing-rule catalogue, and the KELT candidate rule is
-not claimed as scientifically validated.
+``insufficient_independent_astrophysical_sources``.  The candidate rule is
+not claimed as scientifically validated by this public smoke test.  These reasons
+describe the limits of the bundled public evidence; they are not the final
+scientific decision procedure for the candidate rule.
+
+Maintainer-private multi-source decision contract
+-------------------------------------------------
+
+The final decision is governed by
+``examples/validation/kelt_r3_maintainer_multisource_validation_protocol_v1.json``.
+It binds the same exact KELT ``R3_0``/``R3_1`` protocol-approved candidate
+observational-channel pair, but requires five eligible independent
+astrophysical sources selected from maintainer-owned data before calibration
+outcomes are inspected.
+
+Eligibility requires both exact observational channels at the frozen physical
+wavelength, finite strictly positive flux and uncertainty, at least 100
+deterministic matched pairs, five informative temporal folds with at least 20
+pairs each, and a q05--q95 reference-flux amplitude spanning at least five
+median reference error bars.  Derived copies of a source are excluded.
+
+Eligible source identifiers are sorted, permuted with a recorded random seed,
+and the first five are selected without replacement.  The scientific test is
+source-balanced leave-one-source-out validation: four sources train one common
+affine rule and the unseen fifth source is evaluated without refitting.  This
+is repeated until every selected source has been held out once.  Equal matched
+pair counts from each training source prevent one densely sampled light curve
+from dominating the fit.
+
+The public package defines the data-agnostic contract and redacted evidence
+schema.  A **private Parquet** ingestion and selection runner is maintainer
+infrastructure, is not distributed, and does not create public package Parquet
+support.  Raw source identifiers, private light curves, and the detailed
+source-level report remain private.  A public redacted summary may contain
+only protocol and input digests, the selection seed, hashed selected-source
+identities, aggregate held-out metrics, coefficient-stability summaries, and
+the final disposition.
 
 Maintained execution
 --------------------
