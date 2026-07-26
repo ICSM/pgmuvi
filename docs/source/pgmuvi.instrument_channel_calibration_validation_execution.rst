@@ -67,8 +67,28 @@ When ``--dataset-manifest`` is used, explicit non-default
 ``--result-output`` and ``--report-output`` paths are required so the committed
 representative artifacts cannot be overwritten accidentally.  The resulting
 assessment combines the anchor and all additional source results.  This
-infrastructure does not assert that any supplied source is scientifically
-adequate and cannot turn an inconclusive anchor result into passing evidence.
+repository-bound manifest surface remains useful for a public reproducibility
+smoke test and synthetic contract coverage.  It is not the final
+maintainer-private multi-source decision workflow and does not read the private
+Parquet catalogue.
+
+Maintainer-private execution boundary
+-------------------------------------
+
+The next implementation layer will accept already prepared per-source channel
+arrays in memory and execute the frozen maintainer-private multi-source
+contract.  It will not own private catalogue discovery or Parquet ingestion.
+The non-distributed private runner will identify sources containing the exact
+protocol-approved candidate observational-channel pair, apply all pre-fit
+eligibility gates, record the sorted eligible set and random seed, select the
+first five entries from the seeded permutation, and invoke the public
+data-agnostic engine.
+
+The engine will perform source-balanced leave-one-source-out fitting and
+held-out temporal-fold evaluation.  It will return detailed in-memory evidence
+for the private report and a redacted public summary containing no raw source
+identifiers or private paths.  Catalogue population remains a later explicit
+step and is permitted only after a passing redacted decision.
 
 Maintained execution status
 ---------------------------
@@ -83,9 +103,12 @@ repository-contained anchor dataset.  The maintained artifacts are:
 The committed report disposition is ``inconclusive``.  Its reasons are
 ``source_results_inconclusive`` and
 ``insufficient_independent_astrophysical_sources``.  The anchor contains one
-low-dynamic-range fold, and the repository contains no second eligible
-independent KELT source.  The dataset-manifest execution surface is therefore
-ready for future supplied data, but no current evidence passes the frozen
-protocol.  The execution performed no catalogue population and does not
-establish a scientifically validated pairing rule or authorize calibration in
-ordinary light-curve fitting.
+low-dynamic-range fold.  This remains an accurate assessment of the **bundled
+public evidence** and a useful public reproducibility smoke test.  It does not
+preclude a final decision from the separate frozen maintainer-private
+five-source protocol.
+
+There is **no catalogue population** from the current execution.  It has not
+established a scientifically validated pairing rule or authorized calibration
+in ordinary light-curve fitting.  The private runner and public
+leave-one-source-out engine remain to be implemented and executed.

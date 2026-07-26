@@ -176,23 +176,34 @@ Wavelength-model extensions
     exploratory runs are explicitly ineligible as validation evidence.
 
     This does not close ``TBD[instrument-channel-calibration]``.  The frozen
-    protocol has now been executed on the repository-contained anchor dataset.
-    The committed report is ``inconclusive`` with the recorded reasons
+    anchor protocol has been executed on the repository-contained public
+    dataset and remains an ``inconclusive`` **public reproducibility smoke
+    test**.  That disposition describes only the limits of the bundled
+    evidence and is not the final multi-source decision procedure.
+
+    The public contract for maintainer-private multi-source validation now
+    freezes the exact protocol-approved candidate observational-channel pair,
+    pre-fit source
+    eligibility, seeded selection of the first five eligible independent
+    sources, source-balanced leave-one-source-out validation, held-out temporal
+    folds, aggregate gates, privacy boundaries, and the redacted public summary.
+    The private Parquet catalogue, raw source identifiers, selected light
+    curves, and detailed source-level report are not distributed, and public
+    package Parquet support is not required.
+
+    The committed public smoke-test result retains the recorded reasons
     ``source_results_inconclusive`` and
-    ``insufficient_independent_astrophysical_sources``: source-level evidence
-    was inconclusive and only one independent astrophysical source was
-    available.
-    No real rule is therefore claimed as scientifically validated, and no
-    populated scientifically validated rule catalogue exists.  A strict,
-    protocol-bound dataset-manifest execution path now supports repository-
-    contained additional independent primary sources while preserving dataset
-    identity, lineage, digest, observational-channel, and frozen-protocol
-    constraints.  No eligible second KELT source is currently distributed, and
-    the anchor still contains one low-dynamic-range fold.  Obtaining
-    scientifically adequate anchor evidence and the remaining representative calibration validation
-    with genuinely independent external scientific data therefore remain future
-    work, together with catalogue population and normal
-    light-curve workflow integration.
+    ``insufficient_independent_astrophysical_sources``.  It does not complete
+    the remaining representative calibration validation, which requires the frozen private
+    multi-source decision.  No populated scientifically validated rule catalogue
+    exists; catalogue population remains blocked until that decision passes.
+
+    The remaining work is to implement the public data-agnostic multi-source
+    engine, implement the non-distributed private Parquet selection runner,
+    execute the frozen five-source test internally, and commit only a redacted
+    aggregate decision.  A real rule may enter a populated scientifically
+    validated catalogue only after that decision passes.  Normal light-curve
+    workflow integration remains later work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current
