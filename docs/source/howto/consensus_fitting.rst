@@ -472,9 +472,10 @@ Notebook tutorial
 -----------------
 
 The maintained :doc:`../notebooks/pgmuvi_tutorial_2d` notebook provides an
-interactive baseline ``2D`` consensus workflow with deterministic data, an
-explicit no-training default, structured failure handling, and LPV-relevant
-follow-up configurations.  The runnable script remains the preferred reference
+executed end-to-end ``2DWavelengthDependent`` consensus workflow with
+deterministic data.  Its default path performs a required fit, verifies fit
+history and recovered period, and calls ``Lightcurve.plot()`` to render fitted
+predictions before presenting explicit follow-up configurations.  The runnable script remains the preferred reference
 for command-line execution and artifact export.
 
 Relationship to wavelength advisory
