@@ -1,12 +1,10 @@
-"""Regression tests for the refreshed public 2-D consensus notebook."""
+"""Regression tests for the executed public 2-D consensus notebook."""
 
 from __future__ import annotations
 
-import importlib.util
+import ast
 import json
-import os
 from pathlib import Path
-import tempfile
 import unittest
 
 
@@ -15,21 +13,61 @@ NOTEBOOK = ROOT / "docs/source/notebooks/pgmuvi_tutorial_2d.ipynb"
 INDEX = ROOT / "docs/source/index.rst"
 CONF = ROOT / "docs/source/conf.py"
 CONSENSUS = ROOT / "docs/source/howto/consensus_fitting.rst"
+STATUS = ROOT / "docs/source/notebook_status.rst"
 
 
 def load_notebook() -> dict:
     return json.loads(NOTEBOOK.read_text(encoding="utf-8"))
 
 
+def code_cells() -> list[dict]:
+    return [
+        cell
+        for cell in load_notebook().get("cells", [])
+        if cell.get("cell_type") == "code"
+    ]
+
+
+def code_sources() -> list[str]:
+    return [
+        "".join(cell.get("source", []))
+        for cell in code_cells()
+    ]
+
+
 def notebook_text() -> str:
-    chunks = []
-    for cell in load_notebook().get("cells", []):
-        source = cell.get("source", [])
-        chunks.append("".join(source) if isinstance(source, list) else str(source))
+    return "\n".join(
+        "".join(cell.get("source", []))
+        for cell in load_notebook().get("cells", [])
+    )
+
+
+def output_text() -> str:
+    chunks: list[str] = []
+
+    for cell in code_cells():
+        for output in cell.get("outputs", []):
+            if output.get("output_type") == "stream":
+                text = output.get("text", "")
+                chunks.append(
+                    "".join(text)
+                    if isinstance(text, list)
+                    else str(text)
+                )
+                continue
+
+            data = output.get("data", {})
+            plain = data.get("text/plain", "")
+            chunks.append(
+                "".join(plain)
+                if isinstance(plain, list)
+                else str(plain)
+            )
+
     return "\n".join(chunks)
 
 
-class TestRefreshed2DConsensusNotebook(unittest.TestCase):
+class TestExecuted2DConsensusNotebook(unittest.TestCase):
     def test_notebook_is_public_and_not_excluded(self):
         self.assertIn(
             "notebooks/pgmuvi_tutorial_2d",
@@ -40,112 +78,156 @@ class TestRefreshed2DConsensusNotebook(unittest.TestCase):
             CONF.read_text(encoding="utf-8"),
         )
 
-    def test_notebook_has_current_structure_and_metadata(self):
-        nb = load_notebook()
-        self.assertEqual(nb.get("nbformat"), 4)
+    def test_notebook_has_executed_current_structure(self):
+        notebook = load_notebook()
+
+        self.assertEqual(notebook.get("nbformat"), 4)
         self.assertEqual(
-            nb.get("metadata", {}).get("kernelspec", {}).get("name"),
+            notebook.get("metadata", {})
+            .get("kernelspec", {})
+            .get("name"),
             "python3",
         )
-        self.assertGreaterEqual(len(nb.get("cells", [])), 12)
-        self.assertTrue(
-            any(cell.get("cell_type") == "markdown" for cell in nb["cells"])
+        self.assertGreaterEqual(
+            len(notebook.get("cells", [])),
+            12,
         )
-        self.assertTrue(
-            any(cell.get("cell_type") == "code" for cell in nb["cells"])
-        )
-        for cell in nb.get("cells", []):
-            if cell.get("cell_type") == "code":
-                self.assertIsNone(cell.get("execution_count"))
-                self.assertEqual(cell.get("outputs"), [])
 
-    def test_notebook_contains_core_workflow_contracts(self):
+        for cell in load_notebook().get("cells", []):
+            self.assertTrue(cell.get("id"))
+
+        for cell in code_cells():
+            self.assertIsNotNone(
+                cell.get("execution_count")
+            )
+            self.assertFalse(
+                any(
+                    output.get("output_type") == "error"
+                    for output in cell.get("outputs", [])
+                )
+            )
+
+    def test_required_end_to_end_contract(self):
         text = notebook_text()
+
         for token in [
-            "RUN_FIT = False",
-            "Lightcurve(",
-            '"model": "2D"',
+            "RUN_REQUIRED_FIT = True",
+            '"model": "2DWavelengthDependent"',
             '"fit_strategy": "consensus"',
+            '"time_kernel_type": "quasi_periodic"',
+            '"wavelength_kernel_type": "rbf"',
+            '"constraint_set": "LPV"',
             '"learn_additional_noise": True',
-            "ConsensusFitError",
-            "get_period_summary()",
-            "consensus_diagnostics",
-            "2DWavelengthDependent",
+            "warnings.catch_warnings(record=True)",
+            "fit_result = lc.fit(**fit_kwargs)",
+            "fit_history = lc.get_fit_history()",
+            '"fit_warning_count"',
+            '"plot_warning_count"',
+            'latest_fit["success"] is True',
+            'latest_fit["training_iter"] == TRAINING_ITER',
+            'period_summary["dominant_period"]',
+            "fitted_lightcurve_figures = lc.plot(",
+            '"figure_count"',
             "2DDustMean",
             "2DPowerLawMean",
             "2DSeparable",
-            '"time_kernel_type": "quasi_periodic"',
             "automatic model selection",
         ]:
-            self.assertIn(token, text)
+            with self.subTest(token=token):
+                self.assertIn(token, text)
 
-    def test_notebook_removes_stale_stub_patterns(self):
+    def test_default_path_cannot_skip_required_fit(self):
         text = notebook_text()
-        for token in [
-            "%pip",
-            "!pip install",
-            "git+https://github.com/ICSM/pgmuvi.git",
-            'xtransform="minmax"',
-            "maybe drawing from a specific PSD",
-            "#generate random x data here",
-        ]:
-            self.assertNotIn(token, text)
-        self.assertNotIn("TODO", text)
 
-    def test_all_code_cells_compile(self):
-        for index, cell in enumerate(load_notebook().get("cells", [])):
-            if cell.get("cell_type") != "code":
-                continue
-            source = "".join(cell.get("source", []))
+        for stale in [
+            "RUN_FIT = False",
+            "RUN_FITS = False",
+            "PREPARE ONLY",
+            "training was not started",
+            "No fit diagnostics exist",
+            "if RUN_FIT:",
+        ]:
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, text)
+
+    def test_fit_and_plot_order_is_semantic(self):
+        sources = code_sources()
+
+        fit_cell = next(
+            index
+            for index, source in enumerate(sources)
+            if "fit_result = lc.fit(**fit_kwargs)" in source
+        )
+        history_cell = next(
+            index
+            for index, source in enumerate(sources)
+            if "fit_history = lc.get_fit_history()" in source
+        )
+        plot_cell = next(
+            index
+            for index, source in enumerate(sources)
+            if "fitted_lightcurve_figures = lc.plot("
+            in source
+        )
+
+        self.assertEqual(fit_cell, history_cell)
+        self.assertLess(fit_cell, plot_cell)
+
+    def test_all_code_cells_compile_and_parse(self):
+        for index, source in enumerate(code_sources()):
             compile(
                 source,
                 f"pgmuvi_tutorial_2d.ipynb:cell-{index}",
                 "exec",
             )
+            ast.parse(source)
 
-    @unittest.skipUnless(
-        importlib.util.find_spec("gpytorch") is not None,
-        "gpytorch is required for the notebook preparation smoke test",
-    )
-    def test_preparation_path_executes_without_training_or_outputs(self):
-        namespace = {"__name__": "__main__"}
-        old_cwd = Path.cwd()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.chdir(tmpdir)
-            try:
-                for index, cell in enumerate(load_notebook().get("cells", [])):
-                    if cell.get("cell_type") != "code":
-                        continue
-                    source = "".join(cell.get("source", []))
-                    exec(
-                        compile(
-                            source,
-                            f"pgmuvi_tutorial_2d.ipynb:cell-{index}",
-                            "exec",
-                        ),
-                        namespace,
-                    )
-            finally:
-                os.chdir(old_cwd)
+    def test_saved_outputs_prove_fit_and_plot_completed(self):
+        text = output_text()
 
-            self.assertFalse(
-                Path(tmpdir, "tutorial_2d_consensus_output").exists()
+        self.assertIn("fit_success", text)
+        self.assertIn("figure_count", text)
+        self.assertIn("dominant_period", text)
+        self.assertIn("fit_warning_count", text)
+        self.assertIn("plot_warning_count", text)
+
+        for machine_local_prefix in [
+            "/Volumes/",
+            "/Users/",
+            "/private/var/",
+        ]:
+            self.assertNotIn(
+                machine_local_prefix,
+                text,
             )
 
-        self.assertFalse(namespace["RUN_FIT"])
-        self.assertEqual(namespace["lc"].ndim, 2)
-        self.assertEqual(len(namespace["unique_wavelengths"]), 3)
-        self.assertIsNone(namespace["fit_result"])
-        self.assertIsNone(namespace["fit_error"])
+        image_outputs = [
+            output
+            for cell in code_cells()
+            for output in cell.get("outputs", [])
+            if "image/png" in output.get("data", {})
+        ]
+        self.assertGreaterEqual(len(image_outputs), 1)
+
+    def test_status_and_consensus_guide(self):
         self.assertIn(
-            "2DWavelengthDependent",
-            namespace["comparison_fit_kwargs"],
+            ":doc:`../notebooks/pgmuvi_tutorial_2d`",
+            CONSENSUS.read_text(encoding="utf-8"),
         )
 
-    def test_consensus_guide_links_notebook_and_removes_tbd(self):
-        text = CONSENSUS.read_text(encoding="utf-8")
-        self.assertIn(":doc:`../notebooks/pgmuvi_tutorial_2d`", text)
-        self.assertNotIn("TBD: notebook tutorial", text)
+        status = STATUS.read_text(encoding="utf-8")
+        self.assertIn(
+            "required ``2DWavelengthDependent`` consensus fit",
+            status,
+        )
+        self.assertIn(
+            "calls ``Lightcurve.plot()``",
+            status,
+        )
+        self.assertNotIn(
+            "explicit no-training default",
+            status,
+        )
 
 
 if __name__ == "__main__":

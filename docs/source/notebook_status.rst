@@ -69,7 +69,7 @@ These notebooks are linked from the main Tutorials toctree:
      - Retained as substantive public material; re-execute after relevant API changes.
    * - ``pgmuvi_tutorial_2d.ipynb``
      - Maintained 2-D baseline and consensus-fitting tutorial.
-     - Refreshed in PR103 with deterministic data, an explicit no-training default, failure handling, and LPV-relevant follow-up configurations.
+     - Refreshed in PR103 with deterministic data and a preparation-only default; updated in PR168 as an executed end-to-end workflow whose default path performs a required ``2DWavelengthDependent`` consensus fit, verifies fit history and period recovery, calls ``Lightcurve.plot()``, and records rendered predictions before presenting explicit follow-up configurations.
 
 Unavailable future workflows
 ----------------------------
