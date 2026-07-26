@@ -2901,12 +2901,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             data are assumed to already be in days and no conversion is
             performed.
         max_samples_per_band : int or None, optional
-            Maximum number of observations to retain per band for 2-D
-            (multiband) lightcurves.  Each band is checked independently:
-            only bands that exceed `max_samples_per_band` are subsampled;
-            bands already at or below the limit are left untouched.  For
-            1-D lightcurves this parameter has no effect.  Set to ``None``
-            (default) to disable per-band subsampling entirely.  A
+            Maximum number of observations to retain per observational
+            channel for 2-D lightcurves when one per-row ``band`` label is
+            available. This keeps distinct channels separate even when they
+            share one physical wavelength. When channel labels are absent,
+            the numeric physical-wavelength coordinate is used as a fallback
+            grouping key. Only groups exceeding the limit are subsampled;
+            groups already at or below it are left untouched. For 1-D
+            lightcurves this parameter has no effect. Set to ``None``
+            (default) to disable grouped subsampling entirely. A
             :class:`UserWarning` is issued whenever subsampling occurs
             (see :func:`~pgmuvi.preprocess.subsample_lightcurve`).
         max_samples : int or None, optional
@@ -3072,6 +3075,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     f"expected number of rows ({n_rows})."
                 )
             self.band = band_arr
+
+        if self.band is not None and self.ndim > 1:
+            self._observational_channel_first_appearance_order = list(
+                dict.fromkeys(str(value) for value in self.band.tolist())
+            )
+        else:
+            self._observational_channel_first_appearance_order = []
 
         self.__SET_LIKELIHOOD_CALLED = False
         self.__SET_MODEL_CALLED = False
@@ -3271,49 +3281,67 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         "malformed."
                     )
                 xdata_np = self._xdata_raw.detach().cpu().numpy()
-                band_ids = xdata_np[:, 1]
-                unique_bands = np.unique(band_ids)
+                if (
+                    self.band is not None
+                    and len(self.band) == len(xdata_np)
+                ):
+                    group_values = np.asarray(self.band, dtype=np.str_)
+                    unique_groups = list(
+                        dict.fromkeys(group_values.tolist())
+                    )
+                    group_kind = "observational channels"
+
+                    def _format_group(value):
+                        return f"channel={value}"
+                else:
+                    group_values = xdata_np[:, 1]
+                    unique_groups = np.unique(group_values).tolist()
+                    group_kind = "physical wavelengths"
+
+                    def _format_group(value):
+                        return f"λ={value}"
+
                 global_keep = []
-                subsampled_bands = []
-                for bval in unique_bands:
-                    band_mask = np.where(band_ids == bval)[0]
-                    n_band = len(band_mask)
-                    if n_band > max_samples_per_band:
-                        t_band = xdata_np[band_mask, 0]
+                subsampled_groups = []
+                for group_value in unique_groups:
+                    group_mask = np.where(group_values == group_value)[0]
+                    n_group = len(group_mask)
+                    if n_group > max_samples_per_band:
+                        t_group = xdata_np[group_mask, 0]
                         local_idx = subsample_lightcurve(
-                            t_band,
+                            t_group,
                             max_samples=max_samples_per_band,
                             max_gap_fraction=mgf,
                             random_seed=subsample_seed,
                         )
-                        global_keep.append(band_mask[local_idx])
-                        subsampled_bands.append(bval)
+                        global_keep.append(group_mask[local_idx])
+                        subsampled_groups.append(group_value)
                     else:
-                        global_keep.append(band_mask)
-                if subsampled_bands:
-                    _band_str = ", ".join(
-                        f"\u03bb={b}" for b in subsampled_bands
+                        global_keep.append(group_mask)
+                if subsampled_groups:
+                    _group_str = ", ".join(
+                        _format_group(value)
+                        for value in subsampled_groups
                     )
                     _struct_lines = "\n".join(
-                        f"    \u03bb={bval}: {len(keep)} points"
-                        for bval, keep in zip(
-                            unique_bands, global_keep, strict=True
+                        f"    {_format_group(value)}: {len(keep)} points"
+                        for value, keep in zip(
+                            unique_groups, global_keep, strict=True
                         )
                     )
                     _msg = (
-                        "The following bands exceed "
+                        f"The following {group_kind} exceed "
                         f"max_samples_per_band={max_samples_per_band}"
-                        f" and were randomly subsampled: {_band_str}. "
+                        f" and were randomly subsampled: {_group_str}. "
                         "Set max_samples_per_band=None to disable "
                         "subsampling.\nThe subsampled 2D light curve has "
                         f"the following structure:\n{_struct_lines}"
                     )
                     warnings.warn(_msg, UserWarning, stacklevel=2)
                     idx = np.concatenate(global_keep)
-                    # Sort by time column to preserve temporal ordering.
-                    idx = idx[
-                        np.argsort(xdata_np[idx, 0], kind="stable")
-                    ]
+                    # Preserve original row order so "first channel
+                    # encountered" remains deterministic after subsampling.
+                    idx = np.sort(idx, kind="stable")
                     idx_t = torch.as_tensor(
                         idx,
                         dtype=torch.long,
@@ -3526,6 +3554,411 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         one physical wavelength.
         """
         return self.band
+
+    def _duplicate_physical_wavelength_channel_groups(self) -> list[dict]:
+        """Return duplicated physical-wavelength observational-channel groups.
+
+        A duplicated group exists when a standard two-dimensional light curve
+        has per-row observational-channel labels and two or more distinct
+        labels occur at the same numeric physical wavelength.
+
+        Returns
+        -------
+        list of dict
+            One JSON-safe record per duplicated physical wavelength, in first
+            wavelength-appearance order.  Each record contains
+            ``physical_wavelength``, ``observational_channels`` in first-row
+            appearance order, and ``row_counts`` by channel.
+        """
+        if (
+            self.ndim <= 1
+            or self.band is None
+            or self._xdata_raw.dim() != 2
+            or self._xdata_raw.shape[1] < 2
+            or len(self.band) != len(self._xdata_raw)
+        ):
+            return []
+
+        wavelength_values = (
+            self._xdata_raw[:, 1].detach().cpu().numpy().astype(float)
+        )
+        channel_values = np.asarray(self.band, dtype=np.str_)
+
+        wavelength_order: list[float] = []
+        for value in wavelength_values.tolist():
+            value_float = float(value)
+            if value_float not in wavelength_order:
+                wavelength_order.append(value_float)
+
+        groups: list[dict] = []
+        for wavelength in wavelength_order:
+            mask = wavelength_values == wavelength
+            channels_at_wavelength = channel_values[mask]
+            present_channels = set(
+                str(value) for value in channels_at_wavelength
+            )
+            stored_order = list(
+                getattr(
+                    self,
+                    "_observational_channel_first_appearance_order",
+                    [],
+                )
+            )
+            channel_order = [
+                channel
+                for channel in stored_order
+                if channel in present_channels
+            ]
+            for value in channels_at_wavelength:
+                channel = str(value)
+                if channel not in channel_order:
+                    channel_order.append(channel)
+            if len(channel_order) <= 1:
+                continue
+            row_counts = {
+                channel: int(np.count_nonzero(channels_at_wavelength == channel))
+                for channel in channel_order
+            }
+            groups.append(
+                {
+                    "physical_wavelength": float(wavelength),
+                    "observational_channels": channel_order,
+                    "row_counts": row_counts,
+                }
+            )
+        return groups
+
+    @staticmethod
+    def _normalize_duplicate_wavelength_selection(
+        selection,
+        duplicated_groups: list[dict],
+    ) -> dict[float, str]:
+        """Normalize explicit duplicate-channel selection to wavelength mapping."""
+        if selection is None:
+            raise ValueError(
+                "duplicate_wavelength_policy='select' requires "
+                "duplicate_wavelength_selection."
+            )
+
+        if isinstance(selection, (str, np.str_)):
+            if len(duplicated_groups) != 1:
+                wavelengths = [
+                    group["physical_wavelength"] for group in duplicated_groups
+                ]
+                raise ValueError(
+                    "A single observational-channel identifier is only "
+                    "unambiguous when exactly one duplicated physical "
+                    "wavelength exists. Provide a mapping from physical "
+                    f"wavelength to channel for: {wavelengths!r}."
+                )
+            return {
+                float(duplicated_groups[0]["physical_wavelength"]): str(selection)
+            }
+
+        if not isinstance(selection, dict):
+            raise TypeError(
+                "duplicate_wavelength_selection must be a channel string or "
+                "a mapping from physical wavelength to channel identifier."
+            )
+
+        normalized: dict[float, str] = {}
+        for raw_wavelength, raw_channel in selection.items():
+            try:
+                wavelength = float(raw_wavelength)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    "duplicate_wavelength_selection keys must be numeric "
+                    "physical wavelengths."
+                ) from exc
+            if not np.isfinite(wavelength):
+                raise ValueError(
+                    "duplicate_wavelength_selection keys must be finite "
+                    "physical wavelengths."
+                )
+            if not isinstance(raw_channel, (str, np.str_)):
+                raise TypeError(
+                    "duplicate_wavelength_selection values must be string "
+                    "observational-channel identifiers."
+                )
+            channel = str(raw_channel).strip()
+            if not channel:
+                raise ValueError(
+                    "duplicate_wavelength_selection values must not be empty."
+                )
+            normalized[wavelength] = channel
+        return normalized
+
+    def copy_with_duplicate_wavelength_channels(
+        self,
+        *,
+        policy="first",
+        selection=None,
+    ) -> "Lightcurve":
+        """Return an independent light curve with duplicate channels resolved.
+
+        This is the non-mutating entry point for comparing alternative
+        observational channels at shared physical wavelengths. The source
+        object, its stored arrays, fit state, and history remain unchanged.
+        The returned object contains cloned data and independent transform
+        objects, and may be fitted normally.
+
+        Parameters
+        ----------
+        policy : {"first", "select", "all"}, optional
+            Duplicate-channel policy forwarded to
+            :meth:`_apply_duplicate_wavelength_channel_policy`.
+        selection : str or dict, optional
+            Explicit observational-channel selection used with ``"select"``.
+
+        Returns
+        -------
+        Lightcurve
+            Independent resolved copy ready for fitting.
+        """
+        copied_yerr = (
+            self._yerr_raw.detach().clone()
+            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
+            else None
+        )
+        copied_band = (
+            np.array(self.band, dtype=np.str_, copy=True)
+            if self.band is not None
+            else None
+        )
+        resolved = type(self)(
+            self._xdata_raw.detach().clone(),
+            self._ydata_raw.detach().clone(),
+            yerr=copied_yerr,
+            xtransform=copy.deepcopy(self.xtransform),
+            ytransform=copy.deepcopy(self.ytransform),
+            name=self.name,
+            band=copied_band,
+            check_sampling=False,
+            check_variability=False,
+            max_samples=None,
+            max_samples_per_band=None,
+        )
+        resolved._recenter_time_after_data_selection = bool(
+            getattr(self, "_recenter_time_after_data_selection", False)
+        )
+        resolved._observational_channel_first_appearance_order = list(
+            getattr(
+                self,
+                "_observational_channel_first_appearance_order",
+                [],
+            )
+        )
+        resolved._apply_duplicate_wavelength_channel_policy(
+            policy=policy,
+            selection=selection,
+        )
+        return resolved
+
+    def _apply_duplicate_wavelength_channel_policy(
+        self,
+        *,
+        policy="first",
+        selection=None,
+    ) -> dict:
+        """Resolve duplicated physical-wavelength channels before fitting.
+
+        The resolution mutates the stored fitting data in place so that the
+        :class:`Lightcurve` continues to represent the exact observations used
+        by the resulting model, matching existing constructor-time filtering
+        and subsampling semantics.
+        """
+        allowed = {"first", "select", "all"}
+        if not isinstance(policy, str):
+            raise TypeError(
+                "duplicate_wavelength_policy must be one of "
+                f"{sorted(allowed)!r}; got {type(policy).__name__!r}."
+            )
+        policy = policy.strip().lower()
+        if policy not in allowed:
+            raise ValueError(
+                "duplicate_wavelength_policy must be one of "
+                f"{sorted(allowed)!r}; got {policy!r}."
+            )
+
+        groups = self._duplicate_physical_wavelength_channel_groups()
+        provenance = {
+            "policy": policy,
+            "applied": False,
+            "duplicated_group_count": len(groups),
+            "groups": [],
+            "retained_row_count_before": len(self._xdata_raw),
+            "retained_row_count_after": len(self._xdata_raw),
+        }
+        if not groups:
+            if selection is not None:
+                raise ValueError(
+                    "duplicate_wavelength_selection was provided, but no "
+                    "physical wavelength has multiple observational channels."
+                )
+            existing_resolution = getattr(
+                self,
+                "duplicate_wavelength_channel_resolution",
+                None,
+            )
+            if (
+                isinstance(existing_resolution, dict)
+                and existing_resolution.get("applied") is True
+            ):
+                return copy.deepcopy(existing_resolution)
+            self.duplicate_wavelength_channel_resolution = provenance
+            return provenance
+
+        if self.band is None or len(self.band) != len(self._xdata_raw):
+            raise ValueError(
+                "Duplicate physical-wavelength resolution requires one "
+                "observational-channel label per observation row."
+            )
+
+        if policy == "all":
+            group_descriptions = "; ".join(
+                (
+                    f"{group['physical_wavelength']:g}: "
+                    + ", ".join(group["observational_channels"])
+                )
+                for group in groups
+            )
+            raise NotImplementedError(
+                "duplicate_wavelength_policy='all' requires an applicable "
+                "scientifically validated instrument-channel calibration "
+                "strategy. No validated strategy is available for: "
+                f"{group_descriptions}."
+            )
+
+        if policy == "first":
+            resolved_selection = {
+                float(group["physical_wavelength"]): str(
+                    group["observational_channels"][0]
+                )
+                for group in groups
+            }
+            if selection is not None:
+                raise ValueError(
+                    "duplicate_wavelength_selection is only valid with "
+                    "duplicate_wavelength_policy='select'."
+                )
+        else:
+            resolved_selection = self._normalize_duplicate_wavelength_selection(
+                selection,
+                groups,
+            )
+            required_wavelengths = {
+                float(group["physical_wavelength"]) for group in groups
+            }
+            supplied_wavelengths = set(resolved_selection)
+            missing = sorted(required_wavelengths - supplied_wavelengths)
+            extra = sorted(supplied_wavelengths - required_wavelengths)
+            if missing:
+                raise ValueError(
+                    "duplicate_wavelength_selection does not resolve every "
+                    f"duplicated physical wavelength. Missing: {missing!r}."
+                )
+            if extra:
+                raise ValueError(
+                    "duplicate_wavelength_selection contains physical "
+                    f"wavelengths that are not duplicated: {extra!r}."
+                )
+
+        wavelength_values = (
+            self._xdata_raw[:, 1].detach().cpu().numpy().astype(float)
+        )
+        channel_values = np.asarray(self.band, dtype=np.str_)
+        keep_mask = np.ones(len(self._xdata_raw), dtype=bool)
+
+        for group in groups:
+            wavelength = float(group["physical_wavelength"])
+            available = list(group["observational_channels"])
+            selected = resolved_selection[wavelength]
+            if selected not in available:
+                raise ValueError(
+                    f"Observational channel {selected!r} is not available at "
+                    f"physical wavelength {wavelength:g}. Available channels: "
+                    f"{available!r}."
+                )
+
+            group_mask = wavelength_values == wavelength
+            selected_mask = group_mask & (channel_values == selected)
+            ignored_mask = group_mask & ~selected_mask
+            ignored_channels = [
+                channel for channel in available if channel != selected
+            ]
+            ignored_counts = {
+                channel: int(
+                    np.count_nonzero(
+                        ignored_mask & (channel_values == channel)
+                    )
+                )
+                for channel in ignored_channels
+            }
+            selected_count = int(np.count_nonzero(selected_mask))
+            keep_mask[ignored_mask] = False
+
+            group_provenance = {
+                "physical_wavelength": wavelength,
+                "available_observational_channels": available,
+                "selected_observational_channel": selected,
+                "selected_row_count": selected_count,
+                "ignored_observational_channels": ignored_channels,
+                "ignored_row_counts": ignored_counts,
+            }
+            provenance["groups"].append(group_provenance)
+
+            ignored_summary = ", ".join(
+                f"{channel} ({ignored_counts[channel]} rows)"
+                for channel in ignored_channels
+            )
+            warnings.warn(
+                "Physical wavelength "
+                f"{wavelength:g} contains multiple observational channels. "
+                f"Selected {selected} ({selected_count} rows) under "
+                f"duplicate_wavelength_policy={policy!r}; ignored "
+                f"{ignored_summary}. Ignored observations are not included "
+                "in this fit.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        if not keep_mask.any():
+            raise ValueError(
+                "Duplicate physical-wavelength channel resolution removed "
+                "all observations."
+            )
+
+        keep_tensor = torch.as_tensor(
+            keep_mask,
+            dtype=torch.bool,
+            device=self._xdata_raw.device,
+        )
+        buffer_names = (
+            "_xdata_raw",
+            "_xdata_transformed",
+            "_ydata_raw",
+            "_ydata_transformed",
+            "_yerr_raw",
+            "_yerr_transformed",
+        )
+        for buffer_name in buffer_names:
+            if hasattr(self, buffer_name):
+                value = getattr(self, buffer_name)
+                if (
+                    value is not None
+                    and getattr(value, "dim", lambda: 0)() >= 1
+                    and len(value) == len(keep_mask)
+                ):
+                    self.register_buffer(buffer_name, value[keep_tensor].clone())
+
+        self.band = self.band[keep_mask]
+        if getattr(self, "_recenter_time_after_data_selection", False):
+            self._refresh_xdata_transform(recalc=True)
+
+        provenance["applied"] = True
+        provenance["retained_row_count_after"] = len(self._xdata_raw)
+        self.duplicate_wavelength_channel_resolution = provenance
+        return provenance
 
     @property
     def magnitudes(self):
@@ -10386,8 +10819,33 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
         return report
 
-    def fit(self, *args, **kwargs):
-        """Fit wrapper that records lightweight in-memory fit history."""
+    def fit(
+        self,
+        *args,
+        duplicate_wavelength_policy="first",
+        duplicate_wavelength_selection=None,
+        **kwargs,
+    ):
+        """Fit the light curve with duplicate-channel resolution.
+
+        Parameters
+        ----------
+        duplicate_wavelength_policy : {"first", "select", "all"}, optional
+            Policy for physical wavelengths represented by more than one
+            observational channel. ``"first"`` (default) retains the first
+            channel encountered in the original aligned input row order,
+            captured before constructor sampling, subsampling, or
+            transformation, and warns about every ignored channel.
+            ``"select"`` requires ``duplicate_wavelength_selection``.
+            ``"all"`` is reserved for validated instrument-channel
+            calibration and currently raises :class:`NotImplementedError`.
+        duplicate_wavelength_selection : str or dict, optional
+            Explicit channel selection used with policy ``"select"``. A
+            single string is accepted only when exactly one physical
+            wavelength is duplicated. Otherwise pass
+            ``{physical_wavelength: observational_channel}`` for every
+            duplicated group.
+        """
         # Nested fit() calls (e.g. from _consensus_standard_fit) delegate
         # to _fit_core directly so that only the outermost call records a
         # single canonical history entry.
@@ -10398,6 +10856,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 return self._fit_core(*args, **kwargs)
             finally:
                 self._fit_nesting_depth -= 1
+
+        _duplicate_resolution = self._apply_duplicate_wavelength_channel_policy(
+            policy=duplicate_wavelength_policy,
+            selection=duplicate_wavelength_selection,
+        )
 
         self._fit_nesting_depth = 1
         self.parameter_workflow_result = None
@@ -10456,8 +10919,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _uses_frequency_space = None
             _uses_period_space = None
 
+        _fit_configuration_kwargs = dict(kwargs)
+        _fit_configuration_kwargs["duplicate_wavelength_policy"] = (
+            duplicate_wavelength_policy
+        )
+        if duplicate_wavelength_selection is not None:
+            _fit_configuration_kwargs["duplicate_wavelength_selection"] = (
+                duplicate_wavelength_selection
+            )
         _fit_configuration = self._collect_fit_configuration_snapshot(
-            fit_kwargs=kwargs,
+            fit_kwargs=_fit_configuration_kwargs,
             context={
                 "model_class": _model_class,
                 "fit_strategy": _fit_strategy,
@@ -10486,6 +10957,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "uses_period_space": _uses_period_space,
             "fit_configuration": _fit_configuration,
             "environment": self._fit_history_environment_metadata(),
+            "duplicate_wavelength_channel_resolution": _duplicate_resolution,
         }
         self._fit_history_recorded = False
 
@@ -10559,7 +11031,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 bands=_bands,
                 uses_frequency_space=_resolved_freq,
                 uses_period_space=_resolved_period,
-                notes={"source": "fit_success"},
+                notes={
+                    "source": "fit_success",
+                    "duplicate_wavelength_channel_resolution": (
+                        _duplicate_resolution
+                    ),
+                },
             )
             self._fit_history_recorded = True
             return result
