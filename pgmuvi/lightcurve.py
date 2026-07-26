@@ -5546,7 +5546,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
             if timestamp_utc is None:
                 timestamp_utc = datetime.datetime.now(
-                    datetime.UTC
+                    datetime.timezone.utc
                 ).isoformat()
 
             _constrained_resolved = (
@@ -5858,7 +5858,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             _normalized_history.append(_normalized)
 
         _payload = {
-            "exported_at_utc": datetime.datetime.now(datetime.UTC).isoformat(),
+            "exported_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "fit_history_schema_version": _FIT_HISTORY_SCHEMA_VERSION,
             "fit_history_supported_schema_versions": sorted(
                 _FIT_HISTORY_SUPPORTED_SCHEMA_VERSIONS
