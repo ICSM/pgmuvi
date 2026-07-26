@@ -86,6 +86,28 @@ The fitting workflow is the same as in 1D::
 
     lc.fit(model="2D")
 
+When several observational channels share one physical wavelength, the default
+fit policy retains the first channel encountered in the original aligned input
+row order captured before constructor subsampling and warns which channels were
+ignored.  This makes the bundled
+``examples/data/10131+3049.csv`` source fit-able without silently pooling its
+two KELT data streams.  To choose the other channel explicitly::
+
+    lc.fit(
+        model="2D",
+        duplicate_wavelength_policy="select",
+        duplicate_wavelength_selection="KELT/OSN_Johnson.Cousins_R3_1",
+    )
+
+The explicit ``"all"`` policy is unavailable until a scientifically validated
+instrument-channel calibration strategy exists; requesting it raises
+an explicit unsupported-policy exception before model construction.
+
+For side-by-side fits of the two KELT channels without modifying the loaded
+source, use
+:meth:`~pgmuvi.lightcurve.Lightcurve.copy_with_duplicate_wavelength_channels`
+to create one independent fit target per choice.
+
 For heterogeneous channel sampling (for example, one observational channel has
 far more observations than the others), consider using the legacy best-band
 initialisation option::
