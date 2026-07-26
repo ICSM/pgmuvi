@@ -3688,6 +3688,170 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             normalized[wavelength] = channel
         return normalized
 
+    def _copy_for_temporal_consensus(self) -> "Lightcurve":
+        """Return an independent raw-data copy for temporal consensus only.
+
+        The copy retains every observational channel, including distinct
+        channels sharing one physical wavelength. It is never the final GP
+        training object.
+        """
+        copied_yerr = (
+            self._yerr_raw.detach().clone()
+            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
+            else None
+        )
+        copied_band = (
+            np.array(self.band, dtype=np.str_, copy=True)
+            if self.band is not None
+            else None
+        )
+        copied = type(self)(
+            self._xdata_raw.detach().clone(),
+            self._ydata_raw.detach().clone(),
+            yerr=copied_yerr,
+            xtransform=copy.deepcopy(self.xtransform),
+            ytransform=copy.deepcopy(self.ytransform),
+            center_time="auto",
+            name=self.name,
+            band=copied_band,
+            check_sampling=False,
+            check_variability=False,
+            max_samples=None,
+            max_samples_per_band=None,
+        )
+        copied._recenter_time_after_data_selection = bool(
+            getattr(
+                self,
+                "_recenter_time_after_data_selection",
+                False,
+            )
+        )
+        copied._observational_channel_first_appearance_order = list(
+            getattr(
+                self,
+                "_observational_channel_first_appearance_order",
+                [],
+            )
+        )
+        return copied
+
+    def _preserve_temporal_consensus_source(self) -> "Lightcurve":
+        """Preserve all pre-resolution channels for temporal consensus."""
+        source = getattr(
+            self,
+            "_temporal_consensus_full_data_source",
+            None,
+        )
+        if source is None:
+            source = self._copy_for_temporal_consensus()
+            self._temporal_consensus_full_data_source = source
+        return source
+
+    def _consensus_data_source(self) -> "Lightcurve":
+        """Return the all-channel source used by temporal consensus."""
+        active = getattr(
+            self,
+            "_active_temporal_consensus_source",
+            None,
+        )
+        if active is not None:
+            return active
+        preserved = getattr(
+            self,
+            "_temporal_consensus_full_data_source",
+            None,
+        )
+        if preserved is not None:
+            return preserved
+        return self
+
+    @staticmethod
+    def _ordered_observational_channels(lightcurve) -> list[str]:
+        """Return channel labels in stable first-row order."""
+        if getattr(lightcurve, "band", None) is None:
+            return []
+        return list(
+            dict.fromkeys(
+                str(value)
+                for value in np.asarray(
+                    lightcurve.band,
+                    dtype=np.str_,
+                ).tolist()
+            )
+        )
+
+    def _consensus_data_scope_provenance(self) -> dict:
+        """Describe independent consensus and GP-training data scopes."""
+        source = self._consensus_data_source()
+
+        def _grouping_metadata(lightcurve):
+            channels = self._ordered_observational_channels(lightcurve)
+            if channels:
+                return "observational_channel", channels
+
+            raw_xdata = getattr(lightcurve, "_xdata_raw", None)
+            if (
+                torch.is_tensor(raw_xdata)
+                and raw_xdata.ndim == 2
+                and raw_xdata.shape[1] >= 2
+            ):
+                wavelength_values = (
+                    raw_xdata[:, 1]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(float)
+                )
+                labels = [
+                    self._consensus_physical_wavelength_label(value)
+                    for value in dict.fromkeys(
+                        wavelength_values.tolist()
+                    )
+                ]
+                return "physical_wavelength", labels
+
+            row_count = len(raw_xdata) if raw_xdata is not None else 0
+            labels = ["single_time_series"] if row_count else []
+            return "single_time_series", labels
+
+        (
+            consensus_grouping_key,
+            consensus_group_labels,
+        ) = _grouping_metadata(source)
+        (
+            gp_training_grouping_key,
+            gp_training_group_labels,
+        ) = _grouping_metadata(self)
+
+        if consensus_grouping_key == "observational_channel":
+            consensus_scope = "all_eligible_observational_channels"
+        elif consensus_grouping_key == "physical_wavelength":
+            consensus_scope = "all_eligible_physical_wavelength_groups"
+        else:
+            consensus_scope = "single_time_series"
+
+        return {
+            "consensus_scope": consensus_scope,
+            "consensus_grouping_key": consensus_grouping_key,
+            "consensus_group_labels": consensus_group_labels,
+            "consensus_row_count": len(source._xdata_raw),
+            "consensus_observational_channels": (
+                self._ordered_observational_channels(source)
+            ),
+            "gp_training_scope": (
+                "duplicate_wavelength_policy_resolved"
+            ),
+            "gp_training_grouping_key": gp_training_grouping_key,
+            "gp_training_group_labels": gp_training_group_labels,
+            "gp_training_row_count": len(self._xdata_raw),
+            "gp_training_observational_channels": (
+                self._ordered_observational_channels(self)
+            ),
+            "duplicate_physical_wavelength_groups": (
+                source._duplicate_physical_wavelength_channel_groups()
+            ),
+        }
+
     def copy_with_duplicate_wavelength_channels(
         self,
         *,
@@ -3747,6 +3911,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "_observational_channel_first_appearance_order",
                 [],
             )
+        )
+        resolved._temporal_consensus_full_data_source = (
+            resolved._copy_for_temporal_consensus()
         )
         resolved._apply_duplicate_wavelength_channel_policy(
             policy=policy,
@@ -10857,10 +11024,39 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             finally:
                 self._fit_nesting_depth -= 1
 
+        _fit_strategy_requested = str(
+            kwargs.get("fit_strategy") or ""
+        ).strip().lower()
+        _uses_temporal_consensus = _fit_strategy_requested in {
+            "consensus",
+            "consensus_multicomp",
+        }
+        _temporal_consensus_source = None
+        _temporal_consensus_scope = None
+        if (
+            _uses_temporal_consensus
+            and isinstance(duplicate_wavelength_policy, str)
+            and duplicate_wavelength_policy.strip().lower() != "all"
+        ):
+            _temporal_consensus_source = (
+                self._preserve_temporal_consensus_source()
+            )
+
         _duplicate_resolution = self._apply_duplicate_wavelength_channel_policy(
             policy=duplicate_wavelength_policy,
             selection=duplicate_wavelength_selection,
         )
+
+        if _temporal_consensus_source is not None:
+            self._active_temporal_consensus_source = (
+                _temporal_consensus_source
+            )
+            _temporal_consensus_scope = (
+                self._consensus_data_scope_provenance()
+            )
+            self.temporal_consensus_data_scope = copy.deepcopy(
+                _temporal_consensus_scope
+            )
 
         self._fit_nesting_depth = 1
         self.parameter_workflow_result = None
@@ -10958,6 +11154,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "fit_configuration": _fit_configuration,
             "environment": self._fit_history_environment_metadata(),
             "duplicate_wavelength_channel_resolution": _duplicate_resolution,
+            "temporal_consensus_data_scope": copy.deepcopy(
+                _temporal_consensus_scope
+            ),
         }
         self._fit_history_recorded = False
 
@@ -11036,6 +11235,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     "duplicate_wavelength_channel_resolution": (
                         _duplicate_resolution
                     ),
+                    "temporal_consensus_data_scope": copy.deepcopy(
+                        _temporal_consensus_scope
+                    ),
                 },
             )
             self._fit_history_recorded = True
@@ -11043,6 +11245,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         finally:
             self._fit_nesting_depth = 0
             self._fit_history_context = {}
+            if hasattr(
+                self,
+                "_active_temporal_consensus_source",
+            ):
+                del self._active_temporal_consensus_source
 
     def _fit_core(
         self,
@@ -13291,42 +13498,133 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         return diagnostics
 
+    @staticmethod
+    def _consensus_physical_wavelength_label(value) -> str:
+        """Return the stable fallback label for one physical wavelength."""
+        return str(float(value))
+
+    def _consensus_select_group_for_gp_validation(
+        self,
+        group_label,
+    ) -> "Lightcurve":
+        """Select one consensus group while preserving GP-fit transforms."""
+        if self.band is not None:
+            return self.select_bands([str(group_label)])
+
+        wavelength_values = (
+            self._xdata_raw[:, 1]
+            .detach()
+            .cpu()
+            .numpy()
+            .astype(float)
+        )
+        target_wavelength = None
+        for wavelength in dict.fromkeys(wavelength_values.tolist()):
+            if (
+                self._consensus_physical_wavelength_label(wavelength)
+                == str(group_label)
+            ):
+                target_wavelength = wavelength
+                break
+
+        if target_wavelength is None:
+            raise ValueError(
+                "Consensus physical-wavelength group "
+                f"{group_label!r} is not present."
+            )
+
+        mask = torch.as_tensor(
+            wavelength_values == target_wavelength,
+            dtype=torch.bool,
+            device=self._xdata_raw.device,
+        )
+        selected_yerr = (
+            self._yerr_raw[mask].detach().clone()
+            if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
+            else None
+        )
+        selected = type(self)(
+            self._xdata_raw[mask].detach().clone(),
+            self._ydata_raw[mask].detach().clone(),
+            yerr=selected_yerr,
+            xtransform=copy.deepcopy(self.xtransform),
+            ytransform=copy.deepcopy(self.ytransform),
+            center_time="auto",
+            name=self.name,
+            band=None,
+            check_sampling=False,
+            check_variability=False,
+            max_samples=None,
+            max_samples_per_band=None,
+        )
+        selected._recenter_time_after_data_selection = bool(
+            getattr(
+                self,
+                "_recenter_time_after_data_selection",
+                False,
+            )
+        )
+        return selected
+
     def _consensus_iter_band_lightcurves(self):
-        """Yield per-band 1D light curves using stored band-label metadata.
+        """Yield independently grouped 1D light curves for consensus.
+
+        Observational-channel labels are the primary grouping key. When they
+        are absent, and only then, rows are grouped by physical wavelength.
 
         Yields
         ------
         tuple[str, Lightcurve]
-            Pairs of ``(band_label, band_lightcurve_1d)``. Each returned light
-            curve contains only time (1-D xdata), flux, and optional flux
-            uncertainty for that band.
+            Pairs of ``(group_label, group_lightcurve_1d)``. Each returned
+            light curve contains only time (1-D xdata), flux, and optional
+            flux uncertainty for one observational channel or fallback
+            physical-wavelength group.
 
         Raises
         ------
         ValueError
-            If this light curve is not 2-D, or if per-row band labels are not
-            available/consistent.
+            If this light curve is not 2-D, or if available per-row
+            observational-channel labels are inconsistent.
         """
         if self.ndim <= 1:
             raise ValueError(
                 "fit_strategy='consensus' requires a 2D (multiband) Lightcurve."
             )
+
         if self.band is None:
-            raise ValueError(
-                "fit_strategy='consensus' requires per-row band labels in "
-                "Lightcurve.band for multiband splitting."
+            wavelength_values = (
+                self._xdata_raw[:, 1]
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(float)
             )
-        if len(self.band) != len(self._xdata_raw):
-            raise ValueError(
-                "fit_strategy='consensus' requires one band label per "
-                "observation row for 2D light curves."
+            unique_wavelengths = list(
+                dict.fromkeys(wavelength_values.tolist())
             )
+            grouped_masks = [
+                (
+                    self._consensus_physical_wavelength_label(wavelength),
+                    wavelength_values == wavelength,
+                )
+                for wavelength in unique_wavelengths
+            ]
+        else:
+            if len(self.band) != len(self._xdata_raw):
+                raise ValueError(
+                    "fit_strategy='consensus' requires one observational-channel "
+                    "label per observation row when Lightcurve.band is set."
+                )
+            channel_values = np.asarray(self.band, dtype=str)
+            unique_channels = list(
+                dict.fromkeys(channel_values.tolist())
+            )
+            grouped_masks = [
+                (channel, channel_values == channel)
+                for channel in unique_channels
+            ]
 
-        band_arr = np.asarray(self.band, dtype=str)
-        unique_bands = list(dict.fromkeys(band_arr.tolist()))
-
-        for band_label in unique_bands:
-            mask_np = band_arr == band_label
+        for group_label, mask_np in grouped_masks:
             mask = torch.as_tensor(
                 mask_np,
                 dtype=torch.bool,
@@ -13339,14 +13637,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 if hasattr(self, "_yerr_raw") and self._yerr_raw is not None
                 else None
             )
-            # These temporary 1D light curves exist only for per-band
-            # sampling, Lomb--Scargle, and ACF diagnostics.  Do not inherit
+            # These temporary 1D light curves exist only for per-channel
+            # sampling, Lomb--Scargle, and ACF diagnostics. Do not inherit
             # the parent transforms: a fitted 2D affine x-transform stores
             # one offset/scale per coordinate and is therefore incompatible
-            # with the 1D time vector extracted here.  The diagnostics below
+            # with the 1D time vector extracted here. The diagnostics below
             # operate on raw time/flux values, while the parent multiband
             # light curve retains its transforms for the final GP fit.
-            lc_band = Lightcurve(
+            lc_group = Lightcurve(
                 t,
                 y,
                 yerr=yerr,
@@ -13354,9 +13652,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 ytransform=None,
                 center_time=False,
                 name=self.name,
-                band=np.asarray([band_label], dtype=np.str_),
+                band=np.asarray([group_label], dtype=np.str_),
+                max_samples=None,
+                max_samples_per_band=None,
             )
-            yield str(band_label), lc_band
+            yield str(group_label), lc_group
 
     def _consensus_resolve_controls(
         self,
@@ -13487,7 +13787,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         sampling-metric computation, conservative control resolution, and
         optional wavelength lookup from ``xdata[:, 1]``.
         """
-        per_band_lc = dict(self._consensus_iter_band_lightcurves())
+        consensus_source = self._consensus_data_source()
+        per_band_lc = dict(
+            consensus_source._consensus_iter_band_lightcurves()
+        )
         metrics_by_band = {
             band: lc_band.compute_sampling_metrics()
             for band, lc_band in per_band_lc.items()
@@ -13507,7 +13810,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         if include_wavelengths:
             prepared["band_to_wavelength"] = (
-                self._consensus_build_band_wavelength_map(per_band_lc.keys())
+                consensus_source._consensus_build_band_wavelength_map(
+                    per_band_lc.keys()
+                )
             )
 
         return prepared
@@ -13519,7 +13824,6 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         missing wavelength column, or non-numeric values).
         """
         band_to_wavelength = {str(label): None for label in band_labels}
-        band_arr = np.asarray(self.band, dtype=str)
 
         try:
             xdata_np = self._xdata_raw.detach().cpu().numpy()
@@ -13529,6 +13833,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if xdata_np.ndim != 2 or xdata_np.shape[1] < 2:
             return band_to_wavelength
 
+        if self.band is None:
+            wavelength_values = xdata_np[:, 1].astype(float)
+            for wavelength in dict.fromkeys(wavelength_values.tolist()):
+                fallback_label = self._consensus_physical_wavelength_label(
+                    wavelength
+                )
+                if fallback_label in band_to_wavelength:
+                    band_to_wavelength[fallback_label] = float(wavelength)
+            return band_to_wavelength
+
+        band_arr = np.asarray(self.band, dtype=str)
         for band_label in band_to_wavelength:
             mask_np = band_arr == band_label
             if not np.any(mask_np):
@@ -16730,7 +17045,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 # self.guess, or self.consensus_diagnostics on this instance.
                 # (self.consensus_diagnostics is assigned by _consensus_standard_fit
                 # after all per-band validation has finished, not here.)
-                lc_band = self.select_bands([str(band_label)])
+                consensus_source = self._consensus_data_source()
+                lc_band = (
+                    consensus_source._consensus_select_group_for_gp_validation(
+                        str(band_label)
+                    )
+                )
                 lc_band.fit(**default_gp_fit_kwargs)
                 summary = lc_band.get_period_summary(**period_summary_kwargs)
 
@@ -17981,8 +18301,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     bool(rec.get("gp_validation_used", False))
                     for rec in candidate_diag.get("band_records", {}).values()
                 )
-            auto_controls = candidate_diag["controls"]
-            _band_records_snap = dict(candidate_diag.get("band_records", {}))
+            auto_controls = dict(candidate_diag["controls"])
+            auto_controls["data_scope"] = (
+                self._consensus_data_scope_provenance()
+            )
+            candidate_diag["controls"] = auto_controls
+            _band_records_snap = dict(
+                candidate_diag.get("band_records", {})
+            )
             _rejected_bands_snap = list(candidate_diag.get("rejected_bands", []))
             # Convert per-band {band: [reasons]} accumulator to canonical
             # top-level {reason: [bands]} format via the rejection-summary
@@ -18987,6 +19313,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 "min_width_fraction": float(min_width_fraction),
                 "drift_warning_fraction": float(drift_warning_fraction),
                 "constrain_consensus": bool(apply_consensus_constraints),
+                "data_scope": self._consensus_data_scope_provenance(),
             },
             "constraint_strategy": (
                 "global_frequency_interval"
