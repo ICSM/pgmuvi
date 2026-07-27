@@ -131,8 +131,7 @@ class TestLightCurve(unittest.TestCase):
         self.assertTrue(torch.equal(self.lightcurve._yerr_transformed, self.test_yerr_transformed))
 
     def test_set_likelihood_squares_errors_by_default(self):
-        """set_likelihood should pass squared errors (variances) to
-        FixedNoiseGaussianLikelihood by default (variance=False)."""
+        """set_likelihood should pass squared errors to the fixed component."""
         lc = Lightcurve(self.test_xdata, self.test_ydata, yerr=self.test_ydata)
         lc.set_likelihood()
         self.assertIsInstance(
@@ -140,11 +139,15 @@ class TestLightCurve(unittest.TestCase):
             gpytorch.likelihoods.FixedNoiseGaussianLikelihood,
         )
         expected_noise = lc._yerr_transformed ** 2
-        self.assertTrue(torch.allclose(lc.likelihood.noise, expected_noise))
+        self.assertTrue(
+            torch.allclose(
+                lc.likelihood.noise_covar.noise,
+                expected_noise,
+            )
+        )
 
     def test_set_likelihood_uses_errors_as_variances_when_variance_true(self):
-        """When variance=True, set_likelihood should pass errors unchanged to
-        FixedNoiseGaussianLikelihood (i.e. treat them as already-squared)."""
+        """variance=True should preserve values in the fixed component."""
         lc = Lightcurve(self.test_xdata, self.test_ydata, yerr=self.test_ydata)
         lc.set_likelihood(variance=True)
         self.assertIsInstance(
@@ -152,7 +155,12 @@ class TestLightCurve(unittest.TestCase):
             gpytorch.likelihoods.FixedNoiseGaussianLikelihood,
         )
         expected_noise = lc._yerr_transformed
-        self.assertTrue(torch.allclose(lc.likelihood.noise, expected_noise))
+        self.assertTrue(
+            torch.allclose(
+                lc.likelihood.noise_covar.noise,
+                expected_noise,
+            )
+        )
 
 
 class TestFitLS(unittest.TestCase):

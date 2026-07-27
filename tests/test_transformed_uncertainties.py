@@ -140,7 +140,12 @@ class TestLightcurveTransformedUncertainties(unittest.TestCase):
 
         lc.set_likelihood(variance=True)
 
-        self.assertTrue(torch.allclose(lc.likelihood.noise, variances / 36.0))
+        self.assertTrue(
+            torch.allclose(
+                lc.likelihood.noise_covar.noise,
+                variances / 36.0,
+            )
+        )
 
 
 if __name__ == "__main__":
