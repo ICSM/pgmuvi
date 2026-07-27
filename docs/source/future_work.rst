@@ -198,12 +198,12 @@ Wavelength-model extensions
     multi-source decision.  No populated scientifically validated rule catalogue
     exists; catalogue population remains blocked until that decision passes.
 
-    The remaining work is to implement the public data-agnostic multi-source
-    engine, implement the non-distributed private Parquet selection runner,
-    execute the frozen five-source test internally, and commit only a redacted
-    aggregate decision.  A real rule may enter a populated scientifically
-    validated catalogue only after that decision passes.  Normal light-curve
-    workflow integration remains later work.
+    The public data-agnostic multi-source engine and maintainer-only private
+    Parquet selection runner are now implemented.  The remaining work is to run
+    the frozen five-source test on the private catalogue and commit only its
+    redacted aggregate decision.  A real rule may enter a populated
+    scientifically validated catalogue only after that decision passes.
+    Normal light-curve workflow integration remains later work.
 
 **TBD[multi-periodic-wavelength-models]**
     Add a documented and validated multi-periodic workflow beyond the current

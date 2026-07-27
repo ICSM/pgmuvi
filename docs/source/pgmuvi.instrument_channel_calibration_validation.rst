@@ -11,6 +11,11 @@ Instrument-channel calibration validation
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: pgmuvi.instrument_channel_calibration_multisource_execution
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Prospective protocol boundary
 -----------------------------
 
@@ -94,14 +99,21 @@ is repeated until every selected source has been held out once.  Equal matched
 pair counts from each training source prevent one densely sampled light curve
 from dominating the fit.
 
-The public package defines the data-agnostic contract and redacted evidence
-schema.  A **private Parquet** ingestion and selection runner is maintainer
-infrastructure, is not distributed, and does not create public package Parquet
-support.  Raw source identifiers, private light curves, and the detailed
-source-level report remain private.  A public redacted summary may contain
-only protocol and input digests, the selection seed, hashed selected-source
-identities, aggregate held-out metrics, coefficient-stability summaries, and
-the final disposition.
+The public package now implements the data-agnostic array engine as well as the
+contract and redacted evidence schema.  It performs source-balanced
+leave-one-source-out fitting, applies one common calibration to the unseen
+source without refitting, evaluates all frozen temporal folds, and derives the
+aggregate disposition.
+
+A **private Parquet** ingestion and selection runner is available at
+``maintainer_tools/run_private_instrument_channel_multisource_validation.py``.
+It is maintainer-only infrastructure outside the installed package, and the
+private catalogue itself is not distributed.  The public package still has no
+Parquet dependency or end-user Parquet input surface.  Raw source identifiers,
+private light curves, and the detailed source-level report remain private.  A
+public redacted summary may contain only protocol and input digests, the
+selection seed, hashed selected-source identities, aggregate held-out metrics,
+coefficient-stability summaries, and the final disposition.
 
 Maintained execution
 --------------------

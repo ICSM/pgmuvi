@@ -18,6 +18,8 @@ __all__ = [
     "gps",
     "initialization",
     "instrument_channel_calibration",
+    "instrument_channel_calibration_multisource_execution",
+    "instrument_channel_calibration_multisource_validation",
     "instrument_channel_calibration_validation",
     "instrument_channel_calibration_validation_execution",
     "lightcurve",
