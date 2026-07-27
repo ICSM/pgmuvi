@@ -75,20 +75,53 @@ Parquet catalogue.
 Maintainer-private execution boundary
 -------------------------------------
 
-The next implementation layer will accept already prepared per-source channel
-arrays in memory and execute the frozen maintainer-private multi-source
-contract.  It will not own private catalogue discovery or Parquet ingestion.
-The non-distributed private runner will identify sources containing the exact
-protocol-approved candidate observational-channel pair, apply all pre-fit
-eligibility gates, record the sorted eligible set and random seed, select the
-first five entries from the seeded permutation, and invoke the public
-data-agnostic engine.
+The public data-agnostic execution engine is implemented in
+:mod:`pgmuvi.instrument_channel_calibration_multisource_execution`.  It accepts
+already prepared per-source channel arrays in memory and executes the frozen
+maintainer-private multi-source contract.  It does not discover private files
+or depend on a Parquet library.
 
-The engine will perform source-balanced leave-one-source-out fitting and
-held-out temporal-fold evaluation.  It will return detailed in-memory evidence
-for the private report and a redacted public summary containing no raw source
-identifiers or private paths.  Catalogue population remains a later explicit
-step and is permitted only after a passing redacted decision.
+The maintainer-only adapter
+``maintainer_tools/run_private_instrument_channel_multisource_validation.py``
+reads one private Parquet file through ``pyarrow`` or a pandas-compatible
+Parquet engine, with exactly these required columns:
+
+.. code-block:: text
+
+   object_id
+   time
+   flux
+   flux_error
+   wavelength
+   band
+
+Rows are grouped by ``object_id``.  Every unique identifier is treated as one
+maintainer-asserted independent primary astrophysical source.  The adapter
+retains only the exact protocol-approved candidate observational-channel pair,
+passes every source group to the public engine, and keeps sources lacking the
+pair in the private eligibility audit.
+
+A typical private invocation is:
+
+.. code-block:: console
+
+   python maintainer_tools/run_private_instrument_channel_multisource_validation.py PRIVATE_CATALOGUE.parquet --selection-seed 20260726 --n-sources 5
+
+``--n-sources all`` evaluates every eligible source.  The default outputs are
+written under the ignored ``validation_outputs/`` directory: one detailed
+private report containing raw ``object_id`` values and one redacted summary
+containing only hashed selected-source identities and aggregate evidence.
+
+Eligibility is completed before calibration outcomes are inspected.  The
+engine records the sorted eligible set, applies the seeded permutation, selects
+the requested sources without replacement, fits equal matched-pair counts from
+every training source, and evaluates the unseen source without refitting.  Its
+five temporal-fold metrics are aggregated to one source-level normalized RMSE
+and bias before the frozen cross-source gates are applied.
+
+Catalogue population remains a later explicit step and is permitted only after
+a passing redacted decision.  Running this script does not populate or activate
+a calibration catalogue.
 
 Maintained execution status
 ---------------------------
@@ -110,5 +143,6 @@ five-source protocol.
 
 There is **no catalogue population** from the current execution.  It has not
 established a scientifically validated pairing rule or authorized calibration
-in ordinary light-curve fitting.  The private runner and public
-leave-one-source-out engine remain to be implemented and executed.
+in ordinary light-curve fitting.  The private Parquet runner and public
+leave-one-source-out engine are now implemented, but the frozen private
+multi-source decision has not yet been executed or committed.
