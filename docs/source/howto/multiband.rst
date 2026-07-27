@@ -86,27 +86,43 @@ The fitting workflow is the same as in 1D::
 
     lc.fit(model="2D")
 
-When several observational channels share one physical wavelength, the default
-fit policy retains the first channel encountered in the original aligned input
-row order captured before constructor subsampling and warns which channels were
-ignored.  This makes the bundled
-``examples/data/10131+3049.csv`` source fit-able without silently pooling its
-two KELT data streams.  To choose the other channel explicitly::
+When several observational channels share one physical wavelength, they form
+a shared-wavelength multiplet.  Pairs, triplets, and larger groups are detected
+from the input itself; no instrument or channel name is hard-coded.  The default
+fit policy is ``"error"`` so the package never chooses a representative channel
+silently.
+
+Inspect the detected structure first::
+
+    print(lc.duplicate_physical_wavelength_multiplets())
+
+Then choose the GP training input explicitly.  To use the first channel in each
+multiplet::
+
+    lc.fit(
+        model="2D",
+        duplicate_wavelength_policy="first",
+    )
+
+To choose one channel per multiplet::
 
     lc.fit(
         model="2D",
         duplicate_wavelength_policy="select",
-        duplicate_wavelength_selection="KELT/OSN_Johnson.Cousins_R3_1",
+        duplicate_wavelength_selection={
+            0.65: "survey_a/channel_beta",
+            1.25: "instrument_c/stream_3",
+        },
     )
 
-The explicit ``"all"`` policy is unavailable until a scientifically validated
-instrument-channel calibration strategy exists; requesting it raises
-an explicit unsupported-policy exception before model construction.
+The explicit ``"all"`` policy remains unavailable until a scientifically
+validated calibration strategy exists; requesting it raises before model
+construction rather than pooling uncalibrated channels at the same GP input
+coordinate.
 
-For side-by-side fits of the two KELT channels without modifying the loaded
-source, use
-:meth:`~pgmuvi.lightcurve.Lightcurve.copy_with_duplicate_wavelength_channels`
-to create one independent fit target per choice.
+Use :meth:`~pgmuvi.lightcurve.Lightcurve.copy_with_duplicate_wavelength_channels`
+to construct independent fit targets for alternative explicit selections
+without mutating the loaded source.
 
 For heterogeneous channel sampling (for example, one observational channel has
 far more observations than the others), consider using the legacy best-band

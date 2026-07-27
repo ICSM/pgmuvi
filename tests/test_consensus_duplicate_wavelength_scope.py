@@ -287,7 +287,7 @@ class TestConsensusDuplicateWavelengthScope(unittest.TestCase):
             "_fit_core",
             new=fake_fit_core,
         ):
-            lc.fit()
+            lc.fit(duplicate_wavelength_policy="first")
 
         self.assertEqual(
             observations["channels"],
@@ -475,7 +475,10 @@ class TestConsensusDuplicateWavelengthScope(unittest.TestCase):
                 UserWarning,
                 "Selected .*R3_0",
             ):
-                result = lc.fit(fit_strategy="consensus")
+                result = lc.fit(
+                    fit_strategy="consensus",
+                    duplicate_wavelength_policy="first",
+                )
 
         self.assertEqual(result, {"status": "mock-fit-complete"})
         self.assertIn(KELT_R3_0, observed["consensus_channels"])
@@ -564,7 +567,10 @@ class TestConsensusDuplicateWavelengthScope(unittest.TestCase):
             new=fake_fit_core,
         ):
             with self.assertWarns(UserWarning):
-                lc.fit(fit_strategy="consensus")
+                lc.fit(
+                    fit_strategy="consensus",
+                    duplicate_wavelength_policy="first",
+                )
             lc.fit()
 
         self.assertIsNotNone(observed_contexts[0])
@@ -592,7 +598,10 @@ class TestConsensusDuplicateWavelengthScope(unittest.TestCase):
                     RuntimeError,
                     "synthetic consensus failure",
                 ):
-                    lc.fit(fit_strategy="consensus")
+                    lc.fit(
+                        fit_strategy="consensus",
+                        duplicate_wavelength_policy="first",
+                    )
 
         self.assertTrue(lc.assert_active_source_for_test)
         self.assertFalse(

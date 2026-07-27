@@ -3622,11 +3622,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             groups.append(
                 {
                     "physical_wavelength": float(wavelength),
+                    "multiplet_size": len(channel_order),
                     "observational_channels": channel_order,
                     "row_counts": row_counts,
                 }
             )
         return groups
+
+    def duplicate_physical_wavelength_multiplets(self) -> list[dict]:
+        """Return a public, independent report of shared-wavelength multiplets.
+
+        Each returned record describes one physical wavelength represented by
+        two or more distinct observational channels. Pairs, triplets, and
+        larger multiplets are represented uniformly. Mutating the returned
+        report does not alter the light curve.
+        """
+        return copy.deepcopy(
+            self._duplicate_physical_wavelength_channel_groups()
+        )
 
     @staticmethod
     def _normalize_duplicate_wavelength_selection(
@@ -3855,7 +3868,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def copy_with_duplicate_wavelength_channels(
         self,
         *,
-        policy="first",
+        policy="error",
         selection=None,
     ) -> "Lightcurve":
         """Return an independent light curve with duplicate channels resolved.
@@ -3868,9 +3881,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Parameters
         ----------
-        policy : {"first", "select", "all"}, optional
+        policy : {"error", "first", "select", "all"}, optional
             Duplicate-channel policy forwarded to
-            :meth:`_apply_duplicate_wavelength_channel_policy`.
+            :meth:`_apply_duplicate_wavelength_channel_policy`. ``"error"``
+            is the default and requires the caller to choose explicitly when
+            any shared-wavelength multiplet is present.
         selection : str or dict, optional
             Explicit observational-channel selection used with ``"select"``.
 
@@ -3924,7 +3939,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def _apply_duplicate_wavelength_channel_policy(
         self,
         *,
-        policy="first",
+        policy="error",
         selection=None,
     ) -> dict:
         """Resolve duplicated physical-wavelength channels before fitting.
@@ -3934,7 +3949,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         by the resulting model, matching existing constructor-time filtering
         and subsampling semantics.
         """
-        allowed = {"first", "select", "all"}
+        allowed = {"error", "first", "select", "all"}
         if not isinstance(policy, str):
             raise TypeError(
                 "duplicate_wavelength_policy must be one of "
@@ -3974,6 +3989,33 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 return copy.deepcopy(existing_resolution)
             self.duplicate_wavelength_channel_resolution = provenance
             return provenance
+
+        if policy == "error":
+            if selection is not None:
+                raise ValueError(
+                    "duplicate_wavelength_selection is only valid with "
+                    "duplicate_wavelength_policy='select'."
+                )
+            descriptions = "; ".join(
+                (
+                    f"{group['physical_wavelength']:g} "
+                    f"({group['multiplet_size']}-channel multiplet): "
+                    + ", ".join(group["observational_channels"])
+                )
+                for group in groups
+            )
+            raise ValueError(
+                "Multiple observational channels share one or more physical "
+                f"wavelengths. Detected multiplets: {descriptions}. "
+                "Choose the GP training input explicitly with "
+                "duplicate_wavelength_policy='first' or "
+                "duplicate_wavelength_policy='select' together with "
+                "duplicate_wavelength_selection. Inspect the complete "
+                "structure with "
+                "duplicate_physical_wavelength_multiplets(). "
+                "duplicate_wavelength_policy='all' remains unavailable "
+                "without a scientifically validated calibration strategy."
+            )
 
         if self.band is None or len(self.band) != len(self._xdata_raw):
             raise ValueError(
@@ -10989,7 +11031,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def fit(
         self,
         *args,
-        duplicate_wavelength_policy="first",
+        duplicate_wavelength_policy="error",
         duplicate_wavelength_selection=None,
         **kwargs,
     ):
@@ -10997,15 +11039,17 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Parameters
         ----------
-        duplicate_wavelength_policy : {"first", "select", "all"}, optional
+        duplicate_wavelength_policy : {"error", "first", "select", "all"}, optional
             Policy for physical wavelengths represented by more than one
-            observational channel. ``"first"`` (default) retains the first
-            channel encountered in the original aligned input row order,
-            captured before constructor sampling, subsampling, or
-            transformation, and warns about every ignored channel.
-            ``"select"`` requires ``duplicate_wavelength_selection``.
-            ``"all"`` is reserved for validated instrument-channel
-            calibration and currently raises :class:`NotImplementedError`.
+            observational channel. ``"error"`` (default) refuses to construct
+            a GP training input until the caller chooses explicitly.
+            ``"first"`` retains the first channel encountered in the original
+            aligned input row order, captured before constructor sampling,
+            subsampling, or transformation, and warns about every ignored
+            channel. ``"select"`` requires
+            ``duplicate_wavelength_selection``. ``"all"`` is reserved for
+            validated instrument-channel calibration and currently raises
+            :class:`NotImplementedError`.
         duplicate_wavelength_selection : str or dict, optional
             Explicit channel selection used with policy ``"select"``. A
             single string is accepted only when exactly one physical
