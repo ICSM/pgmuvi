@@ -68,6 +68,8 @@ class TestWavelengthConstraintNotebook(unittest.TestCase):
             'model="2DSeparable"',
             "primary_lightcurve.fit(",
             "control_lightcurve.fit(",
+            'duplicate_wavelength_policy": "select"',
+            "DUPLICATE_WAVELENGTH_SELECTION",
             "primary_lightcurve.plot(",
             "training_point_prediction_summary",
             "summarize_observational_channel_residuals",

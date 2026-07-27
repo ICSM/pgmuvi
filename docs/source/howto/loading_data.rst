@@ -146,73 +146,98 @@ Duplicate physical wavelengths during fitting
 ---------------------------------------------
 
 A numeric physical wavelength may be represented by more than one
-observational channel, for example two detector/data-stream identifiers from
-the same survey.  Ordinary GP inputs cannot silently treat those channels as
-interchangeable.  Before any model or likelihood is constructed,
-:meth:`~pgmuvi.lightcurve.Lightcurve.fit` therefore resolves each duplicated
-physical-wavelength group.
+observational channel.  Such a group is a shared-wavelength **multiplet**:
+two channels form a pair, three form a triplet, and larger groups are handled
+in the same way.  Ordinary GP inputs use only ``(time, physical wavelength)``
+and therefore cannot silently decide which uncalibrated observational channel
+should represent a multiplet.
 
-The default policy retains the first observational channel encountered in the
-original aligned input row order captured before constructor sampling,
-subsampling, or transformation.  It emits a :class:`UserWarning` that names
-the selected channel, every ignored channel, and the corresponding row counts::
+Inspect all multiplets before fitting::
 
-    lc.fit(model="2DWavelengthDependent")
+    multiplets = lc.duplicate_physical_wavelength_multiplets()
+    for multiplet in multiplets:
+        print(
+            multiplet["physical_wavelength"],
+            multiplet["multiplet_size"],
+            multiplet["observational_channels"],
+            multiplet["row_counts"],
+        )
 
-Select a different channel explicitly when exactly one physical wavelength is
-duplicated::
+When at least one multiplet exists, :meth:`~pgmuvi.lightcurve.Lightcurve.fit`
+refuses to construct the GP training input until the caller chooses explicitly.
+The default ``duplicate_wavelength_policy="error"`` leaves every input row
+unchanged and reports every detected pair, triplet, or larger multiplet.
+
+To retain the first observational channel in the original aligned input order
+for every multiplet, request that behavior explicitly::
+
+    lc.fit(
+        model="2DWavelengthDependent",
+        duplicate_wavelength_policy="first",
+    )
+
+To choose one channel for a single multiplet::
 
     lc.fit(
         model="2DWavelengthDependent",
         duplicate_wavelength_policy="select",
-        duplicate_wavelength_selection="KELT/OSN_Johnson.Cousins_R3_1",
+        duplicate_wavelength_selection="survey_a/channel_beta",
     )
 
-For several duplicated physical wavelengths, provide one channel per physical
-wavelength::
+For several multiplets, provide exactly one selected observational channel for
+every duplicated physical wavelength.  The mapping is generic and may mix
+pairs, triplets, and larger groups::
 
     lc.fit(
         model="2DWavelengthDependent",
         duplicate_wavelength_policy="select",
         duplicate_wavelength_selection={
-            0.6561154962791801: "KELT/OSN_Johnson.Cousins_R3_1",
-            1.25: "SURVEY/FILTER_CHANNEL",
+            0.65: "survey_a/channel_beta",
+            1.25: "instrument_c/stream_3",
         },
     )
 
-The ``"all"`` policy is reserved for a scientifically validated
-instrument-channel calibration strategy.  It currently raises
+Every unselected channel in each multiplet is excluded before model or
+likelihood construction.  The selected rows, ignored rows, multiplet sizes,
+and channel identities are recorded in
+``lc.duplicate_wavelength_channel_resolution`` and in fit-history provenance.
+
+The ``"all"`` policy remains reserved for a scientifically validated
+instrument-channel calibration strategy.  It raises
 :class:`NotImplementedError` before fitting rather than pooling uncalibrated
-channels.  Resolution is recorded in ``lc.duplicate_wavelength_channel_resolution``
-and in fit-history provenance.  Direct :meth:`~pgmuvi.lightcurve.Lightcurve.fit`
-calls preserve the package's established in-place fit contract: the fitted
-object stores the observations actually used by its model.
+channels at an identical GP coordinate.
 
-To preserve one loaded source while fitting alternative channels, create
-independent resolved copies first::
+To preserve one loaded source while comparing alternative explicit choices,
+create independent resolved copies::
 
-    source = Lightcurve.from_csv(
-        "examples/data/10131+3049.csv",
-        max_samples=None,
-        max_samples_per_band=None,
-    )
-    r3_0 = source.copy_with_duplicate_wavelength_channels()
-    r3_1 = source.copy_with_duplicate_wavelength_channels(
+    source = Lightcurve.from_csv("multiwavelength_source.csv", max_samples=None)
+
+    option_a = source.copy_with_duplicate_wavelength_channels(
         policy="select",
-        selection="KELT/OSN_Johnson.Cousins_R3_1",
+        selection={
+            0.65: "survey_a/channel_alpha",
+            1.25: "instrument_c/stream_1",
+        },
+    )
+    option_b = source.copy_with_duplicate_wavelength_channels(
+        policy="select",
+        selection={
+            0.65: "survey_a/channel_beta",
+            1.25: "instrument_c/stream_3",
+        },
     )
 
-    r3_0.fit(model="2DWavelengthDependent")
-    r3_1.fit(model="2DWavelengthDependent")
+    option_a.fit(model="2DWavelengthDependent")
+    option_b.fit(model="2DWavelengthDependent")
 
 ``source`` remains unchanged; each returned copy owns independent data and
-transform objects and records its own channel-resolution provenance.
+transform objects and records its own multiplet-resolution provenance.
 
 When constructor-time ``max_samples_per_band`` is enabled, per-row
-observational-channel labels are used as the grouping key.  Thus two channels
-at one physical wavelength are subsampled independently before the fit policy
-selects one.  Numeric physical wavelength is used only when channel labels are
-unavailable.
+observational-channel labels are used as the grouping key.  Channels at one
+physical wavelength are subsampled independently before the explicit fit
+policy selects one.  Numeric physical wavelength is used only when channel
+labels are unavailable.
 
 Observational-channel labels and mixed-channel input
 ------------------------------------------------------
