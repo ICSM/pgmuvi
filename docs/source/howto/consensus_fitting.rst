@@ -226,10 +226,13 @@ Learned additional noise and uncertainty units
 
 With per-point uncertainties, the default automatic likelihood treats stored
 ``yerr`` values as standard deviations because ``variance=False`` by default.
-The values are squared before being supplied to the fixed-noise likelihood.
+The values are squared before being supplied as fixed per-observation variances,
+and PGMUVI now learns one additional homoscedastic variance by default.  The
+additional term starts near 10% of the median supplied variance so it begins as
+a perturbation rather than replacing the reported uncertainties.
 
-Set ``learn_additional_noise=True`` when the quoted uncertainties may not account
-for all scatter:
+The explicit ``learn_additional_noise=True`` spelling remains available and can
+make the statistical choice visible in a saved workflow:
 
 .. code-block:: python
 
@@ -243,11 +246,13 @@ for all scatter:
    )
 
 This adds one learned homoscedastic variance term on top of the supplied
-per-observation variances.  It does not replace the reported errors.  Do not set
-``variance=True`` unless the stored uncertainty column already contains
-variances rather than standard deviations.  With a ``ytransform``, standard
-deviations use the fitted scale once and variances use its square; location
-shifts are never applied to either quantity.
+per-observation variances.  It does not replace the reported errors.  Pass
+``learn_additional_noise=False`` or ``likelihood="fixed"`` to recover the legacy
+fixed-noise-only behaviour explicitly.  Do not set ``variance=True`` unless the
+stored uncertainty column already contains variances rather than standard
+deviations.  With a ``ytransform``, standard deviations use the fitted scale
+once and variances use its square; location shifts are never applied to either
+quantity.
 
 Initialization, constraints, and numerical stability
 -----------------------------------------------------
