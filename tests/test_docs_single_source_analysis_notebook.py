@@ -104,6 +104,41 @@ class TestSingleSourceAnalysisNotebook(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, text)
 
+
+    def test_first_code_cell_bootstraps_google_colab(self):
+        cells = code_cells()
+        self.assertTrue(cells)
+        bootstrap = cells[0]
+        required_tokens = [
+            'importlib.util.find_spec("google.colab")',
+            'PGMUVI_COLAB_CHECKOUT = Path("/content/pgmuvi-repo")',
+            '"git",',
+            '"clone",',
+            '"--branch",',
+            "PGMUVI_COLAB_GIT_REF",
+            "sys.executable",
+            '"--editable",',
+            "for module_name in list(sys.modules):",
+            "sys.path.insert(0, repository_string)",
+            "importlib.invalidate_caches()",
+            'REPOSITORY_ROOT / "pgmuvi/single_source_analysis.py"',
+            "PGMUVI was imported from the wrong location",
+            'REPOSITORY_ROOT / "examples/data/10131+3049.csv"',
+        ]
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(token, bootstrap)
+
+        self.assertNotIn('Path("/content/pgmuvi")', bootstrap)
+        self.assertNotIn("!pip", bootstrap)
+        self.assertNotIn("%pip", bootstrap)
+        self.assertLess(
+            bootstrap.index("REPOSITORY_ROOT = _prepare_repository_root()"),
+            bootstrap.index(
+                "from pgmuvi.single_source_analysis import"
+            ),
+        )
+
     def test_default_path_cannot_silently_skip_training(self):
         text = notebook_text()
         self.assertNotIn("training_iter=0", text)
