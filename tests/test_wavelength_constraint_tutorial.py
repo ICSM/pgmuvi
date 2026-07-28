@@ -208,6 +208,8 @@ class TestTutorialFitDiagnostics(unittest.TestCase):
                 "residual": np.array([1.0, -1.0]),
                 "predictive_mean": np.array([4.0, 5.0]),
                 "predictive_variance": np.array([0.5, 0.5]),
+                "observational_channel": np.array(["A", "B"]),
+                "physical_wavelength": np.array([0.55, 0.65]),
             },
             warning_messages=["example warning"],
         )
@@ -215,6 +217,14 @@ class TestTutorialFitDiagnostics(unittest.TestCase):
         self.assertTrue(summary["fit_executed"])
         self.assertTrue(summary["objective_improved"])
         self.assertEqual(summary["n_iterations"], 3)
+        self.assertEqual(summary["n_observations"], 2)
+        self.assertEqual(summary["n_observational_channels"], 2)
+        self.assertEqual(summary["n_physical_wavelengths"], 2)
+        self.assertEqual(summary["gp_training_scope"]["n_observations"], 2)
+        self.assertEqual(
+            summary["consensus_input_scope"]["n_observations"],
+            20,
+        )
         self.assertEqual(summary["nonfinite_prediction_count"], 0)
         self.assertEqual(summary["negative_variance_count"], 0)
         self.assertAlmostEqual(summary["residual_rmse"], 1.0)

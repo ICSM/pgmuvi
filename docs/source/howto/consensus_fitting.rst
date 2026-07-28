@@ -483,6 +483,13 @@ history and recovered period, and calls ``Lightcurve.plot()`` to render fitted
 predictions before presenting explicit follow-up configurations.  The runnable script remains the preferred reference
 for command-line execution and artifact export.
 
+For a real-source workflow, use
+:doc:`../notebooks/tutorial_single_source_analysis`.  It computes independent
+Lomb--Scargle and data-ACF evidence for every observational channel, runs
+consensus before the wavelength-parameter workflow and optimizer, keeps both
+shared-wavelength KELT channels in the consensus scope, and records the explicit
+single-channel selection used only for exact-GP training.
+
 Relationship to wavelength advisory
 -----------------------------------
 

@@ -528,6 +528,25 @@ def build_tutorial_fit_summary(
         predictions["predictive_variance"],
         name="predictive_variance",
     )
+    training_channels = np.asarray(
+        predictions["observational_channel"],
+        dtype=str,
+    ).reshape(-1)
+    training_wavelengths = _numpy_1d(
+        predictions["physical_wavelength"],
+        name="physical_wavelength",
+    )
+    prediction_row_count = residual.size
+    if not all(
+        array.size == prediction_row_count
+        for array in (
+            predictive_mean,
+            predictive_variance,
+            training_channels,
+            training_wavelengths,
+        )
+    ):
+        raise ValueError("Prediction arrays must be row aligned.")
     covariance_rows = [
         row for row in constraint_rows if row["applies_to"] == "covariance"
     ]
@@ -547,13 +566,34 @@ def build_tutorial_fit_summary(
         "final_loss": float(losses[-1]),
         "best_loss": float(np.min(losses)),
         "objective_improved": bool(losses[-1] < losses[0]),
-        "n_observations": int(sampling_summary["n_rows_retained"]),
+        "n_observations": int(prediction_row_count),
         "n_observational_channels": int(
-            sampling_summary["n_observational_channels_retained"]
+            np.unique(training_channels).size
         ),
         "n_physical_wavelengths": int(
-            sampling_summary["n_physical_wavelengths_retained"]
+            np.unique(training_wavelengths).size
         ),
+        "gp_training_scope": {
+            "n_observations": int(prediction_row_count),
+            "n_observational_channels": int(
+                np.unique(training_channels).size
+            ),
+            "n_physical_wavelengths": int(
+                np.unique(training_wavelengths).size
+            ),
+            "observational_channels": list(
+                dict.fromkeys(training_channels.tolist())
+            ),
+        },
+        "consensus_input_scope": {
+            "n_observations": int(sampling_summary["n_rows_retained"]),
+            "n_observational_channels": int(
+                sampling_summary["n_observational_channels_retained"]
+            ),
+            "n_physical_wavelengths": int(
+                sampling_summary["n_physical_wavelengths_retained"]
+            ),
+        },
         "wavelength_parameter": (
             None if wavelength_row is None else wavelength_row["parameter"]
         ),

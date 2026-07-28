@@ -3,7 +3,7 @@ Interpreting PGMUVI results
 
 .. note::
 
-   **Documentation status:** current through PR102.
+   **Documentation status:** current through PR174.
 
    This guide explains how to read period summaries, wavelength-trend
    diagnostics, training-residual fit-quality scores, spectral-mixture ARD
@@ -32,6 +32,13 @@ For a completed single-source analysis, inspect outputs in the following order:
 For batch advisory work, start with the batch summary, then inspect each
 source-level JSON report, and finally inspect the long-form model/kernel-config
 CSV for individual failures and boundary hits.
+
+The maintained :doc:`../notebooks/tutorial_single_source_analysis` notebook
+applies this order interactively to the bundled real source.  It records
+per-observational-channel period evidence, consensus acceptance and rejection,
+wavelength-constraint provenance, actual optimizer history, predictions,
+residual and phase diagnostics, fixed and learned noise components, warnings,
+failures, and a JSON-safe report.
 
 Period summaries
 ----------------
@@ -228,6 +235,15 @@ Standardized residual metrics use the observed predictive standard deviation fro
 likelihood noise, so the reported measurement uncertainty is not added again.
 ``standardization_sigma_source`` records whether observed predictive variance was
 available or whether transformed ``yerr`` had to be used as a fallback.
+
+The complete single-source notebook also reports channel-level standardized
+residual RMS.  Its screening reference is one, values above two are promoted to
+a scientific-review warning, and values above three are labelled severe.  These
+thresholds expose local mismatch between training residuals and predictive
+uncertainty; they do not automatically reject a model or establish that another
+model family is preferred.  Inspect the affected observational channels,
+sampling, noise assumptions, and residual structure before interpreting the
+fit.
 
 A very low score should trigger inspection of the underlying metrics and fit
 state.  ``fit_quality_available=False`` means the candidate is unscored; it is
@@ -519,13 +535,6 @@ Full MCMC fitting and posterior plotting are not available in the current
 release.  ``Lightcurve.mcmc()``, ``plot_corner()``, and ``plot_trace()`` remain
 future functionality.  Period intervals in current MAP summaries are therefore
 peak-width diagnostics, not posterior credible intervals.
-
-.. admonition:: TBD: interpretation notebook
-
-   ``TBD[result-interpretation-notebook]``: add a maintained notebook that reads
-   real exported period and advisory reports, reproduces the interpretation
-   sequence above, and compares training-residual diagnostics with future
-   held-out validation outputs.
 
 See also
 --------

@@ -3,7 +3,7 @@ Notebook status and maintenance
 
 .. note::
 
-   **Documentation status:** current through PR134.
+   **Documentation status:** current through PR174.
 
    Every notebook currently shipped under ``docs/source/notebooks`` is part of
    the public Tutorials documentation.  No quarantined or pending-refresh
@@ -49,6 +49,9 @@ These notebooks are linked from the main Tutorials toctree:
    * - ``tutorial_wavelength_constraints.ipynb``
      - Maintained data-derived wavelength-constraint tutorial.
      - Added in PR134 with coordinate round trips, covariance and mean constraints, independent joint-``2D`` ARD diagnostics, reduced optional fits, and the PR133 empirical failure boundaries.
+   * - ``tutorial_single_source_analysis.ipynb``
+     - Maintained complete real-source analysis workflow.
+     - Added in PR174 with validation, per-observational-channel period evidence, temporal consensus, wavelength constraints, a required real GP fit, predictions, plots, residual and phase diagnostics, noise provenance, and a JSON-safe structured report.
    * - ``pgmuvi_mock_data_from_gp.ipynb``
      - Maintained GP-prior mock-data tutorial.
      - Refreshed in PR107 with current parameter schemas, physical-space parameter application, reproducible quasi-periodic/Matérn/spectral-mixture prior draws, and an explicit no-fitting boundary.
@@ -91,6 +94,17 @@ round trips, keeps time and wavelength ARD dimensions independent, and
 explains the empirically calibrated sparse/noisy failure boundaries.  The
 notebook remains advisory and does not convert constraint pressure into
 automatic model selection.
+
+**Completed in PR174:** ``tutorial_single_source_analysis.ipynb`` is the
+maintained complete single-source workflow for the bundled real source
+``examples/data/10131+3049.csv``.  Its default path computes independent period
+evidence for every observational channel, runs temporal consensus, applies and
+verifies live wavelength constraints before optimizer training, performs a
+required ``2DWavelengthDependent`` fit, generates predictions and maintained
+plots, evaluates residual and phase diagnostics, distinguishes fixed measurement
+variance from learned additional variance, and assembles a JSON-safe report.
+The KELT shared-wavelength selection is explicit and applies only to exact-GP
+training; both channels remain available to period evidence and consensus.
 
 
 Notebook maintenance rules

@@ -1,4 +1,4 @@
-"""Regression checks for the PR102 result-interpretation guide."""
+"""Regression checks for the maintained result-interpretation guide."""
 
 from pathlib import Path
 import unittest
@@ -16,7 +16,7 @@ class TestResultInterpretationDocs(unittest.TestCase):
         self.normalized = " ".join(self.text.split())
 
     def test_page_is_current_and_linked(self):
-        self.assertIn("current through PR102", self.text)
+        self.assertIn("current through PR174", self.text)
         self.assertIn("interpreting_results", HOWTO_INDEX.read_text(encoding="utf-8"))
 
     def test_period_interpretation_contracts(self):
@@ -147,10 +147,17 @@ class TestResultInterpretationDocs(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.normalized)
 
-    def test_runnable_example_and_future_marker(self):
+    def test_runnable_example_and_completed_notebook_coverage(self):
         self.assertTrue(EXAMPLE.is_file())
         self.assertIn("examples/interpret_pgmuvi_outputs.py", self.text)
-        self.assertIn("TBD[result-interpretation-notebook]", self.text)
+        self.assertNotIn(
+            "TBD[result-interpretation-notebook]",
+            self.text,
+        )
+        self.assertIn(
+            "tutorial_single_source_analysis",
+            self.text,
+        )
 
 
 if __name__ == "__main__":
