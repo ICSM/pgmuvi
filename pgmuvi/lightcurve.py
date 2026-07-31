@@ -686,6 +686,205 @@ def dict_walk_generator(indict, pre=None):
         yield [*pre, indict]
 
 
+
+
+def _reconcile_consensus_spectral_mixture_scale_constraint(
+    model,
+    consensus_guess,
+):
+    """Expand an active scale interval to contain consensus initial values.
+
+    The temporal consensus and the parameter workflow are both data-derived.
+    An active interval must therefore not exclude the consensus values that
+    will immediately initialize the same parameter. This helper expands an
+    ``Interval`` only when necessary; it never clips a consensus estimate and
+    never narrows an existing bound.
+    """
+    scale_entries = [
+        (name, value)
+        for name, value in consensus_guess.items()
+        if str(name).endswith(".mixture_scales")
+    ]
+    if not scale_entries:
+        return {
+            "parameter": None,
+            "status": "not_applicable",
+            "adjusted": False,
+            "reason": "no_mixture_scale_guess",
+        }
+    if len(scale_entries) != 1:
+        raise RuntimeError(
+            "Expected exactly one spectral-mixture scale guess; "
+            f"found {len(scale_entries)}."
+        )
+
+    parameter_name, requested_value = scale_entries[0]
+    path_parts = str(parameter_name).split(".")
+    target_module = model
+    for path_part in path_parts[:-1]:
+        if path_part.isdigit():
+            target_module = target_module[int(path_part)]
+        else:
+            target_module = getattr(target_module, path_part)
+
+    constrained_name = path_parts[-1]
+    raw_name = f"raw_{constrained_name}"
+    constraint_name = f"{raw_name}_constraint"
+    if not hasattr(target_module, raw_name):
+        raise RuntimeError(
+            "Consensus scale target has no raw parameter: "
+            f"{parameter_name}."
+        )
+    if not hasattr(target_module, constraint_name):
+        return {
+            "parameter": parameter_name,
+            "status": "not_applicable",
+            "adjusted": False,
+            "reason": "constraint_unavailable",
+        }
+
+    raw_parameter = getattr(target_module, raw_name)
+    constraint = getattr(target_module, constraint_name)
+    if not isinstance(constraint, Interval):
+        return {
+            "parameter": parameter_name,
+            "status": "not_applicable",
+            "adjusted": False,
+            "reason": "constraint_is_not_interval",
+            "constraint_class": type(constraint).__name__,
+        }
+
+    requested = torch.as_tensor(
+        requested_value,
+        dtype=raw_parameter.dtype,
+        device=raw_parameter.device,
+    )
+    if requested.numel() == 0:
+        raise RuntimeError(
+            "Consensus mixture-scale guess is empty."
+        )
+    if not bool(torch.isfinite(requested).all()):
+        raise RuntimeError(
+            "Consensus mixture-scale guess contains non-finite values."
+        )
+    if not bool((requested > 0.0).all()):
+        raise RuntimeError(
+            "Consensus mixture-scale guess must be strictly positive."
+        )
+
+    old_lower = constraint.lower_bound.detach().clone().to(
+        raw_parameter
+    )
+    old_upper = constraint.upper_bound.detach().clone().to(
+        raw_parameter
+    )
+    requested_min = requested.min()
+    requested_max = requested.max()
+
+    lower_for_check = torch.broadcast_to(
+        old_lower,
+        requested.shape,
+    )
+    upper_for_check = torch.broadcast_to(
+        old_upper,
+        requested.shape,
+    )
+    below = requested < lower_for_check
+    above = requested > upper_for_check
+    needs_adjustment = bool((below | above).any())
+
+    diagnostics = {
+        "parameter": parameter_name,
+        "status": (
+            "expanded_to_include_consensus_guess"
+            if needs_adjustment
+            else "already_contains_consensus_guess"
+        ),
+        "adjusted": needs_adjustment,
+        "requested_minimum": float(requested_min.detach().cpu()),
+        "requested_maximum": float(requested_max.detach().cpu()),
+        "old_lower_bound": old_lower.detach().cpu().reshape(-1).tolist(),
+        "old_upper_bound": old_upper.detach().cpu().reshape(-1).tolist(),
+    }
+    if not needs_adjustment:
+        diagnostics["new_lower_bound"] = list(
+            diagnostics["old_lower_bound"]
+        )
+        diagnostics["new_upper_bound"] = list(
+            diagnostics["old_upper_bound"]
+        )
+        return diagnostics
+
+    dtype_info = torch.finfo(raw_parameter.dtype)
+    relative_padding = torch.as_tensor(
+        0.05,
+        dtype=raw_parameter.dtype,
+        device=raw_parameter.device,
+    )
+    absolute_padding = torch.maximum(
+        requested_max.abs() * relative_padding,
+        torch.as_tensor(
+            32.0 * dtype_info.eps,
+            dtype=raw_parameter.dtype,
+            device=raw_parameter.device,
+        ),
+    )
+
+    padded_lower = torch.clamp(
+        requested_min - absolute_padding,
+        min=dtype_info.tiny,
+    )
+    padded_upper = requested_max + absolute_padding
+
+    new_lower = torch.minimum(old_lower, padded_lower)
+    new_upper = torch.maximum(old_upper, padded_upper)
+    if not bool((new_upper > new_lower).all()):
+        raise RuntimeError(
+            "Could not construct a valid expanded mixture-scale interval."
+        )
+
+    interval_kwargs = {}
+    if hasattr(constraint, "_transform"):
+        interval_kwargs["transform"] = constraint._transform
+    if hasattr(constraint, "_inv_transform"):
+        interval_kwargs["inv_transform"] = constraint._inv_transform
+
+    new_constraint = Interval(
+        new_lower,
+        new_upper,
+        initial_value=getattr(constraint, "initial_value", None),
+        **interval_kwargs,
+    )
+    target_module.register_constraint(
+        raw_name,
+        new_constraint,
+        replace=True,
+    )
+
+    transformed = new_constraint.inverse_transform(requested)
+    if not bool(torch.isfinite(transformed).all()):
+        raise RuntimeError(
+            "Expanded mixture-scale interval still yields non-finite "
+            "raw initialization values."
+        )
+    raw_check = new_constraint.check_raw(transformed)
+    if torch.is_tensor(raw_check):
+        raw_check = bool(raw_check.all())
+    if not raw_check:
+        raise RuntimeError(
+            "Expanded mixture-scale interval still rejects the "
+            "consensus initialization."
+        )
+
+    diagnostics["new_lower_bound"] = (
+        new_constraint.lower_bound.detach().cpu().reshape(-1).tolist()
+    )
+    diagnostics["new_upper_bound"] = (
+        new_constraint.upper_bound.detach().cpu().reshape(-1).tolist()
+    )
+    diagnostics["padding_fraction"] = 0.05
+    return diagnostics
+
 def _convert_time_to_days(xdata, time_units):
     """Convert the time axis of xdata to days.
 
@@ -2788,6 +2987,41 @@ class FitFailureSummary:
                 indent=2,
                 allow_nan=False,
             )
+
+
+def _cache_period_diagnostic_call(kind):
+    """Decorate LS/ACF methods while preserving their public signatures."""
+    import functools
+    import inspect
+
+    def decorator(function):
+        signature = inspect.signature(function)
+
+        @functools.wraps(function)
+        def wrapped(self, *args, **kwargs):
+            result = function(self, *args, **kwargs)
+            bound = signature.bind_partial(self, *args, **kwargs)
+            bound.apply_defaults()
+            arguments = {
+                key: value
+                for key, value in bound.arguments.items()
+                if key != "self"
+            }
+            from .period_diagnostic_comparison import (
+                cache_period_diagnostic_call,
+            )
+
+            cache_period_diagnostic_call(
+                self,
+                kind=kind,
+                result=result,
+                arguments=arguments,
+            )
+            return result
+
+        return wrapped
+
+    return decorator
 
 
 class Lightcurve(InputHelpers, gpytorch.Module):
@@ -8882,6 +9116,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             errmsg = "You must first set the model and likelihood"
             _reraise_with_note(e, errmsg)
 
+    @_cache_period_diagnostic_call("fit_LS")
     def fit_LS(
         self,
         freq_only: bool = False,
@@ -9229,6 +9464,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 return (_pf, _sm, _freq_t, _power_t)
             return (_pf, _sm)
 
+    @_cache_period_diagnostic_call("acf")
     def acf(
         self,
         method="data",
@@ -10966,6 +11202,15 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ),
         )
 
+    def get_parameter_estimation_context(self):
+        """Build a data-derived parameter context without applying it.
+
+        This read-only preview uses the same maintained estimator path as
+        ``use_parameter_workflow=True``. It does not construct a model,
+        register constraints, initialize parameters, or start training.
+        """
+        return self._build_parameter_estimation_context()
+
     def _apply_parameter_workflow_estimates(self):
         """Apply parameter workflow estimates when the model supports them."""
         self.parameter_workflow_result = None
@@ -11103,7 +11348,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
     def fit(
         self,
         *args,
-        duplicate_wavelength_policy="error",
+        duplicate_wavelength_policy="first",
         duplicate_wavelength_selection=None,
         **kwargs,
     ):
@@ -11113,12 +11358,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         ----------
         duplicate_wavelength_policy : {"error", "first", "select", "all"}, optional
             Policy for physical wavelengths represented by more than one
-            observational channel. ``"error"`` (default) refuses to construct
-            a GP training input until the caller chooses explicitly.
-            ``"first"`` retains the first channel encountered in the original
-            aligned input row order, captured before constructor sampling,
-            subsampling, or transformation, and warns about every ignored
-            channel. ``"select"`` requires
+            observational channel. ``"first"`` (default) retains the first
+            channel encountered in the original aligned input row order,
+            captured before constructor sampling, subsampling, or
+            transformation, and warns about every selected and ignored
+            channel. ``"error"`` is an explicit opt-in that refuses to
+            construct a GP training input until the caller chooses a policy.
+            ``"select"`` requires
             ``duplicate_wavelength_selection``. ``"all"`` is reserved for
             validated instrument-channel calibration and currently raises
             :class:`NotImplementedError`.
@@ -11502,6 +11748,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             Set to False to disable automatic parameter-workflow application
             and rely only on existing defaults, explicit user guesses,
             consensus/MLS initialization, and manually supplied constraints.
+            The selected value is preserved through ``consensus`` and
+            ``consensus_multicomp`` dispatch.
 
             After fitting, use get_parameter_workflow_summary() or
             get_parameter_workflow_report() to inspect what was applied or skipped.
@@ -11631,7 +11879,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 periods=periods,
                 use_mls_init=use_mls_init,
                 use_best_band_init=use_best_band_init,
-                # use_parameter_workflow=use_parameter_workflow,
+                use_parameter_workflow=use_parameter_workflow,
                 constraint_set=constraint_set,
                 grid_size=grid_size,
                 cuda=cuda,
@@ -13348,6 +13596,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             and callable(getattr(self.model, "initialize", None))
         ):
             try:
+                self._consensus_multicomp_scale_constraint_reconciliation = (
+                    _reconcile_consensus_spectral_mixture_scale_constraint(
+                        self.model,
+                        consensus_guess,
+                    )
+                )
                 self.set_hypers(dict(consensus_guess))
             except Exception as exc:
                 raise RuntimeError(
@@ -18947,6 +19201,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "periods",
             "use_mls_init",
             "use_best_band_init",
+            "use_parameter_workflow",
             "constraint_set",
             "grid_size",
             "cuda",
@@ -19729,6 +19984,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             "periods",
             "use_mls_init",
             "use_best_band_init",
+            "use_parameter_workflow",
             "constraint_set",
             "grid_size",
             "cuda",
@@ -22692,6 +22948,43 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             interval_definition=_interval_def,
         )
 
+    @staticmethod
+    def _merge_consensus_multicomp_psd_summary(
+        psd_summary,
+        consensus_summary,
+    ):
+        """Attach consensus-component provenance to a fitted PSD summary."""
+        psd_summary.method = (
+            "consensus_multicomp_spectral_mixture_psd"
+        )
+        psd_summary.backend = (
+            "consensus_multicomp_spectral_mixture"
+        )
+        psd_summary.is_multicomponent = True
+        for attribute in (
+            "component_periods",
+            "component_period_widths",
+            "component_fitted_periods",
+            "component_initialized_periods",
+            "component_strengths",
+            "component_source_cluster_ids",
+            "component_member_bands",
+            "component_summaries",
+            "drift_warning_fraction",
+        ):
+            setattr(
+                psd_summary,
+                attribute,
+                getattr(consensus_summary, attribute),
+            )
+        psd_summary.notes = (
+            "Fitted summed-PSD and individual spectral-mixture component "
+            "curves for a multi-component consensus fit. Consensus component "
+            "provenance is retained separately from PSD-peak identities. "
+            + str(getattr(psd_summary, "notes", ""))
+        )
+        return psd_summary
+
     def get_period_summary(
         self,
         n_grid=5000,
@@ -22702,6 +22995,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         n_peaks=None,
         mass_level=0.68,
         classify_lsp=False,
+        prefer_fitted_psd=False,
     ):
         """Return a literature-comparable period summary for the fitted model.
         
@@ -22744,6 +23038,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         classify_lsp : bool, default=False
             If ``True``, flag long-secondary-period-like peaks relative to the dominant
             peak.
+        prefer_fitted_psd : bool, default=False
+            For a ``consensus_multicomp`` fit, return the fitted summed-PSD
+            summary enriched with consensus-component provenance instead
+            of the legacy interval-only component table.
         
         Returns
         -------
@@ -22771,13 +23069,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             )
 
         multicomp_summary = self._get_consensus_multicomp_period_summary()
-        if multicomp_summary is not None:
+        if multicomp_summary is not None and not prefer_fitted_psd:
             return multicomp_summary
 
         backend = self._detect_period_summary_backend()
 
         if backend == "spectral_mixture":
-            return self._get_sm_period_summary(
+            psd_summary = self._get_sm_period_summary(
                 n_grid=n_grid,
                 min_freq=min_freq,
                 max_freq=max_freq,
@@ -22787,6 +23085,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 mass_level=mass_level,
                 classify_lsp=classify_lsp,
             )
+            if multicomp_summary is not None:
+                return self._merge_consensus_multicomp_psd_summary(
+                    psd_summary,
+                    multicomp_summary,
+                )
+            return psd_summary
 
         if backend == "explicit_period":
             return self._get_explicit_period_summary()
@@ -22795,7 +23099,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             return self._get_periodic_plus_stochastic_summary()
 
         if backend == "separable_2d":
-            return self._get_separable_2d_period_summary(
+            psd_summary = self._get_separable_2d_period_summary(
                 n_grid=n_grid,
                 min_freq=min_freq,
                 max_freq=max_freq,
@@ -22805,15 +23109,95 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 mass_level=mass_level,
                 classify_lsp=classify_lsp,
             )
+            if (
+                multicomp_summary is not None
+                and psd_summary["freq_grid"] is not None
+            ):
+                return self._merge_consensus_multicomp_psd_summary(
+                    psd_summary,
+                    multicomp_summary,
+                )
+            if multicomp_summary is not None:
+                return multicomp_summary
+            return psd_summary
 
         # backend == "non_periodic"
         return self._get_non_periodic_summary()
+
+    def plot_lomb_scargle_periodogram(
+        self,
+        frequency=None,
+        power=None,
+        *,
+        candidates=None,
+        strict=False,
+        **kwargs,
+    ):
+        """Plot explicit or cached full Lomb--Scargle output.
+
+        The maintained default display uses period on a logarithmic x-axis
+        and Lomb--Scargle power on a linear y-axis.  All supplied candidates
+        and reference periods are retained, including multi-component
+        results.  This method never calls :meth:`fit_LS` itself.
+        """
+        from .lomb_scargle_plotting import (
+            plot_lightcurve_lomb_scargle_periodogram,
+        )
+
+        return plot_lightcurve_lomb_scargle_periodogram(
+            self,
+            frequency,
+            power,
+            candidates=candidates,
+            strict=strict,
+            **kwargs,
+        )
+
+    def register_period_diagnostic_evidence(self, evidence):
+        """Register per-channel LS/ACF evidence for comparison plots."""
+        from .period_diagnostic_comparison import (
+            register_period_diagnostic_evidence,
+        )
+
+        return register_period_diagnostic_evidence(self, evidence)
+
+    def plot_period_diagnostic_comparison(
+        self,
+        *,
+        observational_channels=None,
+        show=True,
+        strict=False,
+        match_tolerance=0.15,
+        harmonic_orders=(0.5, 1.0, 2.0, 3.0),
+        period_summary=None,
+        period_summary_kwargs=None,
+    ):
+        # Compare cached LS candidates and ACF curves with GP features.
+        # The data ACF remains a comparison curve only: this public wrapper
+        # exposes no ACF peak-selection or prominence control.
+        from .period_diagnostic_comparison import (
+            plot_period_diagnostic_comparison,
+        )
+
+        return plot_period_diagnostic_comparison(
+            self,
+            observational_channels=observational_channels,
+            show=show,
+            strict=strict,
+            match_tolerance=match_tolerance,
+            harmonic_orders=harmonic_orders,
+            period_summary=period_summary,
+            period_summary_kwargs=period_summary_kwargs,
+        )
 
     def plot_period_summary(
         self,
         summary=None,
         show=True,
         log_freq=True,
+        x_axis="frequency",
+        log_x=None,
+        show_components=False,
         show_full_psd=None,
         max_peaks_to_mark=3,
         log_y=True,
@@ -22838,9 +23222,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
           P1, P2, … with a distinct color.
         * **Spectral-mixture PSD summary (plain dict)**: plots the PSD curve
           with the dominant peak and dotted lines for other significant peaks.
-        * **Explicit-period summary** (e.g. quasi-periodic): plots a single
-          vertical line at the dominant frequency with an annotated period,
-          interval, and Q-factor.  No PSD curve is drawn because none is
+        * **Explicit-period summary** (e.g. quasi-periodic): renders a compact
+          point-and-interval estimate with no filled region, legend, or
+          quantitative y-axis. No PSD curve is drawn because none is
           computed for this backend.
         * **Non-periodic summary**: produces a simple figure with explanatory
           text stating that no dominant period is defined for this kernel.
@@ -22858,8 +23242,18 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If ``True`` (default), call ``plt.show()``.  If ``False``,
             return ``(fig, ax)`` for further customisation.
         log_freq : bool, optional
-            If ``True`` (default), plot the x-axis (frequency) on a log
-            scale.  Ignored for non-periodic summaries.
+            Backward-compatible x-axis scale control.  Used only when
+            ``log_x`` is ``None``.
+        x_axis : {"frequency", "period"}, optional
+            Coordinate shown on the x-axis.  ``"frequency"`` preserves the
+            historical display.  ``"period"`` plots the same fitted PSD
+            ordinate against reciprocal frequency; it does not reinterpret
+            the curve as a probability density in period.
+        log_x : bool or None, optional
+            Explicit x-axis scale control.  ``None`` inherits ``log_freq``.
+        show_components : bool, optional
+            For spectral-mixture summaries, draw every individual fitted
+            mixture-component PSD curve in addition to the summed PSD.
         log_y : bool, optional
             If ``True`` (default), plot the y-axis (PSD) on a log scale.
             The lower y-axis limit is clamped automatically so that at most
@@ -22906,6 +23300,124 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         method = summary.get("method", "")
         has_psd = summary["freq_grid"] is not None
+
+        x_axis = str(x_axis).strip().lower()
+        if x_axis not in {"frequency", "period"}:
+            raise ValueError(
+                "x_axis must be either 'frequency' or 'period'."
+            )
+        use_log_x = bool(log_freq if log_x is None else log_x)
+        _x_axis_label = "Frequency" if x_axis == "frequency" else "Period"
+
+        def _x_from_frequency(frequency):
+            frequency = float(frequency)
+            if x_axis == "frequency":
+                return frequency
+            if not np.isfinite(frequency) or frequency <= 0.0:
+                return float("nan")
+            return 1.0 / frequency
+
+        def _period_interval_to_x(period_lo, period_hi):
+            if not (
+                np.isfinite(period_lo)
+                and np.isfinite(period_hi)
+                and period_lo > 0.0
+                and period_hi > 0.0
+            ):
+                return None
+            if x_axis == "period":
+                return tuple(sorted((float(period_lo), float(period_hi))))
+            return tuple(
+                sorted((1.0 / float(period_hi), 1.0 / float(period_lo)))
+            )
+
+        def _curve_xy(frequency, values):
+            frequency = np.asarray(frequency, dtype=float).reshape(-1)
+            values = np.asarray(values, dtype=float).reshape(-1)
+            finite = (
+                np.isfinite(frequency)
+                & np.isfinite(values)
+                & (frequency > 0.0)
+            )
+            frequency = frequency[finite]
+            values = values[finite]
+            x_values = (
+                frequency
+                if x_axis == "frequency"
+                else 1.0 / frequency
+            )
+            order = np.argsort(x_values)
+            return x_values[order], values[order]
+
+        def _component_psd_curves(frequency):
+            diagnostics = getattr(summary, "component_diagnostics", None)
+            if diagnostics is None and isinstance(summary, dict):
+                diagnostics = summary.get("component_diagnostics")
+            if diagnostics is None:
+                return []
+
+            def _diag_value(name):
+                if isinstance(diagnostics, dict):
+                    return diagnostics.get(name, [])
+                return getattr(diagnostics, name, [])
+
+            means = np.asarray(
+                _diag_value("component_frequencies"),
+                dtype=float,
+            ).reshape(-1)
+            scales = np.asarray(
+                _diag_value("component_frequency_scales"),
+                dtype=float,
+            ).reshape(-1)
+            weights = np.asarray(
+                _diag_value("component_weights"),
+                dtype=float,
+            ).reshape(-1)
+            if not (means.size == scales.size == weights.size):
+                return []
+            frequency = np.asarray(frequency, dtype=float).reshape(-1)
+            curves = []
+            for index, (mean, scale, weight) in enumerate(
+                zip(means, scales, weights, strict=True),
+                start=1,
+            ):
+                if not (
+                    np.isfinite(mean)
+                    and np.isfinite(scale)
+                    and np.isfinite(weight)
+                    and scale > 0.0
+                ):
+                    continue
+                curve = weight * np.exp(
+                    -0.5 * ((frequency - mean) / scale) ** 2
+                )
+                curves.append((index, curve))
+            return curves
+
+        def _plot_psd_curves(panel_ax, frequency, total_psd):
+            x_values, total_values = _curve_xy(frequency, total_psd)
+            panel_ax.plot(
+                x_values,
+                total_values,
+                color="steelblue",
+                lw=1.8,
+                label="Summed PSD",
+            )
+            if show_components:
+                for component_index, component_curve in (
+                    _component_psd_curves(frequency)
+                ):
+                    component_x, component_values = _curve_xy(
+                        frequency, component_curve
+                    )
+                    panel_ax.plot(
+                        component_x,
+                        component_values,
+                        lw=1.1,
+                        ls="--",
+                        alpha=0.85,
+                        label=f"SM component {component_index}",
+                    )
 
         # -- non-periodic: informational plot only -------------------------
         if method == "non_periodic_kernel" or (
@@ -23046,20 +23558,23 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                             f_zoom, p_zoom):
             """Populate a zoom panel for one peak."""
             col = _peak_color(pk.rank)
-            panel_ax.plot(f_zoom, p_zoom, color="steelblue", lw=1.5)
-            panel_ax.axvline(pk.frequency, color=col, lw=1.5, ls="--")
+            _plot_psd_curves(panel_ax, f_zoom, p_zoom)
+            panel_ax.axvline(
+                _x_from_frequency(pk.frequency),
+                color=col,
+                lw=1.5,
+                ls="--",
+            )
             p_lo, p_hi = pk.interval_period
             if (
                 np.isfinite(p_lo) and np.isfinite(p_hi) and p_lo > 0
             ):
-                f_lo_int = 1.0 / p_hi
-                f_hi_int = 1.0 / p_lo
+                interval_x = _period_interval_to_x(p_lo, p_hi)
                 # Always draw the span when the interval is valid; matplotlib
-                # clips it to the axes automatically, so there is no need to
-                # check whether it fits inside the zoom window.
-                if f_lo_int < f_hi_int:
+                # clips it to the axes automatically.
+                if interval_x is not None:
                     panel_ax.axvspan(
-                        f_lo_int, f_hi_int,
+                        interval_x[0], interval_x[1],
                         alpha=0.25, color=col,
                         label=(
                             f"{interval_label}  "
@@ -23074,12 +23589,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             panel_ax.set_title(
                 f"P{pk.rank}  period = {pk.period:.6g}{_ratio_str}"
             )
-            if log_freq:
+            if use_log_x:
                 panel_ax.set_xscale("log")
             if log_y:
                 panel_ax.set_yscale("log")
                 _clamp_log_ylim(panel_ax, p_zoom)
-            panel_ax.set_xlabel("Frequency")
+            panel_ax.set_xlabel(_x_axis_label)
             panel_ax.set_ylabel("PSD")
             panel_ax.legend(fontsize=7, loc="upper left")
 
@@ -23132,12 +23647,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
                 if ax_full is not None:
                     # Optional full-range panel below
-                    ax_full.plot(
-                        freq_grid, psd,
-                        color="steelblue", lw=1.5, label="PSD"
-                    )
+                    _plot_psd_curves(ax_full, freq_grid, psd)
                     ax_full.axvline(
-                        pk.frequency, color=col, lw=1.5, ls="--",
+                        _x_from_frequency(pk.frequency),
+                        color=col, lw=1.5, ls="--",
                         label=f"P1  period={pk.period:.4g}",
                     )
                     p_lo_fp, p_hi_fp = pk.interval_period
@@ -23145,22 +23658,24 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         np.isfinite(p_lo_fp) and np.isfinite(p_hi_fp)
                         and p_lo_fp > 0 and p_hi_fp > 0
                     ):
-                        f_lo_int = 1.0 / p_hi_fp
-                        f_hi_int = 1.0 / p_lo_fp
-                        if f_lo_int < f_hi_int:
+                        interval_x = _period_interval_to_x(
+                            p_lo_fp, p_hi_fp
+                        )
+                        if interval_x is not None:
                             ax_full.axvspan(
-                                f_lo_int, f_hi_int,
+                                interval_x[0], interval_x[1],
                                 alpha=0.15, color=col,
                                 label=(
                                     f"{interval_label}  "
                                     f"[{p_lo_fp:.4g}, {p_hi_fp:.4g}]"
                                 ),
                             )
-                    if log_freq:
+                    if use_log_x:
                         ax_full.set_xscale("log")
                     if log_y:
                         ax_full.set_yscale("log")
                         _clamp_log_ylim(ax_full, psd)
+                    ax_full.set_xlabel(_x_axis_label)
                     ax_full.set_ylabel("PSD")
                     ax_full.set_title(
                         f"Period summary - full PSD ({method})"
@@ -23182,13 +23697,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 ax = axes[0]  # top panel = full PSD
 
                 # Top panel: full PSD
-                ax.plot(
-                    freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
-                )
+                _plot_psd_curves(ax, freq_grid, psd)
                 for pk in _peaks_to_plot:
                     col = _peak_color(pk.rank)
                     ax.axvline(
-                        pk.frequency,
+                        _x_from_frequency(pk.frequency),
                         color=col,
                         lw=1.5,
                         ls="--",
@@ -23199,9 +23712,8 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                         np.isfinite(p_lo) and np.isfinite(p_hi)
                         and p_lo > 0 and p_hi > 0
                     ):
-                        f_lo_int = 1.0 / p_hi
-                        f_hi_int = 1.0 / p_lo
-                        if f_lo_int < f_hi_int:
+                        interval_x = _period_interval_to_x(p_lo, p_hi)
+                        if interval_x is not None:
                             _span_label = (
                                 f"{interval_label}  "
                                 f"[{p_lo:.4g}, {p_hi:.4g}]"
@@ -23209,15 +23721,16 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                                 else None
                             )
                             ax.axvspan(
-                                f_lo_int, f_hi_int,
+                                interval_x[0], interval_x[1],
                                 alpha=0.15, color=col,
                                 label=_span_label,
                             )
-                if log_freq:
+                if use_log_x:
                     ax.set_xscale("log")
                 if log_y:
                     ax.set_yscale("log")
                     _clamp_log_ylim(ax, psd)
+                ax.set_xlabel(_x_axis_label)
                 ax.set_ylabel("PSD")
                 ax.set_title(f"Period summary - full PSD ({method})")
                 ax.legend(fontsize=7, loc="upper left", ncol=2)
@@ -23243,6 +23756,167 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 return None
             return fig, ax
 
+
+        # ------------------------------------------------------------------
+        # Explicit scalar period parameter: compact estimate renderer
+        # ------------------------------------------------------------------
+        if not has_psd and method == "explicit_period_parameter":
+            fig, ax = plt.subplots(1, 1, figsize=(9.0, 2.35))
+
+            dominant_x = _x_from_frequency(f_peak)
+            interval_x = None
+            if interval is not None:
+                period_lo, period_hi = interval
+                interval_x = _period_interval_to_x(
+                    period_lo,
+                    period_hi,
+                )
+
+            # Draw an estimate, not a PSD or posterior-density surrogate.
+            # The interval is a thin coherence proxy; it must never be
+            # represented as a filled credible-region rectangle.
+            estimate_y = 0.0
+            if interval_x is not None:
+                interval_lo, interval_hi = interval_x
+                ax.hlines(
+                    estimate_y,
+                    interval_lo,
+                    interval_hi,
+                    linewidth=2.2,
+                    color="0.35",
+                    zorder=2,
+                )
+                cap_half_height = 0.055
+                ax.vlines(
+                    [interval_lo, interval_hi],
+                    estimate_y - cap_half_height,
+                    estimate_y + cap_half_height,
+                    linewidth=1.5,
+                    color="0.35",
+                    zorder=2,
+                )
+
+            ax.scatter(
+                [dominant_x],
+                [estimate_y],
+                s=72,
+                marker="o",
+                color="crimson",
+                edgecolor="white",
+                linewidth=0.8,
+                zorder=3,
+            )
+            ax.axvline(
+                dominant_x,
+                ymin=0.24,
+                ymax=0.76,
+                linewidth=1.0,
+                linestyle="--",
+                color="crimson",
+                alpha=0.75,
+                zorder=1,
+            )
+
+            if use_log_x:
+                ax.set_xscale("log")
+            ax.set_xlabel(_x_axis_label)
+            ax.set_yticks([])
+            ax.set_ylabel("")
+            ax.set_ylim(-0.18, 0.18)
+            ax.spines["left"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["top"].set_visible(False)
+            ax.spines["bottom"].set_position(("outward", 2))
+
+            # Derive a compact x range from the estimate and interval.
+            if interval_x is not None:
+                data_lo = min(interval_x[0], dominant_x)
+                data_hi = max(interval_x[1], dominant_x)
+            else:
+                data_lo = dominant_x
+                data_hi = dominant_x
+            if use_log_x and data_lo > 0.0 and data_hi > 0.0:
+                if np.isclose(data_lo, data_hi):
+                    data_lo /= 1.12
+                    data_hi *= 1.12
+                log_lo = np.log(data_lo)
+                log_hi = np.log(data_hi)
+                pad = max(0.12 * (log_hi - log_lo), 0.035)
+                ax.set_xlim(np.exp(log_lo - pad), np.exp(log_hi + pad))
+            else:
+                span = data_hi - data_lo
+                if not np.isfinite(span) or span <= 0.0:
+                    span = max(abs(dominant_x) * 0.12, 1.0e-8)
+                pad = 0.16 * span
+                ax.set_xlim(data_lo - pad, data_hi + pad)
+
+            if interval is not None:
+                period_lo, period_hi = interval
+                interval_text = (
+                    f"{interval_label}: "
+                    f"{period_lo:.4g}\N{EN DASH}{period_hi:.4g}"
+                )
+            else:
+                interval_text = f"{interval_label}: unavailable"
+
+            caption = (
+                f"Period = {p_dom:.6g}; {interval_text}"
+            )
+            ax.text(
+                0.5,
+                -0.34,
+                caption,
+                transform=ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize=9,
+            )
+            ax.set_title(
+                "Fitted GP temporal period",
+                fontsize=12,
+                pad=11,
+            )
+
+            # Secondary diagnostics belong in compact prose, not in a legend
+            # or an annotation box competing with the estimate.
+            secondary = []
+            if q is not None and np.isfinite(q):
+                secondary.append(f"Q proxy = {q:.3g}")
+            elif q is not None and np.isinf(q):
+                secondary.append("Q proxy = \N{INFINITY}")
+            if n_sig is not None:
+                secondary.append(f"reported peaks = {n_sig}")
+            if secondary:
+                ax.text(
+                    0.995,
+                    0.98,
+                    " \N{MIDDLE DOT} ".join(secondary),
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=8,
+                    color="0.35",
+                )
+
+            if annotate_provenance:
+                self._plot_fit_history_provenance(
+                    ax,
+                    provenance_location=provenance_location,
+                )
+
+            fig.subplots_adjust(
+                left=0.09,
+                right=0.98,
+                top=0.78,
+                bottom=0.36,
+            )
+            if show:
+                plt.show()
+                if close:
+                    plt.close(fig)
+                return None
+            return fig, ax
+
         # ------------------------------------------------------------------
         # Single-panel fallback (non-structured or no PSD)
         # ------------------------------------------------------------------
@@ -23252,13 +23926,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         if has_psd:
             freq_grid = summary["freq_grid"]
             psd = summary["psd"]
-            ax.plot(
-                freq_grid, psd, color="steelblue", lw=1.5, label="PSD"
-            )
+            _plot_psd_curves(ax, freq_grid, psd)
 
         # -- dominant peak marker -----------------------------------------
         ax.axvline(
-            f_peak,
+            _x_from_frequency(f_peak),
             color="crimson",
             lw=1.5,
             ls="--",
@@ -23268,20 +23940,13 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         # -- period interval shaded band (if finite interval) --------------
         if interval is not None:
             period_lo, period_hi = interval
-            f_left = (
-                1.0 / period_hi if period_hi and period_hi > 0 else None
+            interval_x = _period_interval_to_x(
+                period_lo, period_hi
             )
-            f_right = (
-                1.0 / period_lo if period_lo and period_lo > 0 else None
-            )
-            if (
-                f_left is not None and f_right is not None
-                and np.isfinite(f_left) and np.isfinite(f_right)
-                and f_left < f_right
-            ):
+            if interval_x is not None:
                 ax.axvspan(
-                    f_left,
-                    f_right,
+                    interval_x[0],
+                    interval_x[1],
                     alpha=0.25,
                     color="crimson",
                     label=(
@@ -23295,7 +23960,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             for pk in structured_peaks[1:max_peaks_to_mark]:
                 col = _peak_color(pk.rank)
                 ax.axvline(
-                    pk.frequency,
+                    _x_from_frequency(pk.frequency),
                     color=col,
                     lw=1.0,
                     ls=":",
@@ -23308,7 +23973,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                 sf = 1.0 / sp
                 if abs(sf - f_peak) > 1e-12 * max(f_peak, 1e-12):
                     ax.axvline(
-                        sf,
+                        _x_from_frequency(sf),
                         color="darkorange",
                         lw=1.0,
                         ls=":",
@@ -23349,13 +24014,19 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             ),
         )
 
-        if log_freq:
+        if use_log_x:
             ax.set_xscale("log")
         if has_psd and log_y:
             ax.set_yscale("log")
             _clamp_log_ylim(ax, psd)
-        ax.set_xlabel("Frequency")
+        ax.set_xlabel(_x_axis_label)
         ax.set_ylabel("PSD" if has_psd else "")
+        if not has_psd:
+            ax.set_yticks([])
+            ax.spines["left"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["top"].set_visible(False)
+            ax.set_ylim(0.0, 1.0)
         ax.set_title(f"Period summary ({method})")
         ax.legend(fontsize=8, loc="upper left")
         if annotate_provenance:

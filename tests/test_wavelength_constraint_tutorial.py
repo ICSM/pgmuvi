@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 import unittest
 
 import numpy as np
@@ -127,10 +128,85 @@ class TestObservationalChannelTutorialSampling(unittest.TestCase):
         self.assertEqual(summary["n_physical_wavelengths_retained"], 16)
         self.assertEqual(lightcurve.xdata.shape[0], 789)
         self.assertEqual(len(lightcurve.observational_channel_labels), 789)
+        self.assertFalse(summary["check_sampling"])
+        self.assertEqual(
+            summary["n_rows_before_sampling_quality_filter"],
+            789,
+        )
+        self.assertEqual(
+            summary["n_rows_removed_by_sampling_quality_filter"],
+            0,
+        )
         self.assertTrue(summary["instrument_calibration_tbd"])
         shared = summary["observational_channels_by_shared_wavelength"]
         self.assertEqual(len(shared), 1)
         self.assertEqual(len(next(iter(shared.values()))), 2)
+
+    def test_sampling_quality_filter_is_forwarded_and_reported(self):
+        rows = ["time,flux,flux_error,wavelength,band"]
+        rows.extend(
+            f"{time},10.0,1.0,1.0,A"
+            for time in range(20)
+        )
+        rows.extend(
+            f"{time},10.0,1.0,2.0,B"
+            for time in range(4)
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "sampling.csv"
+            source_path.write_text(
+                "\n".join(rows) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertWarnsRegex(
+                UserWarning,
+                "Skipping band",
+            ):
+                lightcurve, summary = (
+                    load_wavelength_constraint_tutorial_lightcurve(
+                        source_path,
+                        max_samples_per_observational_channel=100,
+                        check_sampling=True,
+                    )
+                )
+
+        self.assertTrue(summary["check_sampling"])
+        self.assertEqual(summary["sampling_kwargs"], {})
+        self.assertEqual(
+            summary["n_rows_before_sampling_quality_filter"],
+            24,
+        )
+        self.assertEqual(
+            summary["n_rows_removed_by_sampling_quality_filter"],
+            4,
+        )
+        self.assertEqual(summary["n_rows_retained"], 20)
+        self.assertEqual(
+            summary[
+                "n_physical_wavelengths_before_sampling_quality_filter"
+            ],
+            2,
+        )
+        self.assertEqual(
+            summary["n_physical_wavelengths_retained"],
+            1,
+        )
+        self.assertEqual(
+            summary[
+                "n_observational_channels_before_sampling_quality_filter"
+            ],
+            2,
+        )
+        self.assertEqual(
+            summary["n_observational_channels_retained"],
+            1,
+        )
+        self.assertEqual(lightcurve.xdata.shape[0], 20)
+        self.assertEqual(
+            set(lightcurve.observational_channel_labels),
+            {"A"},
+        )
 
     def test_quota_must_be_an_integer_at_least_two(self):
         with self.assertRaises(TypeError):

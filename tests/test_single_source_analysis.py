@@ -111,7 +111,11 @@ class TestPerChannelPeriodEvidence(unittest.TestCase):
         for row in evidence["rows"]:
             self.assertEqual(row["status"], "available")
             self.assertIn("peak_periods", row["lomb_scargle"])
-            self.assertIn("strongest_positive_lag", row["acf"])
+            self.assertNotIn("strongest_positive_lag", row["acf"])
+            self.assertEqual(
+                row["acf"]["interpretation"],
+                "comparison_curve_only_no_peak_identification",
+            )
 
 
 class TestSingleSourceNoiseProvenance(unittest.TestCase):
