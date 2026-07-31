@@ -87,6 +87,8 @@ def load_wavelength_constraint_tutorial_lightcurve(
     source_path: str | Path,
     *,
     max_samples_per_observational_channel: int = 100,
+    check_sampling: bool = False,
+    sampling_kwargs: dict[str, Any] | None = None,
     name: str | None = None,
 ) -> tuple[Lightcurve, dict[str, Any]]:
     """Load a bounded real multiwavelength CSV for the tutorial.
@@ -94,6 +96,9 @@ def load_wavelength_constraint_tutorial_lightcurve(
     The input must use the maintained representative-data columns.  Rows with
     non-finite values, non-positive flux, non-positive uncertainty, or empty
     observational-channel labels are excluded before deterministic sampling.
+    ``check_sampling`` and ``sampling_kwargs`` are forwarded directly to
+    :class:`~pgmuvi.lightcurve.Lightcurve`; this helper does not duplicate or
+    replace the maintained sampling-quality implementation.
     """
     csv_path = Path(source_path)
     data = np.genfromtxt(
@@ -158,15 +163,26 @@ def load_wavelength_constraint_tutorial_lightcurve(
         yerr=torch.as_tensor(retained_flux_error, dtype=torch.get_default_dtype()),
         band=retained_channels,
         name=(name or csv_path.stem),
-        check_sampling=False,
+        check_sampling=check_sampling,
+        sampling_kwargs=sampling_kwargs,
         max_samples=None,
         max_samples_per_band=None,
     )
 
     original_channel_counts = Counter(channels[valid].tolist())
-    retained_channel_counts = Counter(retained_channels.tolist())
+    sampled_channel_counts = Counter(retained_channels.tolist())
     original_wavelengths = np.unique(eligible_wavelength)
-    retained_wavelengths = np.unique(retained_wavelength)
+    sampled_wavelengths = np.unique(retained_wavelength)
+
+    final_channels = np.asarray(
+        lightcurve.observational_channel_labels,
+        dtype=str,
+    )
+    final_wavelength = (
+        lightcurve.xdata[:, 1].detach().cpu().numpy()
+    )
+    final_channel_counts = Counter(final_channels.tolist())
+    final_wavelengths = np.unique(final_wavelength)
     source_summary = build_representative_lpv_source_summary(lightcurve)
 
     summary = {
@@ -177,23 +193,45 @@ def load_wavelength_constraint_tutorial_lightcurve(
         "max_samples_per_observational_channel": int(
             max_samples_per_observational_channel
         ),
+        "check_sampling": bool(check_sampling),
+        "sampling_kwargs": dict(sampling_kwargs or {}),
+        "n_rows_before_sampling_quality_filter": int(
+            retained_local.size
+        ),
+        "n_rows_removed_by_sampling_quality_filter": int(
+            retained_local.size - final_channels.size
+        ),
         "n_rows_original": int(times.size),
         "n_rows_eligible": int(np.count_nonzero(valid)),
-        "n_rows_retained": int(retained_local.size),
+        "n_rows_retained": int(final_channels.size),
         "n_rows_excluded_by_validity_policy": int(np.count_nonzero(~valid)),
         "strictly_positive_flux_and_uncertainty_required": True,
         "n_observational_channels_original": len(original_channel_counts),
-        "n_observational_channels_retained": len(retained_channel_counts),
+        "n_observational_channels_before_sampling_quality_filter": len(
+            sampled_channel_counts
+        ),
+        "n_observational_channels_retained": len(
+            final_channel_counts
+        ),
         "n_physical_wavelengths_original": int(original_wavelengths.size),
-        "n_physical_wavelengths_retained": int(retained_wavelengths.size),
+        "n_physical_wavelengths_before_sampling_quality_filter": int(
+            sampled_wavelengths.size
+        ),
+        "n_physical_wavelengths_retained": int(
+            final_wavelengths.size
+        ),
         "observational_channel_counts_original": dict(
             sorted(original_channel_counts.items())
         ),
+        "observational_channel_counts_before_sampling_quality_filter": dict(
+            sorted(sampled_channel_counts.items())
+        ),
         "observational_channel_counts_retained": dict(
-            sorted(retained_channel_counts.items())
+            sorted(final_channel_counts.items())
         ),
         "physical_wavelengths_original": original_wavelengths.tolist(),
-        "physical_wavelengths_retained": retained_wavelengths.tolist(),
+        "physical_wavelengths_before_sampling_quality_filter": sampled_wavelengths.tolist(),
+        "physical_wavelengths_retained": final_wavelengths.tolist(),
         "observational_channels_by_shared_wavelength": source_summary[
             "observational_channels_by_shared_wavelength"
         ],
@@ -205,14 +243,18 @@ def load_wavelength_constraint_tutorial_lightcurve(
         ],
     }
 
-    if summary["n_observational_channels_retained"] != summary[
-        "n_observational_channels_original"
-    ]:
-        raise AssertionError("Tutorial sampling dropped an observational channel.")
-    if summary["n_physical_wavelengths_retained"] != summary[
-        "n_physical_wavelengths_original"
-    ]:
-        raise AssertionError("Tutorial sampling dropped a physical wavelength.")
+    if len(sampled_channel_counts) != len(original_channel_counts):
+        raise AssertionError(
+            "Tutorial computational sampling dropped an observational channel."
+        )
+    if sampled_wavelengths.size != original_wavelengths.size:
+        raise AssertionError(
+            "Tutorial computational sampling dropped a physical wavelength."
+        )
+    if final_channels.size <= 0 or final_wavelengths.size <= 0:
+        raise AssertionError(
+            "Tutorial loading retained no sampling-quality-eligible data."
+        )
 
     return lightcurve, summary
 
@@ -274,6 +316,28 @@ def training_point_prediction_summary(lightcurve: Lightcurve) -> dict[str, Any]:
     usable = np.isfinite(standard_deviation) & (standard_deviation > 0.0)
     standardized_residual[usable] = residual[usable] / standard_deviation[usable]
 
+    fixed_noise_covar = getattr(likelihood, "noise_covar", None)
+    fixed_variance = getattr(fixed_noise_covar, "noise", None)
+    if fixed_variance is None:
+        measurement_standard_deviation = np.full(mean.shape, np.nan)
+    else:
+        fixed_variance_array = (
+            fixed_variance.detach().cpu().numpy().reshape(-1)
+        )
+        if fixed_variance_array.size == 1:
+            fixed_variance_array = np.full(
+                mean.shape,
+                fixed_variance_array[0],
+                dtype=float,
+            )
+        if fixed_variance_array.size != mean.size:
+            raise RuntimeError(
+                "Fixed measurement variance is not row aligned."
+            )
+        measurement_standard_deviation = np.sqrt(
+            np.clip(fixed_variance_array, 0.0, None)
+        )
+
     labels = np.asarray(
         lightcurve.observational_channel_labels,
         dtype=str,
@@ -289,6 +353,9 @@ def training_point_prediction_summary(lightcurve: Lightcurve) -> dict[str, Any]:
         "predictive_mean": mean,
         "predictive_variance": variance,
         "predictive_standard_deviation": standard_deviation,
+        "measurement_standard_deviation": (
+            measurement_standard_deviation
+        ),
         "residual": residual,
         "standardized_residual": standardized_residual,
         "prediction_space": "training_target_space",
@@ -298,7 +365,7 @@ def training_point_prediction_summary(lightcurve: Lightcurve) -> dict[str, Any]:
 def summarize_observational_channel_residuals(
     predictions: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Summarize fitted residuals without merging observational channels."""
+    """Summarize raw and dimensionless residual metrics by channel."""
     times = _numpy_1d(predictions["time"], name="time")
     wavelengths = _numpy_1d(
         predictions["physical_wavelength"],
@@ -309,18 +376,45 @@ def summarize_observational_channel_residuals(
         predictions["standardized_residual"],
         name="standardized_residual",
     )
-    labels = np.asarray(predictions["observational_channel"], dtype=str).reshape(-1)
+    labels = np.asarray(
+        predictions["observational_channel"],
+        dtype=str,
+    ).reshape(-1)
     row_count = times.size
     if not all(
         array.size == row_count
-        for array in (wavelengths, residual, standardized, labels)
+        for array in (
+            wavelengths,
+            residual,
+            standardized,
+            labels,
+        )
     ):
+        raise ValueError("Prediction arrays must be row aligned.")
+
+    if "observed" in predictions:
+        observed = _numpy_1d(predictions["observed"], name="observed")
+        observed_flux_source = "provided"
+    elif "predictive_mean" in predictions:
+        predictive_mean = _numpy_1d(
+            predictions["predictive_mean"],
+            name="predictive_mean",
+        )
+        if predictive_mean.size != row_count:
+            raise ValueError("Prediction arrays must be row aligned.")
+        observed = predictive_mean + residual
+        observed_flux_source = "derived_from_predictive_mean_plus_residual"
+    else:
+        observed = np.full(row_count, np.nan, dtype=float)
+        observed_flux_source = "unavailable"
+    if observed.size != row_count:
         raise ValueError("Prediction arrays must be row aligned.")
 
     rows: list[dict[str, Any]] = []
     for label in dict.fromkeys(labels.tolist()):
         mask = labels == label
         channel_wavelengths = np.unique(wavelengths[mask])
+        finite_observed = observed[mask][np.isfinite(observed[mask])]
         finite_residual = residual[mask][np.isfinite(residual[mask])]
         finite_standardized = standardized[mask][np.isfinite(standardized[mask])]
         if finite_residual.size == 0:
@@ -334,6 +428,46 @@ def summarize_observational_channel_residuals(
             if finite_standardized.size
             else float("nan")
         )
+        empirical_95_percent_coverage = (
+            float(
+                np.mean(
+                    np.abs(finite_standardized)
+                    <= 1.959963984540054
+                )
+            )
+            if finite_standardized.size
+            else float("nan")
+        )
+        median_observed_flux = (
+            float(np.median(finite_observed))
+            if finite_observed.size
+            else float("nan")
+        )
+        robust_half_amplitude = (
+            float(
+                0.5
+                * (
+                    np.percentile(finite_observed, 97.5)
+                    - np.percentile(finite_observed, 2.5)
+                )
+            )
+            if finite_observed.size >= 2
+            else float("nan")
+        )
+        fractional_rmse = (
+            float(rmse / abs(median_observed_flux))
+            if np.isfinite(rmse)
+            and np.isfinite(median_observed_flux)
+            and median_observed_flux != 0.0
+            else None
+        )
+        normalized_rmse = (
+            float(rmse / robust_half_amplitude)
+            if np.isfinite(rmse)
+            and np.isfinite(robust_half_amplitude)
+            and robust_half_amplitude > 0.0
+            else None
+        )
         rows.append(
             {
                 "observational_channel": str(label),
@@ -345,10 +479,20 @@ def summarize_observational_channel_residuals(
                 "n_points": int(np.count_nonzero(mask)),
                 "time_min": float(np.min(times[mask])),
                 "time_max": float(np.max(times[mask])),
+                "median_observed_flux": median_observed_flux,
+                "observed_flux_source": observed_flux_source,
+                "robust_half_amplitude_q02_5_q97_5": (
+                    robust_half_amplitude
+                ),
                 "bias": bias,
                 "mae": mae,
                 "rmse": rmse,
+                "fractional_rmse_over_abs_median_flux": fractional_rmse,
+                "normalized_rmse_over_robust_amplitude": normalized_rmse,
                 "standardized_residual_rms": standardized_rms,
+                "empirical_95_percent_coverage": (
+                    empirical_95_percent_coverage
+                ),
             }
         )
     return rows
@@ -528,6 +672,25 @@ def build_tutorial_fit_summary(
         predictions["predictive_variance"],
         name="predictive_variance",
     )
+    training_channels = np.asarray(
+        predictions["observational_channel"],
+        dtype=str,
+    ).reshape(-1)
+    training_wavelengths = _numpy_1d(
+        predictions["physical_wavelength"],
+        name="physical_wavelength",
+    )
+    prediction_row_count = residual.size
+    if not all(
+        array.size == prediction_row_count
+        for array in (
+            predictive_mean,
+            predictive_variance,
+            training_channels,
+            training_wavelengths,
+        )
+    ):
+        raise ValueError("Prediction arrays must be row aligned.")
     covariance_rows = [
         row for row in constraint_rows if row["applies_to"] == "covariance"
     ]
@@ -547,13 +710,34 @@ def build_tutorial_fit_summary(
         "final_loss": float(losses[-1]),
         "best_loss": float(np.min(losses)),
         "objective_improved": bool(losses[-1] < losses[0]),
-        "n_observations": int(sampling_summary["n_rows_retained"]),
+        "n_observations": int(prediction_row_count),
         "n_observational_channels": int(
-            sampling_summary["n_observational_channels_retained"]
+            np.unique(training_channels).size
         ),
         "n_physical_wavelengths": int(
-            sampling_summary["n_physical_wavelengths_retained"]
+            np.unique(training_wavelengths).size
         ),
+        "gp_training_scope": {
+            "n_observations": int(prediction_row_count),
+            "n_observational_channels": int(
+                np.unique(training_channels).size
+            ),
+            "n_physical_wavelengths": int(
+                np.unique(training_wavelengths).size
+            ),
+            "observational_channels": list(
+                dict.fromkeys(training_channels.tolist())
+            ),
+        },
+        "consensus_input_scope": {
+            "n_observations": int(sampling_summary["n_rows_retained"]),
+            "n_observational_channels": int(
+                sampling_summary["n_observational_channels_retained"]
+            ),
+            "n_physical_wavelengths": int(
+                sampling_summary["n_physical_wavelengths_retained"]
+            ),
+        },
         "wavelength_parameter": (
             None if wavelength_row is None else wavelength_row["parameter"]
         ),

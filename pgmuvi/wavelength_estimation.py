@@ -748,6 +748,22 @@ def _quadratic_mean_recommendation(
     rmse = float(np.sqrt(np.mean((fluxes - predicted) ** 2)))
 
     offset_low, offset_high, flux_span = _wavelength_mean_flux_interval(fluxes)
+
+    # ``bias`` is the polynomial value at model wavelength coordinate zero.
+    # Coordinate zero can lie outside the observed wavelength domain, so the
+    # fitted intercept is not required to lie inside an interval constructed
+    # only from observed flux values.  Expand that data-derived interval just
+    # enough to contain the fitted intercept with a robust flux-scale margin.
+    # Clipping the value would destroy the internally consistent polynomial
+    # initialization; disabling validation would hide a malformed estimate.
+    bias_padding = max(
+        float(flux_span),
+        abs(float(bias)) * 1.0e-6,
+        1.0e-8,
+    )
+    offset_low = min(offset_low, float(bias) - bias_padding)
+    offset_high = max(offset_high, float(bias) + bias_padding)
+
     x_span = max(float(np.ptp(model_wavelengths)), 1.0e-8)
     slope_scale = max(abs(float(weights[0])), flux_span / x_span, 1.0e-8)
     quad_scale = max(abs(float(weights[1])), flux_span / (x_span**2), 1.0e-8)
