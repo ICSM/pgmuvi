@@ -164,19 +164,16 @@ Inspect all multiplets before fitting::
         )
 
 When at least one multiplet exists, :meth:`~pgmuvi.lightcurve.Lightcurve.fit`
-refuses to construct the GP training input until the caller chooses explicitly.
-The default ``duplicate_wavelength_policy="error"`` leaves every input row
-unchanged and reports every detected pair, triplet, or larger multiplet.
+uses the safe default policy ``"first"`` (``duplicate_wavelength_policy="first"``).  The first
+observational channel encountered in the original aligned input order is
+retained for every multiplet, and a user-facing warning lists the selected and
+ignored channels::
 
-To retain the first observational channel in the original aligned input order
-for every multiplet, request that behavior explicitly::
+    lc.fit(model="2DWavelengthDependent")
 
-    lc.fit(
-        model="2DWavelengthDependent",
-        duplicate_wavelength_policy="first",
-    )
-
-To choose one channel for a single multiplet::
+To require an explicit choice instead of applying the default, use
+``duplicate_wavelength_policy="error"``.  To choose one channel for a single
+multiplet::
 
     lc.fit(
         model="2DWavelengthDependent",

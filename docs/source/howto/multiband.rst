@@ -88,22 +88,20 @@ The fitting workflow is the same as in 1D::
 
 When several observational channels share one physical wavelength, they form
 a shared-wavelength multiplet.  Pairs, triplets, and larger groups are detected
-from the input itself; no instrument or channel name is hard-coded.  The default
-fit policy is ``"error"`` so the package never chooses a representative channel
-silently.
+from the input itself; no instrument or channel name is hard-coded.  The safe
+default fit policy is ``"first"``: the first observational channel encountered
+in the original aligned input order is retained, and a user-facing warning
+lists every selected and ignored channel.
 
 Inspect the detected structure first::
 
     print(lc.duplicate_physical_wavelength_multiplets())
 
-Then choose the GP training input explicitly.  To use the first channel in each
-multiplet::
+A normal fit uses that default directly::
 
-    lc.fit(
-        model="2D",
-        duplicate_wavelength_policy="first",
-    )
+    lc.fit(model="2D")
 
+Use ``duplicate_wavelength_policy="error"`` to require an explicit choice.
 To choose one channel per multiplet::
 
     lc.fit(

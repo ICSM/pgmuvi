@@ -189,7 +189,7 @@ class TestGPriorSamplingDocumentation(unittest.TestCase):
 
     def test_status_page_records_current_status_and_public_gp_prior_notebook(self):
         text = STATUS.read_text(encoding="utf-8")
-        self.assertIn("current through PR134", text)
+        self.assertIn("current through PR174", text)
         self.assertIn("Maintained GP-prior mock-data tutorial", text)
         self.assertIn("Refreshed in PR107", text)
         self.assertNotIn("TBD[notebook-mock-data-refresh]", text)

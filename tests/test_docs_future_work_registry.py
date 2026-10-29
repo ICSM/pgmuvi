@@ -33,7 +33,6 @@ class TestDocumentationFutureWorkRegistry(unittest.TestCase):
             "TBD[held-out-validation]",
             "TBD[batch-validation]",
             "TBD[batch-notebook]",
-            "TBD[result-interpretation-notebook]",
             "TBD[automatic-model-selection]",
             "TBD[multi-periodic-wavelength-models]",
             "TBD[non-monotonic-wavelength-kernels]",
@@ -46,6 +45,11 @@ class TestDocumentationFutureWorkRegistry(unittest.TestCase):
         for marker in required:
             with self.subTest(marker=marker):
                 self.assertIn(marker, text)
+        self.assertNotIn("TBD[result-interpretation-notebook]", text)
+        self.assertIn(
+            "Completed result-interpretation notebook coverage (PR174)",
+            text,
+        )
 
     def test_relevant_pages_own_the_registered_markers(self) -> None:
         advisory = (SOURCE / "howto" / "wavelength_advisory.rst").read_text(
@@ -75,8 +79,13 @@ class TestDocumentationFutureWorkRegistry(unittest.TestCase):
         self.assertIn("TBD[wavelength-dependent-lags]", advisory)
         self.assertIn("TBD[batch-validation]", batch)
         self.assertIn("TBD[batch-notebook]", batch)
+        self.assertNotIn(
+            "TBD[result-interpretation-notebook]",
+            interpretation,
+        )
         self.assertIn(
-            "TBD[result-interpretation-notebook]", interpretation
+            "tutorial_single_source_analysis",
+            interpretation,
         )
         self.assertIn("TBD[native-magnitude-input]", loading)
         self.assertIn("TBD[multidimensional-psd-plotting]", multiband)

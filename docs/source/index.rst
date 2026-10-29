@@ -63,6 +63,7 @@ public tutorial.  Unavailable future workflows are tracked in
    notebooks/pgmuvi_mock_data_from_gp
    notebooks/tutorial_wavelength_advisory
    notebooks/tutorial_wavelength_constraints
+   notebooks/tutorial_single_source_analysis
    notebooks/PGMUVI_Lomb_Scargle
    notebooks/PGMUVI_Gaussian_Process_fitting
    notebooks/PGMUVI_comparison_with_other_codes

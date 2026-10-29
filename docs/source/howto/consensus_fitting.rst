@@ -483,6 +483,13 @@ history and recovered period, and calls ``Lightcurve.plot()`` to render fitted
 predictions before presenting explicit follow-up configurations.  The runnable script remains the preferred reference
 for command-line execution and artifact export.
 
+For a real-source workflow, use
+:doc:`../notebooks/tutorial_single_source_analysis`.  It computes independent
+Lomb--Scargle and data-ACF evidence for every observational channel, runs
+consensus before the wavelength-parameter workflow and optimizer, keeps both
+shared-wavelength KELT channels in the consensus scope, and records the explicit
+single-channel selection used only for exact-GP training.
+
 Relationship to wavelength advisory
 -----------------------------------
 
@@ -504,3 +511,149 @@ See also
 * :doc:`wavelength_advisory`
 * :doc:`wavelength_advisory_batch`
 * :doc:`interpreting_results`
+
+
+User-controlled LS and GP components; curve-only ACF
+-----------------------------------------------------
+
+The single-source workflow exposes two independent controls:
+
+``LS_NUM_COMPONENTS``
+   Number of Lomb--Scargle candidates retained per observational channel.
+
+``GP_NUM_COMPONENTS``
+   Number of fitted temporal GP components. A value of one selects the
+   quasi-periodic ``consensus`` pathway. Values above one select the
+   spectral-mixture ``consensus_multicomp`` pathway and set
+   ``num_mixtures`` exactly to the requested count.
+
+The ACF does not identify peaks or components in this comparison workflow. It
+is plotted only as a lag--correlation curve. LS candidates and fitted-GP period
+features are overlaid as references so the reader can inspect whether those
+periods correspond to recurrence structure in the data.
+
+``Lightcurve.plot_period_summary()`` accepts ``x_axis="period"`` or
+``x_axis="frequency"``. ``log_x`` controls the selected coordinate scale.
+For spectral-mixture fits, ``show_components=True`` draws every individual
+fitted mixture-component PSD curve together with the summed PSD. For an
+explicit-period quasi-periodic fit no PSD exists; the plot therefore shows a
+period marker and coherence-proxy interval with no quantitative y-axis.
+
+For a two-dimensional fit the temporal GP is shared across observational
+channels. ``plot_period_diagnostic_comparison()`` consequently creates one
+shared GP period-summary figure, rather than repeating the same figure once per
+channel.
+
+Lomb--Scargle plotting axis contract
+------------------------------------
+
+``Lightcurve.plot_lomb_scargle_periodogram()`` is the maintained plotting path
+for full Lomb--Scargle results.  It does not recompute the periodogram.  The
+default display contract is:
+
+* period on the x-axis;
+* logarithmic x scaling; and
+* linear Lomb--Scargle power on the y-axis.
+
+A frequency-axis display remains available as an explicit override for
+specialized diagnostics.  The method accepts an existing axes, so several
+periodograms can be compared without reproducing conversion, sorting, or scale
+logic in notebooks.
+
+All supplied LS candidates and labeled reference periods are retained.  This is
+important for multi-component signals: the plotting API never silently reduces
+a result to the strongest peak.  Candidate ranks are visual annotations only and
+are not treated as physical component identities.
+
+A prior full-grid call can be plotted directly:
+
+.. code-block:: python
+
+   lc.fit_LS(freq_only=True)
+   fig, ax = lc.plot_lomb_scargle_periodogram(show=False)
+
+Explicit arrays and multiple reference components are also supported:
+
+.. code-block:: python
+
+   fig, ax = lc.plot_lomb_scargle_periodogram(
+       frequency,
+       power,
+       reference_periods={
+           "Primary candidate": primary_period,
+           "Secondary candidate": secondary_period,
+       },
+       show=False,
+   )
+
+Parameter-workflow control under consensus fits
+-----------------------------------------------
+
+``use_parameter_workflow`` is preserved when ``fit_strategy`` is
+``"consensus"`` or ``"consensus_multicomp"``.  This makes the following a
+valid controlled comparison::
+
+    enabled = lightcurve_a.fit(
+        model="2DWavelengthDependent",
+        fit_strategy="consensus",
+        constraint_set="LPV",
+        use_parameter_workflow=True,
+        ...
+    )
+
+    disabled = lightcurve_b.fit(
+        model="2DWavelengthDependent",
+        fit_strategy="consensus",
+        constraint_set="LPV",
+        use_parameter_workflow=False,
+        ...
+    )
+
+The two objects should contain identical retained observations and should be
+fit with the same seed and optimizer controls.  Only the schema-driven
+parameter workflow changes.
+
+When the two independent light curves are reloaded from the same CSV,
+each load must replay the same random seed, PyTorch default dtype, working
+directory, and sampling options.  Compare the retained tensors and stable
+sampling-contract fields directly; do not use equality of an entire diagnostic
+dictionary as a substitute for confirming identical retained data.
+
+For numerical parameter tables, ``Lightcurve.get_parameters(raw=False)``
+returns model-relative names with ``raw_`` removed.  Resolve the corresponding
+constraint on ``lightcurve.model`` using the registered raw parameter name;
+the wrapper object does not own submodules such as ``mean_module`` or
+``covar_module``.
+
+Interpreting registered parameter constraints
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A registered constraint, a valid initialization, and a fitted value inside the
+interval are software and numerical checks.  They do not by themselves show
+that the parameter is statistically well identified or that the model is
+scientifically adequate.  Report the fitted fractional position within the
+interval and distinguish interior, near-bound, and at-bound results.  A useful
+technical screen labels a row satisfactory only when the constraint is
+registered, initialization and the fitted value are inside it, and the fitted
+value is not close to either bound.
+
+Use
+:func:`pgmuvi.single_source_analysis.summarize_single_source_constraint_diagnostics`
+to produce this interpretation.  Its result records each parameter's model
+role, coordinate system, value and interval provenance, technical status,
+boundary status, and an explicit identification caveat.  Near-bound and
+at-bound parameters require sensitivity checks; an interior result still does
+not prove identification.
+
+Notebook tables that must survive PDF export should use Markdown or a plain
+tabular representation rather than displaying a raw
+``IPython.display.HTML`` object.
+
+This is **not** a comparison between a constrained and an unconstrained GP.
+The disabled fit still receives the selected source-type defaults, explicit
+user constraints, and consensus-derived temporal initialization or
+constraints.  It merely skips automatic schema-driven parameter values and
+workflow-derived constraints.  Use
+:meth:`pgmuvi.lightcurve.Lightcurve.get_parameter_workflow_report` after each
+fit to verify that the enabled fit reports applied entries and the disabled
+fit reports ``available=False``.

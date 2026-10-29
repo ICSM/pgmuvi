@@ -22,6 +22,7 @@ __all__ = [
     "instrument_channel_calibration_validation_execution",
     "lightcurve",
     "priors",
+    "single_source_analysis",
     "spectral_mixture_ard",
     "spectral_mixture_ard_diagnostics",
     "synthetic",

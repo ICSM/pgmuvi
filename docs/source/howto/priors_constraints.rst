@@ -161,6 +161,13 @@ plotting API, and reports residual and boundary-pressure diagnostics.  Its
 quasi-periodic time kernel is a tested LPV hypothesis rather
 than a universal requirement for every source.
 
+For the complete real-source sequence, including channel-specific period
+evidence, consensus, live constraint verification, a required GP fit,
+predictions, residuals, phase diagnostics, and structured output, use
+:doc:`../notebooks/tutorial_single_source_analysis`.  That notebook distinguishes
+the data-derived interval, the registered effective constraint, the realized
+initial value, and the fitted value.
+
 
 Common Pitfalls
 ----------------

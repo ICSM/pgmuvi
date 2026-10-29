@@ -349,6 +349,18 @@ training, and compares light-curve and residual diagnostics with a constant-mean
 control.  It does not select a model or treat one fitted source as population-level
 achromatic evidence.
 
+Complete real-source workflow
+-----------------------------
+
+Use :doc:`../notebooks/tutorial_single_source_analysis` when the scientific task
+requires the full sequence rather than only wavelength-constraint inspection.
+The notebook computes per-observational-channel period evidence, runs temporal
+consensus, applies and verifies the live wavelength parameter workflow before
+training, fits ``2DWavelengthDependent``, and then reports predictions,
+residuals, phase coverage, fitted parameters, boundary proximity, and noise
+provenance.  A fitted wavelength scale at a bound is a diagnostic, not proof of
+achromaticity or a population-level model preference.
+
 
 Known limitations and future work
 ---------------------------------

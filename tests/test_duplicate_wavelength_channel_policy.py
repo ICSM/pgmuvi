@@ -462,21 +462,36 @@ class TestDuplicateWavelengthFitIntegration(unittest.TestCase):
             result = lc.fit(**fit_kwargs)
         return result, fit_core
 
-    def test_fit_default_requires_explicit_policy_and_never_calls_core(self):
+    def test_fit_default_selects_first_before_core(self):
         lc = _make_duplicate_group_lightcurve()
-        with mock.patch.object(
-            Lightcurve,
-            "_fit_core",
-            autospec=True,
-        ) as fit_core:
-            with self.assertRaisesRegex(
-                ValueError,
-                "Choose the GP training input explicitly",
-            ):
-                lc.fit(model="2D")
-        fit_core.assert_not_called()
-        self.assertEqual(len(lc.xdata), 12)
-        self.assertIn("B", set(lc.band.tolist()))
+        self.assertEqual(
+            Lightcurve.fit.__kwdefaults__[
+                "duplicate_wavelength_policy"
+            ],
+            "first",
+        )
+        with self.assertWarnsRegex(
+            UserWarning,
+            "Selected A.*ignored B",
+        ):
+            result, fit_core = self._fit_without_training(
+                lc,
+                model="2D",
+            )
+        self.assertEqual(result, "fit-result")
+        self.assertEqual(len(lc.xdata), 10)
+        self.assertNotIn("B", set(lc.band.tolist()))
+        self.assertEqual(
+            lc.duplicate_wavelength_channel_resolution["policy"],
+            "first",
+        )
+        self.assertEqual(
+            lc.duplicate_wavelength_channel_resolution["groups"][0][
+                "selected_observational_channel"
+            ],
+            "A",
+        )
+        fit_core.assert_called_once()
 
     def test_fit_explicit_first_resolves_before_core(self):
         lc = _make_duplicate_group_lightcurve()
@@ -567,24 +582,36 @@ class TestRepresentativeDatasetDuplicateWavelengthPolicy(unittest.TestCase):
             {KELT_R3_1: 3636},
         )
 
-    def test_representative_dataset_default_fit_requires_user_choice(self):
+    def test_representative_dataset_default_fit_selects_r3_0(self):
         lc = Lightcurve.from_csv(REPRESENTATIVE_CSV, max_samples=None)
 
         with mock.patch.object(
             Lightcurve,
             "_fit_core",
             autospec=True,
+            return_value="fit-result",
         ) as fit_core:
-            with self.assertRaisesRegex(
-                ValueError,
-                "Choose the GP training input explicitly",
+            with self.assertWarnsRegex(
+                UserWarning,
+                "Selected .*R3_0.*ignored .*R3_1",
             ):
-                lc.fit(model="2D")
+                result = lc.fit(model="2D")
 
-        fit_core.assert_not_called()
-        self.assertEqual(len(lc.xdata), 10815)
+        self.assertEqual(result, "fit-result")
+        fit_core.assert_called_once()
+        self.assertEqual(len(lc.xdata), 7179)
         self.assertIn(KELT_R3_0, set(lc.band.tolist()))
-        self.assertIn(KELT_R3_1, set(lc.band.tolist()))
+        self.assertNotIn(KELT_R3_1, set(lc.band.tolist()))
+        self.assertEqual(
+            lc.duplicate_wavelength_channel_resolution["policy"],
+            "first",
+        )
+        self.assertEqual(
+            lc.duplicate_wavelength_channel_resolution["groups"][0][
+                "selected_observational_channel"
+            ],
+            KELT_R3_0,
+        )
 
     def test_representative_dataset_explicit_first_reaches_core(self):
         lc = Lightcurve.from_csv(REPRESENTATIVE_CSV, max_samples=None)

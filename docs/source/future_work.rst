@@ -217,21 +217,32 @@ Documentation tutorial extensions
 
 Completed wavelength-constraint notebook (PR134)
     The maintained :doc:`notebooks/tutorial_wavelength_constraints` tutorial
-    now demonstrates wavelength-scale derivation, affine coordinate
-    transformation and round trips, separable covariance and physical-mean
-    constraints, independent temporal/wavelength ARD diagnostics, and the
-    empirically tested D2 failure boundaries.  It uses reduced deterministic
-    examples, keeps fitting optional, and remains explicitly advisory.
+    demonstrates wavelength-scale derivation, affine coordinate transformation
+    and round trips, separable covariance and physical-mean constraints,
+    independent temporal/wavelength ARD diagnostics, and the empirically tested
+    D2 failure boundaries.  Its maintained default path now performs bounded
+    real-data fits and remains explicitly advisory.
+
+Completed complete single-source notebook (PR174)
+    The maintained :doc:`notebooks/tutorial_single_source_analysis` tutorial
+    executes the bundled real source through validation, per-observational-
+    channel period evidence, temporal consensus, wavelength-derived constraints,
+    a required real two-dimensional GP fit, predictions, plots, residual and
+    phase diagnostics, fitted parameters, noise provenance, warnings, and a
+    JSON-safe report.  It does not perform population-level model selection or
+    instrument-channel calibration.
 
 **TBD[batch-notebook]**
     Add a maintained notebook for the batch wavelength-advisory workflow.
     The current command-line walkthrough and deterministic preparation script
     remain the supported executable documentation until that notebook exists.
 
-**TBD[result-interpretation-notebook]**
-    Add a maintained notebook for interactive interpretation of period,
-    wavelength-trend, ARD, fit-quality, and failure/fallback reports. The
-    current interpretation guide and JSON-report helper remain authoritative.
+Completed result-interpretation notebook coverage (PR174)
+    :doc:`notebooks/tutorial_single_source_analysis` now provides interactive
+    period, consensus, wavelength-constraint, fit-quality, noise, residual,
+    phase, warning, and structured-report interpretation for the bundled real
+    source.  The written interpretation guide remains the broader reference for
+    batch outputs and alternative model families.
 
 Other package boundaries
 ------------------------
