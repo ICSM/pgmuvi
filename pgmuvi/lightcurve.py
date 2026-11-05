@@ -6361,9 +6361,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             keys are the names of the parameters, and the values are the
             samples of the parameters.
         """
-        pyro, NUTS, MCMC, HMC, xr, az = _import_mcmc_backends()
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
+        pyro, NUTS, MCMC, HMC, xr, az = _import_mcmc_backends()
         if sampler is None:
             sampler = NUTS
         elif isinstance(sampler, str):
@@ -6559,11 +6559,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             `arviz.summary`. If None, the default behaviour of `arviz.summary`
             will be used ('mean'), by default 'median'.
         """
-        *_, az = _import_mcmc_backends()
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
+        *_, az = _import_mcmc_backends()
         if var_names is None:
             var_names = ["mean_module", "covar_module.mixture_weights", "raw"]
         elif var_names == "all":
@@ -6617,11 +6617,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The point estimate to plot, based on `arviz.plot_pair`. If None,
             no point estimate will be plotted, by default 'median'.
         """
-        *_, az = _import_mcmc_backends()
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
+        *_, az = _import_mcmc_backends()
         if var_names is None:
             var_names = ["mean_module", "covar_module.mixture_weights", "raw"]
         if point_estimate is None:
@@ -6646,11 +6646,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If None, the variables for the mean function and the covariance
             function will be included, by default None.
         """
-        *_, az = _import_mcmc_backends()
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
+        *_, az = _import_mcmc_backends()
         if var_names is None:
             # we carefully choose the default variables to plot
             # we want to plot all parameters relating to the mean function

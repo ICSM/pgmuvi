@@ -28,7 +28,6 @@ xarray =
 pyro =
 gpytorch =
 matplotlib =
-seaborn =
 arviz =
 
 **Screenshots**
