@@ -30,8 +30,10 @@ Source reports (in `reports/`): `stack_A_consensus_params.md`, `stack_B_waveleng
 
 ## 2. Phases and PR list
 
+Completed items end with `✓ done YYYY-MM-DD`; a PR that completes an item edits only that line (AGENTS.md section 8). Cards for every item are on the Project board: https://github.com/orgs/ICSM/projects/1.
+
 ### Phase 0 — triage (no code, ~1 day)
-- 0.1 Tag `archive/stack-2026-07` at `origin/pr174-add-complete-single-source-analysis-notebook` and `archive/giant-pr` at `backup/giant-pr-original`. Then (DEC-1) close the 74 PRs in table 0.1a with a comment linking this file and naming the section-5 item that drops them; leave the 30 PRs in table 0.1b open, each with a comment naming the roadmap item that will supersede it, and close each one when that item merges.
+- 0.1 Tag `archive/stack-2026-07` at `origin/pr174-add-complete-single-source-analysis-notebook` and `archive/giant-pr` at `backup/giant-pr-original`. Then (DEC-1) close the 74 PRs in table 0.1a with a comment linking this file and naming the section-5 item that drops them; leave the 30 PRs in table 0.1b open, each with a comment naming the roadmap item that will supersede it, and close each one when that item merges. ✓ done 2026-11-05 (plus `archive/pr<N>` tags on the seven closed heads not reachable from the stack tag: #152, #159, #160, #161, #191, #265, #266).
 
   Table 0.1a — close now (content dropped; section 5.1 item in brackets):
   | PRs | what |
@@ -55,9 +57,9 @@ Source reports (in `reports/`): `stack_A_consensus_params.md`, `stack_B_waveleng
   | #224 [3.4/3.6], #261, #262, #269 [3.7], #270 [3.1] | consensus handoff, duplicate channels, jitter |
   | #234, #236, #240, #242, #244 [3.9] | calibration algorithm (IRLS fit, DP pairing, coefficient covariance, predictive propagation, errors-in-both) |
   | #229 [3.12, waits DEC-17], #263 [3.12] | CIT 6 dataset, 2D tutorial |
-- 0.2 Merge #267/#268 into one private-analysis issue outside the package. Close #110/#136 (numpy 2 is fine). Close #28 (answered by DEC-3; resolved by 2.11).
-- 0.3 Merge this plan as `docs/dev/roadmap.md` and open a GitHub Project board with one card per PR below (DEC-20). The roadmap PR also ships the agent/contributor instructions pulled forward from 1.2: `AGENTS.md` as the single source of truth, `CLAUDE.md` and `.github/copilot-instructions.md` as pointers to it, a `Pull Requests` section in `CONTRIBUTING.md` (DEC-5), `.github/pull_request_template.md` (DEC-22), and `.claude/` agent definitions and read-only permission settings. Claim protocol: an item is claimed by opening a draft PR with its number in the title; the Project board links issues and PRs to item cards; any approving human reviewer squash-merges (AGENTS.md section 8).
-- 0.4 Two tracks run concurrently (DEC-2), both as independent small PRs against `main`, never as long-lived branches: the **JOSS track** (J1–J6 below) and the **reorganisation track** (phases 1–5). JOSS-track PRs must not depend on reorganisation PRs; the notebook in J5 uses only the public API so that its post-2.11 rewrite is mechanical.
+- 0.2 Merge #267/#268 into one private-analysis issue outside the package. Close #110/#136 (numpy 2 is fine). Close #28 (answered by DEC-3; resolved by 2.11). ✓ done 2026-11-05 (merged issue is #273).
+- 0.3 Merge this plan as `docs/dev/roadmap.md` and open a GitHub Project board with one card per PR below (DEC-20). The roadmap PR also ships the agent/contributor instructions pulled forward from 1.2: `AGENTS.md` as the single source of truth, `CLAUDE.md` and `.github/copilot-instructions.md` as pointers to it, a `Pull Requests` section in `CONTRIBUTING.md` (DEC-5), `.github/pull_request_template.md` (DEC-22), and `.claude/` agent definitions and read-only permission settings. Claim protocol: an item is claimed by opening a draft PR with its number in the title; the Project board links issues and PRs to item cards; any approving human reviewer squash-merges (AGENTS.md section 8). ✓ done 2026-11-05 (#272; board https://github.com/orgs/ICSM/projects/1).
+- 0.4 Two tracks run concurrently (DEC-2), both as independent small PRs against `main`, never as long-lived branches: the **JOSS track** (J1–J6 below) and the **reorganisation track** (phases 1–5). JOSS-track PRs must not depend on reorganisation PRs; the notebook in J5 uses only the public API so that its post-2.11 rewrite is mechanical. ✓ done 2026-11-05 (policy; nothing to merge).
 
 ### JOSS track (alongside phases 1–2; DEC-2, DEC-16, DEC-21)
 - J1 = 1.1 hygiene & pins (shared with the reorganisation track; lands first).
