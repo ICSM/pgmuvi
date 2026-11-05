@@ -40,6 +40,8 @@ dependencies = [
 mcmc = ["pyro-ppl>=1.8", "arviz<1", "xarray"]
 test = ["pytest>=7", "pytest-xdist"]
 docs = ["sphinx>=7", "nbsphinx", "ipykernel"]
+# Same ruff as CI and pre-commit.
+dev = ["ruff==0.16.9", "pre-commit"]
 
 [project.readme]
 file = "README.md"

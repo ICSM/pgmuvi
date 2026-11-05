@@ -15,7 +15,8 @@ repos:
       - id: debug-statements
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+    # Keep in step with .github/workflows/ruff.yml and the `dev` extra.
+    rev: v0.16.9
     hooks:
       # Run the linter
       - id: ruff
@@ -23,10 +24,4 @@ repos:
         exclude: ^(tests/|docs/source/notebooks/)
       # Run the formatter
       - id: ruff-format
-        exclude: ^(tests/|docs/source/notebooks/)
-
-  - repo: https://github.com/psf/black
-    rev: 24.10.0
-    hooks:
-      - id: black
         exclude: ^(tests/|docs/source/notebooks/)

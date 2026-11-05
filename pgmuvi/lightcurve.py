@@ -8476,12 +8476,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._find_dominant_peak_basin(psd, dominant_idx)
         )
         _note_parts = [
-            "Interval is based on the integrated PSD mass within the "
-            "primary peak basin (peak-centered shortest-mass interval). "
-            "The interval is guaranteed to contain the peak frequency. "
-            "Integration is performed in log-frequency space to avoid "
-            "high-frequency bias on a log-spaced grid. "
-            "PSD evaluated on a log-spaced frequency grid."
+            (
+                "Interval is based on the integrated PSD mass within the "
+                "primary peak basin (peak-centered shortest-mass interval). "
+                "The interval is guaranteed to contain the peak frequency. "
+                "Integration is performed in log-frequency space to avoid "
+                "high-frequency bias on a log-spaced grid. "
+                "PSD evaluated on a log-spaced frequency grid."
+            )
         ]
         if _basin_left_at_bdy:
             _note_parts.append(
