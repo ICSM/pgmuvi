@@ -10,11 +10,11 @@ Instructions for anyone writing code in this repository, human or coding agent. 
 - Read that item's pointers. Section 5 says what the archived stack did and why it was dropped or kept; `docs/dev/reports/` has the inventories. Treat function names and line counts in the reports as pointers to verify, not facts.
 - The decisions in section 7 are settled. Do not re-open them in code: for example, per-band jitter is implemented but off by default (DEC-7), `"2D"` keeps its current meaning (DEC-11), subsampling on load is off (DEC-9). DEC-17, DEC-18 and DEC-19 are still open; say so if your work touches them.
 - Claim the item before coding (section 8): check the Project board and the open PRs for one naming the item; if there is none, open a draft PR from your branch straight away. An open or draft PR means someone else is already on it.
-- When a PR completes an item, tick it in the roadmap in the same PR.
+- When a PR completes an item, mark it done in the roadmap in the same PR by appending `✓ done YYYY-MM-DD` to its line.
 
 ## 2. Rules the archived stack broke; do not repeat them
 
-The 99-PR stack being archived under roadmap phase 0 added 140k lines, of which about 6k were useful. These rules exist because of that.
+The 99-PR stack archived under roadmap phase 0 (tags `archive/stack-2026-07`, `archive/giant-pr`) added 140k lines, of which about 6k were useful. These rules exist because of that.
 
 1. **One PR per feature or fix.** Never one per phase, never a bundle. Target under ~800 lines of code; mechanical moves may be larger if the diff is `git mv` plus imports and the golden tests pass.
 2. **No contract / implement / validate triplets.** Write the function and its tests in one PR. No schema, status, enum, disposition, provenance or manifest layers around results; a function returns a small dataclass or a tensor.
@@ -23,7 +23,7 @@ The 99-PR stack being archived under roadmap phase 0 added 140k lines, of which 
 5. **Fixes first, then moves, then features.** A mechanical move means no behaviour change, tests pass, aliases left behind. A behaviour change is its own PR with a changelog line and a before/after on a real light curve (`pgmuvi/AlfOriAAVSO_Vband.csv` today; CIT 6 once 3.12 lands).
 6. **Tests test behaviour.** No tests that grep `.rst` files or notebook cells for phrases. No tests that only assert a dataclass round-trips through `to_dict`.
 7. **Deprecate, do not break.** Old names become shims that emit `DeprecationWarning` for one release. Defaults change with a `FutureWarning` one release ahead.
-8. **Do not revive archived branches wholesale.** Use `git show origin/<branch>:<path>` to read the old implementation, then rewrite it small. Archive tags (made in roadmap phase 0): `archive/stack-2026-07`, `archive/giant-pr`.
+8. **Do not revive archived branches wholesale.** Use `git show origin/<branch>:<path>` to read the old implementation, then rewrite it small. Archive tags: `archive/stack-2026-07` (the whole stack), `archive/giant-pr` (the pre-split PR), `archive/pr<N>` for the seven closed heads the stack tag does not reach.
 9. **No junk in commits.** No `.orig` files, `debug*.txt`, stray notebooks with outputs, files over 1 MB without discussion, or data without a provenance README.
 10. **No new dependencies without discussion.** Heavy optional imports (`pyro`, `arviz`, `xarray`) are imported lazily inside the functions that need them.
 11. **Say so when a PR is AI-assisted**, which tool was used, and what the human author checked. Review is a mix of human and AI reviewers (DEC-5).
@@ -118,9 +118,9 @@ The template at `.github/pull_request_template.md` asks for these. Fill it in; r
 Several people and several agents work on this repository at once, from different time zones. Assume the other party is asleep: everything is written down in GitHub, nothing is agreed in a chat.
 
 **Claiming an item**
-- The unit of work is a roadmap item. The Project board (roadmap 0.3) has one card per item; issues and PRs are linked to their card.
+- The unit of work is a roadmap item. The Project board, https://github.com/orgs/ICSM/projects/1, has one card per item. Issues and PRs are added to the board with the `Roadmap item` field set to the item number (Projects has no parent/child link; group the board by that field to see a card next to its PRs).
 - Before starting, check the board and `gh pr list --state open --search "<item>"` for an open or draft PR naming the item. If one exists, the item is taken: pick another, or offer help in that PR.
-- If none exists, create your branch, push it, and open a **draft PR** immediately with the item number in the title (`[1.5] Fix transform of yerr`), even before any code. Link it to the card and move the card to "In progress". The draft PR is the claim.
+- If none exists, create your branch, push it, and open a **draft PR** immediately with the item number in the title (`[1.5] Fix transform of yerr`), even before any code. Add it to the board (`gh project item-add 1 --owner ICSM --url <pr-url>`), set its `Roadmap item` field, and move the item's card to "In progress". The draft PR is the claim.
 - A draft PR with no commit or comment for 7 days is stale. Ask in it whether the author is continuing; after 48 hours without reply you may take the item over by branching from their branch (never by pushing to it) and saying so in both PRs.
 
 **Branches and files**
