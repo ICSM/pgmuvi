@@ -4,10 +4,10 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 
 ## Active work
 
-### 1.1 Hygiene & pins — branch `1.1/hygiene-pins`, PR #275
-- Done: everything in the roadmap line; reviewed; local suite 1297 OK; CI test matrix green on 3.10–3.15.
-- Next step: maintainer takes the PR out of draft, reviews, squash-merges; then tag `v0.2.0` on the merge commit (DEC-21) and delete this entry.
-- Do not redo: the lower bounds are deliberately untested (min-versions CI is 1.2); `Ruff` and `Build JOSS paper` workflows fail on `main` too (1.2).
+### 1.2 CI — branch `claude/pensive-ride-cefy00`, PR (draft, see board)
+- Doing: workflows run on `pull_request`; CPU torch index + pip cache; ruff pinned and check-only (no auto-commit bot); pre-commit pinned to the same ruff; strict docs build (`make html-strict`, pandoc) as its own job; AGENTS.md section 4 updated.
+- Next step: see the PR description.
+- Do not redo: the single `ISC004` hit that an unpinned ruff flags on `main` is fixed in this PR; notebooks are not executed in the docs job (`nbsphinx_execute=never` via SPHINXOPTS) until 3.13.
 
 ## Pitfalls
 
