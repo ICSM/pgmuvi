@@ -77,6 +77,35 @@ address them in a new commit and push to the same branch, or provide a brief exp
 of why you think our suggestion won't work. Once we are satisfied with
 your changes, we will merge your pull request.
 
+## Pull Requests and the Development Roadmap
+
+Development follows the plan in `docs/dev/roadmap.md`. Each pull request should
+correspond to one item of that plan (or to one bug fix), and should name the
+item in its description; the template at `.github/pull_request_template.md`
+asks for it. If your idea is not in the plan, open an issue first so it can be
+added. The full set of working rules, the repository map and the verified
+commands are in `AGENTS.md` at the repository root; coding agents and humans
+follow the same file.
+
+The rules that matter most:
+
+- One PR per feature or fix, small to medium (target under ~800 lines of code).
+  Mechanical reorganisation PRs may be larger if they are pure moves with no
+  behaviour change.
+- New scientific code goes into small modules as pure functions; nothing new is
+  added to `pgmuvi/lightcurve.py` beyond delegation.
+- A change in default behaviour is its own PR, carries a changelog line, and
+  shows a before/after on a real light curve.
+- Tests exercise behaviour. Tests that only check that documentation contains
+  certain phrases, or that a data class round-trips, will not be accepted.
+- Claim an item by opening a draft PR with the item number in its title as soon
+  as you start; an open or draft PR means someone else is already working on
+  it. Check the Project board and the open PRs first.
+- Reviews are done by a mix of human and AI reviewers. Any approving human
+  reviewer may squash-merge once CI is green and the author has rebased on
+  `main`. If a PR was written with AI assistance, say which tool was used and
+  what the human author checked.
+
 ## Code Style
 
 We try to follow the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide
