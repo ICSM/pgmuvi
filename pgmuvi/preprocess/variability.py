@@ -140,11 +140,10 @@ def compute_fvar(y, yerr) -> float:
     """
     Compute normalized excess variance (F_var).
 
-    F_var = np.sqrt(max(s**2 - mean_err**2, 0)) / |ybar|
+    ``F_var = np.sqrt(max(s**2 - mean_err**2, 0)) / abs(ybar)``
 
-    where:
-      s**2 = sample variance of y
-      mean_err**2 = mean(sig_i**2)
+    where ``s**2`` is the sample variance of y and ``mean_err**2`` is
+    ``mean(sig_i**2)``.
 
     Parameters
     ----------
@@ -190,10 +189,10 @@ def compute_stetson_k(y, yerr) -> float:
     """
     Compute Stetson K index for shape/coherence diagnostics.
 
-    K = (1/N) * sum(|delta_i|) / np.sqrt((1/N) * sum(delta_i**2))
+    ``K = (1/N) * sum(abs(delta_i)) / np.sqrt((1/N) * sum(delta_i**2))``
 
-    where delta_i = sqrt(N/(N-1)) * (y_i - ybar) / sig_i and N is the number
-    of valid points used in the statistic.
+    where ``delta_i = sqrt(N/(N-1)) * (y_i - ybar) / sig_i`` and N is the
+    number of valid points used in the statistic.
 
     Parameters
     ----------
@@ -316,25 +315,16 @@ def is_variable(
         True if lightcurve passes the required variability gates
         (min_points, chi2, and F_var).
     diagnostics : dict
-        {
-            'n_points': int,
-            'chi2': float,
-            'dof': int,
-            'p_value': float,
-            'fvar': float,
-            'stetson_k': float,
-            'decision': str,  # 'VARIABLE' or reason for rejection
-            'tests_passed': {
-                'chi2_test': bool,
-                'fvar_test': bool,
-                'stetson_test': bool,
-                'min_points': bool
-            }
-        }
+        Dictionary with keys ``'n_points'``, ``'chi2'``, ``'dof'``,
+        ``'p_value'``, ``'fvar'``, ``'stetson_k'``, ``'decision'`` (the string
+        ``'VARIABLE'`` or the reason for rejection) and ``'tests_passed'``
+        (a dict of booleans with keys ``'chi2_test'``, ``'fvar_test'``,
+        ``'stetson_test'`` and ``'min_points'``).
 
     Notes
     -----
     Decision logic (required gates):
+
     1. N >= min_points
     2. p_value < alpha (statistically significant)
     3. F_var >= fvar_min (astrophysically significant)

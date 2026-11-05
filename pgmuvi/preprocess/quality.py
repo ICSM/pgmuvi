@@ -67,42 +67,40 @@ def compute_sampling_metrics(
     Returns
     -------
     dict
-        {
-            'n_points': int,
-            'baseline': float,
-                Total time span (max(t) - min(t))
-            'max_gap': float,
-                Largest gap between consecutive observations
-            'max_gap_fraction': float,
-                max_gap / baseline
-            'median_cadence': float,
-                Median time between observations
-            'mean_cadence': float,
-                Mean time between observations
-            'cadence_std': float,
-                Standard deviation of cadences
-            'nyquist_period': float,
-                2 * effective_cadence (shortest reliably detectable period),
-                where effective_cadence is the median cadence, or the mean
-                cadence if the median is zero (e.g. many duplicate timestamps)
-            'nyquist_frequency': float,
-                1 / (2 * effective_cadence), np.inf if effective_cadence == 0
-            'longest_detectable_period': float,
-                baseline / 2 (heuristic upper limit)
-            'duty_cycle': float,
-                Fraction of baseline with observations (simple estimate)
-            'sampling_uniformity': float,
-                1 - (std(cadences) / mean(cadences)), range [0,1]
-                1 = perfectly uniform, 0 = highly irregular
-        }
+        Dictionary with the following keys.
 
-        If y and yerr provided, also includes:
-        {
-            'median_snr': float,
-            'mean_snr': float,
-            'fraction_snr_gt_3': float,
-            'fraction_snr_gt_5': float
-        }
+        ``'n_points'`` : int
+            Number of observations.
+        ``'baseline'`` : float
+            Total time span (``max(t) - min(t)``).
+        ``'max_gap'`` : float
+            Largest gap between consecutive observations.
+        ``'max_gap_fraction'`` : float
+            ``max_gap / baseline``.
+        ``'median_cadence'`` : float
+            Median time between observations.
+        ``'mean_cadence'`` : float
+            Mean time between observations.
+        ``'cadence_std'`` : float
+            Standard deviation of cadences.
+        ``'nyquist_period'`` : float
+            ``2 * effective_cadence`` (shortest reliably detectable period),
+            where effective_cadence is the median cadence, or the mean
+            cadence if the median is zero (e.g. many duplicate timestamps).
+        ``'nyquist_frequency'`` : float
+            ``1 / (2 * effective_cadence)``, ``np.inf`` if
+            ``effective_cadence == 0``.
+        ``'longest_detectable_period'`` : float
+            ``baseline / 2`` (heuristic upper limit).
+        ``'duty_cycle'`` : float
+            Fraction of baseline with observations (simple estimate).
+        ``'sampling_uniformity'`` : float
+            ``1 - (std(cadences) / mean(cadences))``, range [0, 1];
+            1 is perfectly uniform, 0 is highly irregular.
+
+        If y and yerr are provided, also includes ``'median_snr'``,
+        ``'mean_snr'``, ``'fraction_snr_gt_3'`` and ``'fraction_snr_gt_5'``
+        (all float).
 
     Examples
     --------
@@ -263,17 +261,11 @@ def assess_sampling_quality(
     passes : bool
         True if all quality gates pass
     diagnostics : dict
-        {
-            'metrics': dict (from compute_sampling_metrics),
-            'gates': {
-                'min_points': bool,
-                'max_gap': bool,
-                'min_baseline': bool,
-                'min_snr': bool (if applicable)
-            },
-            'warnings': list[str],
-            'recommendation': str  # 'PROCEED' or 'DO NOT FIT'
-        }
+        Dictionary with keys ``'metrics'`` (dict from
+        ``compute_sampling_metrics``), ``'gates'`` (dict of bool with keys
+        ``'min_points'``, ``'max_gap'``, ``'min_baseline'`` and, if
+        applicable, ``'min_snr'``), ``'warnings'`` (list of str) and
+        ``'recommendation'`` (``'PROCEED'`` or ``'DO NOT FIT'``).
 
     Examples
     --------
