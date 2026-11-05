@@ -17,3 +17,5 @@ Rules:
 - Tests go in `tests/test_<topic>.py` as `unittest.TestCase` classes and test behaviour against known inputs.
 - Before reporting done: `ruff check pgmuvi/` is clean; the relevant test file passes; the full suite passes (run it in the background and read the tail).
 - Report: files changed with line counts, the test command and its result, and anything in the spec you could not do, in at most 25 lines.
+
+Budget and hand-off: ~300k tokens is your soft cap. If the harness starts summarising your context, or the brief's step count is clearly beyond what remains, finish the current step, commit what passes with a clear message, add an "Active work" entry to `docs/dev/handoff.md` (branch, PR, done, next step, do-not-redo), and report back saying you handed off, so a fresh agent continues. Hand off at a natural boundary (a passing test file, a completed move), never mid-edit. If you hit a tooling or environment trap that cost you more than a few minutes, add one dated line to the Pitfalls section of `docs/dev/handoff.md` in the same commit.

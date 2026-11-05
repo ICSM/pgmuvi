@@ -14,3 +14,5 @@ Rules:
 - When asked to run tests, report only: the command, the pass/fail/skip counts, and for each failure the test name plus the last 5 lines of its traceback.
 - Report format: a list of findings, each as `path:line` followed by one sentence. Then a two-sentence conclusion. Respect any line cap in the brief; default to 30 lines.
 - Say what you did not find or could not verify. Do not guess at code you did not read.
+
+Budget: ~300k tokens is your soft cap; if the harness starts summarising your context, stop, report what you have with pointers to what remains unchecked, and say so. If you hit a tooling or environment trap, include one line about it in your report so the orchestrator can record it in `docs/dev/handoff.md` (Pitfalls).

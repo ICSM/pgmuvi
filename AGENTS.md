@@ -160,6 +160,19 @@ An orchestrator is the model running the session that plans, delegates and revie
 9. When the orchestrator writes code itself, it still follows section 2, and a reviewer agent reads the diff before the PR leaves draft.
 10. Record in the PR description which roles did what (for example "scout: inventory; worker: move + tests; architect: review"), so reviewers know where to look hardest.
 
+**Concurrency and budget (soft caps)**
+- At most **2 subagents run at once**. Batch independent lookups into one scout brief rather than spawning several scouts.
+- When subagents work on **different roadmap items**, start them at least **30 minutes apart**, so the first has claimed its item (draft PR on the board) and its early commits are visible before the second begins, and the two do not race for `lightcurve.py`. Subagents on the same item (a scout feeding a worker) have no lag.
+- **300k tokens per agent** is the soft cap, orchestrator and subagents alike. Treat the harness's context summarisation, or a context counter passing ~300k, as the signal.
+  - A subagent approaching it finishes the current step, commits what passes, writes a hand-off note (below) and reports back so a fresh subagent continues. Hand off at the next natural boundary of the item: a passing test file, a completed move, a function with its tests. Do not hand off mid-edit.
+  - The orchestrator approaching it tells the user plainly: how far the item is, what is committed, and that a new session would be cheaper and sharper. The user chooses; continuing is allowed. If they continue, the orchestrator writes the hand-off note first, so nothing is lost if the session dies.
+- A hand-off note is written **before** the hand-off, not from memory afterwards.
+
+**Hand-off documentation and pitfalls**
+- `docs/dev/handoff.md` is the global hand-off file, committed on the branch of the item it describes (the "Active work" entry) or on `main` via the PR that learned the lesson (the "Pitfalls" entry). Every session that starts or stops work on an item updates it: branch, PR, what is done, the next step, and what the next agent should not redo.
+- Every PR description carries a **"Next step"** line while the PR is open, so a hand-off is possible from the PR alone.
+- Pitfalls are one line each, dated, with the fix or workaround: tooling quirks, environment traps, a test that must be run a particular way, a GitHub behaviour. Read the Pitfalls section at the start of every session; it is short on purpose. Delete an entry when the roadmap item that removes the trap merges.
+
 **Claude Code specifics**
 - `.claude/settings.json` allows read-only commands (git and gh queries, grep, ruff check, test runs) without prompts, so parallel sessions are not blocked on approvals. Personal overrides go in `.claude/settings.local.json`, which is gitignored.
 - Use the agent definitions above as `subagent_type`. Give a fresh agent the item number and the pointers; it has no other context.
