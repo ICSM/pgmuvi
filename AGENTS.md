@@ -1,6 +1,6 @@
 # Working on pgmuvi
 
-Instructions for anyone writing code in this repository, human or coding agent. This file is the single source of truth; `CLAUDE.md` and `.github/copilot-instructions.md` only point here. It replaces the old Copilot instructions, whose "not pytest" and "prefer small changes over large refactors" rules are no longer policy.
+Instructions for anyone writing code in this repository, human or coding agent. This file is the single source of truth; `CLAUDE.md` and `.github/copilot-instructions.md` only point here. Sections 1 to 7 apply to everyone; section 8 is for working alongside other people and agents; section 9 is for whoever orchestrates agents. It replaces the old Copilot instructions, whose "not pytest" and "prefer small changes over large refactors" rules are no longer policy.
 
 ## 1. Read the roadmap before writing code
 
@@ -9,6 +9,7 @@ Instructions for anyone writing code in this repository, human or coding agent. 
 - Find the roadmap item your task corresponds to (for example `1.5`, `3.4`, `J4`). If there is none, do not start coding: open an issue describing the gap and ask whether it belongs in the plan.
 - Read that item's pointers. Section 5 says what the archived stack did and why it was dropped or kept; `docs/dev/reports/` has the inventories. Treat function names and line counts in the reports as pointers to verify, not facts.
 - The decisions in section 7 are settled. Do not re-open them in code: for example, per-band jitter is implemented but off by default (DEC-7), `"2D"` keeps its current meaning (DEC-11), subsampling on load is off (DEC-9). DEC-17, DEC-18 and DEC-19 are still open; say so if your work touches them.
+- Claim the item before coding (section 8): check the Project board and the open PRs for one naming the item; if there is none, open a draft PR from your branch straight away. An open or draft PR means someone else is already on it.
 - When a PR completes an item, tick it in the roadmap in the same PR.
 
 ## 2. Rules the archived stack broke; do not repeat them
@@ -111,3 +112,56 @@ The template at `.github/pull_request_template.md` asks for these. Fill it in; r
 - Public API change: docstring, `docs/source` updated, shim for the old name.
 - AI assistance disclosed, with what the human checked.
 - Roadmap ticked if the item is complete.
+
+## 8. Working in parallel
+
+Several people and several agents work on this repository at once, from different time zones. Assume the other party is asleep: everything is written down in GitHub, nothing is agreed in a chat.
+
+**Claiming an item**
+- The unit of work is a roadmap item. The Project board (roadmap 0.3) has one card per item; issues and PRs are linked to their card.
+- Before starting, check the board and `gh pr list --state open --search "<item>"` for an open or draft PR naming the item. If one exists, the item is taken: pick another, or offer help in that PR.
+- If none exists, create your branch, push it, and open a **draft PR** immediately with the item number in the title (`[1.5] Fix transform of yerr`), even before any code. Link it to the card and move the card to "In progress". The draft PR is the claim.
+- A draft PR with no commit or comment for 7 days is stale. Ask in it whether the author is continuing; after 48 hours without reply you may take the item over by branching from their branch (never by pushing to it) and saying so in both PRs.
+
+**Branches and files**
+- One branch per item, named `<item>/<slug>` (`1.5/transform-yerr`, `j4/laplace`, `2.4/plotting-module`). Never commit to `main`.
+- Before editing a file, see which other open PRs touch it: `gh pr list --state open --json number,title,files --jq '.[] | select(.files[].path == "pgmuvi/lightcurve.py") | "#\(.number) \(.title)"'`. Overlap is allowed but advisory: name the overlapping PR in your description and agree in its thread who lands first. The later PR rebases.
+- `pgmuvi/lightcurve.py` is the hot spot. Keep diffs to it minimal (a one-line delegation to code in a new module conflicts far less than an edited method body), and land PRs that touch it quickly.
+- Do not start an item before its prerequisite in the roadmap has merged, except as a short chain (at most 4 PRs) based on the prerequisite's branch, stated in the PR description.
+- Rebase onto `main` before review and before merge (`git rebase origin/main`); never merge `main` into your branch. Force-push only your own branch, and only with `--force-with-lease`.
+- Never push to someone else's branch. Suggestions go as review comments or as a PR into their branch.
+- In `docs/dev/roadmap.md`, a PR edits only the line of its own item, so the tick-marks do not conflict.
+
+**Review and merge**
+- Review is a mix of human and AI reviewers. Any approving human reviewer may squash-merge once CI is green, the PR template is filled in, and the author has rebased. Agents do not merge.
+- If you are blocked on a question, write it in the PR, mark the PR with a `blocked` label or "Blocked:" line in the description, and move to another item rather than waiting.
+
+## 9. Orchestration and token economy
+
+An orchestrator is the model running the session that plans, delegates and reviews. It is usually the most expensive model available, so its tokens are the scarce resource. Delegate by role; the Claude Code mapping is in `.claude/agents/` and the table below. Other vendors map by cost tier.
+
+| role | Claude model | agent file | does |
+|---|---|---|---|
+| scout | Haiku | `.claude/agents/scout.md` | finds things: grep/glob sweeps, "where is X defined", method index of a module, summarise a report section, run a test file and report the tail, check which PRs touch a file |
+| worker | Sonnet | `.claude/agents/worker.md` | implements to a spec: mechanical moves with golden tests, tests for a stated function, ports from an archive branch to a stated design, docstrings, docs pages, PR descriptions, lint fixes |
+| engineer | Opus | `.claude/agents/engineer.md` | implements items needing numerical or scientific judgement from the roadmap spec; debugs failing fits; reviews correctness |
+| reviewer | Opus | `.claude/agents/reviewer.md` | read-only review of a PR against this file and the roadmap item |
+| architect | Fable (or Opus when Fable is unavailable) | the orchestrator itself | roadmap-level decisions, the new kernels and likelihoods of phase 4, the high-risk PRs (2.9, 2.11, 4.2, 4.5), numerical failures nobody else could resolve |
+
+**Rules for the orchestrator**
+1. Plan in ten lines before any tool call: what has to be true at the end, what you need to know, who fetches each fact.
+2. Never read a whole file longer than ~300 lines. Locate with `grep -n`, then read a range of 20 to 80 lines. `pgmuvi/lightcurve.py` is never read whole by any model; its method index is `docs/dev/reports/architecture_main.md`. Read in this order: roadmap item, report pointer, grep, ranged read.
+3. Delegate anything that is "find", "summarise", "run and report" to a scout; anything with a complete spec to a worker; anything needing judgement about numbers to an engineer. Keep for yourself only what the architect row lists. Do not spawn an agent for what you can do in three tool calls.
+4. A brief names the roadmap item, the goal, the files or report pointers, what is already known or excluded, and the output format with a line cap. Ask for `file:line` pointers and conclusions, never file contents.
+5. Verify one claim from every report with one cheap, precise check (run the one test, grep the one symbol, `git diff --stat`) before building on it. A report that confirms your own hypothesis gets a second check.
+6. Run the test suite in the background and read only its last 20 lines. While iterating, run the one relevant test file. Pipe long outputs to a file in the scratchpad and grep them.
+7. Batch independent delegations and tool calls in one turn.
+8. Do not re-derive what the roadmap or the reports already state; cite the section.
+9. When the orchestrator writes code itself, it still follows section 2, and a reviewer agent reads the diff before the PR leaves draft.
+10. Record in the PR description which roles did what (for example "scout: inventory; worker: move + tests; architect: review"), so reviewers know where to look hardest.
+
+**Claude Code specifics**
+- `.claude/settings.json` allows read-only commands (git and gh queries, grep, ruff check, test runs) without prompts, so parallel sessions are not blocked on approvals. Personal overrides go in `.claude/settings.local.json`, which is gitignored.
+- Use the agent definitions above as `subagent_type`. Give a fresh agent the item number and the pointers; it has no other context.
+- `gh project` commands need the `project` scope: `gh auth refresh -s project,read:project`.
+

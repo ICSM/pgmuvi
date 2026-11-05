@@ -98,8 +98,13 @@ The rules that matter most:
   shows a before/after on a real light curve.
 - Tests exercise behaviour. Tests that only check that documentation contains
   certain phrases, or that a data class round-trips, will not be accepted.
-- Reviews are done by a mix of human and AI reviewers. If a PR was written with
-  AI assistance, say which tool was used and what the human author checked.
+- Claim an item by opening a draft PR with the item number in its title as soon
+  as you start; an open or draft PR means someone else is already working on
+  it. Check the Project board and the open PRs first.
+- Reviews are done by a mix of human and AI reviewers. Any approving human
+  reviewer may squash-merge once CI is green and the author has rebased on
+  `main`. If a PR was written with AI assistance, say which tool was used and
+  what the human author checked.
 
 ## Code Style
 

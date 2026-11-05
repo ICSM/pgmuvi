@@ -56,7 +56,7 @@ Source reports (in `reports/`): `stack_A_consensus_params.md`, `stack_B_waveleng
   | #234, #236, #240, #242, #244 [3.9] | calibration algorithm (IRLS fit, DP pairing, coefficient covariance, predictive propagation, errors-in-both) |
   | #229 [3.12, waits DEC-17], #263 [3.12] | CIT 6 dataset, 2D tutorial |
 - 0.2 Merge #267/#268 into one private-analysis issue outside the package. Close #110/#136 (numpy 2 is fine). Close #28 (answered by DEC-3; resolved by 2.11).
-- 0.3 Merge this plan as `docs/dev/roadmap.md` and open a GitHub Project board with one card per PR below (DEC-20). The roadmap PR also ships the agent/contributor instructions pulled forward from 1.2: `AGENTS.md` as the single source of truth, `CLAUDE.md` and `.github/copilot-instructions.md` as pointers to it, a `Pull Requests` section in `CONTRIBUTING.md` (DEC-5) and `.github/pull_request_template.md` (DEC-22).
+- 0.3 Merge this plan as `docs/dev/roadmap.md` and open a GitHub Project board with one card per PR below (DEC-20). The roadmap PR also ships the agent/contributor instructions pulled forward from 1.2: `AGENTS.md` as the single source of truth, `CLAUDE.md` and `.github/copilot-instructions.md` as pointers to it, a `Pull Requests` section in `CONTRIBUTING.md` (DEC-5), `.github/pull_request_template.md` (DEC-22), and `.claude/` agent definitions and read-only permission settings. Claim protocol: an item is claimed by opening a draft PR with its number in the title; the Project board links issues and PRs to item cards; any approving human reviewer squash-merges (AGENTS.md section 8).
 - 0.4 Two tracks run concurrently (DEC-2), both as independent small PRs against `main`, never as long-lived branches: the **JOSS track** (J1–J6 below) and the **reorganisation track** (phases 1–5). JOSS-track PRs must not depend on reorganisation PRs; the notebook in J5 uses only the public API so that its post-2.11 rewrite is mechanical.
 
 ### JOSS track (alongside phases 1–2; DEC-2, DEC-16, DEC-21)
@@ -463,7 +463,7 @@ Decision: _open_ — needs the stack author (does anyone run `run_wavelength_adv
 **DEC-20. Where the roadmap lives and how progress is tracked**
 Options: (a) `docs/dev/roadmap.md` in the repo, updated by each PR that completes an item, plus a GitHub Project board with one card per PR; (b) a GitHub Discussion or wiki page; (c) outside the repo.
 Recommendation: (a). The roadmap PR is itself phase 0.3 and the first small PR of the new stack. Keep section 5 (the drop list) in the repo copy so the archive pointers are discoverable.
-Decision (2026-11-05): **(a)** as recommended: this file plus a GitHub Project board (0.3).
+Decision (2026-11-05): **(a)** as recommended: this file plus a GitHub Project board (0.3). Items are claimed by opening a draft PR naming the item; the board links issues and PRs to item cards.
 
 **DEC-21. Versioning across the refactor**
 Options: (a) cut `v0.x` from today's main before phase 1 ("last release of the old layout"), do phases 1–2 as `0.(x+1)` with shims, remove shims and ship the new default 2D model as `1.0`; (b) no tag now, release at the end of phase 2.
