@@ -11,7 +11,7 @@ Usage::
 
 import gpytorch
 
-from pgmuvi.models import (
+from pgmuvi.gps import (
     AchromaticGPModel,
     WavelengthDependentGPModel,
     SeparableGPModel,
@@ -90,12 +90,10 @@ print(f"  Number of trainable parameters: {n_params_wd}")
 # ---------------------------------------------------------------------------
 print("\n--- Separable GP with quasi-periodic time kernel ---")
 lik_s = gpytorch.likelihoods.GaussianLikelihood()
-from pgmuvi.kernels import QuasiPeriodicKernel  # noqa: E402
+from pgmuvi.kernels import make_quasi_periodic_kernel  # noqa: E402
 from gpytorch.kernels import ScaleKernel, RBFKernel  # noqa: E402
 
-qp = QuasiPeriodicKernel()
-qp.period = init_params["period"]
-time_kernel = ScaleKernel(qp)
+time_kernel = make_quasi_periodic_kernel(period=init_params["period"])
 wavelength_kernel = ScaleKernel(RBFKernel())
 
 model_s = SeparableGPModel(

@@ -12,7 +12,7 @@ Usage::
 import torch
 import gpytorch
 
-from pgmuvi.models import (
+from pgmuvi.gps import (
     QuasiPeriodicGPModel,
     MaternGPModel,
     PeriodicPlusStochasticGPModel,

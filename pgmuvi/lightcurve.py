@@ -41,15 +41,37 @@ from .priors import (
     NormalPeriodPrior,
     get_prior_set,
 )
-import pyro
-from pyro.infer.mcmc import NUTS, MCMC, HMC
 from inspect import isclass
-import xarray as xr
-import arviz as az
 import warnings
 import dataclasses
 import json
 import math
+
+
+def _import_mcmc_backends():
+    """Import the optional MCMC dependencies on first use.
+
+    ``pyro``, ``arviz`` and ``xarray`` are only needed by
+    :meth:`Lightcurve.mcmc` and the methods that read its results, so they are
+    not imported with the package. Install them with ``pip install
+    "pgmuvi[mcmc]"``.
+
+    Returns
+    -------
+    tuple
+        ``(pyro, NUTS, MCMC, HMC, xr, az)``.
+    """
+    try:
+        import arviz as az
+        import pyro
+        import xarray as xr
+        from pyro.infer.mcmc import HMC, MCMC, NUTS
+    except ImportError as e:
+        raise ImportError(
+            "MCMC support needs the optional dependencies pyro-ppl, arviz<1 and "
+            'xarray: pip install "pgmuvi[mcmc]"'
+        ) from e
+    return pyro, NUTS, MCMC, HMC, xr, az
 
 
 def _reraise_with_note(e, note):
@@ -6339,6 +6361,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             keys are the names of the parameters, and the values are the
             samples of the parameters.
         """
+        pyro, NUTS, MCMC, HMC, xr, az = _import_mcmc_backends()
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
         if sampler is None:
@@ -6536,6 +6559,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             `arviz.summary`. If None, the default behaviour of `arviz.summary`
             will be used ('mean'), by default 'median'.
         """
+        *_, az = _import_mcmc_backends()
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."
@@ -6593,6 +6617,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             The point estimate to plot, based on `arviz.plot_pair`. If None,
             no point estimate will be plotted, by default 'median'.
         """
+        *_, az = _import_mcmc_backends()
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."
@@ -6621,6 +6646,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             If None, the variables for the mean function and the covariance
             function will be included, by default None.
         """
+        *_, az = _import_mcmc_backends()
         if not self.__FITTED_MCMC:
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."

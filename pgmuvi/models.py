@@ -16,7 +16,16 @@
         )
 """
 
-from .gps import (  # noqa: F401
+import warnings
+
+warnings.warn(
+    "pgmuvi.models is deprecated and will be removed in a future release; "
+    "import the model classes from pgmuvi.gps instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+from .gps import (  # noqa: F401, E402
     AchromaticGPModel,
     LinearMeanQuasiPeriodicGPModel,
     MaternGPModel,

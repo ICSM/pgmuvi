@@ -863,12 +863,9 @@ class TestFromCSV(unittest.TestCase):
 
     def test_sample_csv(self):
         """from_csv should work with the bundled AlfOriAAVSO_Vband.csv."""
-        sample = os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "pgmuvi",
-            "AlfOriAAVSO_Vband.csv",
-        )
+        from pgmuvi.datasets import get_path
+
+        sample = get_path("AlfOriAAVSO_Vband.csv")
         lc = Lightcurve.from_csv(sample)
         self.assertIsInstance(lc, Lightcurve)
         self.assertGreater(len(lc.xdata), 0)

@@ -29,6 +29,8 @@ If you want to contribute to pgmuvi and develop new features, you might want an 
 
 this way you can test how things change as you go along.
 
+Optional extras: `pip install "pgmuvi[mcmc]"` adds the MCMC dependencies (pyro, arviz, xarray), `pgmuvi[test]` the test runner and `pgmuvi[docs]` the Sphinx toolchain. `torch` is installed from PyPI by default; for a CPU-only build use `pip install torch --index-url https://download.pytorch.org/whl/cpu` first.
+
 ## Contributing
 
 We very much welcome contributions to pgmuvi! Please take a look at our [contributing guide](https://github.com/ICSM/pgmuvi/blob/main/CONTRIBUTING.md) for more information on how to contribute!

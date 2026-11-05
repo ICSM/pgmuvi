@@ -11,7 +11,7 @@
 - [ ] No behaviour change (mechanical move, or fix whose outputs are unchanged)
 - [ ] Behaviour change: changelog line added, and before/after on a real light curve is below
 
-<!-- Before/after: numbers or a plot from `pgmuvi/AlfOriAAVSO_Vband.csv` or the CIT 6 dataset. -->
+<!-- Before/after: numbers or a plot from `pgmuvi/datasets/AlfOriAAVSO_Vband.csv` or the CIT 6 dataset. -->
 
 ## Checklist
 
