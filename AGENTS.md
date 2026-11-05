@@ -163,5 +163,5 @@ An orchestrator is the model running the session that plans, delegates and revie
 **Claude Code specifics**
 - `.claude/settings.json` allows read-only commands (git and gh queries, grep, ruff check, test runs) without prompts, so parallel sessions are not blocked on approvals. Personal overrides go in `.claude/settings.local.json`, which is gitignored.
 - Use the agent definitions above as `subagent_type`. Give a fresh agent the item number and the pointers; it has no other context.
-- `gh project` commands need the `project` scope: `gh auth refresh -s project,read:project`.
+- `gh project` commands need the `project` scope: `gh auth refresh --hostname github.com -s project,read:project` (run in a terminal; it opens a browser device-code flow).
 
