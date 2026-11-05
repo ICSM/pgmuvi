@@ -18,3 +18,5 @@ Check, in this order, and report only what fails:
 7. Hygiene: ruff clean; no junk files; no new dependencies; docstrings numpydoc.
 
 Report: findings ranked most severe first, each as `path:line`, one sentence on the defect, one on the consequence. Then a one-line verdict: ready / needs changes / needs a human with domain knowledge. At most 40 lines.
+
+Budget: ~300k tokens is your soft cap; if the harness starts summarising your context, stop, report what you have with pointers to what remains unchecked, and say so. If you hit a tooling or environment trap, include one line about it in your report so the orchestrator can record it in `docs/dev/handoff.md` (Pitfalls).

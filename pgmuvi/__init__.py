@@ -13,8 +13,12 @@ except PackageNotFoundError:
     # package is not installed
     __version__ = "unknown"
 
+from .lightcurve import Lightcurve
+
 __all__ = [
+    "Lightcurve",
     "constraints",
+    "datasets",
     "gps",
     "initialization",
     "lightcurve",

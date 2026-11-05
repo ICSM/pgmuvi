@@ -33,31 +33,31 @@ class TestSetModelAlternative(unittest.TestCase):
     def test_set_quasi_periodic(self):
         lc = _make_lc_1d()
         lc.set_model("1DQuasiPeriodic")
-        from pgmuvi.models import QuasiPeriodicGPModel
+        from pgmuvi.gps import QuasiPeriodicGPModel
         self.assertIsInstance(lc.model, QuasiPeriodicGPModel)
 
     def test_set_matern(self):
         lc = _make_lc_1d()
         lc.set_model("1DMatern")
-        from pgmuvi.models import MaternGPModel
+        from pgmuvi.gps import MaternGPModel
         self.assertIsInstance(lc.model, MaternGPModel)
 
     def test_set_periodic_stochastic(self):
         lc = _make_lc_1d()
         lc.set_model("1DPeriodicStochastic")
-        from pgmuvi.models import PeriodicPlusStochasticGPModel
+        from pgmuvi.gps import PeriodicPlusStochasticGPModel
         self.assertIsInstance(lc.model, PeriodicPlusStochasticGPModel)
 
     def test_set_linear_quasi_periodic(self):
         lc = _make_lc_1d()
         lc.set_model("1DLinearQuasiPeriodic")
-        from pgmuvi.models import LinearMeanQuasiPeriodicGPModel
+        from pgmuvi.gps import LinearMeanQuasiPeriodicGPModel
         self.assertIsInstance(lc.model, LinearMeanQuasiPeriodicGPModel)
 
     def test_set_separable_2d(self):
         lc = _make_lc_2d()
         lc.set_model("2DSeparable")
-        from pgmuvi.models import SeparableGPModel
+        from pgmuvi.gps import SeparableGPModel
         self.assertIsInstance(lc.model, SeparableGPModel)
 
     def test_separable_2d_active_dims(self):
@@ -72,13 +72,13 @@ class TestSetModelAlternative(unittest.TestCase):
     def test_set_achromatic_2d(self):
         lc = _make_lc_2d()
         lc.set_model("2DAchromatic")
-        from pgmuvi.models import AchromaticGPModel
+        from pgmuvi.gps import AchromaticGPModel
         self.assertIsInstance(lc.model, AchromaticGPModel)
 
     def test_set_wavelength_dependent_2d(self):
         lc = _make_lc_2d()
         lc.set_model("2DWavelengthDependent")
-        from pgmuvi.models import WavelengthDependentGPModel
+        from pgmuvi.gps import WavelengthDependentGPModel
         self.assertIsInstance(lc.model, WavelengthDependentGPModel)
 
     def test_invalid_model_raises(self):

@@ -41,15 +41,37 @@ from .priors import (
     NormalPeriodPrior,
     get_prior_set,
 )
-import pyro
-from pyro.infer.mcmc import NUTS, MCMC, HMC
 from inspect import isclass
-import xarray as xr
-import arviz as az
 import warnings
 import dataclasses
 import json
 import math
+
+
+def _import_mcmc_backends():
+    """Import the optional MCMC dependencies on first use.
+
+    ``pyro``, ``arviz`` and ``xarray`` are only needed by
+    :meth:`Lightcurve.mcmc` and the methods that read its results, so they are
+    not imported with the package. Install them with ``pip install
+    "pgmuvi[mcmc]"``.
+
+    Returns
+    -------
+    tuple
+        ``(pyro, NUTS, MCMC, HMC, xr, az)``.
+    """
+    try:
+        import arviz as az
+        import pyro
+        import xarray as xr
+        from pyro.infer.mcmc import HMC, MCMC, NUTS
+    except ImportError as e:
+        raise ImportError(
+            "MCMC support needs the optional dependencies pyro-ppl, arviz<1 and "
+            'xarray: pip install "pgmuvi[mcmc]"'
+        ) from e
+    return pyro, NUTS, MCMC, HMC, xr, az
 
 
 def _reraise_with_note(e, note):
@@ -6341,6 +6363,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
+        pyro, NUTS, MCMC, HMC, xr, az = _import_mcmc_backends()
         if sampler is None:
             sampler = NUTS
         elif isinstance(sampler, str):
@@ -6540,6 +6563,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
+        *_, az = _import_mcmc_backends()
         if var_names is None:
             var_names = ["mean_module", "covar_module.mixture_weights", "raw"]
         elif var_names == "all":
@@ -6597,6 +6621,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
+        *_, az = _import_mcmc_backends()
         if var_names is None:
             var_names = ["mean_module", "covar_module.mixture_weights", "raw"]
         if point_estimate is None:
@@ -6625,6 +6650,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             raise RuntimeError("You must first run the MCMC sampler")
         msg = "MCMC is not currently exposed. It will be available in future releases."
         raise NotImplementedError(msg)
+        *_, az = _import_mcmc_backends()
         if var_names is None:
             # we carefully choose the default variables to plot
             # we want to plot all parameters relating to the mean function

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.2", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=77", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,29 +14,32 @@ authors = [
     {name = "Diego Alejandro Vasquez-Torres", email = "d.vasquez@irya.unam.mx"},
     {name = "Sara Jamal", email = "jamal@mpia.de"},
 ]
-license = {text = "GPL"}
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 description = "A python package to interpret multiwavelength astronomical timeseries with GPs"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "numpy",
-    "matplotlib",
-    "seaborn",
-    "torch",
-    "gpytorch",
-    "pyro-ppl",
-    "arviz",
-    "xarray",
-    "tqdm",
-    "astropy",
-    "scipy",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "torch>=2.0",
+    "gpytorch>=1.11",
+    "tqdm>=4.60",
+    "astropy>=6.0",  # LombScargleMultiband
+    "scipy>=1.10",
 ]
+
+[project.optional-dependencies]
+# MCMC (Lightcurve.mcmc and friends) is imported lazily; arviz 1.x dropped
+# az.from_pyro, so stay below 1 until the MCMC rewrite (roadmap 4.8).
+mcmc = ["pyro-ppl>=1.8", "arviz<1", "xarray"]
+test = ["pytest>=7", "pytest-xdist"]
+docs = ["sphinx>=7", "nbsphinx", "ipykernel"]
 
 [project.readme]
 file = "README.md"
@@ -47,13 +50,16 @@ Homepage = "https://github.com/icsm/pgmuvi"
 "Bug Tracker" = "https://github.com/icsm/pgmuvi/issues"
 
 [tool.setuptools]
-packages = ["pgmuvi", "pgmuvi.preprocess"]
+packages = ["pgmuvi", "pgmuvi.preprocess", "pgmuvi.datasets"]
 include-package-data = false
+
+[tool.setuptools.package-data]
+"pgmuvi.datasets" = ["*.csv", "README.md"]
 
 [tool.setuptools_scm]
 
 [tool.ruff]
-exclude = ["tests", "pgmuvi/test_script.py"]
+exclude = ["tests"]
 # include notebooks!
 include = ["*.py", "*.pyi", "**/pyproject.toml", "*.ipynb"]
 
