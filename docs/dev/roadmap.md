@@ -56,7 +56,7 @@ Source reports (in `reports/`): `stack_A_consensus_params.md`, `stack_B_waveleng
   | #234, #236, #240, #242, #244 [3.9] | calibration algorithm (IRLS fit, DP pairing, coefficient covariance, predictive propagation, errors-in-both) |
   | #229 [3.12, waits DEC-17], #263 [3.12] | CIT 6 dataset, 2D tutorial |
 - 0.2 Merge #267/#268 into one private-analysis issue outside the package. Close #110/#136 (numpy 2 is fine). Close #28 (answered by DEC-3; resolved by 2.11).
-- 0.3 Merge this plan as `docs/dev/roadmap.md` and open a GitHub Project board with one card per PR below (DEC-20).
+- 0.3 Merge this plan as `docs/dev/roadmap.md` and open a GitHub Project board with one card per PR below (DEC-20). The roadmap PR also ships the agent/contributor instructions pulled forward from 1.2: `AGENTS.md` as the single source of truth, `CLAUDE.md` and `.github/copilot-instructions.md` as pointers to it, a `Pull Requests` section in `CONTRIBUTING.md` (DEC-5) and `.github/pull_request_template.md` (DEC-22).
 - 0.4 Two tracks run concurrently (DEC-2), both as independent small PRs against `main`, never as long-lived branches: the **JOSS track** (J1–J6 below) and the **reorganisation track** (phases 1–5). JOSS-track PRs must not depend on reorganisation PRs; the notebook in J5 uses only the public API so that its post-2.11 rewrite is mechanical.
 
 ### JOSS track (alongside phases 1–2; DEC-2, DEC-16, DEC-21)
@@ -69,7 +69,7 @@ Source reports (in `reports/`): `stack_A_consensus_params.md`, `stack_B_waveleng
 
 ### Phase 1 — foundations (≈ 12 PRs, each small)
 - 1.1 Hygiene & pins: delete `setup.py`, `pgmuvi/test_script.py`; move `AlfOriAAVSO_Vband.csv` to `pgmuvi/datasets/`; `[project.optional-dependencies]` mcmc/test/docs; lower bounds on torch/gpytorch/numpy/astropy; pin `arviz<1` (or port to arviz_base) since `mcmc()` is broken on fresh installs; drop seaborn; lazy-import pyro/arviz/xarray; export `Lightcurve` from `pgmuvi`; `models.py` shim emits DeprecationWarning; fix broken example import. [arch §4, stack B0] Then tag `v0.x` (DEC-21): the last release of the old layout, pinnable while the shims churn.
-- 1.2 CI: run on `pull_request`; matrix 3.10–3.14; CPU torch index + pip cache; ruff check-only (no auto-commit bot); pre-commit pin; strict docs build (`html-strict`, pandoc) as a separate job; PR template; CONTRIBUTING section with the review rule (DEC-5: one PR per feature, small to medium, mixed human/AI review); rewrite `.github/copilot-instructions.md` (DEC-22: new layout, PR size rule, science in pure functions outside `lightcurve.py`, no contract/implement/validate triplets, before/after on a real light curve for behaviour changes). [stack B0, pr82/83/86/87/88/111]
+- 1.2 CI: run on `pull_request`; matrix 3.10–3.14; CPU torch index + pip cache; ruff check-only (no auto-commit bot); pre-commit pin; strict docs build (`html-strict`, pandoc) as a separate job; update `AGENTS.md`'s commands/CI section to match (the PR template, CONTRIBUTING rule and agent instructions themselves landed with the roadmap PR, see 0.3). [stack B0, pr82/83/86/87/88/111]
 - 1.3 Test harness: run existing suite under pytest (`-n auto`, `slow` marker, DeprecationWarning→error for pgmuvi); split `tests/tests.py` by topic; remove dead/skip-only tests (pr67 equivalent); seed fixture; `rng=` for bootstraps; stop tests writing PNGs to CWD; pr169's reference-integrity check (doc roles, markdown links, machine-local paths) as a ~60-line test. Runner: pytest (DEC-4). [arch §7, B0b]
 - 1.4 Golden regression suite (must land before any move): seeded float64 period-recovery tests (1D sinusoid P=37 d with `1D`, `1DQuasiPeriodic`, `1DPeriodicStochastic`; 2D chromatic with `2D`, `2DSeparable`), fixed-hyperparameter snapshots (MLL, PSD on grid, `get_period_summary().as_dict()`), per-model `state_dict` key/shape snapshots, CSV/table round-trips, public-surface test. [arch §7]
 - 1.5 Fix: transforms & uncertainties — `yerr` must be scale-only through the y-transform (currently mean-shifted), `transform_y` uses `xtransform`, `xtransform.min` crashes ZScore/RobustZScore in plotting, `filter_*`/band LCs drop transforms, plots never inverse-transform y, `"robust_score"` typo. [A B1–B4, pr114/pr37, arch bugs, science bugs]
@@ -362,7 +362,7 @@ Options: (a) every PR < ~800 code lines, one concern, must carry tests and (for 
 Evidence: the archived stack is the result of (c). (b) reproduces the giant-PR problem at smaller scale.
 Recommendation: (a), written into CONTRIBUTING and the PR template (phase 1.2). Mechanical-move PRs (phase 2) can be larger if the diff is `git mv` plus imports and the golden tests pass.
 Consequence: the per-phase PR counts in section 4 stand; if (b), collapse phases into ~8 PRs and accept slower review.
-Decision (2026-11-05): modified (a): one PR per feature or fix (never one per phase), small to medium (target < ~800 code lines; mechanical moves may be larger), with tests; review by a mix of human and AI reviewers. No hard "AI-authored PRs may not merge on AI review alone" rule. Written into CONTRIBUTING and the PR template in 1.2.
+Decision (2026-11-05): modified (a): one PR per feature or fix (never one per phase), small to medium (target < ~800 code lines; mechanical moves may be larger), with tests; review by a mix of human and AI reviewers. No hard "AI-authored PRs may not merge on AI review alone" rule; AI assistance is disclosed in the PR. Written into `CONTRIBUTING.md`, `AGENTS.md` and the PR template in the roadmap PR.
 
 ### 7.2 Behaviour defaults
 All of these change numbers users get from existing scripts. Each is a separate PR with a changelog line and a `FutureWarning` for one release where feasible.
@@ -474,7 +474,7 @@ Decision (2026-11-05): **(a)** as recommended: `v0.x` after 1.1, JOSS release ta
 **DEC-22. Copilot/Claude instructions file**
 Context: `.github/copilot-instructions.md` currently says "not pytest", "prefer small changes over large refactors", and describes the old layout; the stack's agents followed it literally while generating 80k lines.
 Recommendation: rewrite in phase 1.2 to state the new layout, the PR size rule (DEC-5), "science in pure functions outside `lightcurve.py`", "no contract/implement/validate triplets", and "every behaviour change needs a before/after on a real light curve". This is cheap and is the single most effective guard against the stack recurring.
-Decision (2026-11-05): rewrite in 1.2, as recommended.
+Decision (2026-11-05): rewritten, ahead of 1.2, in the roadmap PR itself: `AGENTS.md` holds the rules, layout, commands and style; `.github/copilot-instructions.md` and `CLAUDE.md` point at it.
 
 ### 7.5 Outcome, as one list
 With the decisions above, the plan changed from v1 as follows:
