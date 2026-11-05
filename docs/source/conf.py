@@ -54,7 +54,14 @@ templates_path = ["_templates"]
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ["test*", "old*"]
+exclude_patterns = [
+    "test*",
+    "old*",
+    # Stored without outputs and awaiting their rewrite (roadmap 3.12 / J5);
+    # CI renders notebooks from stored outputs only.
+    "notebooks/pgmuvi_mock_data_from_gp.ipynb",
+    "notebooks/pgmuvi_tutorial_mcmc.ipynb",
+]
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -67,11 +74,19 @@ html_theme = "alabaster"
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ["_static"]
+html_static_path = []  # no static assets yet
 
 
-autodoc_mock_imports = ["torch", "gpytorch", "pyro", "arviz"]
+# Nothing is mocked: torch and gpytorch are installed for the docs build (CI
+# installs the CPU wheels), and mocking torch breaks `X | None` annotations
+# while a mocked pyro makes gpytorch register KL divergences on a mock class.
+# The MCMC extras are imported lazily, so they are not needed here.
+autodoc_mock_imports: list[str] = []
 
 nbsphinx_allow_errors = True
+
+# Render numpydoc "Attributes" sections as :ivar: fields; as attribute
+# directives they duplicate the members autodoc already documents.
+napoleon_use_ivar = True
 
 # imgmath_latex = "latex"
