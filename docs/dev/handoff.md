@@ -4,11 +4,6 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 
 ## Active work
 
-### 1.2 CI — branch `claude/pensive-ride-cefy00`
-- Done: workflows rewritten (`test.yml`, `ruff.yml`, new `docs.yml`, paper workflows path-filtered), pre-commit and `dev` extra pinned to ruff 0.16.9, `html-strict` Makefile target, Sphinx config no longer mocks torch/gpytorch/pyro, docstring and notebook fixes so the strict build is clean, AGENTS.md section 4, changelog, roadmap tick.
-- Next step: push, open the draft PR, add it to the board; wait for the three new jobs to go green on the PR; then delete this entry.
-- Do not redo: notebooks are rendered without execution in the docs job (`nbsphinx_execute=never` via SPHINXOPTS) until 3.13; `pgmuvi_mock_data_from_gp` and `pgmuvi_tutorial_mcmc` are excluded from the build until 3.12/J5; the JOSS `fancyhdr` headheight warning that fails `paper-draft-tex-and-pdf.yml` is the paper's, not CI's (J6).
-
 ## Pitfalls
 
 - 2026-11-05 — `gh auth refresh` from inside a Claude Code session needs `--hostname github.com` (non-interactive). The `project` scope is required for `gh project`.
