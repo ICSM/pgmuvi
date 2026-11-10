@@ -141,7 +141,6 @@ After setup, pre-commit will automatically run on every commit. The hooks will:
 - Fix end of file formatting
 - Check YAML/TOML syntax
 - Run Ruff linting and formatting
-- Run Black formatting
 
 If any hooks fail, the commit will be rejected. Fix the issues and try committing again.
 
