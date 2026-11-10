@@ -59,6 +59,7 @@ Step-by-step notebooks introducing the main workflows in `pgmuvi`.
    notebooks/PGMUVI_comparison_with_other_codes
    notebooks/pgmuvi_tutorial
    notebooks/pgmuvi_tutorial_2d
+   notebooks/PGMUVI_QuasiPeriodic_and_Mean_Functions
    notebooks/tutorial_preprocessing
    notebooks/tutorial_synthetic
    notebooks/tutorial_model_selection

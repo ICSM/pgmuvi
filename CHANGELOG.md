@@ -5,6 +5,7 @@ Entries are added by the PR that makes the change; roadmap item numbers refer to
 ## Unreleased
 
 ### Changed
+- CI runs on pull requests and pushes to `main`: tests with CPU torch wheels, `ruff check` pinned to 0.16.9 (no auto-fix commits), and a strict Sphinx build (`make -C docs html-strict`) that fails on warnings; `pip install -e .[dev]` installs the same ruff. Docstrings and notebooks were tidied so that the strict build passes (1.2).
 - `pgmuvi.Lightcurve` is exported from the top-level package (1.1).
 - `pyro`, `arviz` and `xarray` are optional (`pip install "pgmuvi[mcmc]"`) and imported only when `Lightcurve.mcmc()` or its result methods run; `seaborn` is no longer a dependency (1.1).
 - Lower bounds declared for `numpy`, `torch`, `gpytorch`, `astropy`, `scipy`, `matplotlib`; `arviz<1` in the `mcmc` extra because `az.from_pyro` was removed in arviz 1.x (1.1).

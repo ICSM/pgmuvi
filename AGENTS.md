@@ -56,22 +56,23 @@ Target layout after roadmap phase 2: `lightcurve.py` shrinks to about 1.5k lines
 
 ## 4. Commands
 
-Use a Python 3.10+ environment that has `torch` and `gpytorch` installed; the package does not pin them yet (roadmap 1.1). A CPU-only setup that works: `python -m venv .venv && .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu && .venv/bin/pip install -e .` (`.venv` is gitignored).
+Use a Python 3.10+ environment. `pip install -e .` installs `torch` and `gpytorch` (lower bounds are in `pyproject.toml`), but from PyPI that is the large CUDA build of torch, so install the CPU wheels first. A CPU-only setup that works: `python -m venv .venv && .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu && .venv/bin/pip install -e .` (`.venv` is gitignored).
 
 ```bash
 pip install -e .                                           # editable install
 ruff check pgmuvi/                                         # lint; must be clean (ruff config in pyproject.toml)
 ruff format pgmuvi/                                        # format; pre-commit also runs this
-python -m unittest discover -s tests -p "test*.py"         # full suite, 1,292 tests, 1-2 min on CPU
+python -m unittest discover -s tests -p "test*.py"         # full suite, 1,297 tests, 1-2 min on CPU
 python -m unittest tests.test_kernels                      # one file
 cd docs && make html                                       # Sphinx build
+cd docs && make html-strict                                # Sphinx build, warnings are errors (CI)
 ```
 
 Notes:
 - The test runner is `unittest` today. Roadmap 1.3 switches to `pytest -n auto`; until that merges, new tests are `unittest.TestCase` classes in `tests/test_<topic>.py`, which pytest also runs unchanged.
-- Line length is 88 and `E501` is enforced. `tests/` is excluded from ruff.
+- Line length is 88 and `E501` is enforced. `tests/` is excluded from ruff. `pip install -e .[dev]` gives the pinned ruff; CI pins the same version, so a newer local ruff may flag code that CI accepts, or the reverse.
 - `docs/source/conf.py` sets `nbsphinx_allow_errors = True`, so a broken notebook does not fail the docs build. Do not rely on the build as a notebook test until 3.13 flips this.
-- CI (`.github/workflows/`) runs tests on push for Python 3.10 to 3.15 and runs ruff with auto-fix. Roadmap 1.2 changes this to run on pull requests and lint check-only.
+- CI (`.github/workflows/`) runs on every pull request and on pushes to `main`: the test suite on Python 3.10 to 3.15 with CPU torch wheels (`test.yml`), `ruff check` pinned to the version in `.pre-commit-config.yaml` and the `dev` extra, check-only (`ruff.yml`), and a strict Sphinx build, `make -C docs html-strict`, that fails on any warning and renders notebooks from their stored outputs without executing them (`docs.yml`). The two JOSS paper workflows run only when the paper changes. Run the strict build locally before pushing a docstring or docs change: `SPHINXBUILD=$PWD/.venv/bin/sphinx-build make -C docs html-strict SPHINXOPTS="-D nbsphinx_execute=never"` (needs `pip install -e .[docs]` and pandoc; on Windows the path is `.venv/Scripts/sphinx-build`).
 
 ## 5. Code style
 
