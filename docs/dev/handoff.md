@@ -13,6 +13,11 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 - Next step: reviewer re-reads at head, an approving human squash-merges; then delete this entry. If the merge is not on 2026-11-10, update the date on the 1.2 tick in the roadmap.
 - Do not redo: notebooks are rendered without execution in the docs job (`nbsphinx_execute = "never"` in `conf.py`) until 3.13; `pgmuvi_mock_data_from_gp` and `pgmuvi_tutorial_mcmc` are excluded from the build until 3.12/J5.
 
+### 1.3 Test harness — branch `1.3/pytest-harness` (chained on the 1.2 branch), draft PR
+- Doing: pytest runner (`-n auto`, `slow` marker, pgmuvi `DeprecationWarning` → error), `tests/tests.py` split by topic, dead/skip-only tests removed, seed fixture, `rng=` for bootstraps, no PNGs written to CWD, reference-integrity test; `test.yml` switched to pytest.
+- Next step: see the PR description.
+- Do not redo: base is the #276 branch, so the PR diff is 1.3 only; retarget to `main` and rebase once #276 merges.
+
 ## Pitfalls
 
 - 2026-11-10 — `Build JOSS paper and tex` fails on `main` on a JOSS `fancyhdr` headheight warning that belongs to the paper (J6). Since 1.2 it only runs when `paper/**` changes, so a PR touching the paper goes red for this reason, not for its own changes.
