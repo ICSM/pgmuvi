@@ -8,9 +8,9 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 - Next step: maintainer tags `v0.2.0` on the merge commit `455fbaf` (DEC-21), then deletes this entry. Only `v0.2.0rc1` and `v0.2.0rc2` exist today.
 - Do not redo: the lower bounds on torch/gpytorch are deliberately untested; a min-versions CI job is not part of 1.2 and has no roadmap item yet.
 
-### 1.2 CI — branch `claude/pensive-ride-cefy00`, PR #276 (draft)
+### 1.2 CI — branch `claude/pensive-ride-cefy00`, PR #276 (open, in review)
 - Done: everything in the roadmap line; CI green on the PR; on the Project board; two adversarial reviews done and their in-scope findings fixed.
-- Next step: maintainer takes the PR out of draft, reviews, squash-merges; then delete this entry.
+- Next step: reviewer re-reads at head, an approving human squash-merges; then delete this entry. If the merge is not on 2026-11-10, update the date on the 1.2 tick in the roadmap.
 - Do not redo: notebooks are rendered without execution in the docs job (`nbsphinx_execute = "never"` in `conf.py`) until 3.13; `pgmuvi_mock_data_from_gp` and `pgmuvi_tutorial_mcmc` are excluded from the build until 3.12/J5.
 
 ## Pitfalls

@@ -13,6 +13,9 @@ on:
       - paper/**
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 
 jobs:
   paper:
