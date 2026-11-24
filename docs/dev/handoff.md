@@ -15,7 +15,7 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 
 ### 1.3 Test harness — branch `1.3/pytest-harness`, PR #279 (draft, chained on #276)
 - Done: everything in the roadmap line; suite 1,280 passed / 1 skipped under `pytest -n auto`; roadmap ticked.
-- Next step: reviewer pass, take out of draft; after #276 merges, retarget the PR base to `main` and rebase; maintainer squash-merges; then delete this entry.
+- Next step: maintainer review (reviewer-agent pass done, findings fixed in 6394362); after #276 merges, retarget the PR base to `main` and rebase; maintainer squash-merges; then delete this entry. Open question for the maintainer: raise `numpy>=1.24` to 1.25 and drop the `_spawn_generators` fallback.
 - Do not redo: `tests/tests.py` is gone (its 25 re-imported `test_variability` tests now run once); `test_acf.py::test_gp_acf_smoke` stays skipped because it raises a ValueError when enabled, not for speed.
 
 ## Pitfalls
