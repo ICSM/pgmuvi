@@ -11,7 +11,7 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 ### 1.2 CI — branch `claude/pensive-ride-cefy00`, PR #276 (draft)
 - Done: everything in the roadmap line; CI green on the PR; on the Project board; two adversarial reviews done and their in-scope findings fixed.
 - Next step: maintainer takes the PR out of draft, reviews, squash-merges; then delete this entry.
-- Do not redo: notebooks are rendered without execution in the docs job (`nbsphinx_execute=never` via SPHINXOPTS) until 3.13; `pgmuvi_mock_data_from_gp` and `pgmuvi_tutorial_mcmc` are excluded from the build until 3.12/J5.
+- Do not redo: notebooks are rendered without execution in the docs job (`nbsphinx_execute = "never"` in `conf.py`) until 3.13; `pgmuvi_mock_data_from_gp` and `pgmuvi_tutorial_mcmc` are excluded from the build until 3.12/J5.
 
 ## Pitfalls
 

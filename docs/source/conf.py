@@ -57,8 +57,7 @@ templates_path = ["_templates"]
 exclude_patterns = [
     "test*",
     "old*",
-    # Stored without outputs and awaiting their rewrite (roadmap 3.12 / J5);
-    # CI renders notebooks from stored outputs only.
+    # Left out of the build pending their rewrite (roadmap 3.12 / J5).
     "notebooks/pgmuvi_mock_data_from_gp.ipynb",
     "notebooks/pgmuvi_tutorial_mcmc.ipynb",
 ]
@@ -83,6 +82,9 @@ html_static_path = []  # no static assets yet
 # The MCMC extras are imported lazily, so they are not needed here.
 autodoc_mock_imports: list[str] = []
 
+# Notebooks are rendered from their stored outputs and never executed, in CI,
+# locally and on Read the Docs alike; roadmap 3.13 decides which ones run.
+nbsphinx_execute = "never"
 nbsphinx_allow_errors = True
 
 # Render numpydoc "Attributes" sections as :ivar: fields; as attribute
