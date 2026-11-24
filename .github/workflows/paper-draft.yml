@@ -1,8 +1,20 @@
 on:
   push:
     branches: [ main ]
+    paths:
+      - paper.md
+      - paper.bib
+      - paper/**
   pull_request:
     branches: [ main ]
+    paths:
+      - paper.md
+      - paper.bib
+      - paper/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 
 jobs:

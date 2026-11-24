@@ -39,7 +39,9 @@ dependencies = [
 # az.from_pyro, so stay below 1 until the MCMC rewrite (roadmap 4.8).
 mcmc = ["pyro-ppl>=1.8", "arviz<1", "xarray"]
 test = ["pytest>=7", "pytest-xdist"]
-docs = ["sphinx>=7", "nbsphinx", "ipykernel"]
+docs = ["sphinx>=7.2", "nbsphinx", "ipykernel"]
+# Same ruff as CI and pre-commit.
+dev = ["ruff==0.16.9", "pre-commit"]
 
 [project.readme]
 file = "README.md"
@@ -75,11 +77,6 @@ select = ["A",  # prevent using keywords that clobber python builtins
 
           ]
 ignore = ["UP004", "B007", "ISC001"]  # ISC001 conflicts with formatter
-
-[tool.black]
-line-length = 88
-target-version = ['py310', 'py311', 'py312']
-include = '\.pyi?$'
 
 # [tool.pytest]
 # TBD

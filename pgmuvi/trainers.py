@@ -55,13 +55,10 @@ def train(
         result in larger steps in the parameters each iteration. This will
         make it easier to escape local minima, but may also result in
         instability.
-    lossfn : string or instance of
-             gpytorch.mlls.marginal_log_likelihood.MarginalLogLikelihood,
-             default 'mll'
+    lossfn : string or MarginalLogLikelihood, default 'mll'
         The loss function that will be used to evaluate the training.
         If a string, it must take one of the values 'mll' or 'elbo'.
-    optim : string or instance of torch.optim.optimizer.Optimizer,
-            default 'SGD'
+    optim : string or torch.optim.optimizer.Optimizer, default 'SGD'
         The optimizer that will be used to train the model.
         If a string, it must take one of the values 'SGD', 'Adam', 'AdamW',
         'NUTS'. Otherwise, it may be any torch or pyro optimiser. If passing a

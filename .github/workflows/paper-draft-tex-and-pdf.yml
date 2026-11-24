@@ -11,8 +11,16 @@ name: Build JOSS paper and tex
 on:
   push:
     branches: [ main ]
+    paths:
+      - paper/**
   pull_request:
     branches: [ main ]
+    paths:
+      - paper/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   paper:

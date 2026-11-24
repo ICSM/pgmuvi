@@ -110,8 +110,11 @@ The rules that matter most:
 
 We try to follow the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide
 as much as possible. We lint our code using [ruff](https://beta.ruff.rs/docs/), and we recommend that you do
-the same. There is a github action that will run `ruff` on your code when you open
-a pull request, and we will ask you to address any issues that it finds.
+the same. A GitHub action runs `ruff check` (pinned to the version in
+`.pre-commit-config.yaml`; `pip install -e .[dev]` gives you the same one) on
+every pull request, and we will ask you to address any issues that it finds.
+A second action builds the documentation with warnings as errors, so
+docstrings must be valid reStructuredText.
 
 ### Pre-commit Hooks
 
@@ -138,7 +141,6 @@ After setup, pre-commit will automatically run on every commit. The hooks will:
 - Fix end of file formatting
 - Check YAML/TOML syntax
 - Run Ruff linting and formatting
-- Run Black formatting
 
 If any hooks fail, the commit will be rejected. Fix the issues and try committing again.
 

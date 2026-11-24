@@ -2393,9 +2393,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """The independent variable data
 
         :getter: Returns the independent variable data in its raw
-        (untransformed) state
+            (untransformed) state
         :setter: Takes the input data and transforms it as requested by the
-        user
+            user
         :type: torch.Tensor
         """
         return self._xdata_raw
@@ -2428,9 +2428,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """The dependent variable data
 
         :getter: Returns the dependent variable data in its raw
-        (untransformed) state
+            (untransformed) state
         :setter: Takes the input data and transforms it as requested by the
-        user
+            user
         :type: torch.Tensor"""
         return self._ydata_raw
 
@@ -2458,9 +2458,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """The uncertainties on the dependent variable data
 
         :getter: Returns the uncertainties on the dependent variable data in
-        its raw (untransformed) state
+            its raw (untransformed) state
         :setter: Takes the input data and transforms it as requested by the
-        user
+            user
         :type: torch.Tensor
         """
         return self._yerr_raw
@@ -2771,9 +2771,7 @@ class Lightcurve(InputHelpers, gpytorch.Module):
 
         Parameters
         ----------
-        likelihood : string, None or instance of
-                     gpytorch.likelihoods.likelihood.Likelihood or Constraint,
-                     optional
+        likelihood : string, None, Likelihood or Constraint, optional
             The likelihood function to use for the GP, by default None.
 
             If ``likelihood`` is ``None`` and per-point uncertainties on the
@@ -2886,38 +2884,38 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             following:
 
             Spectral mixture models (default):
-                '1D': SpectralMixtureGPModel
-                '2D': TwoDSpectralMixtureGPModel
-                '1DLinear': SpectralMixtureLinearMeanGPModel
-                '2DLinear': TwoDSpectralMixtureLinearMeanGPModel
-                '1DSKI': SpectralMixtureKISSGPModel
-                '2DSKI': TwoDSpectralMixtureKISSGPModel
-                '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
-                '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
-                '2DPowerLaw': TwoDSpectralMixturePowerLawMeanGPModel
-                '2DPowerLawSKI': TwoDSpectralMixturePowerLawMeanKISSGPModel
-                '2DDust': TwoDSpectralMixtureDustMeanGPModel
-                '2DDustSKI': TwoDSpectralMixtureDustMeanKISSGPModel
+
+            - ``'1D'``: SpectralMixtureGPModel
+            - ``'2D'``: TwoDSpectralMixtureGPModel
+            - ``'1DLinear'``: SpectralMixtureLinearMeanGPModel
+            - ``'2DLinear'``: TwoDSpectralMixtureLinearMeanGPModel
+            - ``'1DSKI'``: SpectralMixtureKISSGPModel
+            - ``'2DSKI'``: TwoDSpectralMixtureKISSGPModel
+            - ``'1DLinearSKI'``: SpectralMixtureLinearMeanKISSGPModel
+            - ``'2DLinearSKI'``: TwoDSpectralMixtureLinearMeanKISSGPModel
+            - ``'2DPowerLaw'``: TwoDSpectralMixturePowerLawMeanGPModel
+            - ``'2DPowerLawSKI'``: TwoDSpectralMixturePowerLawMeanKISSGPModel
+            - ``'2DDust'``: TwoDSpectralMixtureDustMeanGPModel
+            - ``'2DDustSKI'``: TwoDSpectralMixtureDustMeanKISSGPModel
 
             Alternative 1D models:
-                '1DQuasiPeriodic': QuasiPeriodicGPModel
-                '1DMatern': MaternGPModel
-                '1DPeriodicStochastic': PeriodicPlusStochasticGPModel
-                '1DLinearQuasiPeriodic': LinearMeanQuasiPeriodicGPModel
+
+            - ``'1DQuasiPeriodic'``: QuasiPeriodicGPModel
+            - ``'1DMatern'``: MaternGPModel
+            - ``'1DPeriodicStochastic'``: PeriodicPlusStochasticGPModel
+            - ``'1DLinearQuasiPeriodic'``: LinearMeanQuasiPeriodicGPModel
 
             Separable 2D models:
-                '2DSeparable': SeparableGPModel
-                '2DAchromatic': AchromaticGPModel
-                '2DWavelengthDependent': WavelengthDependentGPModel
-                '2DDustMean': DustMeanGPModel
-                '2DPowerLawMean': PowerLawMeanGPModel
 
+            - ``'2DSeparable'``: SeparableGPModel
+            - ``'2DAchromatic'``: AchromaticGPModel
+            - ``'2DWavelengthDependent'``: WavelengthDependentGPModel
+            - ``'2DDustMean'``: DustMeanGPModel
+            - ``'2DPowerLawMean'``: PowerLawMeanGPModel
 
             If an instance of a GP class, that object will be used.
             _description_, by default None
-        likelihood : string, None or instance of
-                     gpytorch.likelihoods.likelihood.Likelihood or Constraint,
-                     optional
+        likelihood : string, None, Likelihood or Constraint, optional
             If likelihood is passed, it will be passed along to `set_likelihood()`
             and used to set the likelihood function for the model. For details, see
             the documentation for `set_likelihood()`.
@@ -3287,19 +3285,20 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Set the default priors for the model and likelihood parameters
 
         The default priors are as follows:
-            - Parameters that must be positive are given LogNormal, HalfNormal
-            or HalfCauchy priors, depending on the parameter.
-            - The noise is given a HalfNormal prior with a scale of 1/10 of the
-            smallest uncertainty on the y-data, if uncertainties are given, or
-            1/10 of the standard deviation of the y data.
-            - The mean of the GP is given a Gaussian prior with a mean of the
-            mean of the y-data and a standard deviation of 1/10 of the standard
-            deviation of the y-data.
-            - For spectral-mixture models the mixture means, scales and weights
-            receive LogNormal(0, 1) priors.
-            - If *prior_set* is provided, :meth:`set_period_prior` is called
-            with that prior set to register a physically motivated prior on
-            the period/frequency parameter of the model.
+
+        - Parameters that must be positive are given LogNormal, HalfNormal
+          or HalfCauchy priors, depending on the parameter.
+        - The noise is given a HalfNormal prior with a scale of 1/10 of the
+          smallest uncertainty on the y-data, if uncertainties are given, or
+          1/10 of the standard deviation of the y data.
+        - The mean of the GP is given a Gaussian prior with a mean of the
+          mean of the y-data and a standard deviation of 1/10 of the standard
+          deviation of the y-data.
+        - For spectral-mixture models the mixture means, scales and weights
+          receive LogNormal(0, 1) priors.
+        - If *prior_set* is provided, :meth:`set_period_prior` is called
+          with that prior set to register a physically motivated prior on
+          the period/frequency parameter of the model.
 
         Parameters
         ----------
@@ -3829,20 +3828,21 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         """Set the default constraints for the model and likelihood parameters
 
         The default constraints are as follows:
-            - All parameters are constrained to be positive, except the mean of
-            the GP, which is constrained to be in the range of the y-data (a correction
-            will be needed if the data are censored!)
-            - The noise is constrained to be less than the standard deviation of
-            the y-data, and greater than either 1e-4 or 1/10 of the smallest
-            uncertainty on the y-data, if uncertainties are given, or 1e-4
-            times the standard deviation of the y data.
-            - The mixture means greater than the frequency corresponding to
-            the separation between the earliest and latest points in the data
-            and less than the frequency corresponding to the separation between
-            the two closest data points (should be updated to account for the
-            window function and whatever we're really sensitive to)
-            - The mixture scales and weights are left with their default
-            constraints as defined in GPyTorch.
+
+        - All parameters are constrained to be positive, except the mean of
+          the GP, which is constrained to be in the range of the y-data (a correction
+          will be needed if the data are censored!)
+        - The noise is constrained to be less than the standard deviation of
+          the y-data, and greater than either 1e-4 or 1/10 of the smallest
+          uncertainty on the y-data, if uncertainties are given, or 1e-4
+          times the standard deviation of the y data.
+        - The mixture means greater than the frequency corresponding to
+          the separation between the earliest and latest points in the data
+          and less than the frequency corresponding to the separation between
+          the two closest data points (should be updated to account for the
+          window function and whatever we're really sensitive to)
+        - The mixture scales and weights are left with their default
+          constraints as defined in GPyTorch.
 
         Parameters
         ----------
@@ -4277,10 +4277,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Compute the (multiband) Lomb-Scargle periodogram.
         Periods returned for the num_peaks highest peaks in the periodogram.
         For a 1D lightcurve, the false-alarm probability is used
-            to estimate the significance of the periods, which are also
-            returned. These can be used to filter out insignificant periods.
+        to estimate the significance of the periods, which are also
+        returned. These can be used to filter out insignificant periods.
         For multi-band lightcurves (2D data), LombScargleMultiband is used
-            to compute periods across all bands simultaneously.
+        to compute periods across all bands simultaneously.
 
         The method can also be used to return the entire grid of frequencies,
         which can be used by other methods such as compute_psd and plot_psd.
@@ -5145,17 +5145,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Returns
         -------
         dict
-        {
-                wavelength1: metrics_dict,
-                wavelength2: metrics_dict,
-                ...
-                'summary': {
-                    'n_bands': int,
-                    'min_points_across_bands': int,
-                    'max_gap_fraction_worst_band': float,
-                    'median_nyquist_period': float
-                }
-            }
+            Maps each wavelength to its ``metrics_dict``, plus a ``'summary'``
+            entry with keys ``'n_bands'``, ``'min_points_across_bands'``,
+            ``'max_gap_fraction_worst_band'`` and ``'median_nyquist_period'``.
 
         Raises
         ------
@@ -5232,17 +5224,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Returns
         -------
         dict
-            {
-                wavelength1: diagnostics_dict,
-                wavelength2: diagnostics_dict,
-                ...
-                'summary': {
-                    'n_bands': int,
-                    'n_passing': int,
-                    'passing_wavelengths': list[float],
-                    'failing_wavelengths': list[float]
-                    }
-            }
+            Maps each wavelength to its ``diagnostics_dict``, plus a
+            ``'summary'`` entry with keys ``'n_bands'``, ``'n_passing'``,
+            ``'passing_wavelengths'`` and ``'failing_wavelengths'``.
 
         Raises
         ------
@@ -5502,9 +5486,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         Only applicable for multiband (2D) lightcurves where
         ``xdata[:, 1]`` encodes the band/wavelength.
 
-
-         Parameters
-         ----------
+        Parameters
+        ----------
+        **kwargs : dict, optional
             Arguments passed to is_variable()
 
         Returns
@@ -5680,37 +5664,37 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             following:
 
             Spectral mixture models:
-                '1D': SpectralMixtureGPModel
-                '2D': TwoDSpectralMixtureGPModel
-                '1DLinear': SpectralMixtureLinearMeanGPModel
-                '2DLinear': TwoDSpectralMixtureLinearMeanGPModel
-                '1DSKI': SpectralMixtureKISSGPModel
-                '2DSKI': TwoDSpectralMixtureKISSGPModel
-                '1DLinearSKI': SpectralMixtureLinearMeanKISSGPModel
-                '2DLinearSKI': TwoDSpectralMixtureLinearMeanKISSGPModel
-                '2DPowerLaw': TwoDSpectralMixturePowerLawMeanGPModel
-                '2DPowerLawSKI': TwoDSpectralMixturePowerLawMeanKISSGPModel
-                '2DDust': TwoDSpectralMixtureDustMeanGPModel
-                '2DDustSKI': TwoDSpectralMixtureDustMeanKISSGPModel
+
+            - ``'1D'``: SpectralMixtureGPModel
+            - ``'2D'``: TwoDSpectralMixtureGPModel
+            - ``'1DLinear'``: SpectralMixtureLinearMeanGPModel
+            - ``'2DLinear'``: TwoDSpectralMixtureLinearMeanGPModel
+            - ``'1DSKI'``: SpectralMixtureKISSGPModel
+            - ``'2DSKI'``: TwoDSpectralMixtureKISSGPModel
+            - ``'1DLinearSKI'``: SpectralMixtureLinearMeanKISSGPModel
+            - ``'2DLinearSKI'``: TwoDSpectralMixtureLinearMeanKISSGPModel
+            - ``'2DPowerLaw'``: TwoDSpectralMixturePowerLawMeanGPModel
+            - ``'2DPowerLawSKI'``: TwoDSpectralMixturePowerLawMeanKISSGPModel
+            - ``'2DDust'``: TwoDSpectralMixtureDustMeanGPModel
+            - ``'2DDustSKI'``: TwoDSpectralMixtureDustMeanKISSGPModel
 
             Alternative 1D models:
-                '1DQuasiPeriodic': QuasiPeriodicGPModel
-                '1DMatern': MaternGPModel
-                '1DPeriodicStochastic': PeriodicPlusStochasticGPModel
-                '1DLinearQuasiPeriodic': LinearMeanQuasiPeriodicGPModel
+
+            - ``'1DQuasiPeriodic'``: QuasiPeriodicGPModel
+            - ``'1DMatern'``: MaternGPModel
+            - ``'1DPeriodicStochastic'``: PeriodicPlusStochasticGPModel
+            - ``'1DLinearQuasiPeriodic'``: LinearMeanQuasiPeriodicGPModel
 
             Separable 2D models:
-                '2DSeparable': SeparableGPModel
-                '2DAchromatic': AchromaticGPModel
-                '2DWavelengthDependent': WavelengthDependentGPModel
-                '2DDustMean': DustMeanGPModel
-                '2DPowerLawMean': PowerLawMeanGPModel
 
+            - ``'2DSeparable'``: SeparableGPModel
+            - ``'2DAchromatic'``: AchromaticGPModel
+            - ``'2DWavelengthDependent'``: WavelengthDependentGPModel
+            - ``'2DDustMean'``: DustMeanGPModel
+            - ``'2DPowerLawMean'``: PowerLawMeanGPModel
 
             If an instance of a GP class, that object will be used.
-        likelihood : string, None or instance of
-                        gpytorch.likelihoods.likelihood.Likelihood or Constraint,
-                        optional
+        likelihood : string, None, Likelihood or Constraint, optional
             If likelihood is passed, it will be passed along to `set_likelihood()`
             and used to set the likelihood function for the model. For details, see
             the documentation for `set_likelihood()`.
@@ -5795,9 +5779,11 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         optim : str or torch.optim.Optimizer, optional
             The optimizer to use for training, by default "AdamW". If a string,
             it must be one of the following:
-                'AdamW': torch.optim.AdamW
-                'Adam': torch.optim.Adam
-                'SGD': torch.optim.SGD
+
+            - ``'AdamW'``: torch.optim.AdamW
+            - ``'Adam'``: torch.optim.Adam
+            - ``'SGD'``: torch.optim.SGD
+
             Otherwise, it must be an instance of torch.optim.Optimizer.
         miniter : int, optional
             The minimum number of iterations to use for training, by default
@@ -6343,8 +6329,10 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         sampler : str or MCMC, optional
             The name of the sampler to use. If None, pyro.infer.mcmc.NUTS will
             be used. If a string, it must be one of the following:
-                'NUTS': pyro.infer.mcmc.NUTS
-                'HMC': pyro.infer.mcmc.HMC
+
+            - ``'NUTS'``: pyro.infer.mcmc.NUTS
+            - ``'HMC'``: pyro.infer.mcmc.HMC
+
             Otherwise, it must be an instance of pyro.infer.mcmc.MCMC.
         num_samples : int, optional
             The number of samples to draw from the posterior, by default 500.
@@ -8476,12 +8464,14 @@ class Lightcurve(InputHelpers, gpytorch.Module):
             self._find_dominant_peak_basin(psd, dominant_idx)
         )
         _note_parts = [
-            "Interval is based on the integrated PSD mass within the "
-            "primary peak basin (peak-centered shortest-mass interval). "
-            "The interval is guaranteed to contain the peak frequency. "
-            "Integration is performed in log-frequency space to avoid "
-            "high-frequency bias on a log-spaced grid. "
-            "PSD evaluated on a log-spaced frequency grid."
+            (
+                "Interval is based on the integrated PSD mass within the "
+                "primary peak basin (peak-centered shortest-mass interval). "
+                "The interval is guaranteed to contain the peak frequency. "
+                "Integration is performed in log-frequency space to avoid "
+                "high-frequency bias on a log-spaced grid. "
+                "PSD evaluated on a log-spaced frequency grid."
+            )
         ]
         if _basin_left_at_bdy:
             _note_parts.append(
@@ -8596,35 +8586,35 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         The method dispatches to the appropriate backend based on the type of
         kernel used by the model:
 
-        **Spectral-mixture models** (all ``"1D"``, ``"2D"``, ``"SKI"``,
-        ``"PowerLaw"``, ``"Dust"`` variants):
-            Constructs the total positive-frequency PSD as a sum of weighted
-            Gaussians, identifies the highest PSD peak, and returns its
-            location as the dominant period.  The half-maximum width of the
-            peak provides a practical uncertainty interval.
+        - **Spectral-mixture models** (all ``"1D"``, ``"2D"``, ``"SKI"``,
+          ``"PowerLaw"``, ``"Dust"`` variants):
+          Constructs the total positive-frequency PSD as a sum of weighted
+          Gaussians, identifies the highest PSD peak, and returns its
+          location as the dominant period.  The half-maximum width of the
+          peak provides a practical uncertainty interval.
 
-        **Explicit-period models** (``"1DQuasiPeriodic"``,
-        ``"1DLinearQuasiPeriodic"``):
-            Reads the fitted ``period_length`` parameter directly from the
-            :class:`~gpytorch.kernels.PeriodicKernel`.  The RBF lengthscale
-            is used as a coherence proxy to derive a period interval and
-            Q-factor.
+        - **Explicit-period models** (``"1DQuasiPeriodic"``,
+          ``"1DLinearQuasiPeriodic"``):
+          Reads the fitted ``period_length`` parameter directly from the
+          :class:`~gpytorch.kernels.PeriodicKernel`.  The RBF lengthscale
+          is used as a coherence proxy to derive a period interval and
+          Q-factor.
 
-        **Periodic-plus-stochastic** (``"1DPeriodicStochastic"``):
-            Extracts the period from the quasi-periodic sub-kernel.  The
-            summary notes flag the mixed periodic/stochastic nature of the
-            model.
+        - **Periodic-plus-stochastic** (``"1DPeriodicStochastic"``):
+          Extracts the period from the quasi-periodic sub-kernel.  The
+          summary notes flag the mixed periodic/stochastic nature of the
+          model.
 
-        **Separable 2D models** (``"2DSeparable"``, ``"2DAchromatic"``,
-        ``"2DWavelengthDependent"``, ``"2DDustMean"``,
-        ``"2DPowerLawMean"``):
-            Identifies the time sub-kernel (``active_dims = [0]``) and
-            applies the appropriate backend to that sub-kernel only.
+        - **Separable 2D models** (``"2DSeparable"``, ``"2DAchromatic"``,
+          ``"2DWavelengthDependent"``, ``"2DDustMean"``,
+          ``"2DPowerLawMean"``):
+          Identifies the time sub-kernel (``active_dims = [0]``) and
+          applies the appropriate backend to that sub-kernel only.
 
-        **Non-periodic models** (``"1DMatern"``):
-            Returns a consistent summary dictionary with ``None`` values for
-            all period-related fields rather than raising an exception, so
-            that automated scripts can handle all model types gracefully.
+        - **Non-periodic models** (``"1DMatern"``):
+          Returns a consistent summary dictionary with ``None`` values for
+          all period-related fields rather than raising an exception, so
+          that automated scripts can handle all model types gracefully.
 
         .. note::
             All uncertainty estimates are *practical proxies*, not posterior

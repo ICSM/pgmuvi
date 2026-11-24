@@ -3,6 +3,9 @@ name: Pre-commit
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
