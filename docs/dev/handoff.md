@@ -13,10 +13,10 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 - Next step: reviewer re-reads at head, an approving human squash-merges; then delete this entry. If the merge is not on 2026-11-10, update the date on the 1.2 tick in the roadmap.
 - Do not redo: notebooks are rendered without execution in the docs job (`nbsphinx_execute = "never"` in `conf.py`) until 3.13; `pgmuvi_mock_data_from_gp` and `pgmuvi_tutorial_mcmc` are excluded from the build until 3.12/J5.
 
-### 1.3 Test harness — branch `1.3/pytest-harness` (chained on the 1.2 branch), draft PR
-- Doing: pytest runner (`-n auto`, `slow` marker, pgmuvi `DeprecationWarning` → error), `tests/tests.py` split by topic, dead/skip-only tests removed, seed fixture, `rng=` for bootstraps, no PNGs written to CWD, reference-integrity test; `test.yml` switched to pytest.
-- Next step: see the PR description.
-- Do not redo: base is the #276 branch, so the PR diff is 1.3 only; retarget to `main` and rebase once #276 merges.
+### 1.3 Test harness — branch `1.3/pytest-harness`, PR #279 (draft, chained on #276)
+- Done: everything in the roadmap line; suite 1,280 passed / 1 skipped under `pytest -n auto`; roadmap ticked.
+- Next step: reviewer pass, take out of draft; after #276 merges, retarget the PR base to `main` and rebase; maintainer squash-merges; then delete this entry.
+- Do not redo: `tests/tests.py` is gone (its 25 re-imported `test_variability` tests now run once); `test_acf.py::test_gp_acf_smoke` stays skipped because it raises a ValueError when enabled, not for speed.
 
 ## Pitfalls
 

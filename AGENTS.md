@@ -47,7 +47,7 @@ Current layout on `main` (line counts as of 2026-11-05):
 | `pgmuvi/trainers.py` | 221 | training loop |
 | `pgmuvi/kernels.py` | 126 | custom kernels |
 | `pgmuvi/models.py` | 27 | legacy re-exports |
-| `tests/` | 27 files | `unittest` test cases; `tests/tests.py` is the old monolith |
+| `tests/` | 38 files | pytest; `unittest.TestCase` classes and plain test functions, one `test_<topic>.py` per topic, shared fixtures in `conftest.py` |
 | `docs/source/` | | Sphinx; `howto/`, `notebooks/`, one `pgmuvi.<module>.rst` per module |
 | `docs/dev/` | | roadmap, reports, experiments |
 | `paper/`, `paper.md`, `paper.bib` | | JOSS paper, under review (#45) |
