@@ -78,5 +78,14 @@ select = ["A",  # prevent using keywords that clobber python builtins
           ]
 ignore = ["UP004", "B007", "ISC001"]  # ISC001 conflicts with formatter
 
-# [tool.pytest]
-# TBD
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test*.py"]
+addopts = "-ra"
+markers = [
+    "slow: takes more than ~5 s; deselect with -m 'not slow'",
+]
+filterwarnings = [
+    "error::DeprecationWarning:pgmuvi",
+    "error::DeprecationWarning:pgmuvi.*",
+]

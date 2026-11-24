@@ -62,14 +62,15 @@ Use a Python 3.10+ environment. `pip install -e .` installs `torch` and `gpytorc
 pip install -e .                                           # editable install
 ruff check pgmuvi/                                         # lint; must be clean (ruff config in pyproject.toml)
 ruff format pgmuvi/                                        # format; pre-commit also runs this
-python -m unittest discover -s tests -p "test*.py"         # full suite, 1,297 tests, 1-2 min on CPU
-python -m unittest tests.test_kernels                      # one file
+python -m pytest -n auto                                   # full suite, 1,297 tests, 1-2 min on CPU
+python -m pytest tests/test_kernels.py                     # one file
+python -m pytest -m "not slow"                             # skip tests marked slow
 cd docs && make html                                       # Sphinx build
 cd docs && make html-strict                                # Sphinx build, warnings are errors (CI)
 ```
 
 Notes:
-- The test runner is `unittest` today. Roadmap 1.3 switches to `pytest -n auto`; until that merges, new tests are `unittest.TestCase` classes in `tests/test_<topic>.py`, which pytest also runs unchanged.
+- The test runner is pytest; tests are `unittest.TestCase` classes or plain pytest functions, tests over ~5 s carry `@pytest.mark.slow`, and `DeprecationWarning`s raised from pgmuvi itself are errors.
 - Line length is 88 and `E501` is enforced. `tests/` is excluded from ruff. `pip install -e .[dev]` gives the pinned ruff; CI pins the same version, so a newer local ruff may flag code that CI accepts, or the reverse.
 - `docs/source/conf.py` sets `nbsphinx_allow_errors = True`, so a broken notebook does not fail the docs build. Do not rely on the build as a notebook test until 3.13 flips this.
 - CI (`.github/workflows/`) runs on every pull request and on pushes to `main`: the test suite on Python 3.10 to 3.15 with CPU torch wheels (`test.yml`), `ruff check` pinned to the version in `.pre-commit-config.yaml` and the `dev` extra, check-only (`ruff.yml`), and a strict Sphinx build, `make -C docs html-strict`, that fails on any warning and renders notebooks from their stored outputs without executing them (`docs.yml`). The two JOSS paper workflows run only when the paper changes. Run the strict build locally before pushing a docstring or docs change: `SPHINXBUILD=$PWD/.venv/bin/sphinx-build make -C docs html-strict` (the same command CI runs; `nbsphinx_execute = "never"` is set in `conf.py`; needs `pip install -e .[docs]` and pandoc; on Windows the path is `.venv/Scripts/sphinx-build`).

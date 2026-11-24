@@ -10,6 +10,7 @@ Tests the complete workflow of:
 """
 
 import unittest
+import pytest
 import torch
 import numpy as np
 from pgmuvi.lightcurve import Lightcurve
@@ -185,6 +186,7 @@ class Test2DIntegration(unittest.TestCase):
             msg=f"Error message didn't mention dimensionality issue: {context.exception}"
         )
 
+    @pytest.mark.slow
     def test_2d_with_different_sampling(self):
         """Test 2D data with different sampling in each wavelength band"""
         lc = make_chromatic_sinusoid_2d(
