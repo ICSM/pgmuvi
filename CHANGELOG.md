@@ -4,6 +4,9 @@ Entries are added by the PR that makes the change; roadmap item numbers refer to
 
 ## Unreleased
 
+### Added
+- `rng=` on `MultibandLSWithSignificance.false_alarm_probability` and `fap_rng=` on `Lightcurve.fit_LS` make bootstrap and phase-scramble FAPs reproducible, including with `n_jobs>1`; one child generator is spawned per Monte Carlo sample. Without `rng` they draw from the global `np.random` state as before (1.3).
+
 ### Changed
 - CI runs on pull requests and pushes to `main`: tests with CPU torch wheels, `ruff check` pinned to 0.16.9 (no auto-fix commits), and a strict Sphinx build (`make -C docs html-strict`) that fails on warnings; `pip install -e .[dev]` installs the same ruff. Docstrings and notebooks were tidied so that the strict build passes (1.2).
 - `pgmuvi.Lightcurve` is exported from the top-level package (1.1).

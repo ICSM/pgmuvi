@@ -230,7 +230,7 @@ class TestFitLS(unittest.TestCase):
         call_kwargs = []
 
         def mock_fap(self_ls, power, method='analytical', n_samples=100,
-                     freq_grid=None, n_jobs=1):
+                     freq_grid=None, n_jobs=1, rng=None):
             call_kwargs.append({'method': method, 'freq_grid': freq_grid})
             return original_fap(self_ls, power, method='analytical',
                                 freq_grid=freq_grid)

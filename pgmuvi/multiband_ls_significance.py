@@ -17,7 +17,7 @@ except ImportError:
 
 
 def _compute_bootstrap_sample_max_power(t, y, bands, dy, freq_grid,
-                                        ls_method='fast'):
+                                        ls_method='fast', rng=None):
     """Compute max LS power for one bootstrap (band-permuted) sample.
 
     Parameters
@@ -34,18 +34,22 @@ def _compute_bootstrap_sample_max_power(t, y, bands, dy, freq_grid,
         Frequency grid for power computation
     ls_method : str, optional
         Method for LombScargleMultiband.power(). Default: ``'fast'``.
+    rng : numpy.random.Generator or None, optional
+        Source of randomness for this sample. If None, the legacy global
+        ``np.random`` state is used. Default: None.
 
     Returns
     -------
     float
         Maximum Lomb-Scargle power over ``freq_grid``
     """
+    permutation = np.random.permutation if rng is None else rng.permutation
     y_permuted = y.copy()
     unique_bands = np.unique(bands)
     for band in unique_bands:
         band_mask = bands == band
         band_indices = np.where(band_mask)[0]
-        permuted_indices = np.random.permutation(band_indices)
+        permuted_indices = permutation(band_indices)
         y_permuted[band_mask] = y[permuted_indices]
     if dy is not None:
         ls_null = LombScargleMultiband(t, y_permuted, bands, dy=dy)
@@ -55,7 +59,7 @@ def _compute_bootstrap_sample_max_power(t, y, bands, dy, freq_grid,
 
 
 def _compute_phase_scramble_sample_max_power(t, y, bands, dy, freq_grid,
-                                             ls_method='fast'):
+                                             ls_method='fast', rng=None):
     """Compute max LS power for one phase-scrambled sample.
 
     Parameters
@@ -72,19 +76,23 @@ def _compute_phase_scramble_sample_max_power(t, y, bands, dy, freq_grid,
         Frequency grid for power computation
     ls_method : str, optional
         Method for LombScargleMultiband.power(). Default: ``'fast'``.
+    rng : numpy.random.Generator or None, optional
+        Source of randomness for this sample. If None, the legacy global
+        ``np.random`` state is used. Default: None.
 
     Returns
     -------
     float
         Maximum Lomb-Scargle power over ``freq_grid``
     """
+    random = np.random.random if rng is None else rng.random
     y_scrambled = y.copy()
     unique_bands = np.unique(bands)
     for band in unique_bands:
         band_mask = bands == band
         y_band = y[band_mask]
         fft = np.fft.fft(y_band)
-        random_phases = np.exp(2j * np.pi * np.random.random(len(fft)))
+        random_phases = np.exp(2j * np.pi * random(len(fft)))
         fft_scrambled = np.abs(fft) * random_phases
         y_scrambled[band_mask] = np.real(np.fft.ifft(fft_scrambled))
     if dy is not None:
@@ -92,6 +100,33 @@ def _compute_phase_scramble_sample_max_power(t, y, bands, dy, freq_grid,
     else:
         ls_null = LombScargleMultiband(t, y_scrambled, bands)
     return ls_null.power(freq_grid, method=ls_method).max()
+
+
+def _spawn_generators(gen, n):
+    """Spawn ``n`` independent child generators from ``gen``.
+
+    Parameters
+    ----------
+    gen : numpy.random.Generator
+        Parent generator.
+    n : int
+        Number of children.
+
+    Returns
+    -------
+    list of numpy.random.Generator
+        Independent generators, one per Monte Carlo sample.
+
+    Notes
+    -----
+    ``Generator.spawn`` needs numpy >= 1.25; older numpy spawns from the
+    bit generator's ``SeedSequence``, which yields the same streams for a
+    ``default_rng``-built generator.
+    """
+    if hasattr(gen, "spawn"):
+        return gen.spawn(n)
+    seed_seq = gen.bit_generator._seed_seq
+    return [np.random.default_rng(child) for child in seed_seq.spawn(n)]
 
 
 class MultibandLSWithSignificance:
@@ -202,7 +237,8 @@ class MultibandLSWithSignificance:
         return self.ls.power(frequency, method=self.ls_method)
 
     def false_alarm_probability(self, power_values, method='analytical',
-                                n_samples=100, freq_grid=None, n_jobs=1):
+                                n_samples=100, freq_grid=None, n_jobs=1,
+                                *, rng=None):
         """
         Compute FAP for multiband LS periodogram.
 
@@ -236,6 +272,15 @@ class MultibandLSWithSignificance:
             ('bootstrap' and 'phase_scramble'). ``-1`` uses all available
             CPU cores. Requires ``joblib`` (installed with scikit-learn).
             Default: 1 (serial execution).
+        rng : None, int, array-like, numpy.random.SeedSequence or \
+numpy.random.Generator, optional
+            Seed or generator for the Monte Carlo methods, passed to
+            :func:`numpy.random.default_rng`. One independent child
+            generator is spawned per sample, so a given ``rng`` gives the
+            same result for any ``n_jobs``. Ignored by 'analytical' and
+            'calibrated'. Default: None, which keeps the legacy
+            behaviour: the global ``np.random`` state, seedable with
+            ``np.random.seed``.
 
         Returns
         -------
@@ -281,12 +326,14 @@ class MultibandLSWithSignificance:
         power_values = np.atleast_1d(power_values)
         scalar_input = (power_values.size == 1)
 
+        gen = None if rng is None else np.random.default_rng(rng)
+
         if method == 'bootstrap':
             fap = self._bootstrap_fap(power_values, freq_grid, n_samples,
-                                      n_jobs=n_jobs)
+                                      n_jobs=n_jobs, rng=gen)
         elif method == 'phase_scramble':
             fap = self._phase_scramble_fap(power_values, freq_grid, n_samples,
-                                           n_jobs=n_jobs)
+                                           n_jobs=n_jobs, rng=gen)
         elif method == 'analytical':
             fap = self._analytical_fap(power_values, freq_grid)
         elif method == 'calibrated':
@@ -301,7 +348,8 @@ class MultibandLSWithSignificance:
         # Return scalar if input was scalar
         return fap[0] if scalar_input else fap
 
-    def _bootstrap_fap(self, power_values, freq_grid, n_samples, n_jobs=1):
+    def _bootstrap_fap(self, power_values, freq_grid, n_samples, n_jobs=1,
+                       rng=None):
         """
         Compute FAP using bootstrap permutation within bands.
 
@@ -321,28 +369,37 @@ class MultibandLSWithSignificance:
         n_jobs : int, optional
             Number of parallel jobs. ``-1`` uses all available cores.
             Requires ``joblib``. Default: 1 (serial).
+        rng : numpy.random.Generator or None, optional
+            Parent generator; one child is spawned per sample and handed to
+            the worker, so serial and parallel runs agree. If None, the
+            workers use the legacy global ``np.random`` state.
+            Default: None.
 
         Returns
         -------
         fap : ndarray
             False alarm probability for each power value
         """
+        if rng is None:
+            children = [None] * n_samples
+        else:
+            children = _spawn_generators(rng, n_samples)
         if _JOBLIB_AVAILABLE and n_jobs != 1:
             max_powers_null = Parallel(n_jobs=n_jobs)(
                 delayed(_compute_bootstrap_sample_max_power)(
                     self.t, self.y, self.bands, self.dy, freq_grid,
-                    self.ls_method
+                    self.ls_method, rng=child
                 )
-                for _ in range(n_samples)
+                for child in children
             )
             max_powers_null = np.array(max_powers_null)
         else:
             max_powers_null = np.array([
                 _compute_bootstrap_sample_max_power(
                     self.t, self.y, self.bands, self.dy, freq_grid,
-                    self.ls_method
+                    self.ls_method, rng=child
                 )
-                for _ in range(n_samples)
+                for child in children
             ])
 
         # Compute FAP for each power value
@@ -354,7 +411,7 @@ class MultibandLSWithSignificance:
         return fap
 
     def _phase_scramble_fap(self, power_values, freq_grid, n_samples,
-                            n_jobs=1):
+                            n_jobs=1, rng=None):
         """
         Compute FAP using phase scrambling.
 
@@ -373,28 +430,37 @@ class MultibandLSWithSignificance:
         n_jobs : int, optional
             Number of parallel jobs. ``-1`` uses all available cores.
             Requires ``joblib``. Default: 1 (serial).
+        rng : numpy.random.Generator or None, optional
+            Parent generator; one child is spawned per sample and handed to
+            the worker, so serial and parallel runs agree. If None, the
+            workers use the legacy global ``np.random`` state.
+            Default: None.
 
         Returns
         -------
         fap : ndarray
             False alarm probability for each power value
         """
+        if rng is None:
+            children = [None] * n_samples
+        else:
+            children = _spawn_generators(rng, n_samples)
         if _JOBLIB_AVAILABLE and n_jobs != 1:
             max_powers_null = Parallel(n_jobs=n_jobs)(
                 delayed(_compute_phase_scramble_sample_max_power)(
                     self.t, self.y, self.bands, self.dy, freq_grid,
-                    self.ls_method
+                    self.ls_method, rng=child
                 )
-                for _ in range(n_samples)
+                for child in children
             )
             max_powers_null = np.array(max_powers_null)
         else:
             max_powers_null = np.array([
                 _compute_phase_scramble_sample_max_power(
                     self.t, self.y, self.bands, self.dy, freq_grid,
-                    self.ls_method
+                    self.ls_method, rng=child
                 )
-                for _ in range(n_samples)
+                for child in children
             ])
 
         # Compute FAP for each power value
