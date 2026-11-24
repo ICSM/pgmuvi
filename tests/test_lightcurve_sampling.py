@@ -394,3 +394,6 @@ class TestLightcurve2DSamplingMethods(unittest.TestCase):
                 miniter=2,
                 lr=0.05,
             )
+        self.assertIs(lc.model, gp_instance)
+        self.assertEqual(lc.model.train_inputs[0].shape[0], 50)
+        self.assertIsNotNone(results)

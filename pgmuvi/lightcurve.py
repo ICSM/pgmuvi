@@ -4337,7 +4337,9 @@ class Lightcurve(InputHelpers, gpytorch.Module):
         - fap_rng: None, int, SeedSequence or numpy Generator, optional
             Passed as ``rng`` to
             ``MultibandLSWithSignificance.false_alarm_probability`` so that
-            multiband Monte Carlo FAPs are reproducible. Ignored for 1D.
+            multiband Monte Carlo FAPs are reproducible. For 1D data it is
+            forwarded to astropy's bootstrap FAP as ``random_seed`` when
+            ``fap_method='bootstrap'``, and ignored otherwise.
         - kwargs: dict, optional
             Additional keyword arguments to be passed to the
             LombScargle(Multiband) constructor.
@@ -4622,8 +4624,12 @@ class Lightcurve(InputHelpers, gpytorch.Module):
                     stacklevel=2,
                 )
                 _fap_method_max = 'baluev'
+            _fap_kwds = {}
+            if _fap_method_max == 'bootstrap' and fap_rng is not None:
+                _fap_kwds = {'random_seed': fap_rng}
             fap_max = LS.false_alarm_probability(power.max(),
-                                                 method=_fap_method_max)
+                                                 method=_fap_method_max,
+                                                 method_kwds=_fap_kwds)
             n_return = min(num_peaks, len(peaks))
 
             if fap_max > single_threshold:

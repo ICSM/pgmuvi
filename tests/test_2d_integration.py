@@ -87,6 +87,7 @@ class Test2DIntegration(unittest.TestCase):
         self.assertIn('raw_mixture_means_constraint',
                       lightcurve._model_pars['mixture_means']['module']._constraints)
 
+    @pytest.mark.slow
     def test_fit_2d_workflow(self):
         """Test complete fit workflow with 2D data"""
         lightcurve = Lightcurve(self.xdata_2d, self.ydata_2d)

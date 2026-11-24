@@ -4,6 +4,10 @@ Three checks, each over the tracked files: Sphinx ``:doc:`` roles resolve to a
 document, local Markdown links resolve to a file, and no public file carries a
 path from someone's machine. Rewritten small from the archived stack's
 ``test_repository_reference_integrity.py`` (roadmap 1.3).
+
+Deliberately small: inline Markdown links only (reference-style links are not
+checked and fenced code is not excluded), ``:doc:`` roles in ``.rst`` files only,
+and machine paths in four public directories (not README.md or docs/dev).
 """
 
 import re
@@ -16,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs" / "source"
 DOC_ROLE = re.compile(r":doc:`(?:[^`<]*<)?([^`>]+)>?`")
 MD_LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)")
-MACHINE_PATH = re.compile(r"/Users/|/Volumes/|/home/[\w.-]+/|file:///|[A-Za-z]:\\Users\\")
+MACHINE_PATH = re.compile(r"/Users/|/Volumes/|/home/[\w.-]+/|file:///|[A-Za-z]:[\\/]+Users[\\/]")
 EXTERNAL = ("http://", "https://", "mailto:", "#")
 
 
@@ -39,7 +43,9 @@ def test_sphinx_doc_roles_resolve():
         for m in DOC_ROLE.finditer(text):
             target = m.group(1).strip()
             base = DOCS / target.lstrip("/") if target.startswith("/") else rst.parent / target
-            if not any(base.with_suffix(s).is_file() for s in (".rst", ".ipynb", ".md")):
+            if not any(
+                (base.parent / (base.name + s)).is_file() for s in (".rst", ".ipynb", ".md")
+            ):
                 bad.append(f"{rst.relative_to(ROOT)}:{_lineno(text, m.start())}: {target}")
     assert not bad, "Unresolved :doc: targets:\n" + "\n".join(bad)
 

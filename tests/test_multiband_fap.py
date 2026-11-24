@@ -1,6 +1,8 @@
 """Tests for multiband Lomb-Scargle false-alarm probability."""
 import unittest
 
+import pytest
+
 import numpy as np
 import torch
 
@@ -158,6 +160,7 @@ class TestMultibandFAP(unittest.TestCase):
         self.assertLess(fap_bootstrap, 0.5,
                         "Bootstrap FAP too high for strong signal")
 
+    @pytest.mark.slow
     def test_parallel_bootstrap_fap(self):
         """Test that parallel bootstrap (n_jobs>1) gives consistent results"""
         from pgmuvi.multiband_ls_significance import MultibandLSWithSignificance

@@ -202,7 +202,7 @@ class TestFitLS(unittest.TestCase):
         original_fap = LombScargle.false_alarm_probability
         called_methods = []
 
-        def mock_fap(self_ls, power, method='baluev'):
+        def mock_fap(self_ls, power, method='baluev', **kwargs):
             called_methods.append(method)
             return original_fap(self_ls, power, method='davies')
 

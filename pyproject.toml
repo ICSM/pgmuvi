@@ -85,7 +85,8 @@ addopts = "-ra"
 markers = [
     "slow: takes more than ~5 s; deselect with -m 'not slow'",
 ]
+# The module field is a regex matched at the start, so this covers the
+# subpackages; it turns deprecated APIs *called from* pgmuvi code into errors.
 filterwarnings = [
     "error::DeprecationWarning:pgmuvi",
-    "error::DeprecationWarning:pgmuvi.*",
 ]

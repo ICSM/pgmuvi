@@ -238,7 +238,7 @@ class MultibandLSWithSignificance:
 
     def false_alarm_probability(self, power_values, method='analytical',
                                 n_samples=100, freq_grid=None, n_jobs=1,
-                                *, rng=None):
+                                *, rng: int | np.random.Generator | None = None):
         """
         Compute FAP for multiband LS periodogram.
 
