@@ -10,6 +10,7 @@ Tests the complete workflow of:
 """
 
 import unittest
+import pytest
 import torch
 import numpy as np
 from pgmuvi.lightcurve import Lightcurve
@@ -86,6 +87,7 @@ class Test2DIntegration(unittest.TestCase):
         self.assertIn('raw_mixture_means_constraint',
                       lightcurve._model_pars['mixture_means']['module']._constraints)
 
+    @pytest.mark.slow
     def test_fit_2d_workflow(self):
         """Test complete fit workflow with 2D data"""
         lightcurve = Lightcurve(self.xdata_2d, self.ydata_2d)
@@ -185,6 +187,7 @@ class Test2DIntegration(unittest.TestCase):
             msg=f"Error message didn't mention dimensionality issue: {context.exception}"
         )
 
+    @pytest.mark.slow
     def test_2d_with_different_sampling(self):
         """Test 2D data with different sampling in each wavelength band"""
         lc = make_chromatic_sinusoid_2d(
