@@ -4,10 +4,10 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 
 ## Active work
 
-### 1.4 Golden regression suite — branch `1.4/golden-suite`, draft PR
-- Doing: seeded float64 period-recovery tests (1D sinusoid P = 37 d with `1D`, `1DQuasiPeriodic`, `1DPeriodicStochastic`; 2D chromatic with `2D`, `2DSeparable`), fixed-hyperparameter snapshots (MLL, PSD on a grid, `get_period_summary().as_dict()`), per-model `state_dict` key/shape snapshots, CSV/table round-trips, public-surface test.
-- Next step: see the PR description.
-- Do not redo: nothing yet.
+### 1.4 Golden regression suite — branch `1.4/golden-suite`, PR #281 (draft)
+- Done: everything in the roadmap line (`tests/test_golden_*.py`, `tests/test_public_surface.py`, snapshots in `tests/golden/`, `golden` fixture in `conftest.py`); roadmap ticked.
+- Next step: reviewer pass; un-draft; maintainer squash-merge; then delete this entry.
+- Do not redo: the snapshots are float32 (the data path hard-codes it); regenerate with `PGMUVI_UPDATE_GOLDEN=1` when 1.8 lands. Findings for later items, recorded as xfails/comments in `test_golden_period_recovery.py`: `fit()` does not seed `period_length` for the quasi-periodic kernels (1DQuasiPeriodic, 1DPeriodicStochastic end at ~175 d) → 3.3; `1D` misses P on 2/6 seeds at the default lr 0.1 → 3.3; `2D` drifts to ~312 d without an explicit scales guess → 1.7/1.11; `write_votable`→`from_table` scrambles x for 2D (strict xfail in `test_golden_io.py`) → 1.12/2.5.
 
 ## Pitfalls
 
