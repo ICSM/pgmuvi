@@ -2,7 +2,8 @@
 
 For each module, the sorted public names (no leading underscore) are recorded
 with ``own`` if the object's ``__module__`` is that module and ``re-export``
-otherwise (``var`` for objects without ``__module__``, such as constants).
+otherwise (and objects without ``__module__``, such as constants, are dropped along with
+third-party and typing imports; only names originating in pgmuvi are kept).
 Names that move are expected to stay importable from the old module as shims,
 so the names must not disappear; an intentional addition or removal is a
 visible diff in ``tests/golden/public_surface.json``.
@@ -51,16 +52,18 @@ def _module_surface(modname):
     return {
         name: _kind(modname, obj)
         for name, obj in sorted(vars(mod).items())
-        if not name.startswith("_") and not inspect.ismodule(obj)
+        if not name.startswith("_")
+        and not inspect.ismodule(obj)
+        and getattr(obj, "__module__", "").startswith("pgmuvi")
     }
 
 
 def _lightcurve_members():
-    return sorted(
-        name
-        for name, _ in inspect.getmembers(Lightcurve)
-        if not name.startswith("_")
-    )
+    names = set()
+    for cls in Lightcurve.__mro__:
+        if getattr(cls, "__module__", "").startswith("pgmuvi"):
+            names.update(n for n in vars(cls) if not n.startswith("_"))
+    return sorted(names)
 
 
 def test_public_surface(golden):

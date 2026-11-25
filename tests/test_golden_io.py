@@ -142,6 +142,8 @@ def test_alfori_from_csv_snapshot(golden):
         assert len(Lightcurve.from_csv(path)._xdata_raw) == 1000
     lc = Lightcurve.from_csv(path, max_samples=None)
     x, y = lc._xdata_raw, lc._ydata_raw
+    # The x values are float32-quantised JDs; they change when 1.8 lands
+    # (float64 default), and this snapshot must then be regenerated.
     golden(
         "io_alfori",
         {

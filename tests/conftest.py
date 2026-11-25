@@ -65,8 +65,13 @@ def _assert_close(expected, actual, rtol, atol, path):
         for i, (e, a) in enumerate(zip(expected, actual, strict=True)):
             _assert_close(e, a, rtol, atol, f"{path}[{i}]")
     elif isinstance(expected, bool) or expected is None or isinstance(expected, str):
+        if isinstance(expected, bool) or isinstance(actual, bool):
+            assert type(expected) is type(actual), (
+                f"{path}: type {type(actual).__name__} != {type(expected).__name__}"
+            )
         assert expected == actual, f"{path}: {actual!r} != {expected!r}"
     else:
+        assert type(actual) is not bool, f"{path}: {actual!r} is a bool, not a number"
         assert isinstance(actual, (int, float)), f"{path}: {actual!r} is not a number"
         if math.isnan(expected):
             assert math.isnan(actual), f"{path}: {actual!r} != nan"
@@ -86,6 +91,8 @@ def golden():
     is always a visible diff.
     """
 
+    # Golden names must be unique per test (no sharing between tests), which
+    # also makes this xdist-safe: no two workers write the same file.
     def check(name, value, rtol=1e-5, atol=1e-8):
         path = GOLDEN_DIR / f"{name}.json"
         value = _jsonable(value)

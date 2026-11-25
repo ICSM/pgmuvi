@@ -8,9 +8,12 @@ derived quantity with a JSON file in ``tests/golden/``:
 * the log power spectral density from ``compute_psd`` on a fixed grid,
 * ``get_period_summary().as_dict()`` for the 1D spectral-mixture model.
 
-Before the snapshot is taken, the MLL and the PSD are also checked against an
-independent float64 NumPy computation of the same formula, so the golden
-values are known to be correct and not merely stable.
+Before the snapshot is taken, the MLL and the 1D PSD are also checked against
+an independent float64 NumPy computation of the same formula. The 2D PSD is
+not: pgmuvi's 1D branch returns log(1/2 [S(f) + S(-f)]), but its 2D branch
+returns log S(f1, f2) with no mirrored component and no factor 1/2, so the
+2D snapshot pins today's behaviour and is not known to be the correct density.
+A strict xfail asserts the symmetrised formula (roadmap 1.12).
 
 Precision: ``Lightcurve`` currently stores its data as float32
 (``lightcurve.py`` coerces inputs; roadmap 1.8 flips the default to float64)
@@ -198,13 +201,32 @@ class TestPSD:
         )
         log_psd = lc_2d.compute_psd(freq, log=True).detach().double().numpy()
         assert log_psd.shape == (len(FREQ_T), len(FREQ_WL))
-        # Product of one-sided Gaussians in each dual, weight 1.
-        expected = (
-            _norm_logpdf_np(FREQ_T, 1.0 / PERIOD, 0.005)[:, None]
-            + _norm_logpdf_np(FREQ_WL, 0.2, 0.5)[None, :]
-        )
-        np.testing.assert_allclose(log_psd, expected, rtol=RTOL, atol=1e-4)
+        # Regression pin of what compute_psd returns today (no mirror term).
         golden("snapshot_psd_2d", log_psd, rtol=RTOL, atol=1e-4)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="2D compute_psd omits the mirrored component and the 1/2 factor "
+        "that the 1D branch applies (roadmap 1.12)",
+    )
+    def test_psd_2d_symmetrised(self, lc_2d):
+        freq = (
+            torch.as_tensor(FREQ_T, dtype=torch.float32),
+            torch.as_tensor(FREQ_WL, dtype=torch.float32),
+        )
+        log_psd = lc_2d.compute_psd(freq, log=True).detach().double().numpy()
+        # Consistent with the 1D branch: 1/2 [S(f1, f2) + S(-f1, -f2)], weight 1.
+        def log_s(f1, f2):
+            return (
+                _norm_logpdf_np(f1, 1.0 / PERIOD, 0.005)[:, None]
+                + _norm_logpdf_np(f2, 0.2, 0.5)[None, :]
+            )
+
+        expected = np.logaddexp(
+            log_s(FREQ_T, FREQ_WL), log_s(-FREQ_T, -FREQ_WL)
+        ) + np.log(0.5)
+        np.testing.assert_allclose(log_psd, expected, rtol=RTOL, atol=1e-4)
 
 
 class TestPeriodSummary:
