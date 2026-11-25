@@ -93,7 +93,7 @@ class TestMultibandFapRng(unittest.TestCase):
             "phase_scramble": mls._compute_phase_scramble_sample_max_power,
         }[method]
         ls = self.ls
-        children = mls._spawn_generators(np.random.default_rng(seed), n)
+        children = np.random.default_rng(seed).spawn(n)
         return np.array(
             [
                 worker(ls.t, ls.y, ls.bands, ls.dy, self.freq, ls.ls_method,

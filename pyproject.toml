@@ -25,7 +25,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.24",
+    "numpy>=1.25",  # Generator.spawn, used for per-sample FAP generators
     "matplotlib>=3.7",
     "torch>=2.0",
     "gpytorch>=1.11",

@@ -105,33 +105,6 @@ def _compute_phase_scramble_sample_max_power(t, y, bands, dy, freq_grid,
     return ls_null.power(freq_grid, method=ls_method).max()
 
 
-def _spawn_generators(gen, n):
-    """Spawn ``n`` independent child generators from ``gen``.
-
-    Parameters
-    ----------
-    gen : numpy.random.Generator
-        Parent generator.
-    n : int
-        Number of children.
-
-    Returns
-    -------
-    list of numpy.random.Generator
-        Independent generators, one per Monte Carlo sample.
-
-    Notes
-    -----
-    ``Generator.spawn`` needs numpy >= 1.25; older numpy spawns from the
-    bit generator's ``SeedSequence``, which yields the same streams for a
-    ``default_rng``-built generator.
-    """
-    if hasattr(gen, "spawn"):
-        return gen.spawn(n)
-    seed_seq = gen.bit_generator._seed_seq
-    return [np.random.default_rng(child) for child in seed_seq.spawn(n)]
-
-
 class MultibandLSWithSignificance:
     """
     Wrapper around LombScargleMultiband with significance testing.
@@ -401,7 +374,7 @@ numpy.random.Generator, optional
         if rng is None:
             children = [None] * n_samples
         else:
-            children = _spawn_generators(rng, n_samples)
+            children = rng.spawn(n_samples)
         if _JOBLIB_AVAILABLE and n_jobs != 1:
             max_powers_null = Parallel(n_jobs=n_jobs)(
                 delayed(_compute_bootstrap_sample_max_power)(
@@ -462,7 +435,7 @@ numpy.random.Generator, optional
         if rng is None:
             children = [None] * n_samples
         else:
-            children = _spawn_generators(rng, n_samples)
+            children = rng.spawn(n_samples)
         if _JOBLIB_AVAILABLE and n_jobs != 1:
             max_powers_null = Parallel(n_jobs=n_jobs)(
                 delayed(_compute_phase_scramble_sample_max_power)(

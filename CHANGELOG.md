@@ -5,7 +5,7 @@ Entries are added by the PR that makes the change; roadmap item numbers refer to
 ## Unreleased
 
 ### Added
-- `rng=` on `MultibandLSWithSignificance.false_alarm_probability` and `fap_rng=` on `Lightcurve.fit_LS` make bootstrap and phase-scramble FAPs reproducible, including with `n_jobs>1`; one child generator is spawned per Monte Carlo sample. Without `rng` they draw from the global `np.random` state as before (1.3).
+- `rng=` on `MultibandLSWithSignificance.false_alarm_probability` and `fap_rng=` on `Lightcurve.fit_LS` make bootstrap and phase-scramble FAPs reproducible, including with `n_jobs>1`; one child generator is spawned per Monte Carlo sample. `numpy>=1.25` is now required (`Generator.spawn`). Without `rng` they draw from the global `np.random` state as before (1.3).
 
 ### Changed
 - The test runner is pytest (`python -m pytest -n auto`); `tests/tests.py` was split into topic files; `unittest discover` still runs the `TestCase` classes but misses the plain-function tests, the per-test seeding and the warning filter; use `python -m pytest` (1.3).
