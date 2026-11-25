@@ -4,7 +4,10 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 
 ## Active work
 
-_None at the moment._
+### 1.4 Golden regression suite — branch `1.4/golden-suite`, draft PR
+- Doing: seeded float64 period-recovery tests (1D sinusoid P = 37 d with `1D`, `1DQuasiPeriodic`, `1DPeriodicStochastic`; 2D chromatic with `2D`, `2DSeparable`), fixed-hyperparameter snapshots (MLL, PSD on a grid, `get_period_summary().as_dict()`), per-model `state_dict` key/shape snapshots, CSV/table round-trips, public-surface test.
+- Next step: see the PR description.
+- Do not redo: nothing yet.
 
 ## Pitfalls
 
