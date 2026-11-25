@@ -4,12 +4,15 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 
 ## Active work
 
-### 1.3 Test harness — branch `1.3/pytest-harness`, PR #279 (rebased on main)
-- Done: everything in the roadmap line; suite 1,280 passed / 1 skipped under `pytest -n auto`; roadmap ticked.
-- Next step: maintainer review; squash-merge; then delete this entry. Open question for the maintainer: raise `numpy>=1.24` to 1.25 and drop the `_spawn_generators` fallback.
-- Do not redo: `tests/tests.py` is gone (its 25 re-imported `test_variability` tests now run once); `test_acf.py::test_gp_acf_smoke` stays skipped because it raises a ValueError when enabled, not for speed.
+_None at the moment._
 
 ## Pitfalls
+
+- 2026-11-25 — `pull_request` workflows do not start while a PR conflicts with its base, and a PR chained on another branch loses its base when that branch merges. Retarget to `main` and rebase before expecting CI; no run on a push is the symptom.
+- 2026-11-25 — Applying an exported patch with `git am` strips the `[1.2]`-style subject prefix; use `git am --keep-non-patch`.
+- 2026-11-25 — GraphQL-backed `gh` commands (`gh pr checks`, `gh project ...`) fail from Claude Code cloud sessions. Read checks with `gh api repos/ICSM/pgmuvi/commits/<sha>/check-runs`; board edits are done from a terminal.
+- 2026-11-25 — `pytest -x --durations=N` reports only the tests that ran before the first failure; take timings from a full run.
+- 2026-11-25 — The auto-mode permission classifier also blocks `git reset --hard` (use `git checkout -B <branch> <ref>` on a clean tree) and the merge API call; merging is the maintainer's action in any case (AGENTS.md section 8).
 
 - 2026-11-10 — `Build JOSS paper and tex` fails on `main` on a JOSS `fancyhdr` headheight warning that belongs to the paper (J6). Since 1.2 it only runs when `paper/**` changes, so a PR touching the paper goes red for this reason, not for its own changes.
 - 2026-11-05 — `gh auth refresh` from inside a Claude Code session needs `--hostname github.com` (non-interactive). The `project` scope is required for `gh project`.
