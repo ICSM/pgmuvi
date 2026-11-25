@@ -212,6 +212,29 @@ class TestFitLS(unittest.TestCase):
         # fap_max should use 'baluev'
         self.assertIn('baluev', called_methods)
 
+    def test_fap_rng_forwarded_to_1d_bootstrap(self):
+        """fap_rng reaches astropy's 1D bootstrap FAP as method_kwds['random_seed']"""
+        from unittest.mock import patch
+        from astropy.timeseries import LombScargle
+
+        original_fap = LombScargle.false_alarm_probability
+        calls = []
+
+        def mock_fap(self_ls, power, method='baluev', method_kwds=None, **kw):
+            calls.append((method, method_kwds))
+            return original_fap(self_ls, power, method='davies')
+
+        with patch.object(LombScargle, 'false_alarm_probability', mock_fap):
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='bootstrap', fap_rng=7)
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='bootstrap')
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='baluev', fap_rng=7)
+
+        bootstrap_kwds = [kwds for method, kwds in calls if method == 'bootstrap']
+        self.assertEqual(bootstrap_kwds[0], {'random_seed': 7})
+        self.assertFalse(bootstrap_kwds[1])  # no seed given: nothing forwarded
+        # a non-bootstrap method never receives the seed
+        self.assertTrue(all(not kwds for method, kwds in calls if method == 'baluev'))
+
     def test_fap_method_parameter_2d(self):
         """Test that fap_method parameter works for multiband lightcurves"""
         for method in ('analytical', 'bootstrap'):
