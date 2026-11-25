@@ -2,6 +2,7 @@
 import unittest
 import warnings
 
+import pytest
 import torch
 
 from pgmuvi.lightcurve import (
@@ -234,6 +235,37 @@ class TestFitLS(unittest.TestCase):
         self.assertFalse(bootstrap_kwds[1])  # no seed given: nothing forwarded
         # a non-bootstrap method never receives the seed
         self.assertTrue(all(not kwds for method, kwds in calls if method == 'baluev'))
+
+    @pytest.mark.slow
+    def test_fap_rng_reproduces_1d_bootstrap_fap(self):
+        """The same fap_rng gives the same bootstrap FAP; no seed gives another"""
+        import numpy as np
+        from unittest.mock import patch
+        from astropy.timeseries import LombScargle
+
+        original_fap = LombScargle.false_alarm_probability
+        values = []
+
+        def recording_fap(self_ls, power, method='baluev', **kwargs):
+            if method != 'bootstrap':
+                return original_fap(self_ls, power, method=method, **kwargs)
+            # The peak FAP of this strong signal is 0 for any draw, so also
+            # evaluate (in the same bootstrap) a range of null-level powers.
+            levels = np.linspace(0.02, 0.2, 10)
+            out = original_fap(
+                self_ls, np.append(power, levels), method=method, **kwargs
+            )
+            values.append(tuple(out[1:]))
+            return out[0]
+
+        with patch.object(LombScargle, 'false_alarm_probability', recording_fap):
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='bootstrap', fap_rng=7)
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='bootstrap', fap_rng=7)
+            self.lc_with_yerr.fit_LS(num_peaks=1, fap_method='bootstrap')
+
+        self.assertEqual(len(values), 3)
+        self.assertEqual(values[0], values[1])
+        self.assertNotEqual(values[0], values[2])
 
     def test_fap_method_parameter_2d(self):
         """Test that fap_method parameter works for multiband lightcurves"""

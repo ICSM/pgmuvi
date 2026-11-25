@@ -25,9 +25,12 @@ EXTERNAL = ("http://", "https://", "mailto:", "#")
 
 
 def _tracked(suffix=None):
-    out = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True
-    ).stdout
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip("not a git checkout")
     paths = [ROOT / p.decode() for p in out.split(b"\0") if p]
     return [p for p in paths if suffix is None or p.suffix == suffix]
 

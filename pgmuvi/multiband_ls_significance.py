@@ -5,6 +5,9 @@ This module provides a wrapper around astropy's LombScargleMultiband
 that adds false-alarm probability (FAP) computation capabilities.
 """
 
+import copy
+from collections.abc import Sequence
+
 import numpy as np
 from astropy.timeseries import LombScargleMultiband, LombScargle
 
@@ -238,7 +241,8 @@ class MultibandLSWithSignificance:
 
     def false_alarm_probability(self, power_values, method='analytical',
                                 n_samples=100, freq_grid=None, n_jobs=1,
-                                *, rng: int | np.random.Generator | None = None):
+                                *, rng: (int | Sequence[int] | np.random.SeedSequence
+                                | np.random.Generator | None) = None):
         """
         Compute FAP for multiband LS periodogram.
 
@@ -272,15 +276,17 @@ class MultibandLSWithSignificance:
             ('bootstrap' and 'phase_scramble'). ``-1`` uses all available
             CPU cores. Requires ``joblib`` (installed with scikit-learn).
             Default: 1 (serial execution).
-        rng : None, int, array-like, numpy.random.SeedSequence or \
+        rng : int, sequence of int, numpy.random.SeedSequence or \
 numpy.random.Generator, optional
-            Seed or generator for the Monte Carlo methods, passed to
-            :func:`numpy.random.default_rng`. One independent child
-            generator is spawned per sample, so a given ``rng`` gives the
-            same result for any ``n_jobs``. Ignored by 'analytical' and
-            'calibrated'. Default: None, which keeps the legacy
-            behaviour: the global ``np.random`` state, seedable with
-            ``np.random.seed``.
+            Seed or generator for the Monte Carlo methods: anything
+            :func:`numpy.random.default_rng` accepts except
+            ``numpy.random.RandomState``, which raises ``TypeError``. The
+            generator is copied before use, so the same seed,
+            ``SeedSequence`` or ``Generator`` gives the same result on every
+            call and for any ``n_jobs``; one independent child generator is
+            spawned per sample. Ignored by 'analytical' and 'calibrated'.
+            Default: None, which keeps the legacy behaviour: the global
+            ``np.random`` state, seedable with ``np.random.seed``.
 
         Returns
         -------
@@ -326,12 +332,12 @@ numpy.random.Generator, optional
         power_values = np.atleast_1d(power_values)
         scalar_input = (power_values.size == 1)
 
-        gen = None if rng is None else np.random.default_rng(rng)
-
         if method == 'bootstrap':
+            gen = self._make_generator(rng)
             fap = self._bootstrap_fap(power_values, freq_grid, n_samples,
                                       n_jobs=n_jobs, rng=gen)
         elif method == 'phase_scramble':
+            gen = self._make_generator(rng)
             fap = self._phase_scramble_fap(power_values, freq_grid, n_samples,
                                            n_jobs=n_jobs, rng=gen)
         elif method == 'analytical':
@@ -347,6 +353,18 @@ numpy.random.Generator, optional
 
         # Return scalar if input was scalar
         return fap[0] if scalar_input else fap
+
+    @staticmethod
+    def _make_generator(rng):
+        """Return a private Generator for ``rng`` (None stays None)."""
+        if isinstance(rng, np.random.RandomState):
+            raise TypeError(
+                "rng must be a seed, SeedSequence or numpy Generator, "
+                "not RandomState"
+            )
+        if rng is None:
+            return None
+        return copy.deepcopy(np.random.default_rng(rng))
 
     def _bootstrap_fap(self, power_values, freq_grid, n_samples, n_jobs=1,
                        rng=None):

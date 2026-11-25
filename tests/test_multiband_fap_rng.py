@@ -119,6 +119,43 @@ class TestMultibandFapRng(unittest.TestCase):
                 self.assertEqual(fap.shape, self.levels.shape)
                 self.assertTrue(np.all((fap >= 0) & (fap <= 1)))
 
+    def test_rng_none_is_legacy_global_state(self):
+        from pgmuvi import multiband_ls_significance as mls
+
+        workers = {
+            "bootstrap": mls._compute_bootstrap_sample_max_power,
+            "phase_scramble": mls._compute_phase_scramble_sample_max_power,
+        }
+        ls = self.ls
+        for method, worker in workers.items():
+            with self.subTest(method=method):
+                np.random.seed(0)
+                got = self._fap(method, None, n_samples=10)
+                np.random.seed(0)
+                null = np.array(
+                    [
+                        worker(ls.t, ls.y, ls.bands, ls.dy, self.freq,
+                               ls.ls_method, rng=None)
+                        for _ in range(10)
+                    ]
+                )
+                expected = np.array([(null >= p).mean() for p in self.levels])
+                np.testing.assert_array_equal(got, expected)
+
+    def test_random_state_rejected(self):
+        for method in METHODS:
+            with self.subTest(method=method):
+                with self.assertRaises(TypeError):
+                    self._fap(method, np.random.RandomState(0))
+
+    def test_reused_generator_is_reproducible(self):
+        for method in METHODS:
+            with self.subTest(method=method):
+                gen = np.random.default_rng(5)
+                np.testing.assert_array_equal(
+                    self._fap(method, gen), self._fap(method, gen)
+                )
+
     def test_worker_without_rng_uses_global_state(self):
         from pgmuvi import multiband_ls_significance as mls
 

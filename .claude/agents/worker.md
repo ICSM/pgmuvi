@@ -14,7 +14,7 @@ Rules:
 - Read files by line range after a `grep -n`; do not read `pgmuvi/lightcurve.py` whole.
 - For a mechanical move: `git mv` or copy the code unchanged, leave a re-export shim with `DeprecationWarning` at the old name, update imports, and run the full test suite. Behaviour must not change.
 - For a port from an archived branch: read the old code with `git show origin/<branch>:<path>`, then rewrite it small to the design in the brief. Do not copy scaffolding (dataclass layers, status enums, provenance dicts).
-- Tests go in `tests/test_<topic>.py` as `unittest.TestCase` classes and test behaviour against known inputs.
+- Tests go in `tests/test_<topic>.py` as `unittest.TestCase` classes or plain pytest functions and test behaviour against known inputs.
 - Before reporting done: `ruff check pgmuvi/` is clean; the relevant test file passes; the full suite passes (run it in the background and read the tail).
 - Report: files changed with line counts, the test command and its result, and anything in the spec you could not do, in at most 25 lines.
 

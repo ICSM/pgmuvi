@@ -8,7 +8,7 @@ Entries are added by the PR that makes the change; roadmap item numbers refer to
 - `rng=` on `MultibandLSWithSignificance.false_alarm_probability` and `fap_rng=` on `Lightcurve.fit_LS` make bootstrap and phase-scramble FAPs reproducible, including with `n_jobs>1`; one child generator is spawned per Monte Carlo sample. Without `rng` they draw from the global `np.random` state as before (1.3).
 
 ### Changed
-- The test runner is pytest (`python -m pytest -n auto`); `tests/tests.py` was split into topic files, so `unittest discover` no longer runs the whole suite (1.3).
+- The test runner is pytest (`python -m pytest -n auto`); `tests/tests.py` was split into topic files; `unittest discover` still runs the `TestCase` classes but misses the plain-function tests, the per-test seeding and the warning filter; use `python -m pytest` (1.3).
 - CI runs on pull requests and pushes to `main`: tests with CPU torch wheels, `ruff check` pinned to 0.16.9 (no auto-fix commits), and a strict Sphinx build (`make -C docs html-strict`) that fails on warnings; `pip install -e .[dev]` installs the same ruff. Docstrings and notebooks were tidied so that the strict build passes (1.2).
 - `pgmuvi.Lightcurve` is exported from the top-level package (1.1).
 - `pyro`, `arviz` and `xarray` are optional (`pip install "pgmuvi[mcmc]"`) and imported only when `Lightcurve.mcmc()` or its result methods run; `seaborn` is no longer a dependency (1.1).

@@ -62,7 +62,7 @@ Use a Python 3.10+ environment. `pip install -e .` installs `torch` and `gpytorc
 pip install -e .                                           # editable install
 ruff check pgmuvi/                                         # lint; must be clean (ruff config in pyproject.toml)
 ruff format pgmuvi/                                        # format; pre-commit also runs this
-python -m pytest -n auto                                   # full suite, 1,280 tests, under a minute on CPU
+python -m pytest -n auto                                   # full suite, 1,281 tests (1 skipped), under a minute on CPU
 python -m pytest tests/test_kernels.py                     # one file
 python -m pytest -m "not slow"                             # skip tests marked slow
 cd docs && make html                                       # Sphinx build

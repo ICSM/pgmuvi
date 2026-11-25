@@ -4,18 +4,9 @@ Read the Pitfalls at the start of every session. Update Active work when you sta
 
 ## Active work
 
-### 1.1 Hygiene & pins — merged as #275; one step left
-- Next step: maintainer tags `v0.2.0` on the merge commit `455fbaf` (DEC-21), then deletes this entry. Only `v0.2.0rc1` and `v0.2.0rc2` exist today.
-- Do not redo: the lower bounds on torch/gpytorch are deliberately untested; a min-versions CI job is not part of 1.2 and has no roadmap item yet.
-
-### 1.2 CI — branch `claude/pensive-ride-cefy00`, PR #276 (open, in review)
-- Done: everything in the roadmap line; CI green on the PR; on the Project board; two adversarial reviews done and their in-scope findings fixed.
-- Next step: reviewer re-reads at head, an approving human squash-merges; then delete this entry. If the merge is not on 2026-11-10, update the date on the 1.2 tick in the roadmap.
-- Do not redo: notebooks are rendered without execution in the docs job (`nbsphinx_execute = "never"` in `conf.py`) until 3.13; `pgmuvi_mock_data_from_gp` and `pgmuvi_tutorial_mcmc` are excluded from the build until 3.12/J5.
-
-### 1.3 Test harness — branch `1.3/pytest-harness`, PR #279 (draft, chained on #276)
+### 1.3 Test harness — branch `1.3/pytest-harness`, PR #279 (rebased on main)
 - Done: everything in the roadmap line; suite 1,280 passed / 1 skipped under `pytest -n auto`; roadmap ticked.
-- Next step: maintainer review (reviewer-agent pass done, findings fixed in 6394362); after #276 merges, retarget the PR base to `main` and rebase; maintainer squash-merges; then delete this entry. Open question for the maintainer: raise `numpy>=1.24` to 1.25 and drop the `_spawn_generators` fallback.
+- Next step: maintainer review; squash-merge; then delete this entry. Open question for the maintainer: raise `numpy>=1.24` to 1.25 and drop the `_spawn_generators` fallback.
 - Do not redo: `tests/tests.py` is gone (its 25 re-imported `test_variability` tests now run once); `test_acf.py::test_gp_acf_smoke` stays skipped because it raises a ValueError when enabled, not for speed.
 
 ## Pitfalls
